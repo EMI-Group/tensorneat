@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 from itertools import count
 
 import jax
@@ -14,7 +14,7 @@ class Species(object):
         self.created = generation
         self.last_improved = generation
         self.representative: Tuple[NDArray, NDArray] = (None, None)  # (nodes, connections)
-        self.members: List[int] = []  # idx in pop_nodes, pop_connections
+        self.members: List[int] = []  # idx in pop_nodes, pop_connections,
         self.fitness = None
         self.member_fitnesses = None
         self.adjusted_fitness = None
@@ -37,7 +37,11 @@ class SpeciesController:
         self.config = config
         self.compatibility_threshold = self.config.neat.species.compatibility_threshold
         self.species_elitism = self.config.neat.species.species_elitism
+        self.pop_size = self.config.neat.population.pop_size
         self.max_stagnation = self.config.neat.species.max_stagnation
+        self.min_species_size = self.config.neat.species.min_species_size
+        self.genome_elitism = self.config.neat.species.genome_elitism
+        self.survival_threshold = self.config.neat.species.survival_threshold
 
         self.species_idxer = count(0)
         self.species: Dict[int, Species] = {}  # species_id -> species
@@ -136,6 +140,8 @@ class SpeciesController:
                 self.genome_to_species[gid] = sid
 
             s.update((pop_nodes[rid], pop_connections[rid]), members)
+        for s in self.species.values():
+            print(s.members)
 
     def update_species_fitnesses(self, fitnesses):
         """
@@ -183,8 +189,141 @@ class SpeciesController:
             result.append((sid, s, is_stagnant))
         return result
 
+    def reproduce(self, generation: int) -> List[Optional[int, Tuple[int, int]]]:
+        """
+        code modified from neat-python!
+        :param generation:
+        :return: next population indices.
+        # int -> idx in the pop_nodes, pop_connections of elitism
+        # (int, int) -> the father and mother idx to be crossover
+        """
+        # Filter out stagnated species, collect the set of non-stagnated
+        # species members, and compute their average adjusted fitness.
+        # The average adjusted fitness scheme (normalized to the interval
+        # [0, 1]) allows the use of negative fitness values without
+        # interfering with the shared fitness scheme.
+        all_fitnesses = []
+        remaining_species = []
+        for stag_sid, stag_s, stagnant in self.stagnation(generation):
+            if not stagnant:
+                all_fitnesses.extend(stag_s.member_fitnesses)
+                remaining_species.append(stag_s)
+
+        # No species left.
+        if not remaining_species:
+            self.species = {}
+            return []
+
+        # Compute each species' member size in the next generation.
+        min_fitness = min(all_fitnesses)
+        max_fitness = max(all_fitnesses)
+        # Do not allow the fitness range to be zero, as we divide by it below.
+        # TODO: The ``1.0`` below is rather arbitrary, and should be configurable.
+        fitness_range = max(1.0, max_fitness - min_fitness)
+        for afs in remaining_species:
+            # Compute adjusted fitness.
+            msf = afs.fitness
+            af = (msf - min_fitness) / fitness_range  # make adjusted fitness in [0, 1]
+            afs.adjusted_fitness = af
+        adjusted_fitnesses = [s.adjusted_fitness for s in remaining_species]
+        previous_sizes = [len(s.members) for s in remaining_species]
+        min_species_size = max(self.min_species_size, self.genome_elitism)
+        spawn_amounts = compute_spawn(adjusted_fitnesses, previous_sizes, self.pop_size, min_species_size)
+        assert sum(spawn_amounts) == self.pop_size
+
+        # generate new population and speciate
+        self.species = {}
+        # int -> idx in the pop_nodes, pop_connections of elitism
+        # (int, int) -> the father and mother idx to be crossover
+        new_population: List[Optional[int, Tuple[int, int]]] = []
+        for spawn, s in zip(spawn_amounts, remaining_species):
+            assert spawn >= self.genome_elitism
+
+            # retain remain species to next generation
+            old_members, fitnesses = s.members, s.member_fitnesses
+            s.members = []
+            self.species[s.key] = s
+
+            # add elitism genomes to next generation
+            sorted_members, sorted_fitnesses = sort_element_with_fitnesses(old_members, fitnesses)
+            if self.genome_elitism > 0:
+                for m in sorted_members[:self.genome_elitism]:
+                    new_population.append(m)
+                    spawn -= 1
+
+            if spawn <= 0:
+                continue
+
+            # add genome to be crossover to next generation
+            repro_cutoff = int(np.ceil(self.survival_threshold * len(sorted_members)))
+            repro_cutoff = max(repro_cutoff, 2)
+            # only use good genomes to crossover
+            sorted_members = sorted_members[:repro_cutoff]
+
+            # Randomly choose parents and produce the number of offspring allotted to the species.
+            for _ in range(spawn):
+                assert len(sorted_members) >= 2
+                c1, c2 = np.random.choice(len(sorted_members), size=2, replace=False)
+                idx1, fitness1 = sorted_members[c1], sorted_fitnesses[c1]
+                idx2, fitness2 = sorted_members[c2], sorted_fitnesses[c2]
+                if fitness1 >= fitness2:
+                    new_population.append((idx1, idx2))
+                else:
+                    new_population.append((idx2, idx1))
+
+        return new_population
+
+
+def compute_spawn(adjusted_fitness, previous_sizes, pop_size, min_species_size):
+    """
+    Code from neat-python, the only modification is to fix the population size for each generation.
+    Compute the proper number of offspring per species (proportional to fitness).
+    """
+    af_sum = sum(adjusted_fitness)
+
+    spawn_amounts = []
+    for af, ps in zip(adjusted_fitness, previous_sizes):
+        if af_sum > 0:
+            s = max(min_species_size, af / af_sum * pop_size)
+        else:
+            s = min_species_size
+
+        d = (s - ps) * 0.5
+        c = int(round(d))
+        spawn = ps
+        if abs(c) > 0:
+            spawn += c
+        elif d > 0:
+            spawn += 1
+        elif d < 0:
+            spawn -= 1
+
+        spawn_amounts.append(spawn)
+
+    # Normalize the spawn amounts so that the next generation is roughly
+    # the population size requested by the user.
+    total_spawn = sum(spawn_amounts)
+    norm = pop_size / total_spawn
+    spawn_amounts = [max(min_species_size, int(round(n * norm))) for n in spawn_amounts]
+
+    # for batch parallelization, pop size must be a fixed value.
+    total_amounts = sum(spawn_amounts)
+    spawn_amounts[0] += pop_size - total_amounts
+    assert sum(spawn_amounts) == pop_size, "Population size is not stable."
+
+    return spawn_amounts
+
 
 def find_min_with_mask(arr: NDArray, mask: NDArray) -> int:
     masked_arr = np.where(mask, arr, np.inf)
     min_idx = np.argmin(masked_arr)
     return min_idx
+
+
+def sort_element_with_fitnesses(members: List[int], fitnesses: List[float]) \
+        -> Tuple[List[int], List[float]]:
+    combined = zip(members, fitnesses)
+    sorted_combined = sorted(combined, key=lambda x: x[1], reverse=True)
+    sorted_members = [item[0] for item in sorted_combined]
+    sorted_fitnesses = [item[1] for item in sorted_combined]
+    return sorted_members, sorted_fitnesses

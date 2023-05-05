@@ -29,7 +29,6 @@ def main():
     pipeline.tell(fitnesses)
 
 
-
     # for i in range(100):
     #     forward_func = pipeline.ask(batch=True)
     #     fitnesses = evaluate(forward_func)
