@@ -319,6 +319,10 @@ def o2m_distance(r_nodes, r_connections, pop_nodes, pop_connections):
     distances = []
     for nodes, connections in zip(pop_nodes, pop_connections):
         d = distance(r_nodes, r_connections, nodes, connections)
+        if d < 0:
+            d = distance(r_nodes, r_connections, nodes, connections)
+            print(d)
+            assert False
         distances.append(d)
     distances = np.stack(distances, axis=0)
     return distances
