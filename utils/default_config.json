@@ -2,15 +2,15 @@
     "basic": {
         "num_inputs": 2,
         "num_outputs": 1,
-        "init_maximum_nodes": 20,
-        "expands_coe": 1.5
+        "init_maximum_nodes": 10,
+        "expands_coe": 2
     },
     "neat": {
         "population": {
             "fitness_criterion": "max",
-            "fitness_threshold": 43.9999,
+            "fitness_threshold": 3,
             "generation_limit": 100,
-            "pop_size": 1000,
+            "pop_size": 20,
             "reset_on_extinction": "False"
         },
         "gene": {
@@ -73,7 +73,7 @@
             "node_delete_prob": 0.2
         },
         "species": {
-            "compatibility_threshold": 3.5,
+            "compatibility_threshold": 8,
             "species_fitness_func": "max",
             "max_stagnation": 20,
             "species_elitism": 2,

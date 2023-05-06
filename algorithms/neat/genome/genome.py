@@ -99,8 +99,8 @@ def initialize_genomes(pop_size: int,
 def expand(pop_nodes: NDArray, pop_connections: NDArray, new_N: int) -> Tuple[NDArray, NDArray]:
     """
     Expand the genome to accommodate more nodes.
-    :param pop_nodes:
-    :param pop_connections:
+    :param pop_nodes: (pop_size, N, 5)
+    :param pop_connections:  (pop_size, 2, N, N)
     :param new_N:
     :return:
     """
@@ -113,6 +113,23 @@ def expand(pop_nodes: NDArray, pop_connections: NDArray, new_N: int) -> Tuple[ND
     new_pop_connections[:, :, :old_N, :old_N] = pop_connections
     return new_pop_nodes, new_pop_connections
 
+
+def expand_single(nodes: NDArray, connections: NDArray, new_N: int) -> Tuple[NDArray, NDArray]:
+    """
+    Expand a single genome to accommodate more nodes.
+    :param nodes: (N, 5)
+    :param connections:  (2, N, N)
+    :param new_N:
+    :return:
+    """
+    old_N = nodes.shape[0]
+    new_nodes = np.full((new_N, 5), np.nan)
+    new_nodes[:old_N, :] = nodes
+
+    new_connections = np.full((2, new_N, new_N), np.nan)
+    new_connections[:, :old_N, :old_N] = connections
+
+    return new_nodes, new_connections
 
 @jit
 def add_node(new_node_key: int, nodes: Array, connections: Array,

@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Union
 from itertools import count
 
 import jax
@@ -45,7 +45,6 @@ class SpeciesController:
 
         self.species_idxer = count(0)
         self.species: Dict[int, Species] = {}  # species_id -> species
-        self.genome_to_species: Dict[int, int] = {}
 
         self.o2m_distance_func = jax.vmap(distance, in_axes=(None, None, 0, 0))  # one to many
         # self.o2o_distance_func = np_distance  # one to one
@@ -79,36 +78,37 @@ class SpeciesController:
         # Partition population into species based on genetic similarity.
 
         # First, fast match the population to previous species
-        rid_list = [new_representatives[sid] for sid in previous_species_list]
-        res_pop_distance = [
-            jax.device_get(
-                [
+        if previous_species_list:  # exist previous species
+            rid_list = [new_representatives[sid] for sid in previous_species_list]
+            res_pop_distance = [
+                jax.device_get(
                     self.o2m_distance_func(pop_nodes[rid], pop_connections[rid], pop_nodes, pop_connections)
-                    for rid in rid_list
-                ]
-            )
-        ]
-        pop_res_distance = np.stack(res_pop_distance, axis=0).T
-        for i in range(pop_res_distance.shape[0]):
-            if not unspeciated[i]:
-                continue
-            min_idx = np.argmin(pop_res_distance[i])
-            min_val = pop_res_distance[i, min_idx]
-            if min_val <= self.compatibility_threshold:
-                species_id = previous_species_list[min_idx]
-                new_members[species_id].append(i)
-                unspeciated[i] = False
+                )
+                for rid in rid_list
+            ]
+
+            pop_res_distance = np.stack(res_pop_distance, axis=0).T
+            for i in range(pop_res_distance.shape[0]):
+                if not unspeciated[i]:
+                    continue
+                min_idx = np.argmin(pop_res_distance[i])
+                min_val = pop_res_distance[i, min_idx]
+                if min_val <= self.compatibility_threshold:
+                    species_id = previous_species_list[min_idx]
+                    new_members[species_id].append(i)
+                    unspeciated[i] = False
 
         # Second, slowly match the lonely population to new-created species.
         # lonely genome is proved to be not compatible with any previous species, so they only need to be compared with
         # the new representatives.
-        new_species_list = []
         for i in range(pop_nodes.shape[0]):
             if not unspeciated[i]:
                 continue
             unspeciated[i] = False
             if len(new_representatives) != 0:
-                rid = [new_representatives[sid] for sid in new_representatives]  # the representatives of new species
+                # the representatives of new species
+                sid, rid = list(zip(*[(k, v) for k, v in new_representatives.items()]))
+
                 distances = [
                     self.o2o_distance_func(pop_nodes[i], pop_connections[i], pop_nodes[r], pop_connections[r])
                     for r in rid
@@ -117,18 +117,17 @@ class SpeciesController:
                 min_idx = np.argmin(distances)
                 min_val = distances[min_idx]
                 if min_val <= self.compatibility_threshold:
-                    species_id = new_species_list[min_idx]
+                    species_id = sid[min_idx]
                     new_members[species_id].append(i)
-                continue
+                    continue
             # create a new species
             species_id = next(self.species_idxer)
-            new_species_list.append(species_id)
             new_representatives[species_id] = i
             new_members[species_id] = [i]
 
         assert np.all(~unspeciated)
+
         # Update species collection based on new speciation.
-        self.genome_to_species = {}
         for sid, rid in new_representatives.items():
             s = self.species.get(sid)
             if s is None:
@@ -136,12 +135,7 @@ class SpeciesController:
                 self.species[sid] = s
 
             members = new_members[sid]
-            for gid in members:
-                self.genome_to_species[gid] = sid
-
             s.update((pop_nodes[rid], pop_connections[rid]), members)
-        for s in self.species.values():
-            print(s.members)
 
     def update_species_fitnesses(self, fitnesses):
         """
@@ -189,11 +183,11 @@ class SpeciesController:
             result.append((sid, s, is_stagnant))
         return result
 
-    def reproduce(self, generation: int) -> List[Optional[int, Tuple[int, int]]]:
+    def reproduce(self, generation: int) -> List[Union[int, Tuple[int, int]]]:
         """
         code modified from neat-python!
         :param generation:
-        :return: next population indices.
+        :return: crossover_pair for next generation.
         # int -> idx in the pop_nodes, pop_connections of elitism
         # (int, int) -> the father and mother idx to be crossover
         """
@@ -235,7 +229,7 @@ class SpeciesController:
         self.species = {}
         # int -> idx in the pop_nodes, pop_connections of elitism
         # (int, int) -> the father and mother idx to be crossover
-        new_population: List[Optional[int, Tuple[int, int]]] = []
+        crossover_pair: List[Union[int, Tuple[int, int]]] = []
         for spawn, s in zip(spawn_amounts, remaining_species):
             assert spawn >= self.genome_elitism
 
@@ -248,7 +242,7 @@ class SpeciesController:
             sorted_members, sorted_fitnesses = sort_element_with_fitnesses(old_members, fitnesses)
             if self.genome_elitism > 0:
                 for m in sorted_members[:self.genome_elitism]:
-                    new_population.append(m)
+                    crossover_pair.append(m)
                     spawn -= 1
 
             if spawn <= 0:
@@ -262,16 +256,16 @@ class SpeciesController:
 
             # Randomly choose parents and produce the number of offspring allotted to the species.
             for _ in range(spawn):
-                assert len(sorted_members) >= 2
-                c1, c2 = np.random.choice(len(sorted_members), size=2, replace=False)
+                # allow to replace, for the case that the species only has one genome
+                c1, c2 = np.random.choice(len(sorted_members), size=2, replace=True)
                 idx1, fitness1 = sorted_members[c1], sorted_fitnesses[c1]
                 idx2, fitness2 = sorted_members[c2], sorted_fitnesses[c2]
                 if fitness1 >= fitness2:
-                    new_population.append((idx1, idx2))
+                    crossover_pair.append((idx1, idx2))
                 else:
-                    new_population.append((idx2, idx1))
+                    crossover_pair.append((idx2, idx1))
 
-        return new_population
+        return crossover_pair
 
 
 def compute_spawn(adjusted_fitness, previous_sizes, pop_size, min_species_size):

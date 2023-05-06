@@ -1,10 +1,12 @@
 from typing import Callable, List
+from functools import partial
 
 import jax
 import numpy as np
 
 from utils import Configer
 from algorithms.neat import Pipeline
+from time_utils import using_cprofile
 
 xor_inputs = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
 xor_outputs = np.array([[0], [1], [1], [0]])
@@ -17,22 +19,24 @@ def evaluate(forward_func: Callable) -> List[float]:
     """
     outs = forward_func(xor_inputs)
     outs = jax.device_get(outs)
-    fitnesses = np.mean((outs - xor_outputs) ** 2, axis=(1, 2))
+    fitnesses = -np.mean((outs - xor_outputs) ** 2, axis=(1, 2))
+    # print(fitnesses)
     return fitnesses.tolist()  # returns a list
 
 
+# @using_cprofile
+@partial(using_cprofile, root_abs_path='/mnt/e/neat-jax/', replace_pattern="/mnt/e/neat-jax/")
 def main():
     config = Configer.load_config()
     pipeline = Pipeline(config)
-    forward_func = pipeline.ask(batch=True)
-    fitnesses = evaluate(forward_func)
-    pipeline.tell(fitnesses)
+    pipeline.auto_run(evaluate)
 
-
-    # for i in range(100):
+    # for _ in range(100):
+    #     s = time.time()
     #     forward_func = pipeline.ask(batch=True)
     #     fitnesses = evaluate(forward_func)
     #     pipeline.tell(fitnesses)
+    #     print(time.time() - s)
 
 
 if __name__ == '__main__':
