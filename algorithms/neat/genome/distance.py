@@ -35,6 +35,15 @@ def gene_distance(ar1, ar2, gene_type, compatibility_coe=0.5, disjoint_coe=1.):
     n_sorted_indices, n_intersect_mask, n_union_mask = set_operation_analysis(keys1, keys2)
     nodes = jnp.concatenate((ar1, ar2), axis=0)
     sorted_nodes = nodes[n_sorted_indices]
+
+    if gene_type == 'node':
+        node_exist_mask = jnp.any(~jnp.isnan(sorted_nodes[:, 1:]), axis=1)
+    else:
+        node_exist_mask = jnp.any(~jnp.isnan(sorted_nodes[:, 2:]), axis=1)
+
+    n_intersect_mask = n_intersect_mask & node_exist_mask
+    n_union_mask = n_union_mask & node_exist_mask
+
     fr_sorted_nodes, sr_sorted_nodes = sorted_nodes[:-1], sorted_nodes[1:]
 
     non_homologous_cnt = jnp.sum(n_union_mask) - jnp.sum(n_intersect_mask)
@@ -48,9 +57,11 @@ def gene_distance(ar1, ar2, gene_type, compatibility_coe=0.5, disjoint_coe=1.):
 
     gene_cnt1 = jnp.sum(jnp.all(~jnp.isnan(ar1), axis=1))
     gene_cnt2 = jnp.sum(jnp.all(~jnp.isnan(ar2), axis=1))
+    max_cnt = jnp.maximum(gene_cnt1, gene_cnt2)
 
     val = non_homologous_cnt * disjoint_coe + homologous_distance * compatibility_coe
-    return val / jnp.where(gene_cnt1 > gene_cnt2, gene_cnt1, gene_cnt2)
+
+    return jnp.where(max_cnt == 0, 0, val / max_cnt)  # consider the case that both genome has no gene
 
 
 @partial(vmap, in_axes=(0, 0))

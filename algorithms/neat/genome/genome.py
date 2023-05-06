@@ -12,9 +12,10 @@ status.
 Empty nodes or connections are represented using np.nan.
 
 """
-from typing import Tuple
+from typing import Tuple, Dict
 from functools import partial
 
+import jax
 import numpy as np
 from numpy.typing import NDArray
 from jax import numpy as jnp
@@ -131,6 +132,83 @@ def expand_single(nodes: NDArray, connections: NDArray, new_N: int) -> Tuple[NDA
 
     return new_nodes, new_connections
 
+
+def analysis(nodes: NDArray, connections: NDArray, input_keys, output_keys) -> \
+        Tuple[Dict[int, Tuple[float, float, int, int]], Dict[Tuple[int, int], Tuple[float, bool]]]:
+    """
+    Convert a genome from array to dict.
+    :param nodes: (N, 5)
+    :param connections: (2, N, N)
+    :param output_keys:
+    :param input_keys:
+    :return: nodes_dict[key: (bias, response, act, agg)], connections_dict[(f_key, t_key): (weight, enabled)]
+    """
+    # update nodes_dict
+    try:
+        nodes_dict = {}
+        idx2key = {}
+        for i, node in enumerate(nodes):
+            if np.isnan(node[0]):
+                continue
+            key = int(node[0])
+            assert key not in nodes_dict, f"Duplicate node key: {key}!"
+
+            bias = node[1] if not np.isnan(node[1]) else None
+            response = node[2] if not np.isnan(node[2]) else None
+            act = node[3] if not np.isnan(node[3]) else None
+            agg = node[4] if not np.isnan(node[4]) else None
+            nodes_dict[key] = (bias, response, act, agg)
+            idx2key[i] = key
+
+        # check nodes_dict
+        for i in input_keys:
+            assert i in nodes_dict, f"Input node {i} not found in nodes_dict!"
+            bias, response, act, agg = nodes_dict[i]
+            assert bias is None and response is None and act is None and agg is None, \
+                f"Input node {i} must has None bias, response, act, or agg!"
+
+        for o in output_keys:
+            assert o in nodes_dict, f"Output node {o} not found in nodes_dict!"
+
+        for k, v in nodes_dict.items():
+            if k not in input_keys:
+                bias, response, act, agg = v
+                assert bias is not None and response is not None and act is not None and agg is not None, \
+                    f"Normal node {k} must has non-None bias, response, act, or agg!"
+
+        # update connections
+        connections_dict = {}
+        for i in range(connections.shape[1]):
+            for j in range(connections.shape[2]):
+                if np.isnan(connections[0, i, j]) and np.isnan(connections[1, i, j]):
+                    continue
+                assert i in idx2key, f"Node index {i} not found in idx2key:{idx2key}!"
+                assert j in idx2key, f"Node index {j} not found in idx2key:{idx2key}!"
+                key = (idx2key[i], idx2key[j])
+
+                weight = connections[0, i, j] if not np.isnan(connections[0, i, j]) else None
+                enabled = (connections[1, i, j] == 1) if not np.isnan(connections[1, i, j]) else None
+
+                assert weight is not None, f"Connection {key} must has non-None weight!"
+                assert enabled is not None, f"Connection {key} must has non-None enabled!"
+                connections_dict[key] = (weight, enabled)
+
+        return nodes_dict, connections_dict
+    except AssertionError:
+        print(nodes)
+        print(connections)
+        raise AssertionError
+
+
+def pop_analysis(pop_nodes, pop_connections, input_keys, output_keys):
+    pop_nodes, pop_connections = jax.device_get((pop_nodes, pop_connections))
+    res = []
+    for nodes, connections in zip(pop_nodes, pop_connections):
+        res.append(analysis(nodes, connections, input_keys, output_keys))
+    return res
+
+
+
 @jit
 def add_node(new_node_key: int, nodes: Array, connections: Array,
              bias: float = 0.0, response: float = 1.0, act: int = 0, agg: int = 0) -> Tuple[Array, Array]:
@@ -158,11 +236,12 @@ def delete_node_by_idx(idx: int, nodes: Array, connections: Array) -> Tuple[Arra
     """
     delete a node from the genome. only delete the node, regardless of connections.
     """
-    node_keys = nodes[:, 0]
+    # node_keys = nodes[:, 0]
+    nodes = nodes.at[idx].set(EMPTY_NODE)
     # move the last node to the deleted node's position
-    last_real_idx = fetch_last(~jnp.isnan(node_keys))
-    nodes = nodes.at[idx].set(nodes[last_real_idx])
-    nodes = nodes.at[last_real_idx].set(EMPTY_NODE)
+    # last_real_idx = fetch_last(~jnp.isnan(node_keys))
+    # nodes = nodes.at[idx].set(nodes[last_real_idx])
+    # nodes = nodes.at[last_real_idx].set(EMPTY_NODE)
     return nodes, connections
 
 
@@ -206,7 +285,3 @@ def delete_connection_by_idx(from_idx: int, to_idx: int, nodes: Array, connectio
     """
     connections = connections.at[:, from_idx, to_idx].set(np.nan)
     return nodes, connections
-
-# if __name__ == '__main__':
-#     pop_nodes, pop_connections, input_keys, output_keys = initialize_genomes(100, 5, 2, 1)
-#     print(pop_nodes, pop_connections)

@@ -148,7 +148,9 @@ def check_cycles(nodes: Array, connections: Array, from_idx: Array, to_idx: Arra
         check_cycles(nodes, connections, 0, 3) -> False
         check_cycles(nodes, connections, 1, 0) -> False
     """
-    connections_enable = connections[1, :, :] == 1
+    # connections_enable = connections[0, :, :] == 1
+    connections_enable = ~jnp.isnan(connections[0, :, :])
+
     connections_enable = connections_enable.at[from_idx, to_idx].set(True)
     nodes_visited = jnp.full(nodes.shape[0], False)
     nodes_visited = nodes_visited.at[to_idx].set(True)

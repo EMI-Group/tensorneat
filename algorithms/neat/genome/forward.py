@@ -27,7 +27,7 @@ def create_forward_function(nodes: NDArray, connections: NDArray,
     """
 
     if debug:
-        cal_seqs = topological_sort(nodes, connections)
+        cal_seqs = topological_sort_debug(nodes, connections)
         return lambda inputs: forward_single_debug(inputs, N, input_idx, output_idx,
                                                    cal_seqs, nodes, connections)
 

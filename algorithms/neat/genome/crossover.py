@@ -42,14 +42,14 @@ def crossover(randkey: Array, nodes1: Array, connections1: Array, nodes2: Array,
     # crossover nodes
     keys1, keys2 = nodes1[:, 0], nodes2[:, 0]
     nodes2 = align_array(keys1, keys2, nodes2, 'node')
-    new_nodes = jnp.where(jnp.isnan(nodes2), nodes1, crossover_gene(randkey_1, nodes1, nodes2))
+    new_nodes = jnp.where(jnp.isnan(nodes1) | jnp.isnan(nodes2), nodes1, crossover_gene(randkey_1, nodes1, nodes2))
 
     # crossover connections
     cons1 = flatten_connections(keys1, connections1)
     cons2 = flatten_connections(keys2, connections2)
     con_keys1, con_keys2 = cons1[:, :2], cons2[:, :2]
     cons2 = align_array(con_keys1, con_keys2, cons2, 'connection')
-    new_cons = jnp.where(jnp.isnan(cons2), cons1, crossover_gene(randkey_2, cons1, cons2))
+    new_cons = jnp.where(jnp.isnan(cons1) | jnp.isnan(cons2), cons1, crossover_gene(randkey_2, cons1, cons2))
     new_cons = unflatten_connections(len(keys1), new_cons)
 
     return new_nodes, new_cons
