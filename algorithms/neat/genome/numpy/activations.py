@@ -1,104 +1,84 @@
-import jax
-import jax.numpy as jnp
-from jax import jit
+import numpy as np
 
 
-@jit
 def sigmoid_act(z):
-    z = jnp.clip(z * 5, -60, 60)
-    return 1 / (1 + jnp.exp(-z))
+    z = np.clip(z * 5, -60, 60)
+    return 1 / (1 + np.exp(-z))
 
 
-@jit
 def tanh_act(z):
-    z = jnp.clip(z * 2.5, -60, 60)
-    return jnp.tanh(z)
+    z = np.clip(z * 2.5, -60, 60)
+    return np.tanh(z)
 
 
-@jit
 def sin_act(z):
-    z = jnp.clip(z * 5, -60, 60)
-    return jnp.sin(z)
+    z = np.clip(z * 5, -60, 60)
+    return np.sin(z)
 
 
-@jit
 def gauss_act(z):
-    z = jnp.clip(z, -3.4, 3.4)
-    return jnp.exp(-5 * z ** 2)
+    z = np.clip(z, -3.4, 3.4)
+    return np.exp(-5 * z ** 2)
 
 
-@jit
 def relu_act(z):
-    return jnp.maximum(z, 0)
+    return np.maximum(z, 0)
 
 
-@jit
 def elu_act(z):
-    return jnp.where(z > 0, z, jnp.exp(z) - 1)
+    return np.where(z > 0, z, np.exp(z) - 1)
 
 
-@jit
 def lelu_act(z):
     leaky = 0.005
-    return jnp.where(z > 0, z, leaky * z)
+    return np.where(z > 0, z, leaky * z)
 
 
-@jit
 def selu_act(z):
     lam = 1.0507009873554804934193349852946
     alpha = 1.6732632423543772848170429916717
-    return jnp.where(z > 0, lam * z, lam * alpha * (jnp.exp(z) - 1))
+    return np.where(z > 0, lam * z, lam * alpha * (np.exp(z) - 1))
 
 
-@jit
 def softplus_act(z):
-    z = jnp.clip(z * 5, -60, 60)
-    return 0.2 * jnp.log(1 + jnp.exp(z))
+    z = np.clip(z * 5, -60, 60)
+    return 0.2 * np.log(1 + np.exp(z))
 
 
-@jit
 def identity_act(z):
     return z
 
 
-@jit
 def clamped_act(z):
-    return jnp.clip(z, -1, 1)
+    return np.clip(z, -1, 1)
 
 
-@jit
 def inv_act(z):
     return 1 / z
 
 
-@jit
 def log_act(z):
-    z = jnp.maximum(z, 1e-7)
-    return jnp.log(z)
+    z = np.maximum(z, 1e-7)
+    return np.log(z)
 
 
-@jit
 def exp_act(z):
-    z = jnp.clip(z, -60, 60)
-    return jnp.exp(z)
+    z = np.clip(z, -60, 60)
+    return np.exp(z)
 
 
-@jit
 def abs_act(z):
-    return jnp.abs(z)
+    return np.abs(z)
 
 
-@jit
 def hat_act(z):
-    return jnp.maximum(0, 1 - jnp.abs(z))
+    return np.maximum(0, 1 - np.abs(z))
 
 
-@jit
 def square_act(z):
     return z ** 2
 
 
-@jit
 def cube_act(z):
     return z ** 3
 
@@ -128,9 +108,6 @@ act_name2key = {
 }
 
 
-@jit
 def act(idx, z):
-    idx = jnp.asarray(idx, dtype=jnp.int32)
-    # change idx from float to int
-    return jax.lax.switch(idx, ACT_TOTAL_LIST, z)
-
+    idx = np.asarray(idx, dtype=np.int32)
+    return ACT_TOTAL_LIST[idx](z)
