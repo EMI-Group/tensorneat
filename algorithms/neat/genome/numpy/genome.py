@@ -198,8 +198,13 @@ def analysis(nodes: NDArray, connections: NDArray, input_keys, output_keys) -> \
 
 def pop_analysis(pop_nodes, pop_connections, input_keys, output_keys):
     res = []
+    total_nodes, total_connections = 0, 0
     for nodes, connections in zip(pop_nodes, pop_connections):
-        res.append(analysis(nodes, connections, input_keys, output_keys))
+        nodes, connections = analysis(nodes, connections, input_keys, output_keys)
+        res.append((nodes, connections))
+        total_nodes += len(nodes)
+        total_connections += len(connections)
+    print(total_nodes - 200, total_connections)
     return res
 
 

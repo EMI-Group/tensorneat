@@ -138,7 +138,8 @@ class SpeciesController:
         for sid, s in self.species.items():
             # TODO: here use mean to measure the fitness of a species, but it may be other functions
             s.member_fitnesses = s.get_fitnesses(fitnesses)
-            s.fitness = np.mean(s.member_fitnesses)
+            # s.fitness = np.mean(s.member_fitnesses)
+            s.fitness = np.max(s.member_fitnesses)
             s.fitness_history.append(s.fitness)
             s.adjusted_fitness = None
 

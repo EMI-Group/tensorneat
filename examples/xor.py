@@ -17,7 +17,7 @@ def evaluate(forward_func: Callable) -> List[float]:
     :return:
     """
     outs = forward_func(xor_inputs)
-    fitnesses = np.mean((outs - xor_outputs) ** 2, axis=(1, 2))
+    fitnesses = 4 - np.sum(np.abs(outs - xor_outputs), axis=(1, 2))
     # print(fitnesses)
     return fitnesses.tolist()  # returns a list
 
@@ -38,4 +38,5 @@ def main():
 
 
 if __name__ == '__main__':
+    np.random.seed(63124326)
     main()

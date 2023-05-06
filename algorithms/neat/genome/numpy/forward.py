@@ -76,7 +76,6 @@ def forward_single(inputs: NDArray, N: int, input_idx: NDArray, output_idx: NDAr
         # for some nodes (inputs nodes), the output z will be nan, thus we do not update the vals
         ini_vals[i] = z
 
-
     return ini_vals[output_idx]
 
 

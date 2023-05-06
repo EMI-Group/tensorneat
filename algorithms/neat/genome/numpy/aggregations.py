@@ -69,7 +69,6 @@ agg_name2key = {
 
 def agg(idx, z):
     idx = np.asarray(idx, dtype=np.int32)
-
     if np.all(z == 0.):
         return 0
     else:

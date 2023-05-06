@@ -2,14 +2,14 @@
     "basic": {
         "num_inputs": 2,
         "num_outputs": 1,
-        "init_maximum_nodes": 10,
-        "expands_coe": 2
+        "init_maximum_nodes": 5,
+        "expands_coe": 1.5
     },
     "neat": {
         "population": {
             "fitness_criterion": "max",
-            "fitness_threshold": 3,
-            "generation_limit": 100,
+            "fitness_threshold": 76,
+            "generation_limit": 1000,
             "pop_size": 100,
             "reset_on_extinction": "False"
         },
@@ -17,8 +17,6 @@
             "bias": {
                 "init_mean": 0.0,
                 "init_stdev": 1.0,
-                "max_value": 30.0,
-                "min_value": -30.0,
                 "mutate_power": 0.5,
                 "mutate_rate": 0.7,
                 "replace_rate": 0.1
@@ -26,34 +24,23 @@
             "response": {
                 "init_mean": 1.0,
                 "init_stdev": 0.0,
-                "max_value": 30.0,
-                "min_value": -30.0,
                 "mutate_power": 0.0,
                 "mutate_rate": 0.0,
                 "replace_rate": 0.0
             },
             "activation": {
                 "default": "sigmoid",
-                "options": "sigmoid",
+                "options": ["sigmoid"],
                 "mutate_rate": 0.01
             },
             "aggregation": {
                 "default": "sum",
-                "options": [
-                    "product",
-                    "sum",
-                    "max",
-                    "min",
-                    "median",
-                    "mean"
-                ],
+                "options": ["sum"],
                 "mutate_rate": 0.01
             },
             "weight": {
                 "init_mean": 0.0,
                 "init_stdev": 1.0,
-                "max_value": 30.0,
-                "min_value": -30.0,
                 "mutate_power": 0.5,
                 "mutate_rate": 0.8,
                 "replace_rate": 0.1
@@ -65,7 +52,6 @@
         "genome": {
             "compatibility_disjoint_coefficient": 1.0,
             "compatibility_weight_coefficient": 0.5,
-            "feedforward": "True",
             "single_structural_mutation": "False",
             "conn_add_prob": 0.5,
             "conn_delete_prob": 0.5,
@@ -81,28 +67,5 @@
             "survival_threshold": 0.2,
             "min_species_size": 1
         }
-    },
-    "hyperneat": {
-        "substrate": {
-            "type": "feedforward",
-            "layers": [
-                3,
-                10,
-                10,
-                1
-            ],
-            "x_lim": [
-                -5,
-                5
-            ],
-            "y_lim": [
-                -5,
-                5
-            ],
-            "threshold": 0.2,
-            "max_weight": 5.0
-        }
-    },
-    "es-hyperneat": {
     }
 }
