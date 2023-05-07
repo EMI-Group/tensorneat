@@ -1,12 +1,9 @@
-from typing import List, Tuple, Dict, Union
+from typing import List, Tuple, Dict, Union, Callable
 from itertools import count
 
 import jax
 import numpy as np
 from numpy.typing import NDArray
-
-from .genome import create_distance_function
-
 
 class Species(object):
 
@@ -47,14 +44,14 @@ class SpeciesController:
         self.species_idxer = count(0)
         self.species: Dict[int, Species] = {}  # species_id -> species
 
-        self.o2o_distance = create_distance_function(self.config, type='o2o')
-        self.o2m_distance = create_distance_function(self.config, type='o2m')
-
-    def speciate(self, pop_nodes: NDArray, pop_connections: NDArray, generation: int) -> None:
+    def speciate(self, pop_nodes: NDArray, pop_connections: NDArray, generation: int,
+                 o2o_distance: Callable, o2m_distance: Callable) -> None:
         """
         :param pop_nodes:
         :param pop_connections:
         :param generation: use to flag the created time of new species
+        :param o2o_distance: distance function for one-to-one comparison
+        :param o2m_distance: distance function for one-to-many comparison
         :return:
         """
         unspeciated = np.full((pop_nodes.shape[0],), True, dtype=bool)
@@ -67,7 +64,7 @@ class SpeciesController:
         for sid, species in self.species.items():
             # calculate the distance between the representative and the population
             r_nodes, r_connections = species.representative
-            distances = self.o2m_distance(r_nodes, r_connections, pop_nodes, pop_connections)
+            distances = o2m_distance(r_nodes, r_connections, pop_nodes, pop_connections)
             distances = jax.device_get(distances)
             min_idx = find_min_with_mask(distances, unspeciated)  # find the min un-specified distance
 
@@ -81,7 +78,7 @@ class SpeciesController:
         if previous_species_list:  # exist previous species
             rid_list = [new_representatives[sid] for sid in previous_species_list]
             res_pop_distance = [
-                jax.device_get(self.o2m_distance(pop_nodes[rid], pop_connections[rid], pop_nodes, pop_connections))
+                jax.device_get(o2m_distance(pop_nodes[rid], pop_connections[rid], pop_nodes, pop_connections))
                 for rid in rid_list
             ]
 
@@ -107,7 +104,7 @@ class SpeciesController:
                 # the representatives of new species
                 sid, rid = list(zip(*[(k, v) for k, v in new_representatives.items()]))
                 distances = [
-                    self.o2o_distance(pop_nodes[i], pop_connections[i], pop_nodes[r], pop_connections[r])
+                    o2o_distance(pop_nodes[i], pop_connections[i], pop_nodes[r], pop_connections[r])
                     for r in rid
                 ]
                 distances = np.array(distances)
