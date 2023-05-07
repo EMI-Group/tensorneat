@@ -9,8 +9,8 @@
         "population": {
             "fitness_criterion": "max",
             "fitness_threshold": 76,
-            "generation_limit": 1000,
-            "pop_size": 200,
+            "generation_limit": 100,
+            "pop_size": 1000,
             "reset_on_extinction": "False"
         },
         "gene": {
