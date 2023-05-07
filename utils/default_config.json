@@ -9,7 +9,7 @@
         "population": {
             "fitness_criterion": "max",
             "fitness_threshold": 76,
-            "generation_limit": 1000,
+            "generation_limit": 100,
             "pop_size": 100,
             "reset_on_extinction": "False"
         },

@@ -8,6 +8,13 @@ from jax import numpy as jnp
 from .utils import flatten_connections, unflatten_connections
 
 
+def create_crossover_function(batch: bool):
+    if batch:
+        return batch_crossover
+    else:
+        return crossover
+
+
 @vmap
 def batch_crossover(randkeys: Array, batch_nodes1: Array, batch_connections1: Array, batch_nodes2: Array,
                     batch_connections2: Array) -> Tuple[Array, Array]:
