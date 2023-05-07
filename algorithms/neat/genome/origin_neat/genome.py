@@ -18,8 +18,8 @@ class Genome:
         # Fitness results.
         self.fitness = None
 
-        self.input_keys = [-i - 1 for i in range(config.basic.num_inputs)]
-        self.output_keys = [i for i in range(config.basic.num_outputs)]
+        # self.input_keys = [-i - 1 for i in range(config.basic.num_inputs)]
+        # self.output_keys = [i for i in range(config.basic.num_outputs)]
 
         if init_val:
             self.initialize()

@@ -2,8 +2,8 @@
     "basic": {
         "num_inputs": 2,
         "num_outputs": 1,
-        "init_maximum_nodes": 5,
-        "expands_coe": 1.5
+        "init_maximum_nodes": 10,
+        "expands_coe": 2
     },
     "neat": {
         "population": {
@@ -39,7 +39,7 @@
                 "mutate_rate": 0.01
             },
             "weight": {
-                "init_mean": 0.0,
+                "init_mean": 1.0,
                 "init_stdev": 1.0,
                 "mutate_power": 0.5,
                 "mutate_rate": 0.8,
@@ -59,7 +59,7 @@
             "node_delete_prob": 0.2
         },
         "species": {
-            "compatibility_threshold": 3.5,
+            "compatibility_threshold": 3,
             "species_fitness_func": "max",
             "max_stagnation": 20,
             "species_elitism": 2,

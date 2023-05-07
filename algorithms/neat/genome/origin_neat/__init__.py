@@ -16,7 +16,7 @@ def object2array(genome, N):
     nodes = np.full((N, 5), np.nan)
     connections = np.full((2, N, N), np.nan)
 
-    assert len(genome.nodes) + len(genome.input_keys) + 1 <= N  # remain one inf row for mutation adding extra node
+    assert len(genome.nodes) + len(genome.input_keys) <= N  # remain one inf row for mutation adding extra node
 
     idx = 0
     n2i = {}
