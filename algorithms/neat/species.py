@@ -5,6 +5,7 @@ import jax
 import numpy as np
 from numpy.typing import NDArray
 
+
 class Species(object):
 
     def __init__(self, key, generation):
