@@ -9,8 +9,8 @@
         "population": {
             "fitness_criterion": "max",
             "fitness_threshold": 76,
-            "generation_limit": 100,
-            "pop_size": 100,
+            "generation_limit": 1000,
+            "pop_size": 200,
             "reset_on_extinction": "False"
         },
         "gene": {
@@ -30,16 +30,16 @@
             },
             "activation": {
                 "default": "sigmoid",
-                "options": ["sigmoid"],
-                "mutate_rate": 0.01
+                "options": ["sigmoid", "gauss", "relu"],
+                "mutate_rate": 0.1
             },
             "aggregation": {
                 "default": "sum",
-                "options": ["sum"],
-                "mutate_rate": 0.01
+                "options": ["sum", "max", "min", "mean"],
+                "mutate_rate": 0.1
             },
             "weight": {
-                "init_mean": 1.0,
+                "init_mean": 0.0,
                 "init_stdev": 1.0,
                 "mutate_power": 0.5,
                 "mutate_rate": 0.8,

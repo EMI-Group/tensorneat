@@ -50,7 +50,7 @@ def initialize_genomes(pop_size: int,
                        default_response: float = 1.0,
                        default_act: int = 0,
                        default_agg: int = 0,
-                       default_weight: float = 1.0) \
+                       default_weight: float = 0.0) \
         -> Tuple[NDArray, NDArray, NDArray, NDArray]:
     """
     Initialize genomes with default values.
