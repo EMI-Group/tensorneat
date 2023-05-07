@@ -6,7 +6,8 @@ from jax import numpy as jnp, Array
 from jax import jit
 
 I_INT = jnp.iinfo(jnp.int32).max  # infinite int
-
+EMPTY_NODE = jnp.full((1, 5), jnp.nan)
+EMPTY_CON = jnp.full((1, 4), jnp.nan)
 
 @jit
 def flatten_connections(keys, connections):

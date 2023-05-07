@@ -1,12 +1,12 @@
 from typing import List, Union, Tuple, Callable
 import time
 
-import numpy as np
+import jax
 
 from .species import SpeciesController
-from .genome.numpy import create_initialize_function, create_mutate_function, create_forward_function
-from .genome.numpy import batch_crossover
-from .genome.numpy import expand, expand_single, pop_analysis
+from .genome import create_initialize_function, create_mutate_function, create_forward_function
+from .genome import batch_crossover
+from .genome import expand, expand_single, pop_analysis
 
 from .genome.origin_neat import *
 
@@ -19,7 +19,8 @@ class Pipeline:
     Neat algorithm pipeline.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, seed=42):
+        self.randkey = jax.random.PRNGKey(seed)
 
         self.config = config
         self.N = config.basic.init_maximum_nodes
@@ -69,30 +70,29 @@ class Pipeline:
 
         self.update_next_generation(crossover_pair)
 
-        analysis = pop_analysis(self.pop_nodes, self.pop_connections, self.input_idx, self.output_idx)
+        # analysis = pop_analysis(self.pop_nodes, self.pop_connections, self.input_idx, self.output_idx)
 
-        try:
-            for nodes, connections in zip(self.pop_nodes, self.pop_connections):
-                g = array2object(self.config, nodes, connections)
-                print(g)
-                net = FeedForwardNetwork.create(g)
-                real_out = [net.activate(x) for x in xor_inputs]
-                func = create_forward_function(nodes, connections, self.N, self.input_idx, self.output_idx, batch=True)
-                out = func(xor_inputs)
-                real_out = np.array(real_out)
-                out = np.array(out)
-                print(real_out, out)
-                assert np.allclose(real_out, out)
-        except AssertionError:
-            np.save("err_nodes.npy", self.pop_nodes)
-            np.save("err_connections.npy", self.pop_connections)
+        # try:
+        #     for nodes, connections in zip(self.pop_nodes, self.pop_connections):
+        #         g = array2object(self.config, nodes, connections)
+        #         print(g)
+        #         net = FeedForwardNetwork.create(g)
+        #         real_out = [net.activate(x) for x in xor_inputs]
+        #         func = create_forward_function(nodes, connections, self.N, self.input_idx, self.output_idx, batch=True)
+        #         out = func(xor_inputs)
+        #         real_out = np.array(real_out)
+        #         out = np.array(out)
+        #         print(real_out, out)
+        #         assert np.allclose(real_out, out)
+        # except AssertionError:
+        #     np.save("err_nodes.npy", self.pop_nodes)
+        #     np.save("err_connections.npy", self.pop_connections)
 
         # print(g)
 
         self.species_controller.speciate(self.pop_nodes, self.pop_connections, self.generation)
 
         self.expand()
-
 
     def auto_run(self, fitness_func, analysis: Union[Callable, str] = "default"):
         for _ in range(self.config.neat.population.generation_limit):
@@ -109,7 +109,6 @@ class Pipeline:
             self.tell(fitnesses)
         print("Generation limit reached!")
 
-
     def update_next_generation(self, crossover_pair: List[Union[int, Tuple[int, int]]]) -> None:
         """
         create the next generation
@@ -117,6 +116,7 @@ class Pipeline:
         """
 
         assert self.pop_nodes.shape[0] == self.pop_size
+        k1, k2, self.randkey = jax.random.split(self.randkey, 3)
 
         # crossover
         # prepare elitism mask and crossover pair
@@ -127,19 +127,20 @@ class Pipeline:
                 crossover_pair[i] = (pair, pair)
         crossover_pair = np.array(crossover_pair)
 
+        crossover_rand_keys = jax.random.split(k1, self.pop_size)
+
         # batch crossover
         wpn = self.pop_nodes[crossover_pair[:, 0]]  # winner pop nodes
         wpc = self.pop_connections[crossover_pair[:, 0]]  # winner pop connections
         lpn = self.pop_nodes[crossover_pair[:, 1]]  # loser pop nodes
         lpc = self.pop_connections[crossover_pair[:, 1]]  # loser pop connections
-        # npn, npc = batch_crossover(crossover_rand_keys, wpn, wpc, lpn, lpc)  # new pop nodes, new pop connections
-        npn, npc = batch_crossover(wpn, wpc, lpn, lpc)
-        # print(pop_analysis(npn, npc, self.input_idx, self.output_idx))
+        npn, npc = batch_crossover(crossover_rand_keys, wpn, wpc, lpn, lpc)  # new pop nodes, new pop connections
 
         # mutate
+        mutate_rand_keys = jax.random.split(k2, self.pop_size)
         new_node_keys = np.array(self.fetch_new_node_keys())
 
-        m_npn, m_npc = self.mutate_func(npn, npc, new_node_keys)  # mutate_new_pop_nodes
+        m_npn, m_npc = self.mutate_func(mutate_rand_keys, npn, npc, new_node_keys)  # mutate_new_pop_nodes
 
         # elitism don't mutate
         # (pop_size, ) to (pop_size, 1, 1)
@@ -155,7 +156,6 @@ class Pipeline:
             if not np.isin(key, node_keys):  # the new node key is not used
                 unused.append(key)
         self.new_node_keys_pool = unused + self.new_node_keys_pool
-
 
     def expand(self):
         """
@@ -176,7 +176,6 @@ class Pipeline:
             for s in self.species_controller.species.values():
                 s.representative = expand_single(*s.representative, self.N)
 
-
     def fetch_new_node_keys(self):
         # if remain unused keys are not enough, create new keys
         if len(self.new_node_keys_pool) < self.pop_size:
@@ -188,7 +187,6 @@ class Pipeline:
         res = self.new_node_keys_pool[:self.pop_size]
         self.new_node_keys_pool = self.new_node_keys_pool[self.pop_size:]
         return res
-
 
     def default_analysis(self, fitnesses):
         max_f, min_f, mean_f, std_f = max(fitnesses), min(fitnesses), np.mean(fitnesses), np.std(fitnesses)

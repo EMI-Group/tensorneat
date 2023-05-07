@@ -1,9 +1,7 @@
-from functools import partial
-
 from jax import jit, vmap, Array
 from jax import numpy as jnp
 
-from algorithms.neat.genome.utils import flatten_connections, set_operation_analysis
+from .utils import flatten_connections, EMPTY_NODE, EMPTY_CON
 
 
 @jit
@@ -14,55 +12,65 @@ def distance(nodes1: Array, connections1: Array, nodes2: Array, connections2: Ar
     connections are a 3-d array with shape (2, N, N), axis 0 means [weights, enable]
     """
 
-    node_distance = gene_distance(nodes1, nodes2, 'node')
+    nd = node_distance(nodes1, nodes2)  # node distance
 
     # refactor connections
     keys1, keys2 = nodes1[:, 0], nodes2[:, 0]
     cons1 = flatten_connections(keys1, connections1)
     cons2 = flatten_connections(keys2, connections2)
+    cd = connection_distance(cons1, cons2)  # connection distance
+    return nd + cd
 
-    connection_distance = gene_distance(cons1, cons2, 'connection')
-    return node_distance + connection_distance
+
+@jit
+def node_distance(nodes1, nodes2, disjoint_coe=1., compatibility_coe=0.5):
+    node_cnt1 = jnp.sum(~jnp.isnan(nodes1[:, 0]))
+    node_cnt2 = jnp.sum(~jnp.isnan(nodes2[:, 0]))
+    max_cnt = jnp.maximum(node_cnt1, node_cnt2)
+
+    nodes = jnp.concatenate((nodes1, nodes2), axis=0)
+    keys = nodes[:, 0]
+    sorted_indices = jnp.argsort(keys, axis=0)
+    nodes = nodes[sorted_indices]
+    nodes = jnp.concatenate([nodes, EMPTY_NODE], axis=0)  # add a nan row to the end
+    fr, sr = nodes[:-1], nodes[1:]  # first row, second row
+    nan_mask = jnp.isnan(nodes[:, 0])
+
+    intersect_mask = (fr[:, 0] == sr[:, 0]) & ~nan_mask[:-1]
+
+    non_homologous_cnt = node_cnt1 + node_cnt2 - 2 * jnp.sum(intersect_mask)
+    nd = batch_homologous_node_distance(fr, sr)
+    nd = jnp.where(jnp.isnan(nd), 0, nd)
+    homologous_distance = jnp.sum(nd * intersect_mask)
+
+    val = non_homologous_cnt * disjoint_coe + homologous_distance * compatibility_coe
+    return jnp.where(max_cnt == 0, 0, val / max_cnt)
 
 
-@partial(jit, static_argnames=["gene_type"])
-def gene_distance(ar1, ar2, gene_type, compatibility_coe=0.5, disjoint_coe=1.):
-    if gene_type == 'node':
-        keys1, keys2 = ar1[:, :1], ar2[:, :1]
-    else:  # connection
-        keys1, keys2 = ar1[:, :2], ar2[:, :2]
+@jit
+def connection_distance(cons1, cons2, disjoint_coe=1., compatibility_coe=0.5):
+    con_cnt1 = jnp.sum(~jnp.isnan(cons1[:, 2]))  # weight is not nan, means the connection exists
+    con_cnt2 = jnp.sum(~jnp.isnan(cons2[:, 2]))
+    max_cnt = jnp.maximum(con_cnt1, con_cnt2)
 
-    n_sorted_indices, n_intersect_mask, n_union_mask = set_operation_analysis(keys1, keys2)
-    nodes = jnp.concatenate((ar1, ar2), axis=0)
-    sorted_nodes = nodes[n_sorted_indices]
+    cons = jnp.concatenate((cons1, cons2), axis=0)
+    keys = cons[:, :2]
+    sorted_indices = jnp.lexsort(keys.T[::-1])
+    cons = cons[sorted_indices]
+    cons = jnp.concatenate([cons, EMPTY_CON], axis=0)  # add a nan row to the end
+    fr, sr = cons[:-1], cons[1:]  # first row, second row
 
-    if gene_type == 'node':
-        node_exist_mask = jnp.any(~jnp.isnan(sorted_nodes[:, 1:]), axis=1)
-    else:
-        node_exist_mask = jnp.any(~jnp.isnan(sorted_nodes[:, 2:]), axis=1)
+    # both genome has such connection
+    intersect_mask = jnp.all(fr[:, :2] == sr[:, :2], axis=1) & ~jnp.isnan(fr[:, 2]) & ~jnp.isnan(sr[:, 2])
 
-    n_intersect_mask = n_intersect_mask & node_exist_mask
-    n_union_mask = n_union_mask & node_exist_mask
-
-    fr_sorted_nodes, sr_sorted_nodes = sorted_nodes[:-1], sorted_nodes[1:]
-
-    non_homologous_cnt = jnp.sum(n_union_mask) - jnp.sum(n_intersect_mask)
-    if gene_type == 'node':
-        node_distance = batch_homologous_node_distance(fr_sorted_nodes, sr_sorted_nodes)
-    else:  # connection
-        node_distance = homologous_connection_distance(fr_sorted_nodes, sr_sorted_nodes)
-
-    node_distance = jnp.where(jnp.isnan(node_distance), 0, node_distance)
-    homologous_distance = jnp.sum(node_distance * n_intersect_mask[:-1])
-
-    gene_cnt1 = jnp.sum(jnp.all(~jnp.isnan(ar1), axis=1))
-    gene_cnt2 = jnp.sum(jnp.all(~jnp.isnan(ar2), axis=1))
-    max_cnt = jnp.maximum(gene_cnt1, gene_cnt2)
+    non_homologous_cnt = con_cnt1 + con_cnt2 - 2 * jnp.sum(intersect_mask)
+    cd = batch_homologous_connection_distance(fr, sr)
+    cd = jnp.where(jnp.isnan(cd), 0, cd)
+    homologous_distance = jnp.sum(cd * intersect_mask)
 
     val = non_homologous_cnt * disjoint_coe + homologous_distance * compatibility_coe
 
-    return jnp.where(max_cnt == 0, 0, val / max_cnt)  # consider the case that both genome has no gene
-
+    return jnp.where(max_cnt == 0, 0, val / max_cnt)
 
 @vmap
 def batch_homologous_node_distance(b_n1, b_n2):

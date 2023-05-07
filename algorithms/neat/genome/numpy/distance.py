@@ -82,44 +82,6 @@ def connection_distance(cons1, cons2, disjoint_coe=1., compatibility_coe=0.5):
         return val / max_cnt
 
 
-def gene_distance(ar1, ar2, gene_type, compatibility_coe=0.5, disjoint_coe=1.):
-    if gene_type == 'node':
-        keys1, keys2 = ar1[:, :1], ar2[:, :1]
-    else:  # connection
-        keys1, keys2 = ar1[:, :2], ar2[:, :2]
-
-    n_sorted_indices, n_intersect_mask, n_union_mask = set_operation_analysis(keys1, keys2)
-    nodes = np.concatenate((ar1, ar2), axis=0)
-    sorted_nodes = nodes[n_sorted_indices]
-
-    if gene_type == 'node':
-        node_exist_mask = np.any(~np.isnan(sorted_nodes[:, 1:]), axis=1)
-    else:
-        node_exist_mask = np.any(~np.isnan(sorted_nodes[:, 2:]), axis=1)
-
-    n_intersect_mask = n_intersect_mask & node_exist_mask
-    n_union_mask = n_union_mask & node_exist_mask
-
-    fr_sorted_nodes, sr_sorted_nodes = sorted_nodes[:-1], sorted_nodes[1:]
-
-    non_homologous_cnt = np.sum(n_union_mask) - np.sum(n_intersect_mask)
-    if gene_type == 'node':
-        node_distance = batch_homologous_node_distance(fr_sorted_nodes, sr_sorted_nodes)
-    else:  # connection
-        node_distance = batch_homologous_connection_distance(fr_sorted_nodes, sr_sorted_nodes)
-
-    node_distance = np.where(np.isnan(node_distance), 0, node_distance)
-    homologous_distance = np.sum(node_distance * n_intersect_mask[:-1])
-
-    gene_cnt1 = np.sum(np.all(~np.isnan(ar1), axis=1))
-    gene_cnt2 = np.sum(np.all(~np.isnan(ar2), axis=1))
-    max_cnt = np.maximum(gene_cnt1, gene_cnt2)
-
-    val = non_homologous_cnt * disjoint_coe + homologous_distance * compatibility_coe
-
-    return np.where(max_cnt == 0, 0, val / max_cnt)  # consider the case that both genome has no gene
-
-
 def batch_homologous_node_distance(b_n1, b_n2):
     res = []
     for n1, n2 in zip(b_n1, b_n2):

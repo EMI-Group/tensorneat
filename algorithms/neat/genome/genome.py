@@ -208,7 +208,6 @@ def pop_analysis(pop_nodes, pop_connections, input_keys, output_keys):
     return res
 
 
-
 @jit
 def add_node(new_node_key: int, nodes: Array, connections: Array,
              bias: float = 0.0, response: float = 1.0, act: int = 0, agg: int = 0) -> Tuple[Array, Array]:
@@ -247,7 +246,7 @@ def delete_node_by_idx(idx: int, nodes: Array, connections: Array) -> Tuple[Arra
 
 @jit
 def add_connection(from_node: int, to_node: int, nodes: Array, connections: Array,
-                   weight: float = 0.0, enabled: bool = True) -> Tuple[Array, Array]:
+                   weight: float = 1.0, enabled: bool = True) -> Tuple[Array, Array]:
     """
     add a new connection to the genome.
     """

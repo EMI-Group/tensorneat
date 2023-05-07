@@ -17,7 +17,7 @@ def evaluate(forward_func: Callable) -> List[float]:
     :return:
     """
     outs = forward_func(xor_inputs)
-    fitnesses = 4 - np.sum(np.abs(outs - xor_outputs), axis=(1, 2))
+    fitnesses = 4 - np.sum((outs - xor_outputs) ** 2, axis=(1, 2))
     # print(fitnesses)
     return fitnesses.tolist()  # returns a list
 
@@ -26,7 +26,7 @@ def evaluate(forward_func: Callable) -> List[float]:
 @partial(using_cprofile, root_abs_path='/mnt/e/neat-jax/', replace_pattern="/mnt/e/neat-jax/")
 def main():
     config = Configer.load_config()
-    pipeline = Pipeline(config)
+    pipeline = Pipeline(config, seed=123123)
     pipeline.auto_run(evaluate)
 
     # for _ in range(100):
@@ -38,5 +38,4 @@ def main():
 
 
 if __name__ == '__main__':
-    np.random.seed(63124326)
     main()
