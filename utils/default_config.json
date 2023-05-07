@@ -2,7 +2,7 @@
     "basic": {
         "num_inputs": 2,
         "num_outputs": 1,
-        "init_maximum_nodes": 10,
+        "init_maximum_nodes": 25,
         "expands_coe": 2
     },
     "neat": {
