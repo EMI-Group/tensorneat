@@ -18,7 +18,6 @@ def evaluate(forward_func: Callable) -> List[float]:
     """
     outs = forward_func(xor_inputs)
     fitnesses = 4 - np.sum((outs - xor_outputs) ** 2, axis=(1, 2))
-    # print(fitnesses)
     return fitnesses.tolist()  # returns a list
 
 
@@ -28,13 +27,6 @@ def main():
     config = Configer.load_config()
     pipeline = Pipeline(config, seed=11323)
     pipeline.auto_run(evaluate)
-
-    # for _ in range(100):
-    #     s = time.time()
-    #     forward_func = pipeline.ask(batch=True)
-    #     fitnesses = evaluate(forward_func)
-    #     pipeline.tell(fitnesses)
-    #     print(time.time() - s)
 
 
 if __name__ == '__main__':

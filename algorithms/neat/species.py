@@ -105,7 +105,6 @@ class SpeciesController:
             if len(new_representatives) != 0:
                 # the representatives of new species
                 sid, rid = list(zip(*[(k, v) for k, v in new_representatives.items()]))
-
                 distances = [
                     self.distance(pop_nodes[i], pop_connections[i], pop_nodes[r], pop_connections[r])
                     for r in rid
