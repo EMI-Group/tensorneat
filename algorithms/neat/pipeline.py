@@ -37,16 +37,18 @@ class Pipeline:
         self.best_fitness = float('-inf')
         self.generation_timestamp = time.time()
 
-    def ask(self, batch: bool):
+    def ask(self):
         """
         Create a forward function for the population.
-        :param batch:
         :return:
         Algorithm gives the population a forward function, then environment gives back the fitnesses.
         """
-        func = create_forward_function(self.pop_nodes, self.pop_connections, self.N, self.input_idx, self.output_idx,
-                                       batch=batch)
-        return func
+        return self.function_factory.ask(self.pop_nodes, self.pop_connections)
+
+        #
+        # func = create_forward_function(self.pop_nodes, self.pop_connections, self.N, self.input_idx, self.output_idx,
+        #                                batch=batch)
+        # return func
 
     def tell(self, fitnesses):
 
@@ -65,7 +67,7 @@ class Pipeline:
 
     def auto_run(self, fitness_func, analysis: Union[Callable, str] = "default"):
         for _ in range(self.config.neat.population.generation_limit):
-            forward_func = self.ask(batch=True)
+            forward_func = self.ask()
             fitnesses = fitness_func(forward_func)
 
             if analysis is not None:

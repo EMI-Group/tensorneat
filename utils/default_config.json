@@ -2,9 +2,10 @@
     "basic": {
         "num_inputs": 2,
         "num_outputs": 1,
-        "init_maximum_nodes": 10,
+        "problem_batch": 4,
+        "init_maximum_nodes": 20,
         "expands_coe": 2,
-        "pre_compile_times": 3
+        "pre_compile_times": 0
     },
     "neat": {
         "population": {

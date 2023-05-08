@@ -8,7 +8,7 @@ from utils import Configer
 from algorithms.neat import Pipeline
 from time_utils import using_cprofile
 
-xor_inputs = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
+xor_inputs = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.float32)
 xor_outputs = np.array([[0], [1], [1], [0]])
 
 
