@@ -32,8 +32,10 @@ class Pipeline:
         self.compile_functions(debug=True)
 
         self.generation = 0
-        self.species_controller.speciate(self.pop_nodes, self.pop_connections,
-                                         self.generation, self.o2o_distance, self.o2m_distance)
+        self.species_controller.init_speciate(self.pop_nodes, self.pop_connections)
+
+        # self.species_controller.speciate(self.pop_nodes, self.pop_connections,
+        #                                  self.generation, self.o2o_distance, self.o2m_distance)
 
         self.best_fitness = float('-inf')
 

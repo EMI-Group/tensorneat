@@ -45,6 +45,20 @@ class SpeciesController:
         self.species_idxer = count(0)
         self.species: Dict[int, Species] = {}  # species_id -> species
 
+    def init_speciate(self, pop_nodes: NDArray, pop_connections: NDArray):
+        """
+        speciate for the first generation
+        :param pop_connections:
+        :param pop_nodes:
+        :return:
+        """
+        pop_size = pop_nodes.shape[0]
+        species_id = next(self.species_idxer)
+        s = Species(species_id, 0)
+        members = list(range(pop_size))
+        s.update((pop_nodes[0], pop_connections[0]), members)
+        self.species[species_id] = s
+
     def speciate(self, pop_nodes: NDArray, pop_connections: NDArray, generation: int,
                  o2o_distance: Callable, o2m_distance: Callable) -> None:
         """
