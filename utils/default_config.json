@@ -2,7 +2,7 @@
     "basic": {
         "num_inputs": 2,
         "num_outputs": 1,
-        "init_maximum_nodes": 10,
+        "init_maximum_nodes": 20,
         "expands_coe": 2
     },
     "neat": {
@@ -30,12 +30,12 @@
             },
             "activation": {
                 "default": "sigmoid",
-                "options": ["sigmoid", "gauss", "relu"],
+                "options": ["sigmoid"],
                 "mutate_rate": 0.1
             },
             "aggregation": {
                 "default": "sum",
-                "options": ["sum", "max", "min", "mean"],
+                "options": ["sum"],
                 "mutate_rate": 0.1
             },
             "weight": {
@@ -59,7 +59,7 @@
             "node_delete_prob": 0.2
         },
         "species": {
-            "compatibility_threshold": 3,
+            "compatibility_threshold": 2.5,
             "species_fitness_func": "max",
             "max_stagnation": 20,
             "species_elitism": 2,

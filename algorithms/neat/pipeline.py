@@ -29,7 +29,7 @@ class Pipeline:
         self.initialize_func = create_initialize_function(config)
         self.pop_nodes, self.pop_connections, self.input_idx, self.output_idx = self.initialize_func()
 
-        self.compile_functions()
+        self.compile_functions(debug=True)
 
         self.generation = 0
         self.species_controller.speciate(self.pop_nodes, self.pop_connections,
@@ -141,13 +141,13 @@ class Pipeline:
                 s.representative = expand_single(*s.representative, self.N)
 
             # update functions
-            self.compile_functions()
+            self.compile_functions(debug=True)
 
-    def compile_functions(self):
-        self.mutate_func = create_mutate_function(self.N, self.config, batch=True)
-        self.crossover_func = create_crossover_function(self.N, self.config, batch=True)
-        self.o2o_distance = create_distance_function(self.N, self.config, type='o2o')
-        self.o2m_distance = create_distance_function(self.N, self.config, type='o2m')
+    def compile_functions(self, debug=False):
+        self.mutate_func = create_mutate_function(self.N, self.config, batch=True, debug=debug)
+        self.crossover_func = create_crossover_function(self.N, self.config, batch=True, debug=debug)
+        self.o2o_distance = create_distance_function(self.N, self.config, type='o2o', debug=debug)
+        self.o2m_distance = create_distance_function(self.N, self.config, type='o2m', debug=debug)
 
     def default_analysis(self, fitnesses):
         max_f, min_f, mean_f, std_f = max(fitnesses), min(fitnesses), np.mean(fitnesses), np.std(fitnesses)

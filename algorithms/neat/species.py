@@ -105,7 +105,7 @@ class SpeciesController:
                 # the representatives of new species
                 sid, rid = list(zip(*[(k, v) for k, v in new_representatives.items()]))
                 distances = [
-                    o2o_distance(pop_nodes[i], pop_connections[i], pop_nodes[r], pop_connections[r])
+                    jax.device_get(o2o_distance(pop_nodes[i], pop_connections[i], pop_nodes[r], pop_connections[r]))
                     for r in rid
                 ]
                 distances = np.array(distances)

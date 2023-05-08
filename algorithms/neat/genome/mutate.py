@@ -13,12 +13,13 @@ from .activations import act_name2key
 from .aggregations import agg_name2key
 
 
-def create_mutate_function(N, config, batch: bool):
+def create_mutate_function(N, config, batch: bool, debug: bool = False):
     """
     create mutate function for different situations
     :param N:
     :param config:
     :param batch: mutate for population or not
+    :param debug:
     :return:
     """
     num_inputs = config.basic.num_inputs
@@ -81,24 +82,31 @@ def create_mutate_function(N, config, batch: bool):
                       single_structure_mutate)
 
     if not batch:
-        rand_key_lower = jnp.zeros((2, ), dtype=jnp.uint32)
+        rand_key_lower = jnp.zeros((2,), dtype=jnp.uint32)
         nodes_lower = jnp.zeros((N, 5))
         connections_lower = jnp.zeros((2, N, N))
         new_node_key_lower = jnp.zeros((), dtype=jnp.int32)
-        return jit(mutate_with_args).lower(rand_key_lower, nodes_lower, connections_lower, new_node_key_lower).compile()
+        res_func = jit(mutate_with_args).lower(rand_key_lower, nodes_lower,
+                                               connections_lower, new_node_key_lower).compile()
+        if debug:
+            return lambda *args: res_func(*args)
+        else:
+            return res_func
     else:
         pop_size = config.neat.population.pop_size
         rand_key_lower = jnp.zeros((pop_size, 2), dtype=jnp.uint32)
         nodes_lower = jnp.zeros((pop_size, N, 5))
         connections_lower = jnp.zeros((pop_size, 2, N, N))
-        new_node_key_lower = jnp.zeros((pop_size, ), dtype=jnp.int32)
+        new_node_key_lower = jnp.zeros((pop_size,), dtype=jnp.int32)
+
         batched_mutate_func = jit(vmap(mutate_with_args)).lower(rand_key_lower, nodes_lower,
                                                                 connections_lower, new_node_key_lower).compile()
+        if debug:
+            return lambda *args: batched_mutate_func(*args)
+        else:
+            return batched_mutate_func
 
-        return batched_mutate_func
 
-
-# @partial(jit, static_argnames=["single_structure_mutate"])
 def mutate(rand_key: Array,
            nodes: Array,
            connections: Array,
@@ -239,7 +247,6 @@ def mutate(rand_key: Array,
     return nodes, connections
 
 
-# @jit
 def mutate_values(rand_key: Array,
                   nodes: Array,
                   connections: Array,
@@ -320,7 +327,6 @@ def mutate_values(rand_key: Array,
     return nodes, connections
 
 
-# @jit
 def mutate_float_values(rand_key: Array, old_vals: Array, mean: float, std: float,
                         mutate_strength: float, mutate_rate: float, replace_rate: float) -> Array:
     """
@@ -353,7 +359,6 @@ def mutate_float_values(rand_key: Array, old_vals: Array, mean: float, std: floa
     return new_vals
 
 
-# @jit
 def mutate_int_values(rand_key: Array, old_vals: Array, val_list: Array, replace_rate: float) -> Array:
     """
     Mutate integer values (act, agg) of a given array.
@@ -376,7 +381,6 @@ def mutate_int_values(rand_key: Array, old_vals: Array, val_list: Array, replace
     return new_vals
 
 
-# @jit
 def mutate_add_node(rand_key: Array, new_node_key: int, nodes: Array, connections: Array,
                     default_bias: float = 0, default_response: float = 1,
                     default_act: int = 0, default_agg: int = 0) -> Tuple[Array, Array]:
@@ -423,7 +427,6 @@ def mutate_add_node(rand_key: Array, new_node_key: int, nodes: Array, connection
     return nodes, connections
 
 
-# @jit
 def mutate_delete_node(rand_key: Array, nodes: Array, connections: Array,
                        input_keys: Array, output_keys: Array) -> Tuple[Array, Array]:
     """
@@ -457,7 +460,6 @@ def mutate_delete_node(rand_key: Array, nodes: Array, connections: Array,
     return nodes, connections
 
 
-# @jit
 def mutate_add_connection(rand_key: Array, nodes: Array, connections: Array,
                           input_keys: Array, output_keys: Array) -> Tuple[Array, Array]:
     """
@@ -496,7 +498,6 @@ def mutate_add_connection(rand_key: Array, nodes: Array, connections: Array,
     return nodes, connections
 
 
-# @jit
 def mutate_delete_connection(rand_key: Array, nodes: Array, connections: Array):
     """
     Randomly delete a connection.
@@ -519,7 +520,6 @@ def mutate_delete_connection(rand_key: Array, nodes: Array, connections: Array):
     return nodes, connections
 
 
-# @partial(jit, static_argnames=('allow_input_keys', 'allow_output_keys'))
 def choice_node_key(rand_key: Array, nodes: Array,
                     input_keys: Array, output_keys: Array,
                     allow_input_keys: bool = False, allow_output_keys: bool = False) -> Tuple[Array, Array]:
@@ -548,7 +548,6 @@ def choice_node_key(rand_key: Array, nodes: Array,
     return key, idx
 
 
-# @jit
 def choice_connection_key(rand_key: Array, nodes: Array, connection: Array) -> Tuple[Array, Array, Array, Array]:
     """
     Randomly choose a connection key from the given connections.
@@ -576,6 +575,5 @@ def choice_connection_key(rand_key: Array, nodes: Array, connection: Array) -> T
     return from_key, to_key, from_idx, to_idx
 
 
-# @jit
 def rand(rand_key):
     return jax.random.uniform(rand_key, ())

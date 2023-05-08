@@ -74,6 +74,7 @@ def topological_sort(nodes: Array, connections: Array) -> Array:
     return res
 
 
+@jit
 @vmap
 def batch_topological_sort(pop_nodes: Array, pop_connections: Array) -> Array:
     """
