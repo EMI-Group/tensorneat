@@ -2,7 +2,7 @@
     "basic": {
         "num_inputs": 2,
         "num_outputs": 1,
-        "init_maximum_nodes": 20,
+        "init_maximum_nodes": 30,
         "expands_coe": 2
     },
     "neat": {
@@ -59,7 +59,7 @@
             "node_delete_prob": 0.2
         },
         "species": {
-            "compatibility_threshold": 2.5,
+            "compatibility_threshold": 3,
             "species_fitness_func": "max",
             "max_stagnation": 20,
             "species_elitism": 2,

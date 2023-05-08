@@ -27,7 +27,7 @@ def evaluate(forward_func: Callable) -> List[float]:
 # @partial(using_cprofile, root_abs_path='/mnt/e/neat-jax/', replace_pattern="/mnt/e/neat-jax/")
 def main():
     config = Configer.load_config()
-    pipeline = Pipeline(config, seed=11323)
+    pipeline = Pipeline(config, seed=114514)
     pipeline.auto_run(evaluate)
 
 
