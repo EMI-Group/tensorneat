@@ -33,9 +33,6 @@ def create_distance_function(N, config, type: str, debug: bool = False):
         else:
             return res_func
 
-        # return lambda nodes1, connections1, nodes2, connections2: \
-        #     distance_numpy(nodes1, connections1, nodes2, connections2, disjoint_coe, compatibility_coe)
-
     elif type == 'o2m':
         vmap_func = vmap(distance_with_args, in_axes=(None, None, 0, 0))
         pop_size = config.neat.population.pop_size

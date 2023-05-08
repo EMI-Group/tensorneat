@@ -45,7 +45,8 @@ def create_initialize_function(config):
 
 def initialize_genomes(pop_size: int,
                        N: int,
-                       num_inputs: int, num_outputs: int,
+                       num_inputs: int,
+                       num_outputs: int,
                        default_bias: float = 0.0,
                        default_response: float = 1.0,
                        default_act: int = 0,

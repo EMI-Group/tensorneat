@@ -113,13 +113,11 @@ def mutate(rand_key: Array,
            new_node_key: int,
            input_idx: Array,
            output_idx: Array,
-           bias_default: float = 0,
            bias_mean: float = 0,
            bias_std: float = 1,
            bias_mutate_strength: float = 0.5,
            bias_mutate_rate: float = 0.7,
            bias_replace_rate: float = 0.1,
-           response_default: float = 1,
            response_mean: float = 1.,
            response_std: float = 0.,
            response_mutate_strength: float = 0.,
@@ -147,8 +145,6 @@ def mutate(rand_key: Array,
     :param input_idx:
     :param agg_default:
     :param act_default:
-    :param response_default:
-    :param bias_default:
     :param rand_key:
     :param nodes: (N, 5)
     :param connections: (2, N, N)
@@ -186,7 +182,7 @@ def mutate(rand_key: Array,
         return n, c
 
     def m_add_node(rk, n, c):
-        return mutate_add_node(rk, new_node_key, n, c, bias_default, response_default, act_default, agg_default)
+        return mutate_add_node(rk, new_node_key, n, c, bias_mean, response_mean, act_default, agg_default)
 
     def m_delete_node(rk, n, c):
         return mutate_delete_node(rk, n, c, input_idx, output_idx)
