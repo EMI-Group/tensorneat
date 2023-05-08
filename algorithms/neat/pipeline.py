@@ -2,7 +2,6 @@ from typing import List, Union, Tuple, Callable
 import time
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 
 from .species import SpeciesController
@@ -19,6 +18,7 @@ class Pipeline:
     def __init__(self, config, seed=42):
         self.generation_timestamp = time.time()
         self.randkey = jax.random.PRNGKey(seed)
+        np.random.seed(seed)
 
         self.config = config
         self.N = config.basic.init_maximum_nodes
@@ -33,9 +33,6 @@ class Pipeline:
 
         self.generation = 0
         self.species_controller.init_speciate(self.pop_nodes, self.pop_connections)
-
-        # self.species_controller.speciate(self.pop_nodes, self.pop_connections,
-        #                                  self.generation, self.o2o_distance, self.o2m_distance)
 
         self.best_fitness = float('-inf')
 

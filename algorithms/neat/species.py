@@ -239,7 +239,9 @@ class SpeciesController:
         self.species = {}
         # int -> idx in the pop_nodes, pop_connections of elitism
         # (int, int) -> the father and mother idx to be crossover
+
         crossover_pair: List[Union[int, Tuple[int, int]]] = []
+
         for spawn, s in zip(spawn_amounts, remaining_species):
             assert spawn >= self.genome_elitism
 
@@ -264,10 +266,8 @@ class SpeciesController:
             # only use good genomes to crossover
             sorted_members = sorted_members[:repro_cutoff]
 
-            # Randomly choose parents and produce the number of offspring allotted to the species.
-            for _ in range(spawn):
-                # allow to replace, for the case that the species only has one genome
-                c1, c2 = np.random.choice(len(sorted_members), size=2, replace=True)
+            list_idx1, list_idx2 = np.random.choice(len(sorted_members), size=(2, spawn), replace=True)
+            for c1, c2 in zip(list_idx1, list_idx2):
                 idx1, fitness1 = sorted_members[c1], sorted_fitnesses[c1]
                 idx2, fitness2 = sorted_members[c2], sorted_fitnesses[c2]
                 if fitness1 >= fitness2:
