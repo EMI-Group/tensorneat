@@ -6,11 +6,7 @@ from functools import partial
 import numpy as np
 from jax import jit, vmap
 
-from .genome import act_name2key, agg_name2key
-from .genome.genome import initialize_genomes
-from .genome.mutate import mutate
-from .genome.distance import distance
-from .genome.crossover import crossover
+from .genome import act_name2key, agg_name2key, initialize_genomes, mutate, distance, crossover
 
 
 class FunctionFactory:

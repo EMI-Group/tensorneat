@@ -5,9 +5,7 @@ import jax
 import numpy as np
 
 from .species import SpeciesController
-from .genome import expand, expand_single
-from .genome import create_initialize_function, create_mutate_function, create_forward_function, \
-    create_distance_function, create_crossover_function
+from .genome import expand, expand_single, create_forward_function
 from .function_factory import FunctionFactory
 
 
