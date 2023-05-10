@@ -23,11 +23,11 @@ def evaluate(forward_func: Callable) -> List[float]:
     return fitnesses.tolist()  # returns a list
 
 
-@using_cprofile
-# @partial(using_cprofile, root_abs_path='/mnt/e/neat-jax/', replace_pattern="/mnt/e/neat-jax/")
+# @using_cprofile
+@partial(using_cprofile, root_abs_path='/mnt/e/neat-jax/', replace_pattern="/mnt/e/neat-jax/")
 def main():
     config = Configer.load_config()
-    pipeline = Pipeline(config, seed=114514)
+    pipeline = Pipeline(config, seed=11454)
     pipeline.auto_run(evaluate)
 
 

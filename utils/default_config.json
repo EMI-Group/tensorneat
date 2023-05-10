@@ -5,14 +5,14 @@
         "problem_batch": 4,
         "init_maximum_nodes": 10,
         "expands_coe": 2,
-        "pre_compile_times": 2
+        "pre_compile_times": 3
     },
     "neat": {
         "population": {
             "fitness_criterion": "max",
             "fitness_threshold": 76,
             "generation_limit": 100,
-            "pop_size": 1000,
+            "pop_size": 2000,
             "reset_on_extinction": "False"
         },
         "gene": {
