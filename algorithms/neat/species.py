@@ -110,7 +110,7 @@ class SpeciesController:
                     new_members[species_id].append(i)
                     unspeciated[i] = False
 
-        # Second, slowly match the lonely population to new-created species.
+        # Second, slowly match the lonely population to new-created species.s
         # lonely genome is proved to be not compatible with any previous species, so they only need to be compared with
         # the new representatives.
         for i in range(pop_nodes.shape[0]):
