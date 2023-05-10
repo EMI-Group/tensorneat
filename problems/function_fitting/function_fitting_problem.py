@@ -15,8 +15,25 @@ class FunctionFittingProblem(Problem):
         self.loss = loss
         super().__init__(self.forward_way, self.num_inputs, self.num_outputs, self.batch)
 
-    def evaluate(self, batch_forward_func):
-        out = batch_forward_func(self.inputs)
-        out = jax.device_get(out)
-        fitnesses = 1 - np.mean((self.target - out) ** 2, axis=(1, 2))
+    def evaluate(self, pop_batch_forward):
+        outs = pop_batch_forward(self.inputs)
+        outs = jax.device_get(outs)
+        fitnesses = -np.mean((self.target - outs) ** 2, axis=(1, 2))
         return fitnesses.tolist()
+
+    def draw(self, batch_func):
+        outs = batch_func(self.inputs)
+        outs = jax.device_get(outs)
+        print(outs)
+        from matplotlib import pyplot as plt
+        plt.xlabel('x')
+        plt.ylabel('y')
+        plt.plot(self.inputs, self.target, color='red', label='target')
+        plt.plot(self.inputs, outs, color='blue', label='predict')
+        plt.legend()
+        plt.show()
+
+    def print(self, batch_func):
+        outs = batch_func(self.inputs)
+        outs = jax.device_get(outs)
+        print(outs)

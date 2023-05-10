@@ -68,6 +68,7 @@ def clamped_act(z):
 
 @jit
 def inv_act(z):
+    z = jnp.maximum(z, 1e-7)
     return 1 / z
 
 
