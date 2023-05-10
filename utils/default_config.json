@@ -5,14 +5,15 @@
         "problem_batch": 4,
         "init_maximum_nodes": 10,
         "expands_coe": 2,
-        "pre_compile_times": 3
+        "pre_compile_times": 3,
+        "forward_way": "pop_batch"
     },
     "neat": {
         "population": {
             "fitness_criterion": "max",
             "fitness_threshold": 76,
             "generation_limit": 100,
-            "pop_size": 2000,
+            "pop_size": 1000,
             "reset_on_extinction": "False"
         },
         "gene": {
@@ -56,9 +57,9 @@
             "compatibility_weight_coefficient": 0.5,
             "single_structural_mutation": "False",
             "conn_add_prob": 0.5,
-            "conn_delete_prob": 0.5,
-            "node_add_prob": 0.2,
-            "node_delete_prob": 0.2
+            "conn_delete_prob": 0,
+            "node_add_prob": 0.1,
+            "node_delete_prob": 0
         },
         "species": {
             "compatibility_threshold": 3,
