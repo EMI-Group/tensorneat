@@ -25,7 +25,7 @@ from problems import Sin, Xor, DIY
 @partial(using_cprofile, root_abs_path='/mnt/e/neat-jax/', replace_pattern="/mnt/e/neat-jax/")
 def main():
     config = Configer.load_config()
-    config.neat.population.pop_size = 50
+    # config.neat.population.pop_size = 50
     problem = Xor()
     # problem = Sin()
     # problem = DIY(func=lambda x: (np.sin(x) + np.exp(x) - x ** 2) / (np.cos(x) + np.sqrt(x)) - np.log(x + 1))

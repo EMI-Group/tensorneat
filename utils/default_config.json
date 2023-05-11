@@ -13,7 +13,7 @@
             "fitness_criterion": "max",
             "fitness_threshold": -0.001,
             "generation_limit": 1000,
-            "pop_size": 30,
+            "pop_size": 1000,
             "reset_on_extinction": "False"
         },
         "gene": {

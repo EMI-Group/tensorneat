@@ -19,7 +19,7 @@ class FunctionFittingProblem(Problem):
         outs = pop_batch_forward(self.inputs)
         outs = jax.device_get(outs)
         fitnesses = -np.mean((self.target - outs) ** 2, axis=(1, 2))
-        return fitnesses.tolist()
+        return fitnesses
 
     def draw(self, batch_func):
         outs = batch_func(self.inputs)
