@@ -194,6 +194,13 @@ def pop_analysis(pop_nodes, pop_connections, input_keys, output_keys):
 
 
 @jit
+def count(nodes, connections):
+    node_cnt = jnp.sum(~jnp.isnan(nodes[:, 0]))
+    connections_cnt = jnp.sum(~jnp.isnan(connections[0, :, :]))
+    return node_cnt, connections_cnt
+
+
+@jit
 def add_node(new_node_key: int, nodes: Array, connections: Array,
              bias: float = 0.0, response: float = 1.0, act: int = 0, agg: int = 0) -> Tuple[Array, Array]:
     """

@@ -7,7 +7,7 @@ import numpy as np
 from .species import SpeciesController
 from .genome import expand, expand_single
 from .function_factory import FunctionFactory
-
+from .genome.genome import count
 
 class Pipeline:
     """

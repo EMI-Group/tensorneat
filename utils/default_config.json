@@ -57,9 +57,9 @@
             "compatibility_weight_coefficient": 0.5,
             "single_structural_mutation": "False",
             "conn_add_prob": 0.5,
-            "conn_delete_prob": 0.5,
+            "conn_delete_prob": 0,
             "node_add_prob": 0.2,
-            "node_delete_prob": 0.2
+            "node_delete_prob": 0
         },
         "species": {
             "compatibility_threshold": 2.5,
