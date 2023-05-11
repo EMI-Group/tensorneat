@@ -6,8 +6,8 @@ from time_utils import using_cprofile
 from problems import Sin, Xor, DIY
 
 
-# @using_cprofile
-@partial(using_cprofile, root_abs_path='/mnt/e/neat-jax/', replace_pattern="/mnt/e/neat-jax/")
+@using_cprofile
+# @partial(using_cprofile, root_abs_path='/mnt/e/neatax/', replace_pattern="/mnt/e/neat-jax/")
 def main():
     config = Configer.load_config()
     problem = Xor()

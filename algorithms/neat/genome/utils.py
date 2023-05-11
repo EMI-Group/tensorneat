@@ -3,84 +3,38 @@ from typing import Tuple
 
 import jax
 from jax import numpy as jnp, Array
-from jax import jit
+from jax import jit, vmap
 
 I_INT = jnp.iinfo(jnp.int32).max  # infinite int
 EMPTY_NODE = jnp.full((1, 5), jnp.nan)
 EMPTY_CON = jnp.full((1, 4), jnp.nan)
 
+
 @jit
-def flatten_connections(keys, connections):
+def unflatten_connections(nodes, cons):
     """
-    flatten the (2, N, N) connections to (N * N, 4)
-    :param keys:
-    :param connections:
-    :return:
-    the first two columns are the index of the node
-    the 3rd column is the weight, and the 4th column is the enabled status
-    """
-    indices_x, indices_y = jnp.meshgrid(keys, keys, indexing='ij')
-    indices = jnp.stack((indices_x, indices_y), axis=-1).reshape(-1, 2)
-
-    # make (2, N, N) to (N, N, 2)
-    con = jnp.transpose(connections, (1, 2, 0))
-    # make (N, N, 2) to (N * N, 2)
-    con = jnp.reshape(con, (-1, 2))
-
-    con = jnp.concatenate((indices, con), axis=1)
-    return con
-
-
-@partial(jit, static_argnames=['N'])
-def unflatten_connections(N, cons):
-    """
-    restore the (N * N, 4) connections to (2, N, N)
-    :param N:
+    transform the (C, 4) connections to (2, N, N)
     :param cons:
+    :param nodes:
     :return:
     """
-    cons = cons[:, 2:]  # remove the indices
-    unflatten_cons = jnp.moveaxis(cons.reshape(N, N, 2), -1, 0)
-    return unflatten_cons
+    N = nodes.shape[0]
+    node_keys = nodes[:, 0]
+    i_keys, o_keys = cons[:, 0], cons[:, 1]
+    i_idxs = key_to_indices(i_keys, node_keys)
+    o_idxs = key_to_indices(o_keys, node_keys)
+    res = jnp.full((2, N, N), jnp.nan)
+
+    # Is interesting that jax use clip when attach data in array
+    # however, it will do nothing set values in an array
+    res = res.at[0, i_idxs, o_idxs].set(cons[:, 2])
+    res = res.at[1, i_idxs, o_idxs].set(cons[:, 3])
+    return res
 
 
-@jit
-def set_operation_analysis(ar1: Array, ar2: Array) -> Tuple[Array, Array, Array]:
-    """
-    Analyze the intersection and union of two arrays by returning their sorted concatenation indices,
-    intersection mask, and union mask.
-
-    :param ar1: JAX array of shape (N, M)
-        First input array. Should have the same shape as ar2.
-    :param ar2: JAX array of shape (N, M)
-        Second input array. Should have the same shape as ar1.
-    :return: tuple of 3 arrays
-        - sorted_indices: Indices that would sort the concatenation of ar1 and ar2.
-        - intersect_mask: A boolean array indicating the positions of the common elements between ar1 and ar2
-                          in the sorted concatenation.
-        - union_mask: A boolean array indicating the positions of the unique elements in the union of ar1 and ar2
-                      in the sorted concatenation.
-
-    Examples:
-        a = jnp.array([[1, 2], [3, 4], [5, 6]])
-        b = jnp.array([[1, 2], [7, 8], [9, 10]])
-
-        sorted_indices, intersect_mask, union_mask = set_operation_analysis(a, b)
-
-        sorted_indices -> array([0, 1, 2, 3, 4, 5])
-        intersect_mask -> array([True, False, False, False, False, False])
-        union_mask -> array([False, True, True, True, True, True])
-    """
-    ar = jnp.concatenate((ar1, ar2), axis=0)
-    sorted_indices = jnp.lexsort(ar.T[::-1])
-    aux = ar[sorted_indices]
-    aux = jnp.concatenate((aux, jnp.full((1, ar1.shape[1]), jnp.nan)), axis=0)
-    nan_mask = jnp.any(jnp.isnan(aux), axis=1)
-
-    fr, sr = aux[:-1], aux[1:]  # first row, second row
-    intersect_mask = jnp.all(fr == sr, axis=1) & ~nan_mask[:-1]
-    union_mask = jnp.any(fr != sr, axis=1) & ~nan_mask[:-1]
-    return sorted_indices, intersect_mask, union_mask
+@partial(vmap, in_axes=(0, None))
+def key_to_indices(key, keys):
+    return fetch_first(key == keys)
 
 
 @jit

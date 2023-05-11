@@ -8,6 +8,7 @@ from .species import SpeciesController
 from .genome import expand, expand_single
 from .function_factory import FunctionFactory
 from .genome.genome import count
+from .genome.debug.tools import check_array_valid
 
 class Pipeline:
     """
@@ -23,6 +24,7 @@ class Pipeline:
 
         self.config = config
         self.N = config.basic.init_maximum_nodes
+        self.C = config.basic.init_maximum_connections
         self.expand_coe = config.basic.expands_coe
         self.pop_size = config.neat.population.pop_size
 
@@ -56,6 +58,8 @@ class Pipeline:
         winner_part, loser_part, elite_mask = self.species_controller.reproduce(fitnesses, self.generation)
 
         self.update_next_generation(winner_part, loser_part, elite_mask)
+
+        # pop_analysis(self.pop_nodes, self.pop_connections, self.input_idx, self.output_idx)
 
         self.species_controller.speciate(self.pop_nodes, self.pop_connections, self.generation,
                                          self.o2o_distance, self.o2m_distance)
@@ -105,16 +109,25 @@ class Pipeline:
 
         npn, npc = self.crossover_func(crossover_rand_keys, wpn, wpc, lpn,
                                        lpc)  # new pop nodes, new pop connections
+
+        # for i in range(self.pop_size):
+        #     n, c = np.array(npn[i]), np.array(npc[i])
+        #     check_array_valid(n, c, self.input_idx, self.output_idx)
+
         # mutate
         new_node_keys = np.arange(self.generation * self.pop_size, self.generation * self.pop_size + self.pop_size)
 
         m_npn, m_npc = self.mutate_func(mutate_rand_keys, npn, npc, new_node_keys)  # mutate_new_pop_nodes
 
+        # for i in range(self.pop_size):
+        #     n, c = np.array(m_npn[i]), np.array(m_npc[i])
+        #     check_array_valid(n, c, self.input_idx, self.output_idx)
+
         # elitism don't mutate
         npn, npc, m_npn, m_npc = jax.device_get([npn, npc, m_npn, m_npc])
 
         self.pop_nodes = np.where(elite_mask[:, None, None], npn, m_npn)
-        self.pop_connections = np.where(elite_mask[:, None, None, None], npc, m_npc)
+        self.pop_connections = np.where(elite_mask[:, None, None], npc, m_npc)
 
     def expand(self):
         """
@@ -128,20 +141,38 @@ class Pipeline:
         max_node_size = np.max(pop_node_sizes)
         if max_node_size >= self.N:
             self.N = int(self.N * self.expand_coe)
-            print(f"expand to {self.N}!")
-            self.pop_nodes, self.pop_connections = expand(self.pop_nodes, self.pop_connections, self.N)
+            print(f"node expand to {self.N}!")
+            self.pop_nodes, self.pop_connections = expand(self.pop_nodes, self.pop_connections, self.N, self.C)
 
             # don't forget to expand representation genome in species
             for s in self.species_controller.species.values():
-                s.representative = expand_single(*s.representative, self.N)
+                s.representative = expand_single(*s.representative, self.N, self.C)
 
             # update functions
             self.compile_functions(debug=True)
 
+
+        pop_con_keys = self.pop_connections[:, :, 0]
+        pop_node_sizes = np.sum(~np.isnan(pop_con_keys), axis=1)
+        max_con_size = np.max(pop_node_sizes)
+        if max_con_size >= self.C:
+            self.C = int(self.C * self.expand_coe)
+            print(f"connections expand to {self.C}!")
+            self.pop_nodes, self.pop_connections = expand(self.pop_nodes, self.pop_connections, self.N, self.C)
+
+            # don't forget to expand representation genome in species
+            for s in self.species_controller.species.values():
+                s.representative = expand_single(*s.representative, self.N, self.C)
+
+            # update functions
+            self.compile_functions(debug=True)
+
+
+
     def compile_functions(self, debug=False):
-        self.mutate_func = self.function_factory.create_mutate(self.N)
-        self.crossover_func = self.function_factory.create_crossover(self.N)
-        self.o2o_distance, self.o2m_distance = self.function_factory.create_distance(self.N)
+        self.mutate_func = self.function_factory.create_mutate(self.N, self.C)
+        self.crossover_func = self.function_factory.create_crossover(self.N, self.C)
+        self.o2o_distance, self.o2m_distance = self.function_factory.create_distance(self.N, self.C)
 
     def default_analysis(self, fitnesses):
         max_f, min_f, mean_f, std_f = max(fitnesses), min(fitnesses), np.mean(fitnesses), np.std(fitnesses)

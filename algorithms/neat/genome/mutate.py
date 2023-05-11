@@ -6,11 +6,9 @@ import numpy as np
 from jax import numpy as jnp
 from jax import jit, vmap, Array
 
-from .utils import fetch_random, fetch_first, I_INT
-from .genome import add_node, add_connection_by_idx, delete_node_by_idx, delete_connection_by_idx
+from .utils import fetch_random, fetch_first, I_INT, unflatten_connections
+from .genome import add_node, delete_node_by_idx, delete_connection_by_idx, add_connection
 from .graph import check_cycles
-from .activations import act_name2key
-from .aggregations import agg_name2key
 
 
 @partial(jit, static_argnames=('single_structure_mutate',))
@@ -89,7 +87,7 @@ def mutate(rand_key: Array,
         return n, c
 
     def m_add_node(rk, n, c):
-        return mutate_add_node(rk, new_node_key, n, c, bias_mean, response_mean, act_default, agg_default)
+        return mutate_add_node(rk, n, c, new_node_key, bias_mean, response_mean, act_default, agg_default)
 
     def m_delete_node(rk, n, c):
         return mutate_delete_node(rk, n, c, input_idx, output_idx)
@@ -153,7 +151,7 @@ def mutate(rand_key: Array,
 @jit
 def mutate_values(rand_key: Array,
                   nodes: Array,
-                  connections: Array,
+                  cons: Array,
                   bias_mean: float = 0,
                   bias_std: float = 1,
                   bias_mutate_strength: float = 0.5,
@@ -180,7 +178,7 @@ def mutate_values(rand_key: Array,
     Args:
         rand_key: A random key for generating random values.
         nodes: A 2D array representing nodes.
-        connections: A 3D array representing connections.
+        cons: A 3D array representing connections.
         bias_mean: Mean of the bias values.
         bias_std: Standard deviation of the bias values.
         bias_mutate_strength: Strength of the bias mutation.
@@ -211,24 +209,23 @@ def mutate_values(rand_key: Array,
                                    bias_mutate_strength, bias_mutate_rate, bias_replace_rate)
     response_new = mutate_float_values(k2, nodes[:, 2], response_mean, response_std,
                                        response_mutate_strength, response_mutate_rate, response_replace_rate)
-    weight_new = mutate_float_values(k3, connections[0, :, :], weight_mean, weight_std,
+    weight_new = mutate_float_values(k3, cons[:, 2], weight_mean, weight_std,
                                      weight_mutate_strength, weight_mutate_rate, weight_replace_rate)
     act_new = mutate_int_values(k4, nodes[:, 3], act_list, act_replace_rate)
     agg_new = mutate_int_values(k5, nodes[:, 4], agg_list, agg_replace_rate)
 
-    # refactor enabled
-    r = jax.random.uniform(rand_key, connections[1, :, :].shape)
-    enabled_new = connections[1, :, :] == 1
-    enabled_new = jnp.where(r < enabled_reverse_rate, ~enabled_new, enabled_new)
-    enabled_new = jnp.where(~jnp.isnan(connections[0, :, :]), enabled_new, jnp.nan)
+    # mutate enabled
+    r = jax.random.uniform(rand_key, cons[:, 3].shape)
+    enabled_new = jnp.where(r < enabled_reverse_rate, 1 - cons[:, 3], cons[:, 3])
+    enabled_new = jnp.where(~jnp.isnan(cons[:, 3]), enabled_new, jnp.nan)
 
     nodes = nodes.at[:, 1].set(bias_new)
     nodes = nodes.at[:, 2].set(response_new)
     nodes = nodes.at[:, 3].set(act_new)
     nodes = nodes.at[:, 4].set(agg_new)
-    connections = connections.at[0, :, :].set(weight_new)
-    connections = connections.at[1, :, :].set(enabled_new)
-    return nodes, connections
+    cons = cons.at[:, 2].set(weight_new)
+    cons = cons.at[:, 3].set(enabled_new)
+    return nodes, cons
 
 
 @jit
@@ -288,7 +285,7 @@ def mutate_int_values(rand_key: Array, old_vals: Array, val_list: Array, replace
 
 
 @jit
-def mutate_add_node(rand_key: Array, new_node_key: int, nodes: Array, connections: Array,
+def mutate_add_node(rand_key: Array, nodes: Array, cons: Array, new_node_key: int,
                     default_bias: float = 0, default_response: float = 1,
                     default_act: int = 0, default_agg: int = 0) -> Tuple[Array, Array]:
     """
@@ -296,7 +293,7 @@ def mutate_add_node(rand_key: Array, new_node_key: int, nodes: Array, connection
     :param rand_key:
     :param new_node_key:
     :param nodes:
-    :param connections:
+    :param cons:
     :param default_bias:
     :param default_response:
     :param default_act:
@@ -304,44 +301,42 @@ def mutate_add_node(rand_key: Array, new_node_key: int, nodes: Array, connection
     :return:
     """
     # randomly choose a connection
-    from_key, to_key, from_idx, to_idx = choice_connection_key(rand_key, nodes, connections)
+    i_key, o_key, idx = choice_connection_key(rand_key, nodes, cons)
 
-    def nothing():
-        return nodes, connections
+    def nothing():  # there is no connection to split
+        return nodes, cons
 
     def successful_add_node():
         # disable the connection
-        new_nodes, new_connections = nodes, connections
-        new_connections = new_connections.at[1, from_idx, to_idx].set(False)
+        new_nodes, new_cons = nodes, cons
+        new_cons = new_cons.at[idx, 3].set(False)
 
         # add a new node
-        new_nodes, new_connections = \
-            add_node(new_node_key, new_nodes, new_connections,
+        new_nodes, new_cons = \
+            add_node(new_nodes, new_cons, new_node_key,
                      bias=default_bias, response=default_response, act=default_act, agg=default_agg)
-        new_idx = fetch_first(new_nodes[:, 0] == new_node_key)
 
         # add two new connections
-        weight = new_connections[0, from_idx, to_idx]
-        new_nodes, new_connections = add_connection_by_idx(from_idx, new_idx,
-                                                           new_nodes, new_connections, weight=1., enabled=True)
-        new_nodes, new_connections = add_connection_by_idx(new_idx, to_idx,
-                                                           new_nodes, new_connections, weight=weight, enabled=True)
-        return new_nodes, new_connections
+        w = new_cons[idx, 2]
+        new_nodes, new_cons = add_connection(new_nodes, new_cons, i_key, new_node_key, weight=1, enabled=True)
+        new_nodes, new_cons = add_connection(new_nodes, new_cons, new_node_key, o_key, weight=w, enabled=True)
+        return new_nodes, new_cons
 
     # if from_idx == I_INT, that means no connection exist, do nothing
-    nodes, connections = jax.lax.cond(from_idx == I_INT, nothing, successful_add_node)
+    nodes, cons = jax.lax.cond(idx == I_INT, nothing, successful_add_node)
 
-    return nodes, connections
+    return nodes, cons
 
 
+# TODO: Need we really need to delete a node?
 @jit
-def mutate_delete_node(rand_key: Array, nodes: Array, connections: Array,
+def mutate_delete_node(rand_key: Array, nodes: Array, cons: Array,
                        input_keys: Array, output_keys: Array) -> Tuple[Array, Array]:
     """
     Randomly delete a node. Input and output nodes are not allowed to be deleted.
     :param rand_key:
     :param nodes:
-    :param connections:
+    :param cons:
     :param input_keys:
     :param output_keys:
     :return:
@@ -351,83 +346,86 @@ def mutate_delete_node(rand_key: Array, nodes: Array, connections: Array,
                                          allow_input_keys=False, allow_output_keys=False)
 
     def nothing():
-        return nodes, connections
+        return nodes, cons
 
     def successful_delete_node():
         # delete the node
-        aux_nodes, aux_connections = delete_node_by_idx(node_idx, nodes, connections)
+        aux_nodes, aux_cons = delete_node_by_idx(nodes, cons, node_idx)
 
-        # delete connections
-        aux_connections = aux_connections.at[:, node_idx, :].set(jnp.nan)
-        aux_connections = aux_connections.at[:, :, node_idx].set(jnp.nan)
+        # delete all connections
+        aux_cons = jnp.where(((aux_cons[:, 0] == node_key) | (aux_cons[:, 1] == node_key))[:, jnp.newaxis],
+                             jnp.nan, aux_cons)
 
-        return aux_nodes, aux_connections
+        return aux_nodes, aux_cons
 
-    nodes, connections = jax.lax.cond(node_idx == I_INT, nothing, successful_delete_node)
+    nodes, cons = jax.lax.cond(node_idx == I_INT, nothing, successful_delete_node)
 
-    return nodes, connections
+    return nodes, cons
 
 
 @jit
-def mutate_add_connection(rand_key: Array, nodes: Array, connections: Array,
+def mutate_add_connection(rand_key: Array, nodes: Array, cons: Array,
                           input_keys: Array, output_keys: Array) -> Tuple[Array, Array]:
     """
     Randomly add a new connection. The output node is not allowed to be an input node. If in feedforward networks,
     cycles are not allowed.
     :param rand_key:
     :param nodes:
-    :param connections:
+    :param cons:
     :param input_keys:
     :param output_keys:
     :return:
     """
     # randomly choose two nodes
     k1, k2 = jax.random.split(rand_key, num=2)
-    from_key, from_idx = choice_node_key(k1, nodes, input_keys, output_keys,
+    i_key, from_idx = choice_node_key(k1, nodes, input_keys, output_keys,
                                          allow_input_keys=True, allow_output_keys=True)
-    to_key, to_idx = choice_node_key(k2, nodes, input_keys, output_keys,
+    o_key, to_idx = choice_node_key(k2, nodes, input_keys, output_keys,
                                      allow_input_keys=False, allow_output_keys=True)
 
+    con_idx = fetch_first((cons[:, 0] == i_key) & (cons[:, 1] == o_key))
+
     def successful():
-        new_nodes, new_connections = add_connection_by_idx(from_idx, to_idx, nodes, connections)
-        return new_nodes, new_connections
+        new_nodes, new_cons = add_connection(nodes, cons, i_key, o_key, weight=1, enabled=True)
+        return new_nodes, new_cons
 
     def already_exist():
-        new_connections = connections.at[1, from_idx, to_idx].set(True)
-        return nodes, new_connections
+        new_cons = cons.at[con_idx, 3].set(True)
+        return nodes, new_cons
 
     def cycle():
-        return nodes, connections
+        return nodes, cons
 
-    is_already_exist = ~jnp.isnan(connections[0, from_idx, to_idx])
-    is_cycle = check_cycles(nodes, connections, from_idx, to_idx)
+    is_already_exist = con_idx != I_INT
+    unflattened = unflatten_connections(nodes, cons)
+    is_cycle = check_cycles(nodes, unflattened, from_idx, to_idx)
 
     choice = jnp.where(is_already_exist, 0, jnp.where(is_cycle, 1, 2))
-    nodes, connections = jax.lax.switch(choice, [already_exist, cycle, successful])
-    return nodes, connections
+    nodes, cons = jax.lax.switch(choice, [already_exist, cycle, successful])
+    return nodes, cons
 
 
 @jit
-def mutate_delete_connection(rand_key: Array, nodes: Array, connections: Array):
+def mutate_delete_connection(rand_key: Array, nodes: Array, cons: Array):
     """
     Randomly delete a connection.
     :param rand_key:
     :param nodes:
-    :param connections:
+    :param cons:
     :return:
     """
     # randomly choose a connection
-    from_key, to_key, from_idx, to_idx = choice_connection_key(rand_key, nodes, connections)
+    i_key, o_key, idx = choice_connection_key(rand_key, nodes, cons)
 
     def nothing():
-        return nodes, connections
+        return nodes, cons
 
     def successfully_delete_connection():
-        return delete_connection_by_idx(from_idx, to_idx, nodes, connections)
+        return delete_connection_by_idx(nodes, cons, idx)
 
-    nodes, connections = jax.lax.cond(from_idx == I_INT, nothing, successfully_delete_connection)
+    nodes, cons = jax.lax.cond(idx == I_INT, nothing, successfully_delete_connection)
 
-    return nodes, connections
+    return nodes, cons
 
 
 @partial(jit, static_argnames=('allow_input_keys', 'allow_output_keys'))
@@ -460,31 +458,20 @@ def choice_node_key(rand_key: Array, nodes: Array,
 
 
 @jit
-def choice_connection_key(rand_key: Array, nodes: Array, connection: Array) -> Tuple[Array, Array, Array, Array]:
+def choice_connection_key(rand_key: Array, nodes: Array, cons: Array) -> Tuple[Array, Array, Array]:
     """
     Randomly choose a connection key from the given connections.
     :param rand_key:
     :param nodes:
-    :param connection:
-    :return: from_key, to_key, from_idx, to_idx
+    :param cons:
+    :return: i_key, o_key, idx
     """
 
-    k1, k2 = jax.random.split(rand_key, num=2)
+    idx = fetch_random(rand_key, ~jnp.isnan(cons[:, 0]))
+    i_key = jnp.where(idx != I_INT, cons[idx, 0], jnp.nan)
+    o_key = jnp.where(idx != I_INT, cons[idx, 1], jnp.nan)
 
-    has_connections_row = jnp.any(~jnp.isnan(connection[0, :, :]), axis=1)
-
-    def nothing():
-        return jnp.nan, jnp.nan, I_INT, I_INT
-
-    def has_connection():
-        f_idx = fetch_random(k1, has_connections_row)
-        col = connection[0, f_idx, :]
-        t_idx = fetch_random(k2, ~jnp.isnan(col))
-        f_key, t_key = nodes[f_idx, 0], nodes[t_idx, 0]
-        return f_key, t_key, f_idx, t_idx
-
-    from_key, to_key, from_idx, to_idx = jax.lax.cond(jnp.any(has_connections_row), has_connection, nothing)
-    return from_key, to_key, from_idx, to_idx
+    return i_key, o_key, idx
 
 
 @jit

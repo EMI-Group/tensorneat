@@ -23,8 +23,8 @@ def sin_act(z):
 
 @jit
 def gauss_act(z):
-    z = jnp.clip(z, -3.4, 3.4)
-    return jnp.exp(-5 * z ** 2)
+    z = jnp.clip(z * 5, -3.4, 3.4)
+    return jnp.exp(-z ** 2)
 
 
 @jit
