@@ -1,5 +1,11 @@
-import jax.numpy as jnp
+import numpy as np
 
-EMPTY_NODE = jnp.full((1, 5), jnp.nan)
+# 输入
+a = np.array([1, 2, 3, 4])
+b = np.array([5, 6])
 
-print(EMPTY_NODE)
+# 创建一个网格，其中包含所有可能的组合
+aa, bb = np.meshgrid(a, b)
+aa = aa.flatten()
+bb = bb.flatten()
+print(aa, bb)
