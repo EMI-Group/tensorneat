@@ -12,7 +12,7 @@ def main():
     config = Configer.load_config()
     problem = Xor()
     problem.refactor_config(config)
-    pipeline = Pipeline(config, seed=0)
+    pipeline = Pipeline(config, seed=1)
     pipeline.auto_run(problem.evaluate)
 
 

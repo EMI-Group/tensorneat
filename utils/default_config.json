@@ -3,8 +3,9 @@
         "num_inputs": 2,
         "num_outputs": 1,
         "problem_batch": 4,
-        "init_maximum_nodes": 50,
-        "init_maximum_connections": 50,
+        "init_maximum_nodes": 20,
+        "init_maximum_connections": 20,
+        "init_maximum_species": 10,
         "expands_coe": 2,
         "pre_compile_times": 3,
         "forward_way": "pop_batch"
@@ -14,7 +15,7 @@
             "fitness_criterion": "max",
             "fitness_threshold": -0.001,
             "generation_limit": 1000,
-            "pop_size": 10000,
+            "pop_size": 1000,
             "reset_on_extinction": "False"
         },
         "gene": {
@@ -58,12 +59,12 @@
             "compatibility_weight_coefficient": 0.5,
             "single_structural_mutation": "False",
             "conn_add_prob": 0.5,
-            "conn_delete_prob": 0.5,
+            "conn_delete_prob": 0,
             "node_add_prob": 0.2,
-            "node_delete_prob": 0.2
+            "node_delete_prob": 0
         },
         "species": {
-            "compatibility_threshold": 2.5,
+            "compatibility_threshold": 3,
             "species_fitness_func": "max",
             "max_stagnation": 20,
             "species_elitism": 2,
