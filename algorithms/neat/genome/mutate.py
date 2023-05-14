@@ -88,6 +88,12 @@ def mutate(rand_key: Array,
     def m_add_connection(rk, n, c):
         return mutate_add_connection(rk, n, c, input_idx, output_idx)
 
+    def m_delete_node(rk, n, c):
+        return mutate_delete_node(rk, n, c, input_idx, output_idx)
+
+    def m_delete_connection(rk, n, c):
+        return mutate_delete_connection(rk, n, c)
+
     r1, r2, r3, r4, rand_key = jax.random.split(rand_key, 5)
 
     # mutate add node
@@ -99,6 +105,16 @@ def mutate(rand_key: Array,
     aux_nodes, aux_connections = m_add_connection(r3, nodes, connections)
     nodes = jnp.where(rand(r3) < add_connection_rate, aux_nodes, nodes)
     connections = jnp.where(rand(r3) < add_connection_rate, aux_connections, connections)
+
+    # mutate delete node
+    aux_nodes, aux_connections = m_delete_node(r2, nodes, connections)
+    nodes = jnp.where(rand(r2) < delete_node_rate, aux_nodes, nodes)
+    connections = jnp.where(rand(r2) < delete_node_rate, aux_connections, connections)
+
+    # mutate delete connection
+    aux_nodes, aux_connections = m_delete_connection(r4, nodes, connections)
+    nodes = jnp.where(rand(r4) < delete_connection_rate, aux_nodes, nodes)
+    connections = jnp.where(rand(r4) < delete_connection_rate, aux_connections, connections)
 
     nodes, connections = mutate_values(rand_key, nodes, connections, bias_mean, bias_std, bias_mutate_strength,
                                        bias_mutate_rate, bias_replace_rate, response_mean, response_std,

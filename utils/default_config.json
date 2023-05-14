@@ -13,9 +13,9 @@
     "neat": {
         "population": {
             "fitness_criterion": "max",
-            "fitness_threshold": -0.001,
-            "generation_limit": 1000,
-            "pop_size": 1000,
+            "fitness_threshold": -1e-2,
+            "generation_limit": 500,
+            "pop_size": 5000,
             "reset_on_extinction": "False"
         },
         "gene": {
@@ -35,7 +35,7 @@
             },
             "activation": {
                 "default": "sigmoid",
-                "options": "sigmoid",
+                "options": ["sigmoid"],
                 "mutate_rate": 0.1
             },
             "aggregation": {
@@ -58,13 +58,13 @@
             "compatibility_disjoint_coefficient": 1.0,
             "compatibility_weight_coefficient": 0.5,
             "single_structural_mutation": "False",
-            "conn_add_prob": 0.5,
+            "conn_add_prob": 0.6,
             "conn_delete_prob": 0,
-            "node_add_prob": 0.2,
+            "node_add_prob": 0.3,
             "node_delete_prob": 0
         },
         "species": {
-            "compatibility_threshold": 3,
+            "compatibility_threshold": 2.5,
             "species_fitness_func": "max",
             "max_stagnation": 20,
             "species_elitism": 2,

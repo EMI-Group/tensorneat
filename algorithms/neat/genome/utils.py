@@ -14,6 +14,8 @@ EMPTY_CON = jnp.full((1, 4), jnp.nan)
 def unflatten_connections(nodes, cons):
     """
     transform the (C, 4) connections to (2, N, N)
+    this function is only used for transform a genome to the forward function, so here we set the weight of un=enabled
+    connections to nan, that means we dont consider such connection when forward;
     :param cons:
     :param nodes:
     :return:
@@ -29,6 +31,10 @@ def unflatten_connections(nodes, cons):
     # however, it will do nothing set values in an array
     res = res.at[0, i_idxs, o_idxs].set(cons[:, 2])
     res = res.at[1, i_idxs, o_idxs].set(cons[:, 3])
+
+    #                 (2, N, N),       (2, N, N),   (2, N, N)
+    # res = jnp.where(res[1, :, :] == 0, jnp.nan, res)
+
     return res
 
 

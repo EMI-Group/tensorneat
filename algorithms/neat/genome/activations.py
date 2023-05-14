@@ -133,5 +133,8 @@ act_name2key = {
 def act(idx, z):
     idx = jnp.asarray(idx, dtype=jnp.int32)
     # change idx from float to int
-    return jax.lax.switch(idx, ACT_TOTAL_LIST, z)
+    res = jax.lax.switch(idx, ACT_TOTAL_LIST, z)
+    return jnp.where(jnp.isnan(res), jnp.nan, res)
+
+    # return jax.lax.switch(idx, ACT_TOTAL_LIST, z)
 
