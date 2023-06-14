@@ -1,3 +1,4 @@
+
 import numpy as np
 import jax
 from utils import Configer
@@ -19,18 +20,16 @@ def main():
     config = Configer.load_config()
     problem = EnhanceLogic("xor", n=3)
     problem.refactor_config(config)
-    function_factory = FunctionFactory(config)
+
     evaluate_func = lambda func: evaluate(problem, func)
 
-    # precompile
-    pipeline = Pipeline(config, function_factory, seed=114514)
-    pipeline.auto_run(evaluate_func)
-
-    for r in range(10):
-        print(f"running: {r}/{10}")
+    for p in [100, 200, 500, 1000, 2000, 5000, 10000, 20000]:
+        config.neat.population.pop_size = p
         tic = time.time()
+        function_factory = FunctionFactory(config)
+        print(f"running: {p}")
 
-        pipeline = Pipeline(config, function_factory, seed=r)
+        pipeline = Pipeline(config, function_factory, seed=2)
         pipeline.auto_run(evaluate_func)
 
         total_time = time.time() - tic
@@ -38,14 +37,11 @@ def main():
         total_it = pipeline.generation
         print(f"total time: {total_time:.2f}s, evaluate time: {evaluate_time:.2f}s, total_it: {total_it}")
 
-        if total_it >= 500:
-            res = "fail"
-        else:
-            res = "success"
-
-        with open("log", "ab") as f:
-            f.write(f"{res}, total time: {total_time:.2f}s, evaluate time: {evaluate_time:.2f}s, total_it: {total_it}\n".encode("utf-8"))
-            f.write(str(pipeline.generation_time_list).encode("utf-8"))
+        with open("2060_log2", "ab") as f:
+            f.write \
+                (f"{p}, total time: {total_time:.2f}s, compile time: {function_factory.compile_time:.2f}s, total_it: {total_it}\n".encode
+                    ("utf-8"))
+            f.write(f"{str(pipeline.generation_time_list)}\n".encode("utf-8"))
 
     compile_time = function_factory.compile_time
 

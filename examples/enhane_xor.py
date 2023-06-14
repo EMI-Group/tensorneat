@@ -18,6 +18,7 @@ def evaluate(problem, func):
         fitnesses.append(f)
     return np.array(fitnesses)
 
+
 # @using_cprofile
 # @partial(using_cprofile, root_abs_path='/mnt/e/neatax/', replace_pattern="/mnt/e/neat-jax/")
 def main():
@@ -36,7 +37,8 @@ def main():
     total_it = pipeline.generation
     mean_time_per_it = (total_time - compile_time) / total_it
     evaluate_time = pipeline.evaluate_time
-    print(f"total time: {total_time:.2f}s, compile time: {compile_time:.2f}s, real_time: {total_time - compile_time:.2f}s, evaluate time: {evaluate_time:.2f}s")
+    print(
+        f"total time: {total_time:.2f}s, compile time: {compile_time:.2f}s, real_time: {total_time - compile_time:.2f}s, evaluate time: {evaluate_time:.2f}s")
     print(f"total it: {total_it}, mean time per it: {mean_time_per_it:.2f}s")
 
 

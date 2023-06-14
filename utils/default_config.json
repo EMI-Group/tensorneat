@@ -13,9 +13,9 @@
     "neat": {
         "population": {
             "fitness_criterion": "max",
-            "fitness_threshold": -1e-2,
-            "generation_limit": 500,
-            "pop_size": 5000,
+            "fitness_threshold": 1e-2,
+            "generation_limit": 100,
+            "pop_size": 1000,
             "reset_on_extinction": "False"
         },
         "gene": {
