@@ -25,9 +25,11 @@ def jax_mutate_population(seed, pop_x):
 def numpy_mutate_population(pop_x):
     return np.stack([numpy_mutate(x) for x in pop_x])
 
+
 def numpy_mutate_population_vmap(pop_x):
     noise = np.random.normal(size=pop_x.shape) * 0.1
     return pop_x + noise
+
 
 def main():
     seed = jax.random.PRNGKey(0)
@@ -52,6 +54,7 @@ def main():
         print(f'POP_SIZE: {i} | JAX: {jax_time:.4f} | Numpy: {numpy_time:.4f} | Numpy Vmap: {numpy_time_vmap:.4f}')
 
         i = int(i * 1.3)
+
 
 if __name__ == '__main__':
     main()

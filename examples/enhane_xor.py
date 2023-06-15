@@ -1,9 +1,8 @@
 import numpy as np
 import jax
 from utils import Configer
-from algorithms.neat import Pipeline
-from time_utils import using_cprofile
-from algorithms.neat.function_factory import FunctionFactory
+from neat import Pipeline
+from neat import FunctionFactory
 from problems import EnhanceLogic
 import time
 

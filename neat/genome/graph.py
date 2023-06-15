@@ -8,7 +8,7 @@ from jax import jit, vmap, Array
 from jax import numpy as jnp
 
 # from .utils import fetch_first, I_INT
-from algorithms.neat.genome.utils import fetch_first, I_INT
+from neat.genome.utils import fetch_first, I_INT
 
 
 @jit

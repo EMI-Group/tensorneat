@@ -1,11 +1,8 @@
 import jax
 import numpy as np
-from algorithms.neat.function_factory import FunctionFactory
-from algorithms.neat.genome.debug.tools import check_array_valid
+from neat import FunctionFactory
+from neat.genome.debug.tools import check_array_valid
 from utils import Configer
-
-from algorithms.neat.genome.crossover import crossover
-
 
 if __name__ == '__main__':
     config = Configer.load_config()

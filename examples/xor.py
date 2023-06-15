@@ -1,7 +1,7 @@
+from neat import FunctionFactory
 from utils import Configer
-from algorithms.neat import Pipeline
-from time_utils import using_cprofile
-from problems import Sin, Xor, DIY
+from neat import Pipeline
+from problems import Xor
 import time
 
 
@@ -10,11 +10,14 @@ import time
 def main():
     tic = time.time()
     config = Configer.load_config()
+    print(config)
+    assert False
     problem = Xor()
     problem.refactor_config(config)
-    pipeline = Pipeline(config, seed=6)
+    function_factory = FunctionFactory(config)
+    pipeline = Pipeline(config, function_factory, seed=6)
     nodes, cons = pipeline.auto_run(problem.evaluate)
-    # print(nodes, cons)
+    print(nodes, cons)
     total_time = time.time() - tic
     compile_time = pipeline.function_factory.compile_time
     total_it = pipeline.generation
