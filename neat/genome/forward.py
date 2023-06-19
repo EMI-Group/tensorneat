@@ -6,6 +6,7 @@ from .aggregations import agg
 from .activations import act
 from .utils import I_INT
 
+
 # TODO: enabled information doesn't influence forward. That is wrong!
 @jit
 def forward_single(inputs: Array, cal_seqs: Array, nodes: Array, connections: Array,

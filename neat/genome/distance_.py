@@ -1,6 +1,8 @@
 """
 Calculate the distance between two genomes.
+The calculation method is the same as the distance calculation in NEAT-python.
 """
+from typing import Dict
 
 from jax import jit, vmap, Array
 from jax import numpy as jnp
@@ -9,22 +11,21 @@ from .utils import EMPTY_NODE, EMPTY_CON
 
 
 @jit
-def distance(nodes1: Array, cons1: Array, nodes2: Array, cons2: Array, disjoint_coe: float = 1.,
-             compatibility_coe: float = 0.5) -> Array:
+def distance(nodes1: Array, cons1: Array, nodes2: Array, cons2: Array, jit_config: Dict) -> Array:
     """
     Calculate the distance between two genomes.
-    nodes are a 2-d array with shape (N, 5), its columns are [key, bias, response, act, agg]
-    connections are a 3-d array with shape (2, N, N), axis 0 means [weights, enable]
     """
-
-    nd = node_distance(nodes1, nodes2, disjoint_coe, compatibility_coe)  # node distance
-
-    cd = connection_distance(cons1, cons2, disjoint_coe, compatibility_coe)  # connection distance
+    nd = node_distance(nodes1, nodes2, jit_config)  # node distance
+    cd = connection_distance(cons1, cons2, jit_config)  # connection distance
     return nd + cd
 
 
 @jit
-def node_distance(nodes1, nodes2, disjoint_coe=1., compatibility_coe=0.5):
+def node_distance(nodes1: Array, nodes2: Array, jit_config: Dict):
+    """
+    Calculate the distance between two nodes.
+    """
+
     node_cnt1 = jnp.sum(~jnp.isnan(nodes1[:, 0]))
     node_cnt2 = jnp.sum(~jnp.isnan(nodes2[:, 0]))
     max_cnt = jnp.maximum(node_cnt1, node_cnt2)
@@ -49,6 +50,9 @@ def node_distance(nodes1, nodes2, disjoint_coe=1., compatibility_coe=0.5):
 
 @jit
 def connection_distance(cons1, cons2, disjoint_coe=1., compatibility_coe=0.5):
+    """
+    Calculate the distance between two connections.
+    """
     con_cnt1 = jnp.sum(~jnp.isnan(cons1[:, 0]))
     con_cnt2 = jnp.sum(~jnp.isnan(cons2[:, 0]))
     max_cnt = jnp.maximum(con_cnt1, con_cnt2)

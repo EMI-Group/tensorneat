@@ -32,9 +32,6 @@ def unflatten_connections(nodes, cons):
     res = res.at[0, i_idxs, o_idxs].set(cons[:, 2])
     res = res.at[1, i_idxs, o_idxs].set(cons[:, 3])
 
-    #                 (2, N, N),       (2, N, N),   (2, N, N)
-    # res = jnp.where(res[1, :, :] == 0, jnp.nan, res)
-
     return res
 
 
@@ -87,6 +84,7 @@ def argmin_with_mask(arr: Array, mask: Array) -> Array:
     masked_arr = jnp.where(mask, arr, jnp.inf)
     min_idx = jnp.argmin(masked_arr)
     return min_idx
+
 
 if __name__ == '__main__':
 
