@@ -17,10 +17,7 @@ from jax import jit, numpy as jnp
 from .utils import fetch_first
 
 
-def initialize_genomes(N: int,
-                       C: int,
-                       config: Dict) \
-        -> Tuple[NDArray, NDArray, NDArray, NDArray]:
+def initialize_genomes(N: int, C: int, config: Dict) -> Tuple[NDArray, NDArray]:
     """
     Initialize genomes with default values.
 
@@ -41,8 +38,8 @@ def initialize_genomes(N: int,
 
     pop_nodes = np.full((config['pop_size'], N, 5), np.nan)
     pop_cons = np.full((config['pop_size'], C, 4), np.nan)
-    input_idx = np.arange(config['num_inputs'])
-    output_idx = np.arange(config['num_inputs'], config['num_inputs'] + config['num_outputs'])
+    input_idx = config['input_idx']
+    output_idx = config['output_idx']
 
     pop_nodes[:, input_idx, 0] = input_idx
     pop_nodes[:, output_idx, 0] = output_idx
@@ -61,7 +58,7 @@ def initialize_genomes(N: int,
     pop_cons[:, :p, 2] = config['weight_init_mean']
     pop_cons[:, :p, 3] = 1
 
-    return pop_nodes, pop_cons, input_idx, output_idx
+    return pop_nodes, pop_cons
 
 
 def expand_single(nodes: NDArray, cons: NDArray, new_N: int, new_C: int) -> Tuple[NDArray, NDArray]:

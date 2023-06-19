@@ -21,7 +21,7 @@ class Pipeline:
         self.generation = 0
         self.best_genome = None
 
-        self.pop_nodes, self.pop_cons, self.input_idx, self.output_idx = initialize_genomes(self.N, self.C, self.config)
+        self.pop_nodes, self.pop_cons = initialize_genomes(self.N, self.C, self.config)
 
-        print(self.pop_nodes, self.pop_cons, self.input_idx, self.output_idx, sep='\n')
+        print(self.pop_nodes, self.pop_cons, sep='\n')
         print(self.jit_config)
