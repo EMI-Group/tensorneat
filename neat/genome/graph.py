@@ -9,6 +9,7 @@ from jax import numpy as jnp
 
 # from .configs import fetch_first, I_INT
 from neat.genome.utils import fetch_first, I_INT
+from .utils import unflatten_connections
 
 
 @jit
@@ -129,6 +130,9 @@ def check_cycles(nodes: Array, connections: Array, from_idx: Array, to_idx: Arra
         check_cycles(nodes, connections, 0, 3) -> False
         check_cycles(nodes, connections, 1, 0) -> False
     """
+
+    connections = unflatten_connections(nodes, connections)
+
     connections_enable = ~jnp.isnan(connections[0, :, :])
 
     connections_enable = connections_enable.at[from_idx, to_idx].set(True)
