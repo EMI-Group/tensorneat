@@ -44,10 +44,13 @@ def initialize_genomes(N: int, C: int, config: Dict) -> Tuple[NDArray, NDArray]:
     pop_nodes[:, input_idx, 0] = input_idx
     pop_nodes[:, output_idx, 0] = output_idx
 
-    pop_nodes[:, output_idx, 1] = config['bias_init_mean']
-    pop_nodes[:, output_idx, 2] = config['response_init_mean']
-    pop_nodes[:, output_idx, 3] = config['activation_default']
-    pop_nodes[:, output_idx, 4] = config['aggregation_default']
+    # pop_nodes[:, output_idx, 1] = config['bias_init_mean']
+    pop_nodes[:, output_idx, 1] = np.random.normal(loc=config['bias_init_mean'], scale=config['bias_init_std'],
+                                                   size=(config['pop_size'], 1))
+    pop_nodes[:, output_idx, 2] = np.random.normal(loc=config['response_init_mean'], scale=config['response_init_std'],
+                                                   size=(config['pop_size'], 1))
+    pop_nodes[:, output_idx, 3] = np.random.choice(config['activation_options'], size=(config['pop_size'], 1))
+    pop_nodes[:, output_idx, 4] = np.random.choice(config['aggregation_options'], size=(config['pop_size'], 1))
 
     grid_a, grid_b = np.meshgrid(input_idx, output_idx)
     grid_a, grid_b = grid_a.flatten(), grid_b.flatten()
@@ -55,7 +58,8 @@ def initialize_genomes(N: int, C: int, config: Dict) -> Tuple[NDArray, NDArray]:
     p = config['num_inputs'] * config['num_outputs']
     pop_cons[:, :p, 0] = grid_a
     pop_cons[:, :p, 1] = grid_b
-    pop_cons[:, :p, 2] = config['weight_init_mean']
+    pop_cons[:, :p, 2] = np.random.normal(loc=config['weight_init_mean'], scale=config['weight_init_std'],
+                                                   size=(config['pop_size'], p))
     pop_cons[:, :p, 3] = 1
 
     return pop_nodes, pop_cons

@@ -3,6 +3,9 @@ import numpy as np
 import jax.numpy as jnp
 import jax
 
+a = {1:2, 2:3, 4:5}
+print(a.values())
+
 a = jnp.array([1, 0, 1, 0, np.nan])
 b = jnp.array([1, 1, 1, 1, 1])
 c = jnp.array([1, 1, 1, 1, 1])
@@ -44,5 +47,9 @@ def func(x):
     else:
         return 2
 
+a = jnp.zeros((3, 3))
+print(a.dtype)
 
-print(main())
+c = None
+b = 1 or c
+print(b)
