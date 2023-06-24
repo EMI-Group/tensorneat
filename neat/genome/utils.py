@@ -1,12 +1,11 @@
-from functools import partial
-
+import numpy as np
 import jax
 from jax import numpy as jnp, Array
 from jax import jit, vmap
 
-I_INT = jnp.iinfo(jnp.int32).max  # infinite int
-EMPTY_NODE = jnp.full((1, 5), jnp.nan)
-EMPTY_CON = jnp.full((1, 4), jnp.nan)
+I_INT = np.iinfo(jnp.int32).max  # infinite int
+EMPTY_NODE = np.full((1, 5), jnp.nan)
+EMPTY_CON = np.full((1, 4), jnp.nan)
 
 
 @jit
@@ -58,8 +57,3 @@ def fetch_random(rand_key, mask, default=I_INT) -> Array:
     mask = jnp.where(true_cnt == 0, False, cumsum >= target)
     return fetch_first(mask, default)
 
-@jit
-def argmin_with_mask(arr: Array, mask: Array) -> Array:
-    masked_arr = jnp.where(mask, arr, jnp.inf)
-    min_idx = jnp.argmin(masked_arr)
-    return min_idx

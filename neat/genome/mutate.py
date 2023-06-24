@@ -10,7 +10,7 @@ import jax
 from jax import numpy as jnp
 from jax import jit, Array
 
-from .utils import fetch_random, fetch_first, I_INT
+from .utils import fetch_random, fetch_first, I_INT, unflatten_connections
 from .genome import add_node, delete_node_by_idx, delete_connection_by_idx, add_connection
 from .graph import check_cycles
 
@@ -273,7 +273,8 @@ def mutate_add_connection(rand_key: Array, nodes: Array, cons: Array, jit_config
 
     is_already_exist = con_idx != I_INT
 
-    is_cycle = check_cycles(nodes, cons, from_idx, to_idx)
+    u_cons = unflatten_connections(nodes, cons)
+    is_cycle = check_cycles(nodes, u_cons, from_idx, to_idx)
 
     choice = jnp.where(is_already_exist, 0, jnp.where(is_cycle, 1, 2))
     nodes, cons = jax.lax.switch(choice, [already_exist, cycle, successful])
