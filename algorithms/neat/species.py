@@ -8,7 +8,6 @@ See
 """
 
 from typing import List, Tuple, Dict
-from itertools import count
 
 import numpy as np
 from numpy.typing import NDArray

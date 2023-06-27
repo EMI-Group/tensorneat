@@ -4,8 +4,8 @@ import configparser
 
 import numpy as np
 
-from neat.genome.activations import act_name2func
-from neat.genome.aggregations import agg_name2func
+from algorithms.neat.genome.activations import act_name2func
+from algorithms.neat.genome.aggregations import agg_name2func
 
 # Configuration used in jit-able functions. The change of values will not cause the re-compilation of JAX.
 jit_config_keys = [
@@ -41,6 +41,11 @@ jit_config_keys = [
     "weight_mutate_rate",
     "weight_replace_rate",
     "enable_mutate_rate",
+    "max_stagnation",
+    "pop_size",
+    "genome_elitism",
+    "survival_threshold",
+    "species_elitism"
 ]
 
 

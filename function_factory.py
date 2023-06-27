@@ -1,8 +1,9 @@
 import numpy as np
 from jax import jit, vmap
 
-from .genome import create_forward, topological_sort, unflatten_connections
-from .operations import create_next_generation_then_speciate
+from algorithms.neat import create_forward, topological_sort, \
+    unflatten_connections, create_next_generation_then_speciate
+
 
 def hash_symbols(symbols):
     return symbols['P'], symbols['N'], symbols['C'], symbols['S']
@@ -32,7 +33,6 @@ class FunctionFactory:
         # (batch_size, inputs_nums) -> (pop_size, batch_size, outputs_nums)
         common_forward = vmap(batch_forward, in_axes=(None, 0, 0, 0))
 
-
         self.function_info = {
             "pop_unflatten_connections": {
                 'func': vmap(unflatten_connections),
@@ -54,7 +54,7 @@ class FunctionFactory:
                 'func': batch_forward,
                 'lowers': [
                     {'shape': (config['batch_size'], config['num_inputs']), 'type': np.float32},
-                    {'shape': ('N', ), 'type': np.int32},
+                    {'shape': ('N',), 'type': np.int32},
                     {'shape': ('N', 5), 'type': np.float32},
                     {'shape': (2, 'N', 'N'), 'type': np.float32}
                 ]
@@ -83,22 +83,21 @@ class FunctionFactory:
             'create_next_generation_then_speciate': {
                 'func': create_next_generation_then_speciate,
                 'lowers': [
-                    {'shape': (2, ), 'type': np.uint32},  # rand_key
+                    {'shape': (2,), 'type': np.uint32},  # rand_key
                     {'shape': ('P', 'N', 5), 'type': np.float32},  # pop_nodes
                     {'shape': ('P', 'C', 4), 'type': np.float32},  # pop_cons
-                    {'shape': ('P', ), 'type': np.int32},  # winner
-                    {'shape': ('P', ), 'type': np.int32},  # loser
-                    {'shape': ('P', ), 'type': bool},  # elite_mask
+                    {'shape': ('P',), 'type': np.int32},  # winner
+                    {'shape': ('P',), 'type': np.int32},  # loser
+                    {'shape': ('P',), 'type': bool},  # elite_mask
                     {'shape': ('P',), 'type': np.int32},  # new_node_keys
                     {'shape': ('S', 'N', 5), 'type': np.float32},  # center_nodes
                     {'shape': ('S', 'C', 4), 'type': np.float32},  # center_cons
-                    {'shape': ('S', ), 'type': np.int32},  # species_keys
+                    {'shape': ('S',), 'type': np.int32},  # species_keys
                     {'shape': (), 'type': np.int32},  # new_species_key_start
                     "jit_config"
                 ]
             }
         }
-
 
     def get(self, name, symbols):
         if (name, hash_symbols(symbols)) not in self.func_dict:

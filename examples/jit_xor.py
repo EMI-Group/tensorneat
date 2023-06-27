@@ -1,7 +1,7 @@
 import numpy as np
 
 from configs import Configer
-from pipeline import Pipeline
+from jit_pipeline import Pipeline
 
 xor_inputs = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.float32)
 xor_outputs = np.array([[0], [1], [1], [0]], dtype=np.float32)

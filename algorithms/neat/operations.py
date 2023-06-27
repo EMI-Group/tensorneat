@@ -1,13 +1,8 @@
 """
 contains operations on the population: creating the next generation and population speciation.
 """
-from functools import partial
-
 import jax
-import jax.numpy as jnp
-from jax import jit, vmap
-
-from jax import Array
+from jax import jit, vmap, Array, numpy as jnp
 
 from .genome import distance, mutate, crossover
 from .genome.utils import I_INT, fetch_first

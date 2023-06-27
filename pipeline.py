@@ -5,9 +5,8 @@ import numpy as np
 import jax
 
 from configs import Configer
-from .genome import initialize_genomes, expand, expand_single
-from .function_factory import FunctionFactory
-from .species import SpeciesController
+from function_factory import FunctionFactory
+from algorithms.neat import initialize_genomes, expand, expand_single, SpeciesController
 
 
 class Pipeline:
@@ -119,25 +118,27 @@ class Pipeline:
         when the maximum node number >= N or the maximum connection number of >= C
         the population will expand
         """
-        changed = False
 
+        # analysis nodes
         pop_node_keys = self.pop_nodes[:, :, 0]
         pop_node_sizes = np.sum(~np.isnan(pop_node_keys), axis=1)
         max_node_size = np.max(pop_node_sizes)
-        if max_node_size >= self.symbols['N']:
-            self.symbols['N'] = int(self.symbols['N'] * self.config['expand_coe'])
-            print(f"node expand to {self.symbols['N']}!")
-            changed = True
 
+        # analysis connections
         pop_con_keys = self.pop_cons[:, :, 0]
         pop_node_sizes = np.sum(~np.isnan(pop_con_keys), axis=1)
         max_con_size = np.max(pop_node_sizes)
-        if max_con_size >= self.symbols['C']:
-            self.symbols['C'] = int(self.symbols['C'] * self.config['expand_coe'])
-            print(f"connection expand to {self.symbols['C']}!")
-            changed = True
 
-        if changed:
+        # expand if needed
+        if max_node_size >= self.symbols['N'] or max_con_size >= self.symbols['C']:
+            if max_node_size > self.symbols['N'] * self.config['pre_expand_threshold']:
+                self.symbols['N'] = int(self.symbols['N'] * self.config['expand_coe'])
+                print(f"pre node expand to {self.symbols['N']}!")
+
+            if max_con_size > self.symbols['C'] * self.config['pre_expand_threshold']:
+                self.symbols['C'] = int(self.symbols['C'] * self.config['expand_coe'])
+                print(f"pre connection expand to {self.symbols['C']}!")
+
             self.pop_nodes, self.pop_cons = expand(self.pop_nodes, self.pop_cons, self.symbols['N'], self.symbols['C'])
             # don't forget to expand representation genome in species
             for s in self.species_controller.species.values():
@@ -160,7 +161,7 @@ class Pipeline:
                 if analysis == "default":
                     self.default_analysis(fitnesses)
                 else:
-                    assert callable(analysis), f"What the fuck you passed in? A {analysis}?"
+                    assert callable(analysis), f"Callable is needed here😅😅😅 A {analysis}?"
                     analysis(fitnesses)
 
             if max(fitnesses) >= self.config['fitness_threshold']:

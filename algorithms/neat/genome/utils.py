@@ -1,3 +1,5 @@
+from functools import partial
+
 import numpy as np
 import jax
 from jax import numpy as jnp, Array
@@ -30,6 +32,7 @@ def unflatten_connections(nodes: Array, cons: Array):
 
     return res
 
+
 def key_to_indices(key, keys):
     return fetch_first(key == keys)
 
@@ -56,4 +59,12 @@ def fetch_random(rand_key, mask, default=I_INT) -> Array:
     target = jax.random.randint(rand_key, shape=(), minval=1, maxval=true_cnt + 1)
     mask = jnp.where(true_cnt == 0, False, cumsum >= target)
     return fetch_first(mask, default)
-
+@partial(jit, static_argnames=['reverse'])
+def rank_elements(array, reverse=False):
+    """
+    rank the element in the array.
+    if reverse is True, the rank is from large to small.
+    """
+    if reverse:
+        array = -array
+    return jnp.argsort(jnp.argsort(array))

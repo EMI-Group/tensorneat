@@ -4,11 +4,11 @@ Only used in feed-forward networks.
 """
 
 import jax
-from jax import jit, vmap, Array
+from jax import jit, Array
 from jax import numpy as jnp
 
 # from .configs import fetch_first, I_INT
-from neat.genome.utils import fetch_first, I_INT, unflatten_connections
+from algorithms.neat.genome.utils import fetch_first, I_INT
 
 
 @jit

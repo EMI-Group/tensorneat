@@ -5,8 +5,11 @@ from jax import jit, vmap
 from .utils import I_INT
 
 
-# TODO: enabled information doesn't influence forward. That is wrong!
 def create_forward(config):
+    """
+    meta method to create forward function
+    """
+
     def act(idx, z):
         """
         calculate activation function for each node
