@@ -4,8 +4,7 @@ contains operations on the population: creating the next generation and populati
 import jax
 from jax import jit, vmap, Array, numpy as jnp
 
-from .genome import distance, mutate, crossover
-from .genome.utils import I_INT, fetch_first, rank_elements
+from .genome import distance, mutate, crossover, I_INT, fetch_first, rank_elements
 
 
 @jit

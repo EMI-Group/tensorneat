@@ -4,11 +4,9 @@ The calculation method is the same as the mutation operation in NEAT-python.
 See https://neat-python.readthedocs.io/en/latest/_modules/genome.html#DefaultGenome.mutate
 """
 from typing import Tuple, Dict
-from functools import partial
 
 import jax
-from jax import numpy as jnp
-from jax import jit, Array
+from jax import numpy as jnp, jit, Array
 
 from .utils import fetch_random, fetch_first, I_INT, unflatten_connections
 from .genome import add_node, delete_node_by_idx, delete_connection_by_idx, add_connection

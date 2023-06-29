@@ -4,10 +4,8 @@ Only used in feed-forward networks.
 """
 
 import jax
-from jax import jit, Array
-from jax import numpy as jnp
+from jax import jit, Array, numpy as jnp
 
-# from .configs import fetch_first, I_INT
 from algorithms.neat.genome.utils import fetch_first, I_INT
 
 

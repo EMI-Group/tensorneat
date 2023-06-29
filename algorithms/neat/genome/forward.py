@@ -1,6 +1,5 @@
 import jax
-from jax import Array, numpy as jnp
-from jax import jit, vmap
+from jax import Array, numpy as jnp, jit, vmap
 
 from .utils import I_INT
 

@@ -6,8 +6,7 @@ See https://neat-python.readthedocs.io/en/latest/_modules/genome.html#DefaultGen
 from typing import Tuple
 
 import jax
-from jax import jit, Array
-from jax import numpy as jnp
+from jax import jit, Array, numpy as jnp
 
 
 @jit

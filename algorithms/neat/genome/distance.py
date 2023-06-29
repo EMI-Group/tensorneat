@@ -5,8 +5,7 @@ See https://github.com/CodeReclaimers/neat-python/blob/master/neat/genome.py
 """
 from typing import Dict
 
-from jax import jit, vmap, Array
-from jax import numpy as jnp
+from jax import jit, vmap, Array, numpy as jnp
 
 from .utils import EMPTY_NODE, EMPTY_CON
 

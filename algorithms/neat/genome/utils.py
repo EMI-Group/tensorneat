@@ -2,8 +2,7 @@ from functools import partial
 
 import numpy as np
 import jax
-from jax import numpy as jnp, Array
-from jax import jit, vmap
+from jax import numpy as jnp, Array, jit, vmap
 
 I_INT = np.iinfo(jnp.int32).max  # infinite int
 EMPTY_NODE = np.full((1, 5), jnp.nan)
@@ -59,6 +58,7 @@ def fetch_random(rand_key, mask, default=I_INT) -> Array:
     target = jax.random.randint(rand_key, shape=(), minval=1, maxval=true_cnt + 1)
     mask = jnp.where(true_cnt == 0, False, cumsum >= target)
     return fetch_first(mask, default)
+
 
 @partial(jit, static_argnames=['reverse'])
 def rank_elements(array, reverse=False):
