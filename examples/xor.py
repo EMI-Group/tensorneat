@@ -1,7 +1,8 @@
 import numpy as np
 
 from configs import Configer
-from pipeline import Pipeline
+from algorithms.neat.pipeline import Pipeline
+
 
 xor_inputs = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.float32)
 xor_outputs = np.array([[0], [1], [1], [0]], dtype=np.float32)
@@ -21,7 +22,8 @@ def main():
     config = Configer.load_config("xor.ini")
     pipeline = Pipeline(config, seed=6)
     nodes, cons = pipeline.auto_run(evaluate)
-    print(nodes, cons)
+    print(nodes)
+    print(cons)
 
 
 if __name__ == '__main__':

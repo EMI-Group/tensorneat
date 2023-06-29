@@ -65,55 +65,6 @@ def initialize_genomes(N: int, C: int, config: Dict) -> Tuple[NDArray, NDArray]:
     return pop_nodes, pop_cons
 
 
-def expand_single(nodes: NDArray, cons: NDArray, new_N: int, new_C: int) -> Tuple[NDArray, NDArray]:
-    """
-    Expand a single genome to accommodate more nodes or connections.
-    :param nodes: (N, 5)
-    :param cons:  (C, 4)
-    :param new_N:
-    :param new_C:
-    :return: (new_N, 5), (new_C, 4)
-    """
-    old_N, old_C = nodes.shape[0], cons.shape[0]
-    new_nodes = np.full((new_N, 5), np.nan)
-    new_nodes[:old_N, :] = nodes
-
-    new_cons = np.full((new_C, 4), np.nan)
-    new_cons[:old_C, :] = cons
-
-    return new_nodes, new_cons
-
-
-def expand(pop_nodes: NDArray, pop_cons: NDArray, new_N: int, new_C: int) -> Tuple[NDArray, NDArray]:
-    """
-    Expand the population to accommodate more nodes or connections.
-    :param pop_nodes: (pop_size, N, 5)
-    :param pop_cons:  (pop_size, C, 4)
-    :param new_N:
-    :param new_C:
-    :return: (pop_size, new_N, 5), (pop_size, new_C, 4)
-    """
-    pop_size, old_N, old_C = pop_nodes.shape[0], pop_nodes.shape[1], pop_cons.shape[1]
-
-    new_pop_nodes = np.full((pop_size, new_N, 5), np.nan)
-    new_pop_nodes[:, :old_N, :] = pop_nodes
-
-    new_pop_cons = np.full((pop_size, new_C, 4), np.nan)
-    new_pop_cons[:, :old_C, :] = pop_cons
-
-    return new_pop_nodes, new_pop_cons
-
-
-@jit
-def count(nodes: NDArray, cons: NDArray) -> Tuple[NDArray, NDArray]:
-    """
-    Count how many nodes and connections are in the genome.
-    """
-    node_cnt = jnp.sum(~jnp.isnan(nodes[:, 0]))
-    cons_cnt = jnp.sum(~jnp.isnan(cons[:, 0]))
-    return node_cnt, cons_cnt
-
-
 @jit
 def add_node(nodes: NDArray, cons: NDArray, new_key: int,
              bias: float = 0.0, response: float = 1.0, act: int = 0, agg: int = 0) -> Tuple[NDArray, NDArray]:

@@ -3,13 +3,13 @@ from typing import Union, Callable
 
 import numpy as np
 import jax
+from jax import jit, vmap
 
 from configs import Configer
-from function_factory import FunctionFactory
-from algorithms.neat import initialize_genomes, expand, expand_single
+from algorithms.neat import initialize_genomes
 
-from algorithms.neat.jit_species import update_species
-from algorithms.neat.operations import create_next_generation_then_speciate
+from algorithms.neat.population import create_next_generation, speciate, update_species
+from algorithms.neat import unflatten_connections, topological_sort, create_forward_function
 
 
 class Pipeline:
@@ -17,30 +17,27 @@ class Pipeline:
     Neat algorithm pipeline.
     """
 
-    def __init__(self, config, function_factory=None, seed=42):
+    def __init__(self, config, seed=42):
         self.randkey = jax.random.PRNGKey(seed)
         np.random.seed(seed)
 
         self.config = config  # global config
         self.jit_config = Configer.create_jit_config(config)  # config used in jit-able functions
-        self.function_factory = function_factory or FunctionFactory(self.config, self.jit_config)
 
-        self.symbols = {
-            'P': self.config['pop_size'],
-            'N': self.config['init_maximum_nodes'],
-            'C': self.config['init_maximum_connections'],
-            'S': self.config['init_maximum_species'],
-        }
+        self.P = config['pop_size']
+        self.N = config['init_maximum_nodes']
+        self.C = config['init_maximum_connections']
+        self.S = config['init_maximum_species']
 
         self.generation = 0
         self.best_genome = None
 
-        self.pop_nodes, self.pop_cons = initialize_genomes(self.symbols['N'], self.symbols['C'], self.config)
-        self.species_info = np.full((self.symbols['S'], 3), np.nan)
+        self.pop_nodes, self.pop_cons = initialize_genomes(self.N, self.C, self.config)
+        self.species_info = np.full((self.S, 3), np.nan)
         self.species_info[0, :] = 0, -np.inf, 0
-        self.idx2species = np.zeros(self.symbols['P'], dtype=np.int32)
-        self.center_nodes = np.full((self.symbols['S'], self.symbols['N'], 5), np.nan)
-        self.center_cons = np.full((self.symbols['S'], self.symbols['C'], 4), np.nan)
+        self.idx2species = np.zeros(self.P, dtype=np.float32)
+        self.center_nodes = np.full((self.S, self.N, 5), np.nan)
+        self.center_cons = np.full((self.S, self.C, 4), np.nan)
         self.center_nodes[0, :, :] = self.pop_nodes[0, :, :]
         self.center_cons[0, :, :] = self.pop_cons[0, :, :]
 
@@ -49,7 +46,10 @@ class Pipeline:
         self.generation_timestamp = time.time()
 
         self.evaluate_time = 0
-        print(self.config)
+
+        self.pop_unflatten_connections = jit(vmap(unflatten_connections))
+        self.pop_topological_sort = jit(vmap(topological_sort))
+        self.forward = create_forward_function(config)
 
     def ask(self):
         """
@@ -71,52 +71,28 @@ class Pipeline:
             e.g. numerical regression; Hyper-NEAT
 
         """
-        u_pop_cons = self.get_func('pop_unflatten_connections')(self.pop_nodes, self.pop_cons)
-        pop_seqs = self.get_func('pop_topological_sort')(self.pop_nodes, u_pop_cons)
+        u_pop_cons = self.pop_unflatten_connections(self.pop_nodes, self.pop_cons)
+        pop_seqs = self.pop_topological_sort(self.pop_nodes, u_pop_cons)
 
-        if self.config['forward_way'] == 'single':
-            forward_funcs = []
-            for seq, nodes, cons in zip(pop_seqs, self.pop_nodes, u_pop_cons):
-                func = lambda x: self.get_func('forward')(x, seq, nodes, cons)
-                forward_funcs.append(func)
-            return forward_funcs
-
-        elif self.config['forward_way'] == 'pop':
-            func = lambda x: self.get_func('pop_batch_forward')(x, pop_seqs, self.pop_nodes, u_pop_cons)
-            return func
-
-        elif self.config['forward_way'] == 'common':
-            func = lambda x: self.get_func('common_forward')(x, pop_seqs, self.pop_nodes, u_pop_cons)
-            return func
-
-        else:
-            raise NotImplementedError
+        # only common mode is supported currently
+        assert self.config['forward_way'] == 'common'
+        return lambda x: self.forward(x, pop_seqs, self.pop_nodes, u_pop_cons)
 
     def tell(self, fitnesses):
         self.generation += 1
 
-        species_info, center_nodes, center_cons, winner, loser, elite_mask = \
-            update_species(self.randkey, fitnesses, self.species_info, self.idx2species, self.center_nodes,
+        k1, k2, self.randkey = jax.random.split(self.randkey, 3)
+
+        self.species_info, self.center_nodes, self.center_cons, winner, loser, elite_mask = \
+            update_species(k1, fitnesses, self.species_info, self.idx2species, self.center_nodes,
                            self.center_cons, self.generation, self.jit_config)
 
-        # node keys to be used in the mutation process
-        new_node_keys = np.arange(self.generation * self.config['pop_size'],
-                                  self.generation * self.config['pop_size'] + self.config['pop_size'])
+        self.pop_nodes, self.pop_cons = create_next_generation(k2, self.pop_nodes, self.pop_cons, winner, loser,
+                                                               elite_mask, self.generation, self.jit_config)
 
-        # create the next generation and then speciate the population
-        self.pop_nodes, self.pop_cons, idx2specie, center_nodes, center_cons, species_keys = \
-            create_next_generation_then_speciate(self.randkey, self.pop_nodes, self.pop_cons, winner, loser, elite_mask, new_node_keys, center_nodes,
-                 center_cons, species_keys, species_key_start, self.jit_config)
-
-        # carry data to cpu
-        self.pop_nodes, self.pop_cons, idx2specie, center_nodes, center_cons, species_keys = \
-            jax.device_get([self.pop_nodes, self.pop_cons, idx2specie, center_nodes, center_cons, species_keys])
-
-        # update randkey
-        self.randkey = jax.random.split(self.randkey)[0]
-
-    def get_func(self, name):
-        return self.function_factory.get(name, self.symbols)
+        self.idx2species, self.center_nodes, self.center_cons, self.species_info = speciate(
+            self.pop_nodes, self.pop_cons, self.species_info, self.center_nodes, self.center_cons, self.generation,
+            self.jit_config)
 
     def auto_run(self, fitness_func, analysis: Union[Callable, str] = "default"):
         for _ in range(self.config['generation_limit']):
