@@ -6,3 +6,5 @@ from .population import update_species, create_next_generation, speciate
 
 from .genome.activations import act_name2func
 from .genome.aggregations import agg_name2func
+
+from .visualize import Genome
