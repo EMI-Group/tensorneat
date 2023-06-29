@@ -30,8 +30,8 @@ class Pipeline:
         self.best_genome = None
 
         self.pop_nodes, self.pop_cons = neat.initialize_genomes(self.N, self.C, self.config)
-        self.species_info = np.full((self.S, 3), np.nan)
-        self.species_info[0, :] = 0, -np.inf, 0
+        self.species_info = np.full((self.S, 4), np.nan)
+        self.species_info[0, :] = 0, -np.inf, 0, self.P
         self.idx2species = np.zeros(self.P, dtype=np.float32)
         self.center_nodes = np.full((self.S, self.N, 5), np.nan)
         self.center_cons = np.full((self.S, self.C, 4), np.nan)
@@ -128,5 +128,8 @@ class Pipeline:
             self.best_fitness = fitnesses[max_idx]
             self.best_genome = (self.pop_nodes[max_idx], self.pop_cons[max_idx])
 
+        species_sizes = [int(i) for i in self.species_info[:, 3] if i > 0]
+
         print(f"Generation: {self.generation}",
+              f"species: {len(species_sizes)}, {species_sizes}",
               f"fitness: {max_f}, {min_f}, {mean_f}, {std_f}, Cost time: {cost_time}")
