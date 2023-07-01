@@ -12,6 +12,28 @@ from .genome import distance, mutate, crossover, I_INT, fetch_first, rank_elemen
 
 
 @jit
+def tell(fitness, randkey, pop_nodes, pop_cons, species_info, idx2species, center_nodes, center_cons, generation,
+         jit_config):
+
+    generation += 1
+
+    k1, k2, randkey = jax.random.split(randkey, 3)
+
+    species_info, center_nodes, center_cons, winner, loser, elite_mask = \
+        update_species(k1, fitness, species_info, idx2species, center_nodes,
+                       center_cons, generation, jit_config)
+
+    pop_nodes, pop_cons = create_next_generation(k2, pop_nodes, pop_cons, winner, loser,
+                                                 elite_mask, generation, jit_config)
+
+    idx2species, center_nodes, center_cons, species_info = speciate(
+        pop_nodes, pop_cons, species_info, center_nodes, center_cons, generation,
+        jit_config)
+
+    return randkey, pop_nodes, pop_cons, species_info, idx2species, center_nodes, center_cons, generation
+
+
+@jit
 def update_species(randkey, fitness, species_info, idx2species, center_nodes, center_cons, generation, jit_config):
     """
     args:
@@ -110,7 +132,13 @@ def cal_spawn_numbers(species_info, jit_config):
     spawn_number_rate = rank_score / denominator  # obtain [0.5, 0.33, 0.17]
     spawn_number_rate = jnp.where(is_species_valid, spawn_number_rate, 0)  # set invalid species to 0
 
-    spawn_number = jnp.floor(spawn_number_rate * jit_config['pop_size']).astype(jnp.int32)  # calculate member
+    target_spawn_number = jnp.floor(spawn_number_rate * jit_config['pop_size'])  # calculate member
+
+    # Avoid too much variation of numbers in a species
+    previous_size = species_info[:, 3].astype(jnp.int32)
+    spawn_number = previous_size + (target_spawn_number - previous_size) * jit_config['spawn_number_move_rate']
+
+    spawn_number = spawn_number.astype(jnp.int32)
 
     # must control the sum of spawn_number to be equal to pop_size
     error = jit_config['pop_size'] - jnp.sum(spawn_number)

@@ -44,7 +44,8 @@ jit_config_keys = [
     "pop_size",
     "genome_elitism",
     "survival_threshold",
-    "species_elitism"
+    "species_elitism",
+    "spawn_number_move_rate"
 ]
 
 

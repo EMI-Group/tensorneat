@@ -100,4 +100,4 @@ def create_forward_function(config):
     elif config['forward_way'] == 'common':
         return jit(common_forward)
 
-    return forward
+    return jit(forward)

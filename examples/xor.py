@@ -1,3 +1,4 @@
+import jax
 import numpy as np
 
 from configs import Configer
@@ -14,8 +15,9 @@ def evaluate(forward_func):
     :return:
     """
     outs = forward_func(xor_inputs)
+    outs = jax.device_get(outs)
     fitnesses = 4 - np.sum((outs - xor_outputs) ** 2, axis=(1, 2))
-    return np.array(fitnesses)  # returns a list
+    return fitnesses
 
 
 def main():
