@@ -39,7 +39,6 @@ class Pipeline:
         self.center_cons[0, :, :] = self.pop_cons[0, :, :]
 
         self.best_fitness = float('-inf')
-        self.best_genome = None
         self.generation_timestamp = time.time()
 
         self.evaluate_time = 0
