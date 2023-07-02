@@ -4,7 +4,8 @@ import configparser
 
 import numpy as np
 
-from algorithms.neat import act_name2func, agg_name2func
+from algorithms.neat.genome.activations import act_name2func
+from algorithms.neat.genome.aggregations import agg_name2func
 
 # Configuration used in jit-able functions. The change of values will not cause the re-compilation of JAX.
 jit_config_keys = [

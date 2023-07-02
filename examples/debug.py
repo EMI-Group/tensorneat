@@ -34,8 +34,6 @@ def get_fitnesses(pop_nodes, pop_cons, pop_unflatten_connections, pop_topologica
     return evaluate(func)
 
 
-
-
 def equal(ar1, ar2):
     if ar1.shape != ar2.shape:
         return False
