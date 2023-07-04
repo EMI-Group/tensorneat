@@ -4,9 +4,6 @@ import configparser
 
 import numpy as np
 
-from algorithms.neat.genome.activations import act_name2func
-from algorithms.neat.genome.aggregations import agg_name2func
-
 # Configuration used in jit-able functions. The change of values will not cause the re-compilation of JAX.
 jit_config_keys = [
     "input_idx",
@@ -108,13 +105,11 @@ class Configer:
     def refactor_activation(cls, config):
         config['activation_default'] = 0
         config['activation_options'] = np.arange(len(config['activation_option_names']))
-        config['activation_funcs'] = [act_name2func[name] for name in config['activation_option_names']]
 
     @classmethod
     def refactor_aggregation(cls, config):
         config['aggregation_default'] = 0
         config['aggregation_options'] = np.arange(len(config['aggregation_option_names']))
-        config['aggregation_funcs'] = [agg_name2func[name] for name in config['aggregation_option_names']]
 
     @classmethod
     def create_jit_config(cls, config):

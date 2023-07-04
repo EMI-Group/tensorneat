@@ -27,27 +27,22 @@ class Pipeline:
 
         self.evaluate_time = 0
 
-
-        self.randkey, self.pop_nodes, self.pop_cons, self.species_info, self.idx2species, self.center_nodes, \
-            self.center_cons, self.generation, self.next_node_key, self.next_species_key = neat.initialize(config)
-
+        (
+            self.randkey,
+            self.pop_nodes,
+            self.pop_cons,
+            self.species_info,
+            self.idx2species,
+            self.center_nodes,
+            self.center_cons,
+            self.generation,
+            self.next_node_key,
+            self.next_species_key,
+        ) = neat.initialize(config)
 
         self.forward = neat.create_forward_function(config)
         self.pop_unflatten_connections = jit(vmap(neat.unflatten_connections))
         self.pop_topological_sort = jit(vmap(neat.topological_sort))
-
-        # self.tell_func = neat.tell.lower(np.zeros(config['pop_size'], dtype=np.float32),
-        #                                  self.randkey,
-        #                                  self.pop_nodes,
-        #                                  self.pop_cons,
-        #                                  self.species_info,
-        #                                  self.idx2species,
-        #                                  self.center_nodes,
-        #                                  self.center_cons,
-        #                                  self.generation,
-        #                                  self.next_node_key,
-        #                                  self.next_species_key,
-        #                                  self.jit_config).compile()
 
     def ask(self):
         """
@@ -77,21 +72,31 @@ class Pipeline:
         return lambda x: self.forward(x, pop_seqs, self.pop_nodes, u_pop_cons)
 
     def tell(self, fitness):
-
-        self.randkey, self.pop_nodes, self.pop_cons, self.species_info, self.idx2species, self.center_nodes, \
-            self.center_cons, self.generation, self.next_node_key, self.next_species_key = neat.tell(fitness,
-                                                                                                     self.randkey,
-                                                                                                     self.pop_nodes,
-                                                                                                     self.pop_cons,
-                                                                                                     self.species_info,
-                                                                                                     self.idx2species,
-                                                                                                     self.center_nodes,
-                                                                                                     self.center_cons,
-                                                                                                     self.generation,
-                                                                                                     self.next_node_key,
-                                                                                                     self.next_species_key,
-                                                                                                     self.jit_config)
-
+        (
+            self.randkey,
+            self.pop_nodes,
+            self.pop_cons,
+            self.species_info,
+            self.idx2species,
+            self.center_nodes,
+            self.center_cons,
+            self.generation,
+            self.next_node_key,
+            self.next_species_key,
+        ) = neat.tell(
+            fitness,
+            self.randkey,
+            self.pop_nodes,
+            self.pop_cons,
+            self.species_info,
+            self.idx2species,
+            self.center_nodes,
+            self.center_cons,
+            self.generation,
+            self.next_node_key,
+            self.next_species_key,
+            self.jit_config
+        )
 
     def auto_run(self, fitness_func, analysis: Union[Callable, str] = "default"):
         for _ in range(self.config['generation_limit']):

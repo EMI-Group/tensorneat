@@ -1,5 +1,5 @@
 """
-Some graph algorithms implemented in jax.
+Some graph algorithm implemented in jax.
 Only used in feed-forward networks.
 """
 
