@@ -55,9 +55,7 @@ class Gym(Problem):
         return -fitnesses, State(key=key)
 
     def __rollout(self, seeds, pop):
-        observations, infos = zip(
-            *[env.reset(seed=seed) for env, seed in zip(self.envs, seeds)]
-        )
+        observations = [env.reset(seed=seed) for env, seed in zip(self.envs, seeds)]
         terminates, truncates = np.zeros((2, self.pop_size), dtype=bool)
         fitnesses, rewards = np.zeros((2, self.pop_size))
 

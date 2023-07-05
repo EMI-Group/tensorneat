@@ -39,6 +39,7 @@ if __name__ == '__main__':
     problem = Gym(
         policy=jit(vmap(neat_forward)),
         env_name="Acrobot-v1",
+        env_options={"new_step_api": True},
         pop_size=100,
     )
 
