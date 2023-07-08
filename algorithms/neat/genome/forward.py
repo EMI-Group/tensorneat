@@ -97,7 +97,9 @@ def create_forward_function(config):
 
     if config['forward_way'] == 'single':
         return jit(forward)
-        # return jit(batch_forward)
+
+    if config['forward_way'] == 'batch':
+        return jit(batch_forward)
 
     elif config['forward_way'] == 'pop':
         return jit(pop_batch_forward)

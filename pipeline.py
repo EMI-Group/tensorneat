@@ -51,8 +51,13 @@ class Pipeline:
 
         single:
             Create pop_size number of forward functions.
-            Each function receive (batch_size, input_size) and returns (batch_size, output_size)
+            Each function receive (input_size, ) and returns (output_size, )
             e.g. RL task
+
+        batch:
+            Create pop_size number of forward functions.
+            Each function receive (input_size, ) and returns (output_size, )
+            some task need to calculate the fitness of a batch of inputs
 
         pop:
             Create a single forward function, which use only once calculation for the population.
@@ -68,8 +73,18 @@ class Pipeline:
         pop_seqs = self.pop_topological_sort(self.pop_nodes, u_pop_cons)
 
         # only common mode is supported currently
-        assert self.config['forward_way'] == 'common'
-        return lambda x: self.forward(x, pop_seqs, self.pop_nodes, u_pop_cons)
+        if self.config['forward_way'] == 'single' or self.config['forward_way'] == 'batch':
+            # carry data to cpu for fast iteration
+            pop_seqs, self.pop_nodes, self.pop_cons = jax.device_get((pop_seqs, self.pop_nodes, self.pop_cons))
+            funcs = [lambda x: self.forward(x, seqs, nodes, u_cons)
+                     for seqs, nodes, u_cons in zip(pop_seqs, self.pop_nodes, self.pop_cons)]
+            return funcs
+
+        elif self.config['forward_way'] == 'pop' or self.config['forward_way'] == 'common':
+            return lambda x: self.forward(x, pop_seqs, self.pop_nodes, u_pop_cons)
+
+        else:
+            raise NotImplementedError(f"forward_way {self.config['forward_way']} is not supported")
 
     def tell(self, fitness):
         (
