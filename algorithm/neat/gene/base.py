@@ -26,12 +26,12 @@ class BaseGene:
         return attrs
 
     @staticmethod
-    def distance_node(state, array: Array):
-        return array
+    def distance_node(state, array1: Array, array2: Array):
+        return array1
 
     @staticmethod
-    def distance_conn(state, array: Array):
-        return array
+    def distance_conn(state, array1: Array, array2: Array):
+        return array1
 
     @staticmethod
     def forward(state, array: Array):

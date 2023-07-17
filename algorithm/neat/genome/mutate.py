@@ -1,6 +1,5 @@
 from typing import Dict, Tuple, Type
 
-import numpy as np
 import jax
 from jax import Array, numpy as jnp, vmap
 

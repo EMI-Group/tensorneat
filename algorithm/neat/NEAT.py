@@ -1,6 +1,8 @@
+import jax
+
 from algorithm.state import State
 from .gene import *
-from .genome import initialize_genomes
+from .genome import initialize_genomes, create_mutate, create_distance, crossover
 
 
 class NEAT:
@@ -10,6 +12,10 @@ class NEAT:
             self.gene_type = NormalGene
         else:
             raise NotImplementedError
+
+        self.mutate = jax.jit(create_mutate(config, self.gene_type))
+        self.distance = jax.jit(create_distance(config, self.gene_type))
+        self.crossover = jax.jit(crossover)
 
     def setup(self, randkey):
 
@@ -24,6 +30,8 @@ class NEAT:
             input_idx=self.config['input_idx'],
             output_idx=self.config['output_idx']
         )
+
+        state = self.gene_type.setup(state, self.config)
 
         pop_nodes, pop_conns = initialize_genomes(state, self.gene_type)
         next_node_key = max(*state.input_idx, *state.output_idx) + 2
