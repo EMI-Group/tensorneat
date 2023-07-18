@@ -4,49 +4,6 @@ import configparser
 
 import numpy as np
 
-# Configuration used in jit-able functions. The change of values will not cause the re-compilation of JAX.
-jit_config_keys = [
-    "input_idx",
-    "output_idx",
-    "compatibility_disjoint",
-    "compatibility_weight",
-    "conn_add_prob",
-    "conn_add_trials",
-    "conn_delete_prob",
-    "node_add_prob",
-    "node_delete_prob",
-    "compatibility_threshold",
-    "bias_init_mean",
-    "bias_init_std",
-    "bias_mutate_power",
-    "bias_mutate_rate",
-    "bias_replace_rate",
-    "response_init_mean",
-    "response_init_std",
-    "response_mutate_power",
-    "response_mutate_rate",
-    "response_replace_rate",
-    "activation_default",
-    "activation_options",
-    "activation_replace_rate",
-    "aggregation_default",
-    "aggregation_options",
-    "aggregation_replace_rate",
-    "weight_init_mean",
-    "weight_init_std",
-    "weight_mutate_power",
-    "weight_mutate_rate",
-    "weight_replace_rate",
-    "enable_mutate_rate",
-    "max_stagnation",
-    "pop_size",
-    "genome_elitism",
-    "survival_threshold",
-    "species_elitism",
-    "spawn_number_move_rate"
-]
-
-
 class Configer:
 
     @classmethod
@@ -110,9 +67,3 @@ class Configer:
     def refactor_aggregation(cls, config):
         config['aggregation_default'] = 0
         config['aggregation_options'] = np.arange(len(config['aggregation_option_names']))
-
-    @classmethod
-    def create_jit_config(cls, config):
-        jit_config = {k: config[k] for k in jit_config_keys}
-
-        return jit_config

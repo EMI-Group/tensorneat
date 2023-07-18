@@ -1,4 +1,4 @@
-from jax import Array, numpy as jnp
+from jax import Array, numpy as jnp, vmap
 
 
 class BaseGene:
@@ -26,13 +26,19 @@ class BaseGene:
         return attrs
 
     @staticmethod
-    def distance_node(state, array1: Array, array2: Array):
-        return array1
+    def distance_node(state, node1: Array, node2: Array):
+        return node1
 
     @staticmethod
-    def distance_conn(state, array1: Array, array2: Array):
-        return array1
+    def distance_conn(state, conn1: Array, conn2: Array):
+        return conn1
+
 
     @staticmethod
-    def forward(state, array: Array):
-        return array
+    def forward_transform(nodes, conns):
+        return nodes, conns
+
+
+    @staticmethod
+    def create_forward(config):
+        return None

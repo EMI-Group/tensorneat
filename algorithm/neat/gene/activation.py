@@ -3,6 +3,8 @@ import jax.numpy as jnp
 
 class Activation:
 
+    name2func = {}
+
     @staticmethod
     def sigmoid_act(z):
         z = jnp.clip(z * 5, -60, 60)
@@ -86,23 +88,23 @@ class Activation:
     def cube_act(z):
         return z ** 3
 
-    name2func = {
-        'sigmoid': sigmoid_act,
-        'tanh': tanh_act,
-        'sin': sin_act,
-        'gauss': gauss_act,
-        'relu': relu_act,
-        'elu': elu_act,
-        'lelu': lelu_act,
-        'selu': selu_act,
-        'softplus': softplus_act,
-        'identity': identity_act,
-        'clamped': clamped_act,
-        'inv': inv_act,
-        'log': log_act,
-        'exp': exp_act,
-        'abs': abs_act,
-        'hat': hat_act,
-        'square': square_act,
-        'cube': cube_act,
-    }
+Activation.name2func = {
+    'sigmoid': Activation.sigmoid_act,
+    'tanh': Activation.tanh_act,
+    'sin': Activation.sin_act,
+    'gauss': Activation.gauss_act,
+    'relu': Activation.relu_act,
+    'elu': Activation.elu_act,
+    'lelu': Activation.lelu_act,
+    'selu': Activation.selu_act,
+    'softplus': Activation.softplus_act,
+    'identity': Activation.identity_act,
+    'clamped': Activation.clamped_act,
+    'inv': Activation.inv_act,
+    'log': Activation.log_act,
+    'exp': Activation.exp_act,
+    'abs': Activation.abs_act,
+    'hat': Activation.hat_act,
+    'square': Activation.square_act,
+    'cube': Activation.cube_act,
+}

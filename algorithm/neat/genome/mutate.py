@@ -4,7 +4,7 @@ import jax
 from jax import Array, numpy as jnp, vmap
 
 from algorithm import State
-from .basic import add_node, add_connection, delete_node_by_idx, delete_connection_by_idx
+from .basic import add_node, add_connection, delete_node_by_idx, delete_connection_by_idx, count
 from .graph import check_cycles
 from ..utils import fetch_random, fetch_first, I_INT, unflatten_connections
 from ..gene import BaseGene
@@ -12,46 +12,51 @@ from ..gene import BaseGene
 
 def create_mutate(config: Dict, gene_type: Type[BaseGene]):
     """
-    Create function to mutate the whole population
+    Create function to mutate a single genome
     """
 
-    def mutate_structure(state: State, randkey, nodes, cons, new_node_key):
-        def nothing(*args):
-            return nodes, cons
+    def mutate_structure(state: State, randkey, nodes, conns, new_node_key):
 
-        def mutate_add_node(key_):
-            i_key, o_key, idx = choice_connection_key(key_, nodes, cons)
+        def mutate_add_node(key_, nodes_, conns_):
+            i_key, o_key, idx = choice_connection_key(key_, nodes_, conns_)
+
+            def nothing():
+                return nodes_, conns_
 
             def successful_add_node():
                 # disable the connection
-                aux_nodes, aux_cons = nodes, cons
+                aux_nodes, aux_conns = nodes_, conns_
 
                 # set enable to false
-                aux_cons = aux_cons.at[idx, 2].set(False)
+                aux_conns = aux_conns.at[idx, 2].set(False)
 
                 # add a new node
-                aux_nodes, aux_cons = add_node(aux_nodes, aux_cons, new_node_key, gene_type.new_node_attrs(state))
+                aux_nodes, aux_conns = add_node(aux_nodes, aux_conns, new_node_key, gene_type.new_node_attrs(state))
 
                 # add two new connections
-                aux_nodes, aux_cons = add_connection(aux_nodes, aux_cons, i_key, new_node_key, True,
+                aux_nodes, aux_conns = add_connection(aux_nodes, aux_conns, i_key, new_node_key, True,
                                                      gene_type.new_conn_attrs(state))
-                aux_nodes, aux_cons = add_connection(aux_nodes, aux_cons, new_node_key, o_key, True,
+                aux_nodes, aux_conns = add_connection(aux_nodes, aux_conns, new_node_key, o_key, True,
                                                      gene_type.new_conn_attrs(state))
 
-                return aux_nodes, aux_cons
+                return aux_nodes, aux_conns
 
             # if from_idx == I_INT, that means no connection exist, do nothing
-            return jax.lax.cond(idx == I_INT, nothing, successful_add_node)
+            new_nodes, new_conns = jax.lax.cond(idx == I_INT, nothing, successful_add_node)
 
-        def mutate_delete_node(key_):
+            return new_nodes, new_conns
+
+        def mutate_delete_node(key_, nodes_, conns_):
             # TODO: Do we really need to delete a node?
             # randomly choose a node
-            key, idx = choice_node_key(key_, nodes, config['input_idx'], config['output_idx'],
+            key, idx = choice_node_key(key_, nodes_, config['input_idx'], config['output_idx'],
                                        allow_input_keys=False, allow_output_keys=False)
+            def nothing():
+                return nodes_, conns_
 
             def successful_delete_node():
                 # delete the node
-                aux_nodes, aux_cons = delete_node_by_idx(nodes, cons, idx)
+                aux_nodes, aux_cons = delete_node_by_idx(nodes_, conns_, idx)
 
                 # delete all connections
                 aux_cons = jnp.where(((aux_cons[:, 0] == key) | (aux_cons[:, 1] == key))[:, None],
@@ -61,29 +66,32 @@ def create_mutate(config: Dict, gene_type: Type[BaseGene]):
 
             return jax.lax.cond(idx == I_INT, nothing, successful_delete_node)
 
-        def mutate_add_conn(key_):
+        def mutate_add_conn(key_, nodes_, conns_):
             # randomly choose two nodes
             k1_, k2_ = jax.random.split(key_, num=2)
-            i_key, from_idx = choice_node_key(k1_, nodes, config['input_idx'], config['output_idx'],
+            i_key, from_idx = choice_node_key(k1_, nodes_, config['input_idx'], config['output_idx'],
                                               allow_input_keys=True, allow_output_keys=True)
-            o_key, to_idx = choice_node_key(k2_, nodes, config['input_idx'], config['output_idx'],
+            o_key, to_idx = choice_node_key(k2_, nodes_, config['input_idx'], config['output_idx'],
                                             allow_input_keys=False, allow_output_keys=True)
 
-            con_idx = fetch_first((cons[:, 0] == i_key) & (cons[:, 1] == o_key))
+            con_idx = fetch_first((conns_[:, 0] == i_key) & (conns_[:, 1] == o_key))
+
+            def nothing():
+                return nodes_, conns_
 
             def successful():
-                new_nodes, new_cons = add_connection(nodes, cons, i_key, o_key, True, gene_type.new_conn_attrs(state))
+                new_nodes, new_cons = add_connection(nodes_, conns_, i_key, o_key, True, gene_type.new_conn_attrs(state))
                 return new_nodes, new_cons
 
             def already_exist():
-                new_cons = cons.at[con_idx, 2].set(True)
-                return nodes, new_cons
+                new_cons = conns_.at[con_idx, 2].set(True)
+                return nodes_, new_cons
 
             is_already_exist = con_idx != I_INT
 
             if config['network_type'] == 'feedforward':
-                u_cons = unflatten_connections(nodes, cons)
-                is_cycle = check_cycles(nodes, u_cons, from_idx, to_idx)
+                u_cons = unflatten_connections(nodes_, conns_)
+                is_cycle = check_cycles(nodes_, u_cons, from_idx, to_idx)
 
                 choice = jnp.where(is_already_exist, 0, jnp.where(is_cycle, 1, 2))
                 return jax.lax.switch(choice, [already_exist, nothing, successful])
@@ -94,23 +102,33 @@ def create_mutate(config: Dict, gene_type: Type[BaseGene]):
             else:
                 raise ValueError(f"Invalid network type: {config['network_type']}")
 
-        def mutate_delete_conn(key_):
+        def mutate_delete_conn(key_, nodes_, conns_):
             # randomly choose a connection
-            i_key, o_key, idx = choice_connection_key(key_, nodes, cons)
+            i_key, o_key, idx = choice_connection_key(key_, nodes_, conns_)
+
+            def nothing():
+                return nodes_, conns_
 
             def successfully_delete_connection():
-                return delete_connection_by_idx(nodes, cons, idx)
+                return delete_connection_by_idx(nodes_, conns_, idx)
 
             return jax.lax.cond(idx == I_INT, nothing, successfully_delete_connection)
 
-        k, k1, k2, k3, k4 = jax.random.split(randkey, num=5)
+        k1, k2, k3, k4 = jax.random.split(randkey, num=4)
         r1, r2, r3, r4 = jax.random.uniform(k1, shape=(4,))
 
-        nodes, cons = jax.lax.cond(r1 < config['node_add_prob'], mutate_add_node, nothing, k1)
-        nodes, cons = jax.lax.cond(r2 < config['node_delete_prob'], mutate_delete_node, nothing, k2)
-        nodes, cons = jax.lax.cond(r3 < config['conn_add_prob'], mutate_add_conn, nothing, k3)
-        nodes, cons = jax.lax.cond(r4 < config['conn_delete_prob'], mutate_delete_conn, nothing, k4)
-        return nodes, cons
+        def no(k, n, c):
+            return n, c
+
+        nodes, conns = jax.lax.cond(r1 < config['node_add_prob'], mutate_add_node, no, k1, nodes, conns)
+
+        nodes, conns = jax.lax.cond(r2 < config['node_delete_prob'], mutate_delete_node, no, k2, nodes, conns)
+
+        nodes, conns = jax.lax.cond(r3 < config['conn_add_prob'], mutate_add_conn, no, k3, nodes, conns)
+
+        nodes, conns = jax.lax.cond(r4 < config['conn_delete_prob'], mutate_delete_conn, no, k4, nodes, conns)
+
+        return nodes, conns
 
     def mutate_values(state: State, randkey, nodes, conns):
         k1, k2 = jax.random.split(randkey, num=2)
@@ -131,32 +149,13 @@ def create_mutate(config: Dict, gene_type: Type[BaseGene]):
 
         return new_nodes, new_conns
 
-    def mutate(state):
-        pop_nodes, pop_conns = state.pop_nodes, state.pop_conns
-        pop_size = pop_nodes.shape[0]
+    def mutate(state, randkey, nodes, conns, new_node_key):
+        k1, k2 = jax.random.split(randkey)
 
-        new_node_keys = jnp.arange(pop_size) + state.next_node_key
-        k1, k2, randkey = jax.random.split(state.randkey, num=3)
-        structure_randkeys = jax.random.split(k1, num=pop_size)
-        values_randkeys = jax.random.split(k2, num=pop_size)
+        nodes, conns = mutate_structure(state, k1, nodes, conns, new_node_key)
+        nodes, conns = mutate_values(state, k2, nodes, conns)
 
-        structure_func = jax.vmap(mutate_structure, in_axes=(None, 0, 0, 0, 0))
-        pop_nodes, pop_conns = structure_func(state, structure_randkeys, pop_nodes, pop_conns, new_node_keys)
-
-        values_func = jax.vmap(mutate_values, in_axes=(None, 0, 0, 0))
-        pop_nodes, pop_conns = values_func(state, values_randkeys, pop_nodes, pop_conns)
-
-        # update next node key
-        all_nodes_keys = pop_nodes[:, :, 0]
-        max_node_key = jnp.max(jnp.where(jnp.isnan(all_nodes_keys), -jnp.inf, all_nodes_keys))
-        next_node_key = max_node_key + 1
-
-        return state.update(
-            pop_nodes=pop_nodes,
-            pop_conns=pop_conns,
-            next_node_key=next_node_key,
-            randkey=randkey
-        )
+        return nodes, conns
 
     return mutate
 
