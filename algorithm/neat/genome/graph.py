@@ -12,28 +12,7 @@ from ..utils import fetch_first, I_INT
 @jit
 def topological_sort(nodes: Array, conns: Array) -> Array:
     """
-    a jit-able version of topological_sort! that's crazy!
-    :param nodes: nodes array
-    :param conns: connections array
-    :return: topological sorted sequence
-
-        Example:
-        nodes = jnp.array([
-            [0],
-            [1],
-            [2],
-            [3]
-        ])
-        connections = jnp.array([
-            [
-                [0, 0, 1, 0],
-                [0, 0, 1, 1],
-                [0, 0, 0, 1],
-                [0, 0, 0, 0]
-            ]
-        ])
-
-        topological_sort(nodes, connections) -> [0, 1, 2, 3]
+    a jit-able version of topological_sort!
     """
 
     in_degree = jnp.where(jnp.isnan(nodes[:, 0]), jnp.nan, jnp.sum(conns, axis=0))
@@ -65,30 +44,9 @@ def topological_sort(nodes: Array, conns: Array) -> Array:
 def check_cycles(nodes: Array, conns: Array, from_idx, to_idx) -> Array:
     """
     Check whether a new connection (from_idx -> to_idx) will cause a cycle.
-
-    Example:
-        nodes = jnp.array([
-            [0],
-            [1],
-            [2],
-            [3]
-        ])
-        connections = jnp.array([
-                [0, 0, 1, 0],
-                [0, 0, 1, 1],
-                [0, 0, 0, 1],
-                [0, 0, 0, 0]
-        ])
-
-        check_cycles(nodes, conns, 3, 2) -> True
-        check_cycles(nodes, conns, 2, 3) -> False
-        check_cycles(nodes, conns, 0, 3) -> False
-        check_cycles(nodes, conns, 1, 0) -> False
     """
 
     conns = conns.at[from_idx, to_idx].set(True)
-    # conns_enable = ~jnp.isnan(conns[0, :, :])
-    # conns_enable = conns_enable.at[from_idx, to_idx].set(True)
 
     visited = jnp.full(nodes.shape[0], False)
     new_visited = visited.at[to_idx].set(True)
@@ -107,36 +65,3 @@ def check_cycles(nodes: Array, conns: Array, from_idx, to_idx) -> Array:
 
     _, visited = jax.lax.while_loop(cond_func, body_func, (visited, new_visited))
     return visited[from_idx]
-
-# if __name__ == '__main__':
-#     nodes = jnp.array([
-#         [0],
-#         [1],
-#         [2],
-#         [3],
-#         [jnp.nan]
-#     ])
-#     connections = jnp.array([
-#         [
-#             [jnp.nan, jnp.nan, 1, jnp.nan, jnp.nan],
-#             [jnp.nan, jnp.nan, 1, 1, jnp.nan],
-#             [jnp.nan, jnp.nan, jnp.nan, 1, jnp.nan],
-#             [jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan],
-#             [jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan]
-#         ],
-#         [
-#             [jnp.nan, jnp.nan, 1, jnp.nan, jnp.nan],
-#             [jnp.nan, jnp.nan, 1, 1, jnp.nan],
-#             [jnp.nan, jnp.nan, jnp.nan, 1, jnp.nan],
-#             [jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan],
-#             [jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan]
-#         ]
-#     ]
-#     )
-#
-#     print(topological_sort(nodes, connections))
-#
-#     print(check_cycles(nodes, connections, 3, 2))
-#     print(check_cycles(nodes, connections, 2, 3))
-#     print(check_cycles(nodes, connections, 0, 3))
-#     print(check_cycles(nodes, connections, 1, 0))

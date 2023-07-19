@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import jax
 from jax import jit, Array, numpy as jnp
 

@@ -5,6 +5,7 @@ import jax
 from jax import vmap, jit
 import numpy as np
 
+
 class Pipeline:
     """
     Neat algorithm pipeline.
