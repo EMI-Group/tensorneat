@@ -34,9 +34,6 @@ class Pipeline:
 
     def tell(self, fitness):
         self.state = self.algorithm.step(self.state, fitness)
-        from algorithm.neat.genome.basic import count
-        # print([count(self.state.pop_nodes[i], self.state.pop_conns[i]) for i in range(self.state.P)])
-
 
     def auto_run(self, fitness_func, analysis: Union[Callable, str] = "default"):
         for _ in range(self.config['generation_limit']):

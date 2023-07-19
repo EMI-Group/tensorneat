@@ -11,7 +11,7 @@ from ..utils import fetch_first
 
 def initialize_genomes(state: State, gene_type: Type[BaseGene]):
     o_nodes = np.full((state.N, state.NL), np.nan, dtype=np.float32)  # original nodes
-    o_conns = np.full((state.N, state.CL), np.nan, dtype=np.float32)  # original connections
+    o_conns = np.full((state.C, state.CL), np.nan, dtype=np.float32)  # original connections
 
     input_idx = state.input_idx
     output_idx = state.output_idx

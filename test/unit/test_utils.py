@@ -1,7 +1,5 @@
-import pytest
-import jax
-
-from algorithm.neat.utils import *
+import jax.numpy as jnp
+from algorithm.neat.utils import unflatten_connections
 
 
 def test_unflatten():
@@ -12,7 +10,6 @@ def test_unflatten():
         [3, 3, 3, 3],
         [jnp.nan, jnp.nan, jnp.nan, jnp.nan]
     ])
-
 
     conns = jnp.array([
         [0, 1, True, 0.1, 0.11],

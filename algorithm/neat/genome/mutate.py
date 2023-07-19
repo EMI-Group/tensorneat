@@ -91,7 +91,8 @@ def create_mutate(config: Dict, gene_type: Type[BaseGene]):
 
             if config['network_type'] == 'feedforward':
                 u_cons = unflatten_connections(nodes_, conns_)
-                is_cycle = check_cycles(nodes_, u_cons, from_idx, to_idx)
+                cons_exist = jnp.where(~jnp.isnan(u_cons[0, :, :]), True, False)
+                is_cycle = check_cycles(nodes_, cons_exist, from_idx, to_idx)
 
                 choice = jnp.where(is_already_exist, 0, jnp.where(is_cycle, 1, 2))
                 return jax.lax.switch(choice, [already_exist, nothing, successful])

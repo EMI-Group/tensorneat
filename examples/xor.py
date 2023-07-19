@@ -2,7 +2,7 @@ import jax
 import numpy as np
 
 from algorithm import Configer, NEAT
-from algorithm.neat import NormalGene, Pipeline
+from algorithm.neat import NormalGene, RecurrentGene, Pipeline
 
 xor_inputs = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.float32)
 xor_outputs = np.array([[0], [1], [1], [0]], dtype=np.float32)
@@ -15,16 +15,17 @@ def evaluate(forward_func):
     """
     outs = forward_func(xor_inputs)
     outs = jax.device_get(outs)
-    # print(outs)
     fitnesses = 4 - np.sum((outs - xor_outputs) ** 2, axis=(1, 2))
     return fitnesses
 
 
 def main():
     config = Configer.load_config("xor.ini")
-    algorithm = NEAT(config, NormalGene)
+    # algorithm = NEAT(config, NormalGene)
+    algorithm = NEAT(config, RecurrentGene)
     pipeline = Pipeline(config, algorithm)
-    pipeline.auto_run(evaluate)
+    best = pipeline.auto_run(evaluate)
+    print(best)
 
 
 if __name__ == '__main__':
