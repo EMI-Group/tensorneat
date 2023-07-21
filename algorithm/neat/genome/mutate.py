@@ -4,9 +4,9 @@ import jax
 from jax import Array, numpy as jnp, vmap
 
 from algorithm import State
-from .basic import add_node, add_connection, delete_node_by_idx, delete_connection_by_idx, count
+from .basic import add_node, add_connection, delete_node_by_idx, delete_connection_by_idx
 from .graph import check_cycles
-from ..utils import fetch_random, fetch_first, I_INT, unflatten_connections
+from algorithm.utils import fetch_random, fetch_first, I_INT, unflatten_connections
 from ..gene import BaseGene
 
 

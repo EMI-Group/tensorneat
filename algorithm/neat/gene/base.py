@@ -33,11 +33,9 @@ class BaseGene:
     def distance_conn(state, conn1: Array, conn2: Array):
         return conn1
 
-
     @staticmethod
-    def forward_transform(nodes, conns):
+    def forward_transform(state, nodes, conns):
         return nodes, conns
-
 
     @staticmethod
     def create_forward(config):

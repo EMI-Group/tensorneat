@@ -6,7 +6,7 @@ Only used in feed-forward networks.
 import jax
 from jax import jit, Array, numpy as jnp
 
-from ..utils import fetch_first, I_INT
+from algorithm.utils import fetch_first, I_INT
 
 
 @jit

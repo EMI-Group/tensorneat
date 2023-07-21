@@ -1,3 +1,4 @@
+from .base import Algorithm
 from .state import State
 from .neat import NEAT
-from .config import Configer
+from .hyperneat import HyperNEAT

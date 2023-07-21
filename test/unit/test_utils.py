@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from algorithm.neat.utils import unflatten_connections
+from algorithm.utils import unflatten_connections
 
 
 def test_unflatten():

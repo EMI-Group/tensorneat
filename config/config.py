@@ -4,6 +4,7 @@ import configparser
 
 import numpy as np
 
+
 class Configer:
 
     @classmethod
@@ -28,7 +29,7 @@ class Configer:
     def __check_redundant_config(cls, default_config, config):
         for key in config:
             if key not in default_config:
-                warnings.warn(f"Redundant config: {key} in {config.name}")
+                warnings.warn(f"Redundant config: {key} in config!")
 
     @classmethod
     def __complete_config(cls, default_config, config):

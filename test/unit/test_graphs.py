@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 
 from algorithm.neat.genome.graph import topological_sort, check_cycles
-from algorithm.neat.utils import I_INT
+from algorithm.utils import I_INT
 
 nodes = jnp.array([
     [0],

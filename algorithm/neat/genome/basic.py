@@ -6,7 +6,7 @@ from jax import Array, numpy as jnp
 
 from algorithm import State
 from ..gene import BaseGene
-from ..utils import fetch_first
+from algorithm.utils import fetch_first
 
 
 def initialize_genomes(state: State, gene_type: Type[BaseGene]):
@@ -47,6 +47,7 @@ def count(nodes: Array, cons: Array):
     node_cnt = jnp.sum(~jnp.isnan(nodes[:, 0]))
     cons_cnt = jnp.sum(~jnp.isnan(cons[:, 0]))
     return node_cnt, cons_cnt
+
 
 def add_node(nodes: Array, cons: Array, new_key: int, attrs: Array) -> Tuple[Array, Array]:
     """

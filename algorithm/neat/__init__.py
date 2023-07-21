@@ -1,3 +1,2 @@
 from .neat import NEAT
-from .gene import NormalGene, RecurrentGene
-from .pipeline import Pipeline
+from .gene import BaseGene, NormalGene, RecurrentGene

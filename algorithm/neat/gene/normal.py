@@ -4,7 +4,7 @@ from jax import Array, numpy as jnp
 from .base import BaseGene
 from .activation import Activation
 from .aggregation import Aggregation
-from ..utils import unflatten_connections, I_INT
+from algorithm.utils import unflatten_connections, I_INT
 from ..genome import topological_sort
 
 
@@ -84,7 +84,7 @@ class NormalGene(BaseGene):
         return (con1[2] != con2[2]) + jnp.abs(con1[3] - con2[3])  # enable + weight
 
     @staticmethod
-    def forward_transform(nodes, conns):
+    def forward_transform(state, nodes, conns):
         u_conns = unflatten_connections(nodes, conns)
         conn_enable = jnp.where(~jnp.isnan(u_conns[0]), True, False)
 

@@ -3,7 +3,7 @@ from typing import Type
 import jax
 from jax import numpy as jnp, vmap
 
-from .utils import rank_elements, fetch_first
+from algorithm.utils import rank_elements, fetch_first
 from .genome import create_mutate, create_distance, crossover
 from .gene import BaseGene
 
