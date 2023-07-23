@@ -9,12 +9,9 @@ EMPTY_NODE = np.full((1, 5), jnp.nan)
 EMPTY_CON = np.full((1, 4), jnp.nan)
 
 
-@jit
-def unflatten_connections(nodes: Array, conns: Array):
+def unflatten_conns(nodes, conns):
     """
     transform the (C, CL) connections to (CL-2, N, N)
-    :param nodes: (N, NL)
-    :param cons: (C, CL)
     :return:
     """
     N = nodes.shape[0]

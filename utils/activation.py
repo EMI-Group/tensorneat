@@ -88,6 +88,7 @@ class Activation:
     def cube_act(z):
         return z ** 3
 
+
 Activation.name2func = {
     'sigmoid': Activation.sigmoid_act,
     'tanh': Activation.tanh_act,

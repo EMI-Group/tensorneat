@@ -1,10 +1,10 @@
 import jax
 import numpy as np
 
+from config import Config, BasicConfig
 from pipeline import Pipeline
-from config import Configer
-from algorithm import NEAT
-from algorithm.neat import  RecurrentGene
+from algorithm.neat.gene import NormalGene, NormalGeneConfig
+from algorithm.neat.neat import NEAT
 
 xor_inputs = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.float32)
 xor_outputs = np.array([[0], [1], [1], [0]], dtype=np.float32)
@@ -21,13 +21,11 @@ def evaluate(forward_func):
     return fitnesses
 
 
-def main():
-    config = Configer.load_config("xor.ini")
-    algorithm = NEAT(config, RecurrentGene)
-    pipeline = Pipeline(config, algorithm)
-    best = pipeline.auto_run(evaluate)
-    print(best)
-
-
 if __name__ == '__main__':
-    main()
+    config = Config(
+        basic=BasicConfig(fitness_target=4),
+        gene=NormalGeneConfig()
+    )
+    algorithm = NEAT(config, NormalGene)
+    pipeline = Pipeline(config, algorithm)
+    pipeline.auto_run(evaluate)

@@ -1,11 +1,11 @@
-from typing import Dict, Type
+from typing import Type
 
 from jax import Array, numpy as jnp, vmap
 
-from ..gene import BaseGene
+from core import Gene
 
 
-def create_distance(config: Dict, gene_type: Type[BaseGene]):
+def create_distance(gene_type: Type[Gene]):
     def node_distance(state, nodes1: Array, nodes2: Array):
         """
         Calculate the distance between nodes of two genomes.
@@ -35,8 +35,7 @@ def create_distance(config: Dict, gene_type: Type[BaseGene]):
         hnd = jnp.where(jnp.isnan(hnd), 0, hnd)
         homologous_distance = jnp.sum(hnd * intersect_mask)
 
-        val = non_homologous_cnt * config['compatibility_disjoint'] + homologous_distance * config[
-            'compatibility_weight']
+        val = non_homologous_cnt * state.compatibility_disjoint + homologous_distance * state.compatibility_weight
 
         return jnp.where(max_cnt == 0, 0, val / max_cnt)  # avoid zero division
 
@@ -64,13 +63,11 @@ def create_distance(config: Dict, gene_type: Type[BaseGene]):
         hcd = jnp.where(jnp.isnan(hcd), 0, hcd)
         homologous_distance = jnp.sum(hcd * intersect_mask)
 
-        val = non_homologous_cnt * config['compatibility_disjoint'] + homologous_distance * config[
-            'compatibility_weight']
+        val = non_homologous_cnt * state.compatibility_disjoint + homologous_distance * state.compatibility_weight
 
         return jnp.where(max_cnt == 0, 0, val / max_cnt)
 
-    def distance(state, nodes1, conns1, nodes2, conns2):
-        return node_distance(state, nodes1, nodes2) + connection_distance(state, conns1, conns2)
+    def distance(state, genome1, genome2):
+        return node_distance(state, genome1.nodes, genome2.nodes) + connection_distance(state, genome1.conns, genome2.conns)
 
     return distance
-

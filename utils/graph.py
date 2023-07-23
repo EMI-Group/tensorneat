@@ -6,13 +6,14 @@ Only used in feed-forward networks.
 import jax
 from jax import jit, Array, numpy as jnp
 
-from algorithm.utils import fetch_first, I_INT
+from .tools import fetch_first, I_INT
 
 
 @jit
 def topological_sort(nodes: Array, conns: Array) -> Array:
     """
     a jit-able version of topological_sort!
+    conns: Array[N, N]
     """
 
     in_degree = jnp.where(jnp.isnan(nodes[:, 0]), jnp.nan, jnp.sum(conns, axis=0))

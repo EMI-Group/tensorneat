@@ -1,8 +1,10 @@
 import jax
-from jax import jit, Array, numpy as jnp
+from jax import Array, numpy as jnp
+
+from core import Genome
 
 
-def crossover(randkey, nodes1: Array, conns1: Array, nodes2: Array, conns2: Array):
+def crossover(randkey, genome1: Genome, genome2: Genome):
     """
     use genome1 and genome2 to generate a new genome
     notice that genome1 should have higher fitness than genome2 (genome1 is winner!)
@@ -10,20 +12,22 @@ def crossover(randkey, nodes1: Array, conns1: Array, nodes2: Array, conns2: Arra
     randkey_1, randkey_2, key= jax.random.split(randkey, 3)
 
     # crossover nodes
-    keys1, keys2 = nodes1[:, 0], nodes2[:, 0]
+    keys1, keys2 = genome1.nodes[:, 0], genome2.nodes[:, 0]
     # make homologous genes align in nodes2 align with nodes1
-    nodes2 = align_array(keys1, keys2, nodes2, False)
-
+    nodes2 = align_array(keys1, keys2, genome2.nodes, False)
+    nodes1 = genome1.nodes
     # For not homologous genes, use the value of nodes1(winner)
     # For homologous genes, use the crossover result between nodes1 and nodes2
     new_nodes = jnp.where(jnp.isnan(nodes1) | jnp.isnan(nodes2), nodes1, crossover_gene(randkey_1, nodes1, nodes2))
 
     # crossover connections
-    con_keys1, con_keys2 = conns1[:, :2], conns2[:, :2]
-    cons2 = align_array(con_keys1, con_keys2, conns2, True)
-    new_cons = jnp.where(jnp.isnan(conns1) | jnp.isnan(cons2), conns1, crossover_gene(randkey_2, conns1, cons2))
+    con_keys1, con_keys2 = genome1.conns[:, :2], genome2.conns[:, :2]
+    conns2 = align_array(con_keys1, con_keys2, genome2.conns, True)
+    conns1 = genome1.conns
 
-    return new_nodes, new_cons
+    new_cons = jnp.where(jnp.isnan(conns1) | jnp.isnan(conns2), conns1, crossover_gene(randkey_2, conns1, conns2))
+
+    return genome1.update(new_nodes, new_cons)
 
 
 def align_array(seq1: Array, seq2: Array, ar2: Array, is_conn: bool) -> Array:

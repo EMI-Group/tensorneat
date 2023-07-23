@@ -1,1 +1,2 @@
-from .config import Configer
+from .config import *
+
