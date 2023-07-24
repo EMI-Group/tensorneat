@@ -29,7 +29,8 @@ if __name__ == '__main__':
         neat=NeatConfig(
             maximum_nodes=50,
             maximum_conns=100,
-        )
+        ),
+        gene=NormalGeneConfig()
     )
     algorithm = NEAT(config, NormalGene)
     pipeline = Pipeline(config, algorithm)

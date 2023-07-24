@@ -26,7 +26,7 @@ if __name__ == '__main__':
     config = Config(
         basic=BasicConfig(
             fitness_target=3.99999,
-            pop_size=1000
+            pop_size=100
         ),
         neat=NeatConfig(
             network_type="recurrent",
