@@ -40,7 +40,7 @@ class Gene:
     @staticmethod
     def forward_transform(state: State, genome: Genome):
         return jnp.zeros(0)  # transformed
+
     @staticmethod
     def create_forward(state: State, config: GeneConfig):
         return lambda *args: args  # forward function
-

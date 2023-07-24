@@ -12,11 +12,10 @@ print(asdict(config))
 pop_nodes = jnp.ones((Config.basic.pop_size, Config.neat.maximum_nodes, 3))
 pop_conns = jnp.ones((Config.basic.pop_size, Config.neat.maximum_conns, 5))
 
-pop_genomes1 = jax.vmap(Genome)(pop_nodes, pop_conns)
-pop_genomes2 = Genome(pop_nodes, pop_conns)
+pop_genomes = Genome(pop_nodes, pop_conns)
 
 print(pop_genomes)
-print(pop_genomes[0])
+print(pop_genomes[0: 20])
 
 @jax.vmap
 def pop_cnts(genome):

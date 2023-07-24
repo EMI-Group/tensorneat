@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from jax.tree_util import register_pytree_node_class
 from jax import numpy as jnp
 
@@ -10,6 +12,15 @@ class Genome:
     def __init__(self, nodes, conns):
         self.nodes = nodes
         self.conns = conns
+
+    def __repr__(self):
+        return f"Genome(nodes={self.nodes}, conns={self.conns})"
+
+    def __getitem__(self, idx):
+        return self.__class__(self.nodes[idx], self.conns[idx])
+
+    def set(self, idx, value: Genome):
+        return self.__class__(self.nodes.at[idx].set(value.nodes), self.conns.at[idx].set(value.conns))
 
     def update(self, nodes, conns):
         return self.__class__(nodes, conns)
@@ -73,5 +84,4 @@ class Genome:
     def tree_unflatten(cls, aux_data, children):
         return cls(*children)
 
-    def __repr__(self):
-        return f"Genome(nodes={self.nodes}, conns={self.conns})"
+

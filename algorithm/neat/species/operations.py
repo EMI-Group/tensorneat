@@ -6,6 +6,7 @@ from jax import numpy as jnp, vmap
 from core import Gene, Genome
 from utils import rank_elements, fetch_first
 from .distance import create_distance
+from .species_info import SpeciesInfo
 
 
 def update_species(state, randkey, fitness):
@@ -18,15 +19,9 @@ def update_species(state, randkey, fitness):
     # sort species_info by their fitness. (push nan to the end)
     sort_indices = jnp.argsort(species_fitness)[::-1]
 
-    center_nodes = state.center_genomes.nodes[sort_indices]
-    center_conns = state.center_genomes.conns[sort_indices]
-
     state = state.update(
-        species_keys=state.species_keys[sort_indices],
-        best_fitness=state.best_fitness[sort_indices],
-        last_improved=state.last_improved[sort_indices],
-        member_count=state.member_count[sort_indices],
-        center_genomes=Genome(center_nodes, center_conns),
+        species_info=state.species_info[sort_indices],
+        center_genomes=state.center_genomes[sort_indices],
     )
 
     # decide the number of members of each species by their fitness
@@ -45,11 +40,11 @@ def update_species_fitness(state, fitness):
     """
 
     def aux_func(idx):
-        s_fitness = jnp.where(state.idx2species == state.species_keys[idx], fitness, -jnp.inf)
+        s_fitness = jnp.where(state.idx2species == state.species_info.species_keys[idx], fitness, -jnp.inf)
         f = jnp.max(s_fitness)
         return f
 
-    return vmap(aux_func)(jnp.arange(state.species_keys.shape[0]))
+    return vmap(aux_func)(jnp.arange(state.species_info.size()))
 
 
 def stagnation(state, species_fitness):
@@ -61,7 +56,7 @@ def stagnation(state, species_fitness):
 
     def aux_func(idx):
         s_fitness = species_fitness[idx]
-        sk, bf, li = state.species_keys[idx], state.best_fitness[idx], state.last_improved[idx]
+        sk, bf, li, _ = state.species_info.get(idx)
         st = (s_fitness <= bf) & (state.generation - li > state.max_stagnation)
         li = jnp.where(s_fitness > bf, state.generation, li)
         bf = jnp.where(s_fitness > bf, s_fitness, bf)
@@ -78,18 +73,19 @@ def stagnation(state, species_fitness):
     species_keys = jnp.where(spe_st, jnp.nan, species_keys)
     best_fitness = jnp.where(spe_st, jnp.nan, best_fitness)
     last_improved = jnp.where(spe_st, jnp.nan, last_improved)
-    member_count = jnp.where(spe_st, jnp.nan, state.member_count)
+    member_count = jnp.where(spe_st, jnp.nan, state.species_info.member_count)
+
     species_fitness = jnp.where(spe_st, -jnp.inf, species_fitness)
 
+    species_info = SpeciesInfo(species_keys, best_fitness, last_improved, member_count)
+
+    # TODO: Simplify the coded
     center_nodes = jnp.where(spe_st[:, None, None], jnp.nan, state.center_genomes.nodes)
     center_conns = jnp.where(spe_st[:, None, None], jnp.nan, state.center_genomes.conns)
 
     state = state.update(
-        species_keys=species_keys,
-        best_fitness=best_fitness,
-        last_improved=last_improved,
-        member_count=member_count,
-        center_genomes=state.center_genomes.update(center_nodes, center_conns)
+        species_info=species_info,
+        center_genomes=Genome(center_nodes, center_conns)
     )
 
     return state, species_fitness
@@ -103,18 +99,20 @@ def cal_spawn_numbers(state):
         e.g. N = 3, P=10 -> probability = [0.5, 0.33, 0.17], spawn_number = [5, 3, 2]
     """
 
-    is_species_valid = ~jnp.isnan(state.species_keys)
+    species_keys = state.species_info.species_keys
+
+    is_species_valid = ~jnp.isnan(species_keys)
     valid_species_num = jnp.sum(is_species_valid)
     denominator = (valid_species_num + 1) * valid_species_num / 2  # obtain 3 + 2 + 1 = 6
 
-    rank_score = valid_species_num - jnp.arange(state.species_keys.shape[0])  # obtain [3, 2, 1]
+    rank_score = valid_species_num - jnp.arange(species_keys.shape[0])  # obtain [3, 2, 1]
     spawn_number_rate = rank_score / denominator  # obtain [0.5, 0.33, 0.17]
     spawn_number_rate = jnp.where(is_species_valid, spawn_number_rate, 0)  # set invalid species to 0
 
     target_spawn_number = jnp.floor(spawn_number_rate * state.P)  # calculate member
 
     # Avoid too much variation of numbers in a species
-    previous_size = state.member_count
+    previous_size = state.species_info.member_count
     spawn_number = previous_size + (target_spawn_number - previous_size) * state.spawn_number_change_rate
     # jax.debug.print("previous_size: {}, spawn_number: {}", previous_size, spawn_number)
     spawn_number = spawn_number.astype(jnp.int32)
@@ -127,14 +125,14 @@ def cal_spawn_numbers(state):
 
 
 def create_crossover_pair(state, randkey, spawn_number, fitness):
-    species_size = state.species_keys.shape[0]
+    species_size = state.species_info.size()
     pop_size = fitness.shape[0]
     s_idx = jnp.arange(species_size)
     p_idx = jnp.arange(pop_size)
 
     # def aux_func(key, idx):
     def aux_func(key, idx):
-        members = state.idx2species == state.species_keys[idx]
+        members = state.idx2species == state.species_info.species_keys[idx]
         members_num = jnp.sum(members)
 
         members_fitness = jnp.where(members, fitness, -jnp.inf)
@@ -176,7 +174,7 @@ def create_speciate(gene_type: Type[Gene]):
     distance = create_distance(gene_type)
 
     def speciate(state):
-        pop_size, species_size = state.idx2species.shape[0], state.species_keys.shape[0]
+        pop_size, species_size = state.idx2species.shape[0], state.species_info.size()
 
         # prepare distance functions
         o2p_distance_func = vmap(distance, in_axes=(None, None, 0))  # one to population
@@ -191,25 +189,23 @@ def create_speciate(gene_type: Type[Gene]):
         def cond_func(carry):
             i, i2s, cgs, o2c = carry
 
-            return (i < species_size) & (~jnp.isnan(state.species_keys[i]))  # current species is existing
+            return (i < species_size) & (~jnp.isnan(state.species_info.species_keys[i]))  # current species is existing
 
         def body_func(carry):
             i, i2s, cgs, o2c = carry
 
-            distances = o2p_distance_func(state, Genome(cgs.nodes[i], cgs.conns[i]), state.pop_genomes)
+            distances = o2p_distance_func(state, cgs[i], state.pop_genomes)
 
             # find the closest one
             closest_idx = argmin_with_mask(distances, mask=jnp.isnan(i2s))
-            # jax.debug.print("closest_idx: {}", closest_idx)
 
-            i2s = i2s.at[closest_idx].set(state.species_keys[i])
-            cn = cgs.nodes.at[i].set(state.pop_genomes.nodes[closest_idx])
-            cc = cgs.conns.at[i].set(state.pop_genomes.conns[closest_idx])
+            i2s = i2s.at[closest_idx].set(state.species_info.species_keys[i])
+            cgs = cgs.set(i, state.pop_genomes[closest_idx])
 
             # the genome with closest_idx will become the new center, thus its distance to center is 0.
             o2c = o2c.at[closest_idx].set(0)
 
-            return i + 1, i2s, Genome(cn, cc), o2c
+            return i + 1, i2s, cgs, o2c
 
         _, idx2species, center_genomes, o2c_distances = \
             jax.lax.while_loop(cond_func, body_func, (0, idx2species, state.center_genomes, o2c_distances))
@@ -247,15 +243,13 @@ def create_speciate(gene_type: Type[Gene]):
             idx = fetch_first(jnp.isnan(i2s))
 
             # assign it to the new species
-            # [key, best score, last update generation, members_count]
+            # [key, best score, last update generation, member_count]
             sk = sk.at[i].set(nsk)
             i2s = i2s.at[idx].set(nsk)
             o2c = o2c.at[idx].set(0)
 
             # update center genomes
-            cn = cgs.nodes.at[i].set(state.pop_genomes.nodes[idx])
-            cc = cgs.conns.at[i].set(state.pop_genomes.conns[idx])
-            cgs = Genome(cn, cc)
+            cgs = cgs.set(i, state.pop_genomes[idx])
 
             i2s, o2c = speciate_by_threshold(i, i2s, cgs, sk, o2c)
 
@@ -273,8 +267,7 @@ def create_speciate(gene_type: Type[Gene]):
         def speciate_by_threshold(i, i2s, cgs, sk, o2c):
             # distance between such center genome and ppo genomes
 
-            center = Genome(cgs.nodes[i], cgs.conns[i])
-            o2p_distance = o2p_distance_func(state, center, state.pop_genomes)
+            o2p_distance = o2p_distance_func(state, cgs[i], state.pop_genomes)
             close_enough_mask = o2p_distance < state.compatibility_threshold
 
             # when a genome is not assigned or the distance between its current center is bigger than this center
@@ -294,32 +287,31 @@ def create_speciate(gene_type: Type[Gene]):
         _, idx2species, center_genomes, species_keys, _, next_species_key = jax.lax.while_loop(
             cond_func,
             body_func,
-            (0, state.idx2species, state.center_genomes, state.species_keys, o2c_distances, state.next_species_key)
+            (0, state.idx2species, state.center_genomes, state.species_info.species_keys, o2c_distances, state.next_species_key)
         )
+
 
         # if there are still some pop genomes not assigned to any species, add them to the last genome
         # this condition can only happen when the number of species is reached species upper bounds
         idx2species = jnp.where(jnp.isnan(idx2species), species_keys[-1], idx2species)
 
         # complete info of species which is created in this generation
-        new_created_mask = (~jnp.isnan(species_keys)) & jnp.isnan(state.best_fitness)
-        best_fitness = jnp.where(new_created_mask, -jnp.inf, state.best_fitness)
-        last_improved = jnp.where(new_created_mask, state.generation, state.last_improved)
+        new_created_mask = (~jnp.isnan(species_keys)) & jnp.isnan(state.species_info.best_fitness)
+        best_fitness = jnp.where(new_created_mask, -jnp.inf, state.species_info.best_fitness)
+        last_improved = jnp.where(new_created_mask, state.generation, state.species_info.last_improved)
 
         # update members count
         def count_members(idx):
             key = species_keys[idx]
-            count = jnp.sum(idx2species == key)
+            count = jnp.sum(idx2species == key, dtype=jnp.float32)
             count = jnp.where(jnp.isnan(key), jnp.nan, count)
+
             return count
 
         member_count = vmap(count_members)(jnp.arange(species_size))
 
         return state.update(
-            species_keys=species_keys,
-            best_fitness=best_fitness,
-            last_improved=last_improved,
-            members_count=member_count,
+            species_info = SpeciesInfo(species_keys, best_fitness, last_improved, member_count),
             idx2species=idx2species,
             center_genomes=center_genomes,
             next_species_key=next_species_key

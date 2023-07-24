@@ -15,5 +15,9 @@ def func(d):
 
 
 d = {0: 1, 1: NetworkType.ANN.value}
+n = None
+
+print(n or d)
+print(d)
 
 print(func(d))
