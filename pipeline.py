@@ -81,3 +81,7 @@ class Pipeline:
         print(f"Generation: {self.state.generation}",
               f"species: {len(species_sizes)}, {species_sizes}",
               f"fitness: {max_f:.6f}, {min_f:.6f}, {mean_f:.6f}, {std_f:.6f}, Cost time: {cost_time * 1000:.6f}ms")
+
+
+
+
