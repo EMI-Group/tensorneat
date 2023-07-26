@@ -3,14 +3,14 @@ Neuroevolution is a subfield of artificial intelligence that
 leverages evolutionary algorithms to generate and optimize
 artificial neural networks. This technique has proven to be
 successful in solving a wide range of complex problems
-across various domains. The NeuroEvolution of Augment-
-ing Topologies (NEAT) is one of the most renowned al-
-gorithms in neuroevolution. Characterized by its openness,
-it starts with minimal networks and progressively evolves
-both the topology and the weights of these networks to opti-
-mize performance. However, the acceleration techniques em-
-ployed in prevailing NEAT implementations typically rely on
-parallelism on CPUs, failing to harness the rapidly expand-
+across various domains. The NeuroEvolution of Augmenting
+Topologies (NEAT) is one of the most renowned algorithms
+in neuroevolution. Characterized by its openendedness, it
+starts with minimal networks and progressively evolves both
+the topology and the weights of these networks to optimize
+performance. However, the acceleration techniques employed
+in prevailing NEAT implementations typically rely on par-
+allelism on CPUs, failing to harness the rapidly expand-
 ing computational resources of today. To bridge this gap,
 we present NEATAX, an innovative framework that adapts
 NEAT for execution on hardware accelerators. Built on top
@@ -24,4 +24,4 @@ minutes. These results demonstrate the potential of NEATAX
 as a scalable and efficient solution for neuroevolution tasks,
 paving the way for the future application of NEAT in more
 complex and demanding scenarios. NEATAX is available at
-https://github.com/WLS2002/neatax.
+https://github.com/WLS2002/neatax
