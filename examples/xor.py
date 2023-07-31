@@ -27,8 +27,8 @@ if __name__ == '__main__':
             pop_size=10000
         ),
         neat=NeatConfig(
-            maximum_nodes=50,
-            maximum_conns=100,
+            maximum_nodes=20,
+            maximum_conns=50,
         ),
         gene=NormalGeneConfig()
     )
