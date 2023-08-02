@@ -24,11 +24,11 @@ class NormalGeneConfig(GeneConfig):
     response_replace_rate: float = 0.1
 
     activation_default: str = 'sigmoid'
-    activation_options: Tuple[str] = ('sigmoid',)
+    activation_options: Tuple = ('sigmoid',)
     activation_replace_rate: float = 0.1
 
     aggregation_default: str = 'sum'
-    aggregation_options: Tuple[str] = ('sum',)
+    aggregation_options: Tuple = ('sum',)
     aggregation_replace_rate: float = 0.1
 
     weight_init_mean: float = 0.0

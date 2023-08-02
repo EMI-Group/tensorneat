@@ -3,8 +3,9 @@ import numpy as np
 
 from config import Config, BasicConfig, NeatConfig
 from pipeline import Pipeline
-from algorithm import NEAT
-from algorithm.neat.gene import NormalGene, NormalGeneConfig
+from algorithm import NEAT, HyperNEAT
+from algorithm.neat.gene import RecurrentGene, RecurrentGeneConfig
+from algorithm.hyperneat.substrate import NormalSubstrate, NormalSubstrateConfig
 
 xor_inputs = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.float32)
 xor_outputs = np.array([[0], [1], [1], [0]], dtype=np.float32)
@@ -24,17 +25,25 @@ def evaluate(forward_func):
 if __name__ == '__main__':
     config = Config(
         basic=BasicConfig(
-            fitness_target=3.9999999,
+            fitness_target=3.99999,
             pop_size=10000
         ),
         neat=NeatConfig(
+            network_type="recurrent",
             maximum_nodes=50,
             maximum_conns=100,
-            compatibility_threshold=4
-        ),
-        gene=NormalGeneConfig()
-    )
+            inputs=4,
+            outputs=1
 
-    algorithm = NEAT(config, NormalGene)
-    pipeline = Pipeline(config, algorithm)
+        ),
+        gene=RecurrentGeneConfig(
+            activation_default="tanh",
+            activation_options=("tanh",),
+        ),
+        substrate=NormalSubstrateConfig(),
+    )
+    neat = NEAT(config, RecurrentGene)
+    hyperNEAT = HyperNEAT(config, neat, NormalSubstrate)
+
+    pipeline = Pipeline(config, hyperNEAT)
     pipeline.auto_run(evaluate)

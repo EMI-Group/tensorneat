@@ -4,7 +4,8 @@ import numpy as np
 from config import Config, BasicConfig, NeatConfig
 from pipeline import Pipeline
 from algorithm import NEAT
-from algorithm.neat.gene import NormalGene, NormalGeneConfig
+from algorithm.neat.gene import RecurrentGene, RecurrentGeneConfig
+
 
 xor_inputs = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.float32)
 xor_outputs = np.array([[0], [1], [1], [0]], dtype=np.float32)
@@ -24,17 +25,18 @@ def evaluate(forward_func):
 if __name__ == '__main__':
     config = Config(
         basic=BasicConfig(
-            fitness_target=3.9999999,
+            fitness_target=3.99999,
             pop_size=10000
         ),
         neat=NeatConfig(
+            network_type="recurrent",
             maximum_nodes=50,
-            maximum_conns=100,
-            compatibility_threshold=4
+            maximum_conns=100
         ),
-        gene=NormalGeneConfig()
+        gene=RecurrentGeneConfig(
+            activate_times=3
+        )
     )
-
-    algorithm = NEAT(config, NormalGene)
+    algorithm = NEAT(config, RecurrentGene)
     pipeline = Pipeline(config, algorithm)
     pipeline.auto_run(evaluate)

@@ -93,9 +93,15 @@ class SubstrateConfig:
 
 
 @dataclass(frozen=True)
+class ProblemConfig:
+    pass
+
+
+@dataclass(frozen=True)
 class Config:
     basic: BasicConfig = BasicConfig()
     neat: NeatConfig = NeatConfig()
     hyper_neat: HyperNeatConfig = HyperNeatConfig()
     gene: GeneConfig = GeneConfig()
     substrate: SubstrateConfig = SubstrateConfig()
+    problem: ProblemConfig = ProblemConfig()

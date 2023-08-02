@@ -1,3 +1,5 @@
+from typing import Type
+
 import jax
 from jax import numpy as jnp
 import numpy as np
@@ -10,9 +12,9 @@ from .species import SpeciesInfo, update_species, speciate
 
 class NEAT(Algorithm):
 
-    def __init__(self, config: Config, gene: Gene):
+    def __init__(self, config: Config, gene_type: Type[Gene]):
         self.config = config
-        self.gene = gene
+        self.gene = gene_type(config.gene)
 
         self.forward_func = None
         self.tell_func = None

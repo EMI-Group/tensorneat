@@ -6,3 +6,5 @@ class Substrate:
     @staticmethod
     def setup(state, config: SubstrateConfig):
         return state
+
+
