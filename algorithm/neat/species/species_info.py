@@ -2,6 +2,7 @@ from jax.tree_util import register_pytree_node_class
 import numpy as np
 import jax.numpy as jnp
 
+
 @register_pytree_node_class
 class SpeciesInfo:
 
@@ -43,7 +44,6 @@ class SpeciesInfo:
 
     def size(self):
         return self.species_keys.shape[0]
-
 
     def tree_flatten(self):
         children = self.species_keys, self.best_fitness, self.last_improved, self.member_count

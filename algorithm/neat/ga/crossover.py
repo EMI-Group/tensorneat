@@ -9,7 +9,7 @@ def crossover(randkey, genome1: Genome, genome2: Genome):
     use genome1 and genome2 to generate a new genome
     notice that genome1 should have higher fitness than genome2 (genome1 is winner!)
     """
-    randkey_1, randkey_2, key= jax.random.split(randkey, 3)
+    randkey_1, randkey_2, key = jax.random.split(randkey, 3)
 
     # crossover nodes
     keys1, keys2 = genome1.nodes[:, 0], genome2.nodes[:, 0]

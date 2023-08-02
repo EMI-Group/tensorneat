@@ -86,6 +86,7 @@ class HyperNeatConfig:
 class GeneConfig:
     pass
 
+
 @dataclass(frozen=True)
 class SubstrateConfig:
     pass

@@ -84,4 +84,3 @@ class Genome:
     def tree_unflatten(cls, aux_data, children):
         return cls(*children)
 
-

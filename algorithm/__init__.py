@@ -1,2 +1,1 @@
-from .neat import *
-from .hyper_neat import *
+from .neat import NEAT
