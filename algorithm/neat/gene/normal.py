@@ -66,7 +66,7 @@ class NormalGene(Gene):
     node_attrs = ['bias', 'response', 'aggregation', 'activation']
     conn_attrs = ['weight']
 
-    def __init__(self, config: NormalGeneConfig):
+    def __init__(self, config: NormalGeneConfig = NormalGeneConfig()):
         self.config = config
         self.act_funcs = [Activation.name2func[name] for name in config.activation_options]
         self.agg_funcs = [Aggregation.name2func[name] for name in config.aggregation_options]
@@ -101,7 +101,7 @@ class NormalGene(Gene):
         )
 
     def update(self, state):
-        pass
+        return state
 
     def new_node_attrs(self, state):
         return jnp.array([state.bias_init_mean, state.response_init_mean,

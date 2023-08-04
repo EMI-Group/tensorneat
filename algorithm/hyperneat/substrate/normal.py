@@ -9,9 +9,9 @@ from config import SubstrateConfig
 
 @dataclass(frozen=True)
 class NormalSubstrateConfig(SubstrateConfig):
-    input_coors: Tuple[Tuple[float]] = ((-1, -1), (0, -1), (1, -1))
-    hidden_coors: Tuple[Tuple[float]] = ((-1, 0), (0, 0), (1, 0))
-    output_coors: Tuple[Tuple[float]] = ((0, 1),)
+    input_coors: Tuple = ((-1, -1), (0, -1), (1, -1))
+    hidden_coors: Tuple = ((-1, 0), (0, 0), (1, 0))
+    output_coors: Tuple = ((0, 1),)
 
 
 class NormalSubstrate(Substrate):

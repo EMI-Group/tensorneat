@@ -6,7 +6,7 @@ class Gene:
     node_attrs = []
     conn_attrs = []
 
-    def __init__(self, config: GeneConfig):
+    def __init__(self, config: GeneConfig = GeneConfig()):
         raise NotImplementedError
 
     def setup(self, state=State()):

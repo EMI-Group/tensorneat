@@ -19,7 +19,7 @@ class RecurrentGeneConfig(NormalGeneConfig):
 
 class RecurrentGene(NormalGene):
 
-    def __init__(self, config: RecurrentGeneConfig):
+    def __init__(self, config: RecurrentGeneConfig = RecurrentGeneConfig()):
         self.config = config
         super().__init__(config)
 

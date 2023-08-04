@@ -19,6 +19,11 @@ class Genome:
     def __getitem__(self, idx):
         return self.__class__(self.nodes[idx], self.conns[idx])
 
+    def __eq__(self, other):
+        nodes_eq = jnp.alltrue((self.nodes == other.nodes) | (jnp.isnan(self.nodes) & jnp.isnan(other.nodes)))
+        conns_eq = jnp.alltrue((self.conns == other.conns) | (jnp.isnan(self.conns) & jnp.isnan(other.conns)))
+        return nodes_eq & conns_eq
+
     def set(self, idx, value: Genome):
         return self.__class__(self.nodes.at[idx].set(value.nodes), self.conns.at[idx].set(value.conns))
 
@@ -83,4 +88,3 @@ class Genome:
     @classmethod
     def tree_unflatten(cls, aux_data, children):
         return cls(*children)
-

@@ -17,9 +17,9 @@ class NeatConfig:
     network_type: str = "feedforward"
     inputs: int = 2
     outputs: int = 1
-    maximum_nodes: int = 50
-    maximum_conns: int = 100
-    maximum_species: int = 10
+    max_nodes: int = 50
+    max_conns: int = 100
+    max_species: int = 10
 
     # genome config
     compatibility_disjoint: float = 1
@@ -44,9 +44,9 @@ class NeatConfig:
         assert self.inputs > 0, "the inputs number of neat must be greater than 0"
         assert self.outputs > 0, "the outputs number of neat must be greater than 0"
 
-        assert self.maximum_nodes > 0, "the maximum nodes must be greater than 0"
-        assert self.maximum_conns > 0, "the maximum connections must be greater than 0"
-        assert self.maximum_species > 0, "the maximum species must be greater than 0"
+        assert self.max_nodes > 0, "the maximum nodes must be greater than 0"
+        assert self.max_conns > 0, "the maximum connections must be greater than 0"
+        assert self.max_species > 0, "the maximum species must be greater than 0"
 
         assert self.compatibility_disjoint > 0, "the compatibility disjoint must be greater than 0"
         assert self.compatibility_weight > 0, "the compatibility weight must be greater than 0"
@@ -101,7 +101,7 @@ class ProblemConfig:
 class Config:
     basic: BasicConfig = BasicConfig()
     neat: NeatConfig = NeatConfig()
-    hyper_neat: HyperNeatConfig = HyperNeatConfig()
+    hyperneat: HyperNeatConfig = HyperNeatConfig()
     gene: GeneConfig = GeneConfig()
     substrate: SubstrateConfig = SubstrateConfig()
     problem: ProblemConfig = ProblemConfig()

@@ -28,9 +28,9 @@ class NEAT(Algorithm):
 
         state = state.update(
             P=self.config.basic.pop_size,
-            N=self.config.neat.maximum_nodes,
-            C=self.config.neat.maximum_conns,
-            S=self.config.neat.maximum_species,
+            N=self.config.neat.max_nodes,
+            C=self.config.neat.max_conns,
+            S=self.config.neat.max_species,
             NL=1 + len(self.gene.node_attrs),  # node length = (key) + attributes
             CL=3 + len(self.gene.conn_attrs),  # conn length = (in, out, key) + attributes
             max_stagnation=self.config.neat.max_stagnation,
@@ -80,6 +80,8 @@ class NEAT(Algorithm):
         return state.pop_genomes
 
     def tell_algorithm(self, state: State, fitness):
+        state = self.gene.update(state)
+
         k1, k2, randkey = jax.random.split(state.randkey, 3)
 
         state = state.update(
