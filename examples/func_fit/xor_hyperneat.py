@@ -3,6 +3,7 @@ from pipeline import Pipeline
 from algorithm.neat import NormalGene, NormalGeneConfig
 from algorithm.hyperneat import HyperNEAT, NormalSubstrate, NormalSubstrateConfig
 from problem.func_fit import XOR3d, FuncFitConfig
+from utils import Act
 
 
 if __name__ == '__main__':
@@ -27,8 +28,8 @@ if __name__ == '__main__':
             input_coors=((-1, -1), (-0.5, -1), (0.5, -1), (1, -1)),
         ),
         gene=NormalGeneConfig(
-            activation_default='tanh',
-            activation_options=('tanh', ),
+            activation_default=Act.tanh,
+            activation_options=(Act.tanh, ),
         ),
         problem=FuncFitConfig()
     )

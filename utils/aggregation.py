@@ -2,38 +2,37 @@ import jax
 import jax.numpy as jnp
 
 
-class Aggregation:
-    name2func = {}
+class Agg:
 
     @staticmethod
-    def sum_agg(z):
+    def sum(z):
         z = jnp.where(jnp.isnan(z), 0, z)
         return jnp.sum(z, axis=0)
 
     @staticmethod
-    def product_agg(z):
+    def product(z):
         z = jnp.where(jnp.isnan(z), 1, z)
         return jnp.prod(z, axis=0)
 
     @staticmethod
-    def max_agg(z):
+    def max(z):
         z = jnp.where(jnp.isnan(z), -jnp.inf, z)
         return jnp.max(z, axis=0)
 
     @staticmethod
-    def min_agg(z):
+    def min(z):
         z = jnp.where(jnp.isnan(z), jnp.inf, z)
         return jnp.min(z, axis=0)
 
     @staticmethod
-    def maxabs_agg(z):
+    def maxabs(z):
         z = jnp.where(jnp.isnan(z), 0, z)
         abs_z = jnp.abs(z)
         max_abs_index = jnp.argmax(abs_z)
         return z[max_abs_index]
 
     @staticmethod
-    def median_agg(z):
+    def median(z):
         n = jnp.sum(~jnp.isnan(z), axis=0)
 
         z = jnp.sort(z)  # sort
@@ -44,7 +43,7 @@ class Aggregation:
         return median
 
     @staticmethod
-    def mean_agg(z):
+    def mean(z):
         aux = jnp.where(jnp.isnan(z), 0, z)
         valid_values_sum = jnp.sum(aux, axis=0)
         valid_values_count = jnp.sum(~jnp.isnan(z), axis=0)

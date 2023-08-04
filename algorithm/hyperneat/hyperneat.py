@@ -6,7 +6,7 @@ import numpy as np
 
 from config import Config, HyperNeatConfig
 from core import Algorithm, Substrate, State, Genome, Gene
-from utils import Activation, Aggregation
+from utils import Act, Agg
 from .substrate import analysis_substrate
 from algorithm import NEAT
 
@@ -90,10 +90,7 @@ class HyperNEATGene:
 
     @staticmethod
     def forward(config: HyperNeatConfig, state: State, inputs, transformed):
-        act = Activation.name2func[config.activation]
-        agg = Aggregation.name2func[config.aggregation]
-
-        batch_act, batch_agg = jax.vmap(act), jax.vmap(agg)
+        batch_act, batch_agg = jax.vmap(config.activation), jax.vmap(config.aggregation)
 
         nodes, weights = transformed
 

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-
+from utils import Act, Agg
 
 @dataclass(frozen=True)
 class BasicConfig:
@@ -68,8 +68,8 @@ class NeatConfig:
 class HyperNeatConfig:
     below_threshold: float = 0.2
     max_weight: float = 3
-    activation: str = "sigmoid"
-    aggregation: str = "sum"
+    activation: callable = Act.sigmoid
+    aggregation: callable = Agg.sum
     activate_times: int = 5
     inputs: int = 2
     outputs: int = 1

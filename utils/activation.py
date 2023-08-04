@@ -2,90 +2,89 @@ import jax
 import jax.numpy as jnp
 
 
-class Activation:
-    name2func = {}
+class Act:
 
     @staticmethod
-    def sigmoid_act(z):
+    def sigmoid(z):
         z = jnp.clip(z * 5, -60, 60)
         return 1 / (1 + jnp.exp(-z))
 
     @staticmethod
-    def tanh_act(z):
+    def tanh(z):
         z = jnp.clip(z * 2.5, -60, 60)
         return jnp.tanh(z)
 
     @staticmethod
-    def sin_act(z):
+    def sin(z):
         z = jnp.clip(z * 5, -60, 60)
         return jnp.sin(z)
 
     @staticmethod
-    def gauss_act(z):
+    def gauss(z):
         z = jnp.clip(z * 5, -3.4, 3.4)
         return jnp.exp(-z ** 2)
 
     @staticmethod
-    def relu_act(z):
+    def relu(z):
         return jnp.maximum(z, 0)
 
     @staticmethod
-    def elu_act(z):
+    def elu(z):
         return jnp.where(z > 0, z, jnp.exp(z) - 1)
 
     @staticmethod
-    def lelu_act(z):
+    def lelu(z):
         leaky = 0.005
         return jnp.where(z > 0, z, leaky * z)
 
     @staticmethod
-    def selu_act(z):
+    def selu(z):
         lam = 1.0507009873554804934193349852946
         alpha = 1.6732632423543772848170429916717
         return jnp.where(z > 0, lam * z, lam * alpha * (jnp.exp(z) - 1))
 
     @staticmethod
-    def softplus_act(z):
+    def softplus(z):
         z = jnp.clip(z * 5, -60, 60)
         return 0.2 * jnp.log(1 + jnp.exp(z))
 
     @staticmethod
-    def identity_act(z):
+    def identity(z):
         return z
 
     @staticmethod
-    def clamped_act(z):
+    def clamped(z):
         return jnp.clip(z, -1, 1)
 
     @staticmethod
-    def inv_act(z):
+    def inv(z):
         z = jnp.maximum(z, 1e-7)
         return 1 / z
 
     @staticmethod
-    def log_act(z):
+    def log(z):
         z = jnp.maximum(z, 1e-7)
         return jnp.log(z)
 
     @staticmethod
-    def exp_act(z):
+    def exp(z):
         z = jnp.clip(z, -60, 60)
         return jnp.exp(z)
 
     @staticmethod
-    def abs_act(z):
+    def abs(z):
         return jnp.abs(z)
 
     @staticmethod
-    def hat_act(z):
+    def hat(z):
         return jnp.maximum(0, 1 - jnp.abs(z))
 
     @staticmethod
-    def square_act(z):
+    def square(z):
         return z ** 2
 
     @staticmethod
-    def cube_act(z):
+    def cube(z):
         return z ** 3
 
 

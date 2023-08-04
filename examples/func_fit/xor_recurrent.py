@@ -36,5 +36,6 @@ if __name__ == '__main__':
     algorithm = NEAT(config, RecurrentGene)
     pipeline = Pipeline(config, algorithm, XOR3d)
     state = pipeline.setup()
+    pipeline.pre_compile(state)
     state, best = pipeline.auto_run(state)
     pipeline.show(state, best)
