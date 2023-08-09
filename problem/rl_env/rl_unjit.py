@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from typing import Callable
-from functools import partial
 
 import jax
 
@@ -15,6 +14,8 @@ class RLEnvConfig(ProblemConfig):
 
 
 class RLEnv(Problem):
+
+    jitable = False
 
     def __init__(self, config: RLEnvConfig = RLEnvConfig()):
         super().__init__(config)
@@ -44,11 +45,9 @@ class RLEnv(Problem):
 
         return total_reward
 
-    @partial(jax.jit, static_argnums=(0,))
     def step(self, randkey, env_state, action):
         return self.env_step(randkey, env_state, action)
 
-    @partial(jax.jit, static_argnums=(0,))
     def reset(self, randkey):
         return self.env_reset(randkey)
 

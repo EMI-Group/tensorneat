@@ -1,5 +1,5 @@
 from config import *
-from pipeline import Pipeline
+from pipeline_jitable_env import Pipeline
 from algorithm import NEAT
 from algorithm.neat.gene import NormalGene, NormalGeneConfig
 from problem.func_fit import XOR, FuncFitConfig

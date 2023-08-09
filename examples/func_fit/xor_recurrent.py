@@ -1,5 +1,5 @@
 from config import *
-from pipeline import Pipeline
+from pipeline_jitable_env import Pipeline
 from algorithm import NEAT
 from algorithm.neat.gene import RecurrentGene, RecurrentGeneConfig
 from problem.func_fit import XOR3d, FuncFitConfig

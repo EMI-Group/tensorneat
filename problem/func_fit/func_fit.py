@@ -17,6 +17,8 @@ class FuncFitConfig(ProblemConfig):
 
 class FuncFit(Problem):
 
+    jitable = True
+
     def __init__(self, config: FuncFitConfig = FuncFitConfig()):
         self.config = config
         super().__init__(config)

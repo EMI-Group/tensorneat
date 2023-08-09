@@ -1,3 +1,7 @@
+"""
+pipeline for jitable env like func_fit, gymnax
+"""
+
 from functools import partial
 from typing import Type
 
@@ -13,15 +17,18 @@ from core import State, Algorithm, Problem
 class Pipeline:
 
     def __init__(self, config: Config, algorithm: Algorithm, problem_type: Type[Problem]):
+
+        assert problem_type.jitable, "problem must be jitable"
+
         self.config = config
         self.algorithm = algorithm
         self.problem = problem_type(config.problem)
 
         if isinstance(algorithm, NEAT):
-            assert config.neat.inputs == self.problem.input_shape[-1]
+            assert config.neat.inputs == self.problem.input_shape[-1], f"problem input shape {self.problem.input_shape}"
 
         elif isinstance(algorithm, HyperNEAT):
-            assert config.hyperneat.inputs == self.problem.input_shape[-1]
+            assert config.hyperneat.inputs == self.problem.input_shape[-1], f"problem input shape {self.problem.input_shape}"
 
         else:
             raise NotImplementedError
@@ -110,6 +117,4 @@ class Pipeline:
         tic = time.time()
         print("start compile")
         self.step.lower(self, state).compile()
-        # compiled_step = jax.jit(self.step, static_argnums=(0,)).lower(state).compile()
-        # self.__dict__['step'] = compiled_step
         print(f"compile finished, cost time: {time.time() - tic}s")

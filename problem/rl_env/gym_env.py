@@ -1,26 +1,26 @@
 from dataclasses import dataclass
 from typing import Callable
 
-import gymnax
+import gym
 
 from core import State
-from .rl_jit import RLEnv, RLEnvConfig
+from .rl_unjit import RLEnv, RLEnvConfig
 
 
 @dataclass(frozen=True)
-class GymNaxConfig(RLEnvConfig):
+class GymConfig(RLEnvConfig):
     env_name: str = "CartPole-v1"
 
     def __post_init__(self):
-        assert self.env_name in gymnax.registered_envs, f"Env {self.env_name} not registered"
+        assert self.env_name in gym.registered_envs, f"Env {self.env_name} not registered"
 
 
 class GymNaxEnv(RLEnv):
 
-    def __init__(self, config: GymNaxConfig = GymNaxConfig()):
+    def __init__(self, config: GymConfig = GymConfig()):
         super().__init__(config)
         self.config = config
-        self.env, self.env_params = gymnax.make(config.env_name)
+        self.env, self.env_params = gym.make(config.env_name)
 
     def env_step(self, randkey, env_state, action):
         return self.env.step(randkey, env_state, action, self.env_params)

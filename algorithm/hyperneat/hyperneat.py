@@ -6,7 +6,6 @@ import numpy as np
 
 from config import Config, HyperNeatConfig
 from core import Algorithm, Substrate, State, Genome, Gene
-from utils import Act, Agg
 from .substrate import analysis_substrate
 from algorithm import NEAT
 

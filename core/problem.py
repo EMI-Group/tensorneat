@@ -6,6 +6,8 @@ from .state import State
 
 class Problem:
 
+    jitable: bool
+
     def __init__(self, problem_config: ProblemConfig = ProblemConfig()):
         self.config = problem_config
 
