@@ -55,7 +55,7 @@ def example_conf3():
     return Config(
         basic=BasicConfig(
             seed=42,
-            fitness_target=500,
+            fitness_target=501,
             pop_size=10000
         ),
         neat=NeatConfig(
