@@ -37,3 +37,4 @@ if __name__ == '__main__':
     state = pipeline.setup()
     pipeline.pre_compile(state)
     state, best = pipeline.auto_run(state)
+
