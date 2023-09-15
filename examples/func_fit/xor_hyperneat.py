@@ -1,5 +1,5 @@
 from config import *
-from pipeline_jitable_env import Pipeline
+from pipeline import Pipeline
 from algorithm.neat import NormalGene, NormalGeneConfig
 from algorithm.hyperneat import HyperNEAT, NormalSubstrate, NormalSubstrateConfig
 from problem.func_fit import XOR3d, FuncFitConfig

@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 
 from config import *
-from pipeline_jitable_env import Pipeline
+from pipeline import Pipeline
 from algorithm import NEAT
 from algorithm.neat.gene import NormalGene, NormalGeneConfig
 from problem.rl_env import GymNaxConfig, GymNaxEnv
