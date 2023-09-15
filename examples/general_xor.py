@@ -4,8 +4,12 @@ from algorithm import NEAT
 from algorithm.neat.gene import NormalGene, NormalGeneConfig
 from problem.func_fit import XOR, FuncFitConfig
 
+def evaluate():
+    pass
+
+
+
 if __name__ == '__main__':
-    # running config
     config = Config(
         basic=BasicConfig(
             seed=42,
@@ -13,6 +17,13 @@ if __name__ == '__main__':
             pop_size=10000
         ),
         neat=NeatConfig(
+            max_nodes=50,
+            max_conns=100,
+            max_species=30,
+            conn_add=0.8,
+            conn_delete=0,
+            node_add=0.4,
+            node_delete=0,
             inputs=2,
             outputs=1
         ),
@@ -21,13 +32,10 @@ if __name__ == '__main__':
             error_method='rmse'
         )
     )
-    # define algorithm: NEAT with NormalGene
+
     algorithm = NEAT(config, NormalGene)
-    # full pipeline
     pipeline = Pipeline(config, algorithm, XOR)
-    # initialize state
     state = pipeline.setup()
-    # run until terminate
+    pipeline.pre_compile(state)
     state, best = pipeline.auto_run(state)
-    # show result
     pipeline.show(state, best)

@@ -29,8 +29,8 @@ class XOR(FuncFit):
 
     @property
     def input_shape(self):
-        return (4, 2)
+        return 4, 2
 
     @property
     def output_shape(self):
-        return (4, 1)
+        return 4, 1
