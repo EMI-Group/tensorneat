@@ -29,10 +29,10 @@ class RLEnv(Problem):
         def cond_func(carry):
             _, _, _, done, _ = carry
             return ~done
-
         def body_func(carry):
             obs, env_state, rng, _, tr = carry  # total reward
             net_out = act_func(state, obs, params)
+
             action = self.config.output_transform(net_out)
             next_obs, next_env_state, reward, done, _ = self.step(rng, env_state, action)
             next_rng, _ = jax.random.split(rng)

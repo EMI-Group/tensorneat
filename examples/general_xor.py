@@ -4,11 +4,6 @@ from algorithm import NEAT
 from algorithm.neat.gene import NormalGene, NormalGeneConfig
 from problem.func_fit import XOR, FuncFitConfig
 
-def evaluate():
-    pass
-
-
-
 if __name__ == '__main__':
     config = Config(
         basic=BasicConfig(

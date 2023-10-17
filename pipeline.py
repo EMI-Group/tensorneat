@@ -24,6 +24,8 @@ class Pipeline:
         self.algorithm = algorithm
         self.problem = problem_type(config.problem)
 
+        print(self.problem.input_shape, self.problem.output_shape)
+
         if isinstance(algorithm, NEAT):
             assert config.neat.inputs == self.problem.input_shape[-1], f"problem input shape {self.problem.input_shape}"
 
