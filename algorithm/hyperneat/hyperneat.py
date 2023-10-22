@@ -105,7 +105,7 @@ class HyperNEATGene:
             values = values.at[input_idx].set(inputs_with_bias)
             nodes_ins = values * weights.T
             values = batch_agg(nodes_ins)  # z = agg(ins)
-            values = values * nodes[:, 2] + nodes[:, 1]  # z = z * response + bias
+            # values = values * nodes[:, 2] + nodes[:, 1]  # z = z * response + bias
             values = batch_act(values)  # z = act(z)
             return values
 

@@ -12,7 +12,7 @@ def example_conf():
         basic=BasicConfig(
             seed=42,
             fitness_target=10000,
-            pop_size=10000
+            pop_size=1000
         ),
         neat=NeatConfig(
             inputs=11,

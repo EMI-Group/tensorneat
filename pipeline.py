@@ -111,9 +111,9 @@ class Pipeline:
               f"species: {len(species_sizes)}, {species_sizes}",
               f"fitness: {max_f:.6f}, {min_f:.6f}, {mean_f:.6f}, {std_f:.6f}, Cost time: {cost_time * 1000:.6f}ms")
 
-    def show(self, state, genome):
+    def show(self, state, genome, *args, **kwargs):
         transformed = self.algorithm.transform(state, genome)
-        self.problem.show(state.evaluate_key, state, self.act_func, transformed)
+        self.problem.show(state.evaluate_key, state, self.act_func, transformed, *args, **kwargs)
 
     def pre_compile(self, state):
         tic = time.time()

@@ -15,7 +15,8 @@ def example_conf():
         basic=BasicConfig(
             seed=42,
             fitness_target=10000,
-            pop_size=10000
+            generation_limit=10,
+            pop_size=100
         ),
         neat=NeatConfig(
             inputs=17,
@@ -33,9 +34,9 @@ def example_conf():
 
 if __name__ == '__main__':
     conf = example_conf()
-
     algorithm = NEAT(conf, NormalGene)
     pipeline = Pipeline(conf, algorithm, BraxEnv)
     state = pipeline.setup()
     pipeline.pre_compile(state)
     state, best = pipeline.auto_run(state)
+    pipeline.show(state, best, save_path="half_cheetah.gif", )

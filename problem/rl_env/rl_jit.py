@@ -32,7 +32,6 @@ class RLEnv(Problem):
         def body_func(carry):
             obs, env_state, rng, _, tr = carry  # total reward
             net_out = act_func(state, obs, params)
-
             action = self.config.output_transform(net_out)
             next_obs, next_env_state, reward, done, _ = self.step(rng, env_state, action)
             next_rng, _ = jax.random.split(rng)
@@ -68,5 +67,5 @@ class RLEnv(Problem):
     def output_shape(self):
         raise NotImplementedError
 
-    def show(self, randkey, state: State, act_func: Callable, params):
+    def show(self, randkey, state: State, act_func: Callable, params, *args, **kwargs):
         raise NotImplementedError

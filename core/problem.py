@@ -22,7 +22,7 @@ class Problem:
     def output_shape(self):
         raise NotImplementedError
 
-    def show(self, randkey, state: State, act_func: Callable, params):
+    def show(self, randkey, state: State, act_func: Callable, params, *args, **kwargs):
         """
         show how a genome perform in this problem
         """
