@@ -57,10 +57,8 @@ def agg(idx, z, agg_funcs):
     """
     idx = jnp.asarray(idx, dtype=jnp.int32)
 
-    def all_nan():
-        return 0.
-
-    def not_all_nan():
-        return jax.lax.switch(idx, agg_funcs, z)
-
-    return jax.lax.cond(jnp.all(jnp.isnan(z)), all_nan, not_all_nan)
+    return jax.lax.cond(
+        jnp.all(jnp.isnan(z)),
+        lambda: jnp.nan,  # all inputs are nan
+        lambda: jax.lax.switch(idx, agg_funcs, z)  # otherwise
+    )

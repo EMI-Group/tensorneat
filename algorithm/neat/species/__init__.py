@@ -1,2 +1,2 @@
-from .species_info import SpeciesInfo
-from .operations import update_species, speciate
+from .base import BaseSpecies
+from .default import DefaultSpecies

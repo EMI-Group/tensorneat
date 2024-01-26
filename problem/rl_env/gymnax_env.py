@@ -1,26 +1,15 @@
-from dataclasses import dataclass
-from typing import Callable
-
 import gymnax
 
-from core import State
-from .rl_jit import RLEnv, RLEnvConfig
+from .rl_jit import RLEnv
 
-
-@dataclass(frozen=True)
-class GymNaxConfig(RLEnvConfig):
-    env_name: str = "CartPole-v1"
-
-    def __post_init__(self):
-        assert self.env_name in gymnax.registered_envs, f"Env {self.env_name} not registered"
 
 
 class GymNaxEnv(RLEnv):
 
-    def __init__(self, config: GymNaxConfig = GymNaxConfig()):
-        super().__init__(config)
-        self.config = config
-        self.env, self.env_params = gymnax.make(config.env_name)
+    def __init__(self, env_name):
+        super().__init__()
+        assert env_name in gymnax.registered_envs, f"Env {env_name} not registered"
+        self.env, self.env_params = gymnax.make(env_name)
 
     def env_step(self, randkey, env_state, action):
         return self.env.step(randkey, env_state, action, self.env_params)
@@ -36,5 +25,5 @@ class GymNaxEnv(RLEnv):
     def output_shape(self):
         return self.env.action_space(self.env_params).shape
 
-    def show(self, randkey, state: State, act_func: Callable, params):
+    def show(self, randkey, state, act_func, params, *args, **kwargs):
         raise NotImplementedError("GymNax render must rely on gym 0.19.0(old version).")

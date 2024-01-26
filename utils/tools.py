@@ -5,13 +5,11 @@ import jax
 from jax import numpy as jnp, Array, jit, vmap
 
 I_INT = np.iinfo(jnp.int32).max  # infinite int
-EMPTY_NODE = np.full((1, 5), jnp.nan)
-EMPTY_CON = np.full((1, 4), jnp.nan)
 
 
 def unflatten_conns(nodes, conns):
     """
-    transform the (C, CL) connections to (CL-2, N, N)
+    transform the (C, CL) connections to (CL-2, N, N), 2 is for the input index and output index)
     :return:
     """
     N = nodes.shape[0]
@@ -67,3 +65,42 @@ def rank_elements(array, reverse=False):
     if not reverse:
         array = -array
     return jnp.argsort(jnp.argsort(array))
+
+
+@jit
+def mutate_float(key, val, init_mean, init_std, mutate_power, mutate_rate, replace_rate):
+    k1, k2, k3 = jax.random.split(key, num=3)
+    noise = jax.random.normal(k1, ()) * mutate_power
+    replace = jax.random.normal(k2, ()) * init_std + init_mean
+    r = jax.random.uniform(k3, ())
+
+    val = jnp.where(
+        r < mutate_rate,
+        val + noise,
+        jnp.where(
+            (mutate_rate < r) & (r < mutate_rate + replace_rate),
+            replace,
+            val
+        )
+    )
+
+    return val
+
+
+@jit
+def mutate_int(key, val, options, replace_rate):
+    k1, k2 = jax.random.split(key, num=2)
+    r = jax.random.uniform(k1, ())
+
+    val = jnp.where(
+        r < replace_rate,
+        jax.random.choice(k2, options),
+        val
+    )
+
+    return val
+
+def argmin_with_mask(arr, mask):
+    masked_arr = jnp.where(mask, arr, jnp.inf)
+    min_idx = jnp.argmin(masked_arr)
+    return min_idx

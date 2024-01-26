@@ -1,28 +1,18 @@
-from dataclasses import dataclass
-from typing import Callable
 from functools import partial
 
 import jax
 
-from config import ProblemConfig
+from .. import BaseProblem
 
-from core import Problem, State
-
-
-@dataclass(frozen=True)
-class RLEnvConfig(ProblemConfig):
-    output_transform: Callable = lambda x: x
-
-
-class RLEnv(Problem):
+class RLEnv(BaseProblem):
 
     jitable = True
 
-    def __init__(self, config: RLEnvConfig = RLEnvConfig()):
-        super().__init__(config)
-        self.config = config
+    # TODO: move output transform to algorithm
+    def __init__(self):
+        super().__init__()
 
-    def evaluate(self, randkey, state: State, act_func: Callable, params):
+    def evaluate(self, randkey, state, act_func, params):
         rng_reset, rng_episode = jax.random.split(randkey)
         init_obs, init_env_state = self.reset(rng_reset)
 
@@ -31,8 +21,7 @@ class RLEnv(Problem):
             return ~done
         def body_func(carry):
             obs, env_state, rng, _, tr = carry  # total reward
-            net_out = act_func(state, obs, params)
-            action = self.config.output_transform(net_out)
+            action = act_func(state, obs, params)
             next_obs, next_env_state, reward, done, _ = self.step(rng, env_state, action)
             next_rng, _ = jax.random.split(rng)
             return next_obs, next_env_state, next_rng, done, tr + reward
@@ -67,5 +56,5 @@ class RLEnv(Problem):
     def output_shape(self):
         raise NotImplementedError
 
-    def show(self, randkey, state: State, act_func: Callable, params, *args, **kwargs):
+    def show(self, randkey, state, act_func, params, *args, **kwargs):
         raise NotImplementedError

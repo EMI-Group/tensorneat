@@ -1,28 +1,13 @@
-from dataclasses import dataclass
-from typing import Callable
-
 import jax.numpy as jnp
 from brax import envs
-from core import State
-from .rl_jit import RLEnv, RLEnvConfig
 
-
-@dataclass(frozen=True)
-class BraxConfig(RLEnvConfig):
-    env_name: str = "ant"
-    backend: str = "generalized"
-
-    def __post_init__(self):
-        # TODO: Check if env_name is registered
-        # assert self.env_name in gymnax.registered_envs, f"Env {self.env_name} not registered"
-        pass
+from .rl_jit import RLEnv
 
 
 class BraxEnv(RLEnv):
-    def __init__(self, config: BraxConfig = BraxConfig()):
-        super().__init__(config)
-        self.config = config
-        self.env = envs.create(env_name=config.env_name, backend=config.backend)
+    def __init__(self, env_name: str = "ant", backend: str = "generalized"):
+        super().__init__()
+        self.env = envs.create(env_name=env_name, backend=backend)
 
     def env_step(self, randkey, env_state, action):
         state = self.env.step(env_state, action)
@@ -40,9 +25,7 @@ class BraxEnv(RLEnv):
     def output_shape(self):
         return (self.env.action_size,)
 
-    def show(self, randkey, state: State, act_func: Callable, params, save_path=None, height=512, width=512,
-             duration=0.1, *args,
-             **kwargs):
+    def show(self, randkey, state, act_func, params, save_path=None, height=512, width=512, duration=0.1, *args, **kwargs):
 
         import jax
         import imageio
@@ -56,8 +39,7 @@ class BraxEnv(RLEnv):
 
         def step(key, env_state, obs):
             key, _ = jax.random.split(key)
-            net_out = act_func(state, obs, params)
-            action = self.config.output_transform(net_out)
+            action = act_func(state, obs, params)
             obs, env_state, r, done, _ = self.step(randkey, env_state, action)
             return key, env_state, obs, r, done
 
@@ -72,7 +54,6 @@ class BraxEnv(RLEnv):
         def create_gif(image_list, gif_name, duration):
             with imageio.get_writer(gif_name, mode='I', duration=duration) as writer:
                 for image in image_list:
-                    # 确保图像的数据类型正确
                     formatted_image = np.array(image, dtype=np.uint8)
                     writer.append_data(formatted_image)
 

@@ -1,13 +1,12 @@
 import numpy as np
 
-from .func_fit import FuncFit, FuncFitConfig
+from .func_fit import FuncFit
 
 
 class XOR3d(FuncFit):
 
-    def __init__(self, config: FuncFitConfig = FuncFitConfig()):
-        self.config = config
-        super().__init__(config)
+    def __init__(self, error_method: str = 'mse'):
+        super().__init__(error_method)
 
     @property
     def inputs(self):
@@ -37,8 +36,8 @@ class XOR3d(FuncFit):
 
     @property
     def input_shape(self):
-        return (8, 3)
+        return 8, 3
 
     @property
     def output_shape(self):
-        return (8, 1)
+        return 8, 1

@@ -1,3 +1,2 @@
-from .crossover import crossover
-from .mutate import mutate
-from .operation import create_next_generation
+from .crossover import BaseCrossover, DefaultCrossover
+from .mutation import BaseMutation, DefaultMutation

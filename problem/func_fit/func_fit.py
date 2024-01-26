@@ -1,42 +1,35 @@
-from typing import Callable
-from dataclasses import dataclass
-
 import jax
 import jax.numpy as jnp
-from config import ProblemConfig
-from core import Problem, State
 
+from .. import BaseProblem
 
-@dataclass(frozen=True)
-class FuncFitConfig(ProblemConfig):
-    error_method: str = 'mse'
-
-    def __post_init__(self):
-        assert self.error_method in {'mse', 'rmse', 'mae', 'mape'}
-
-
-class FuncFit(Problem):
+class FuncFit(BaseProblem):
 
     jitable = True
 
-    def __init__(self, config: FuncFitConfig = FuncFitConfig()):
-        self.config = config
-        super().__init__(config)
+    def __init__(self,
+        error_method: str = 'mse'
+    ):
+        super().__init__()
 
-    def evaluate(self, randkey, state: State, act_func: Callable, params):
+        assert error_method in {'mse', 'rmse', 'mae', 'mape'}
+        self.error_method = error_method
+
+
+    def evaluate(self, randkey, state, act_func, params):
 
         predict = act_func(state, self.inputs, params)
 
-        if self.config.error_method == 'mse':
+        if self.error_method == 'mse':
             loss = jnp.mean((predict - self.targets) ** 2)
 
-        elif self.config.error_method == 'rmse':
+        elif self.error_method == 'rmse':
             loss = jnp.sqrt(jnp.mean((predict - self.targets) ** 2))
 
-        elif self.config.error_method == 'mae':
+        elif self.error_method == 'mae':
             loss = jnp.mean(jnp.abs(predict - self.targets))
 
-        elif self.config.error_method == 'mape':
+        elif self.error_method == 'mape':
             loss = jnp.mean(jnp.abs((predict - self.targets) / self.targets))
 
         else:
@@ -44,7 +37,7 @@ class FuncFit(Problem):
 
         return -loss
 
-    def show(self, randkey, state: State, act_func: Callable, params, *args, **kwargs):
+    def show(self, randkey, state, act_func, params, *args, **kwargs):
         predict = act_func(state, self.inputs, params)
         inputs, target, predict = jax.device_get([self.inputs, self.targets, predict])
         loss = -self.evaluate(randkey, state, act_func, params)
