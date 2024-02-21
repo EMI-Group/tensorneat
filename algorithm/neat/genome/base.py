@@ -4,7 +4,6 @@ from utils import fetch_first
 
 
 class BaseGenome:
-
     network_type = None
 
     def __init__(

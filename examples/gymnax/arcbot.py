@@ -1,32 +1,30 @@
+import jax.numpy as jnp
+
 from pipeline import Pipeline
 from algorithm.neat import *
 
-from problem.rl_env import BraxEnv
-from utils import Act
+from problem.rl_env import GymNaxEnv
 
 if __name__ == '__main__':
     pipeline = Pipeline(
         algorithm=NEAT(
             species=DefaultSpecies(
                 genome=DefaultGenome(
-                    num_inputs=27,
-                    num_outputs=8,
+                    num_inputs=6,
+                    num_outputs=3,
                     max_nodes=50,
                     max_conns=100,
-                    node_gene=DefaultNodeGene(
-                        activation_options=(Act.tanh,),
-                        activation_default=Act.tanh,
-                    )
+                    output_transform=lambda out: jnp.argmax(out)  # the action of acrobot is {0, 1, 2}
                 ),
-                pop_size=1000,
+                pop_size=10000,
                 species_size=10,
             ),
         ),
-        problem=BraxEnv(
-            env_name='ant',
+        problem=GymNaxEnv(
+            env_name='Acrobot-v1',
         ),
         generation_limit=10000,
-        fitness_target=5000
+        fitness_target=-62
     )
 
     # initialize state

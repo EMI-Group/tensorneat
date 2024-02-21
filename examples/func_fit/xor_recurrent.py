@@ -1,41 +1,41 @@
-from config import *
 from pipeline import Pipeline
-from algorithm import NEAT
-from algorithm.neat.gene import RecurrentGene, RecurrentGeneConfig
-from problem.func_fit import XOR3d, FuncFitConfig
+from algorithm.neat import *
 
+from problem.func_fit import XOR3d
+from utils.activation import ACT_ALL
+from utils.aggregation import AGG_ALL
 
 if __name__ == '__main__':
-    config = Config(
-        basic=BasicConfig(
-            seed=42,
-            fitness_target=-1e-2,
-            generation_limit=300,
-            pop_size=1000
+    pipeline = Pipeline(
+        seed=0,
+        algorithm=NEAT(
+            species=DefaultSpecies(
+                genome=RecurrentGenome(
+                    num_inputs=3,
+                    num_outputs=1,
+                    max_nodes=50,
+                    max_conns=100,
+                    activate_time=5,
+                    node_gene=DefaultNodeGene(
+                        activation_options=ACT_ALL,
+                        # aggregation_options=AGG_ALL,
+                        activation_replace_rate=0.2
+                    ),
+                ),
+                pop_size=10000,
+                species_size=10,
+                compatibility_threshold=3.5,
+            ),
         ),
-        neat=NeatConfig(
-            network_type="recurrent",
-            max_nodes=50,
-            max_conns=100,
-            max_species=30,
-            conn_add=0.5,
-            conn_delete=0.5,
-            node_add=0.4,
-            node_delete=0.4,
-            inputs=3,
-            outputs=1
-        ),
-        gene=RecurrentGeneConfig(
-            activate_times=10
-        ),
-        problem=FuncFitConfig(
-            error_method='rmse'
-        )
+        problem=XOR3d(),
+        generation_limit=10000,
+        fitness_target=-1e-8
     )
 
-    algorithm = NEAT(config, RecurrentGene)
-    pipeline = Pipeline(config, algorithm, XOR3d)
+    # initialize state
     state = pipeline.setup()
-    pipeline.pre_compile(state)
+    # print(state)
+    # run until terminate
     state, best = pipeline.auto_run(state)
+    # show result
     pipeline.show(state, best)

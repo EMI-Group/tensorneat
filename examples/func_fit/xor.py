@@ -1,32 +1,31 @@
-from config import *
 from pipeline import Pipeline
-from algorithm import NEAT
-from algorithm.neat.gene import NormalGene, NormalGeneConfig
-from problem.func_fit import XOR, FuncFitConfig
+from algorithm.neat import *
+
+from problem.func_fit import XOR3d
 
 if __name__ == '__main__':
-    # running config
-    config = Config(
-        basic=BasicConfig(
-            seed=42,
-            fitness_target=-1e-2,
-            pop_size=10000
+    pipeline = Pipeline(
+        algorithm=NEAT(
+            species=DefaultSpecies(
+                genome=DefaultGenome(
+                    num_inputs=3,
+                    num_outputs=1,
+                    max_nodes=50,
+                    max_conns=100,
+                ),
+                pop_size=10000,
+                species_size=10,
+                compatibility_threshold=3.5,
+            ),
         ),
-        neat=NeatConfig(
-            inputs=2,
-            outputs=1
-        ),
-        gene=NormalGeneConfig(),
-        problem=FuncFitConfig(
-            error_method='rmse'
-        )
+        problem=XOR3d(),
+        generation_limit=10000,
+        fitness_target=-1e-8
     )
-    # define algorithm: NEAT with NormalGene
-    algorithm = NEAT(config, NormalGene)
-    # full pipeline
-    pipeline = Pipeline(config, algorithm, XOR)
+
     # initialize state
     state = pipeline.setup()
+    # print(state)
     # run until terminate
     state, best = pipeline.auto_run(state)
     # show result

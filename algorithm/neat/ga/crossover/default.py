@@ -3,7 +3,8 @@ import jax, jax.numpy as jnp
 from .base import BaseCrossover
 
 class DefaultCrossover(BaseCrossover):
-    def __call__(self, randkey, genome, nodes1, nodes2, conns1, conns2):
+
+    def __call__(self, randkey, genome, nodes1, conns1, nodes2, conns2):
         """
         use genome1 and genome2 to generate a new genome
         notice that genome1 should have higher fitness than genome2 (genome1 is winner!)

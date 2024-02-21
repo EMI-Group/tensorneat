@@ -1,19 +1,14 @@
 from typing import Callable
 
-from config import ProblemConfig
-from core.state import State
+from utils import State
 
 
 class BaseProblem:
-
     jitable = None
-
-    def __init__(self):
-        pass
 
     def setup(self, randkey, state: State = State()):
         """initialize the state of the problem"""
-        raise NotImplementedError
+        pass
 
     def evaluate(self, randkey, state: State, act_func: Callable, params):
         """evaluate one individual"""

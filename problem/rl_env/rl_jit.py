@@ -4,8 +4,8 @@ import jax
 
 from .. import BaseProblem
 
-class RLEnv(BaseProblem):
 
+class RLEnv(BaseProblem):
     jitable = True
 
     # TODO: move output transform to algorithm
@@ -19,9 +19,10 @@ class RLEnv(BaseProblem):
         def cond_func(carry):
             _, _, _, done, _ = carry
             return ~done
+
         def body_func(carry):
             obs, env_state, rng, _, tr = carry  # total reward
-            action = act_func(state, obs, params)
+            action = act_func(obs, params)
             next_obs, next_env_state, reward, done, _ = self.step(rng, env_state, action)
             next_rng, _ = jax.random.split(rng)
             return next_obs, next_env_state, next_rng, done, tr + reward

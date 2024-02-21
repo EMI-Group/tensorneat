@@ -1,36 +1,33 @@
-from config import *
+import jax.numpy as jnp
+
 from pipeline import Pipeline
-from algorithm import NEAT
-from algorithm.neat.gene import NormalGene, NormalGeneConfig
-from problem.rl_env import GymNaxConfig, GymNaxEnv
+from algorithm.neat import *
 
-
-def example_conf():
-    return Config(
-        basic=BasicConfig(
-            seed=42,
-            fitness_target=500,
-            pop_size=10000
-        ),
-        neat=NeatConfig(
-            inputs=8,
-            outputs=2,
-        ),
-        gene=NormalGeneConfig(
-            activation_default=Act.sigmoid,
-            activation_options=(Act.sigmoid,),
-        ),
-        problem=GymNaxConfig(
-            env_name='Reacher-misc',
-        )
-    )
-
+from problem.rl_env import GymNaxEnv
 
 if __name__ == '__main__':
-    conf = example_conf()
+    pipeline = Pipeline(
+        algorithm=NEAT(
+            species=DefaultSpecies(
+                genome=DefaultGenome(
+                    num_inputs=8,
+                    num_outputs=2,
+                    max_nodes=50,
+                    max_conns=100,
+                ),
+                pop_size=10000,
+                species_size=10,
+            ),
+        ),
+        problem=GymNaxEnv(
+            env_name='Reacher-misc',
+        ),
+        generation_limit=10000,
+        fitness_target =500
+    )
 
-    algorithm = NEAT(conf, NormalGene)
-    pipeline = Pipeline(conf, algorithm, GymNaxEnv)
+    # initialize state
     state = pipeline.setup()
-    pipeline.pre_compile(state)
+    # print(state)
+    # run until terminate
     state, best = pipeline.auto_run(state)

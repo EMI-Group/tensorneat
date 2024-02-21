@@ -3,7 +3,6 @@ import gymnax
 from .rl_jit import RLEnv
 
 
-
 class GymNaxEnv(RLEnv):
 
     def __init__(self, env_name):

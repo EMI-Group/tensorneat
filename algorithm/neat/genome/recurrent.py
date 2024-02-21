@@ -13,11 +13,13 @@ class RecurrentGenome(BaseGenome):
     def __init__(self,
                  num_inputs: int,
                  num_outputs: int,
+                 max_nodes: int,
+                 max_conns: int,
                  node_gene: BaseNodeGene = DefaultNodeGene(),
                  conn_gene: BaseConnGene = DefaultConnGene(),
                  activate_time: int = 10,
                  ):
-        super().__init__(num_inputs, num_outputs, node_gene, conn_gene)
+        super().__init__(num_inputs, num_outputs, max_nodes, max_conns, node_gene, conn_gene)
         self.activate_time = activate_time
 
     def transform(self, nodes, conns):

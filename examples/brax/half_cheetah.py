@@ -1,42 +1,36 @@
-import jax.numpy as jnp
-
-from config import *
 from pipeline import Pipeline
-from algorithm import NEAT
-from algorithm.neat.gene import NormalGene, NormalGeneConfig
-from problem.rl_env import BraxEnv, BraxConfig
+from algorithm.neat import *
 
-
-# ['ant', 'halfcheetah', 'hopper', 'humanoid', 'humanoidstandup', 'inverted_pendulum', 'inverted_double_pendulum', 'pusher', 'reacher', 'walker2d']
-
-
-def example_conf():
-    return Config(
-        basic=BasicConfig(
-            seed=42,
-            fitness_target=10000,
-            generation_limit=10,
-            pop_size=100
-        ),
-        neat=NeatConfig(
-            inputs=17,
-            outputs=6,
-        ),
-        gene=NormalGeneConfig(
-            activation_default=Act.tanh,
-            activation_options=(Act.tanh,),
-        ),
-        problem=BraxConfig(
-            env_name="halfcheetah"
-        )
-    )
-
+from problem.rl_env import BraxEnv
+from utils import Act
 
 if __name__ == '__main__':
-    conf = example_conf()
-    algorithm = NEAT(conf, NormalGene)
-    pipeline = Pipeline(conf, algorithm, BraxEnv)
+    pipeline = Pipeline(
+        algorithm=NEAT(
+            species=DefaultSpecies(
+                genome=DefaultGenome(
+                    num_inputs=17,
+                    num_outputs=6,
+                    max_nodes=50,
+                    max_conns=100,
+                    node_gene=DefaultNodeGene(
+                        activation_options=(Act.tanh,),
+                        activation_default=Act.tanh,
+                    )
+                ),
+                pop_size=1000,
+                species_size=10,
+            ),
+        ),
+        problem=BraxEnv(
+            env_name='halhcheetah',
+        ),
+        generation_limit=10000,
+        fitness_target=5000
+    )
+
+    # initialize state
     state = pipeline.setup()
-    pipeline.pre_compile(state)
+    # print(state)
+    # run until terminate
     state, best = pipeline.auto_run(state)
-    pipeline.show(state, best, save_path="half_cheetah.gif", )

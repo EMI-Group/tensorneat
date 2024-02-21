@@ -26,6 +26,8 @@ def test_default():
     genome = DefaultGenome(
         num_inputs=2,
         num_outputs=1,
+        max_nodes=5,
+        max_conns=4,
         node_gene=DefaultNodeGene(
             activation_default=Act.identity,
             activation_options=(Act.identity, ),
@@ -80,6 +82,8 @@ def test_recurrent():
     genome = RecurrentGenome(
         num_inputs=2,
         num_outputs=1,
+        max_nodes=5,
+        max_conns=4,
         node_gene=DefaultNodeGene(
             activation_default=Act.identity,
             activation_options=(Act.identity, ),

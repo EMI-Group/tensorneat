@@ -9,7 +9,6 @@ from . import BaseNodeGene
 class DefaultNodeGene(BaseNodeGene):
     "Default node gene, with the same behavior as in NEAT-python."
 
-    fixed_attrs = ['index']
     custom_attrs = ['bias', 'response', 'aggregation', 'activation']
 
     def __init__(
@@ -82,8 +81,8 @@ class DefaultNodeGene(BaseNodeGene):
         return (
                 jnp.abs(node1[1] - node2[1]) +
                 jnp.abs(node1[2] - node2[2]) +
-                node1[3] != node2[3] +
-                node1[4] != node2[4]
+                (node1[3] != node2[3]) +
+                (node1[4] != node2[4])
         )
 
     def forward(self, attrs, inputs):

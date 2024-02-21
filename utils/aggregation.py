@@ -51,6 +51,9 @@ class Agg:
         return mean_without_zeros
 
 
+AGG_ALL = (Agg.sum, Agg.product, Agg.max, Agg.min, Agg.maxabs, Agg.median, Agg.mean)
+
+
 def agg(idx, z, agg_funcs):
     """
     calculate activation function for inputs of node

@@ -7,8 +7,7 @@ from . import BaseConnGene
 class DefaultConnGene(BaseConnGene):
     "Default connection gene, with the same behavior as in NEAT-python."
 
-    fixed_attrs = ['input_index', 'output_index', 'enabled']
-    attrs = ['weight']
+    custom_attrs = ['weight']
 
     def __init__(
             self,
