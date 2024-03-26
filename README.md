@@ -1,4 +1,4 @@
-# NEATax: Tensorized NEAT implementation in JAX
+# TensorNEAT: Tensorized NEAT implementation in JAX
 
 TensorNEAT is a powerful tool that utilizes JAX to implement the NEAT (NeuroEvolution of Augmenting Topologies) 
 algorithm. It provides support for parallel execution of tasks such as network forward computation, mutation, 
