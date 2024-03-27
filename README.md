@@ -8,7 +8,7 @@
 </h1>
 
 <p align="center">
-🌟 TensorNEAT: Tensorized NEAT implementation in JAX 🌟
+🌟 TensorNEAT: Tensorized NEAT Implementation in JAX 🌟
 </p>
 
 <p align="center">
