@@ -16,7 +16,7 @@
 </p>
 
 ## Introduction
-🚀TensorNEAT, a part of EvoX project, aims to enhance the NEAT (NeuroEvolution of Augmenting Topologies) algorithm by incorporating GPU acceleration. Utilizing JAX for parallel computations, it extends NEAT's capabilities to modern computational environments, making advanced neuroevolution accessible and fast.
+🚀TensorNEAT is an adaptation of the NeuroEvolution of Augmenting Topologies (NEAT) algorithm, focused on harnessing GPU acceleration to enhance the efficiency of evolving neural network structures for complex tasks. Its core mechanism involves the tensorization of network topologies, enabling parallel processing and significantly boosting computational speed and scalability by leveraging modern hardware accelerators. TensorRVEA is compatible with the [EvoX](https://github.com/EMI-Group/evox/) framewrok.
 
 ## Requirements
 TensorNEAT requires:
@@ -104,3 +104,20 @@ if __name__ == '__main__':
 
 more examples are in `tensorneat/examples`.
 
+## Community & Support
+
+- Engage in discussions and share your experiences on [GitHub Discussion Board](https://github.com/EMI-Group/evox/discussions).
+- Join our QQ group (ID: 297969717).
+- Official Website: https://evox.group/
+  
+## Citing TensorRVEA
+
+If you use TensorNEAT in your research and want to cite it in your work, please use:
+```
+@article{tensorrvea,
+  title = {{Tensorized} {NeuroEvolution} of {Augmenting} {Topologies} for {GPU} {Acceleration}},
+  author = {Wang, Lishuang and Zhao, Mengfei and Liu, Enyu and Sun, Kebin and Cheng, Ran},
+  booktitle = {Proceedings of the Genetic and Evolutionary Computation Conference},
+  year = {2024},
+  series = {GECCO '24}
+}
