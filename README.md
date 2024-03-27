@@ -11,12 +11,12 @@
 
 <p align="center">
   <a href="https://arxiv.org/">
-    <img src="https://img.shields.io/badge/paper-arxiv-red?style=for-the-badge" alt="TensorRVEA Paper on arXiv">
+    <img src="https://img.shields.io/badge/paper-arxiv-red?style=for-the-badge" alt="TensorNEAT Paper on arXiv">
   </a>
 </p>
 
 ## Introduction
-🚀TensorNEAT is an adaptation of the NeuroEvolution of Augmenting Topologies (NEAT) algorithm, focused on harnessing GPU acceleration to enhance the efficiency of evolving neural network structures for complex tasks. Its core mechanism involves the tensorization of network topologies, enabling parallel processing and significantly boosting computational speed and scalability by leveraging modern hardware accelerators. TensorRVEA is compatible with the [EvoX](https://github.com/EMI-Group/evox/) framewrok.
+🚀TensorNEAT is an adaptation of the NeuroEvolution of Augmenting Topologies (NEAT) algorithm, focused on harnessing GPU acceleration to enhance the efficiency of evolving neural network structures for complex tasks. Its core mechanism involves the tensorization of network topologies, enabling parallel processing and significantly boosting computational speed and scalability by leveraging modern hardware accelerators. TensorNEAT is compatible with the [EvoX](https://github.com/EMI-Group/evox/) framewrok.
 
 ## Requirements
 TensorNEAT requires:
@@ -110,11 +110,11 @@ more examples are in `tensorneat/examples`.
 - Join our QQ group (ID: 297969717).
 - Official Website: https://evox.group/
   
-## Citing TensorRVEA
+## Citing TensorNEAT
 
 If you use TensorNEAT in your research and want to cite it in your work, please use:
 ```
-@article{tensorrvea,
+@article{tensorneat,
   title = {{Tensorized} {NeuroEvolution} of {Augmenting} {Topologies} for {GPU} {Acceleration}},
   author = {Wang, Lishuang and Zhao, Mengfei and Liu, Enyu and Sun, Kebin and Cheng, Ran},
   booktitle = {Proceedings of the Genetic and Evolutionary Computation Conference},
