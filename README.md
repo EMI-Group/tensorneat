@@ -7,7 +7,9 @@
   <br>
 </h1>
 
-# TensorNEAT: Tensorized NEAT implementation in JAX
+<p align="center">
+🌟 TensorNEAT: Tensorized NEAT implementation in JAX 🌟
+</p>
 
 <p align="center">
   <a href="https://arxiv.org/">
