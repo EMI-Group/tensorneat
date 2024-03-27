@@ -16,7 +16,7 @@
 </p>
 
 ## Introduction
-🚀TensorNEAT is an adaptation of the NeuroEvolution of Augmenting Topologies (NEAT) algorithm, focused on harnessing GPU acceleration to enhance the efficiency of evolving neural network structures for complex tasks. Its core mechanism involves the tensorization of network topologies, enabling parallel processing and significantly boosting computational speed and scalability by leveraging modern hardware accelerators. TensorNEAT is compatible with the [EvoX](https://github.com/EMI-Group/evox/) framewrok.
+TensorNEAT is an adaptation of the NeuroEvolution of Augmenting Topologies (NEAT) algorithm, focused on harnessing GPU acceleration to enhance the efficiency of evolving neural network structures for complex tasks. Its core mechanism involves the tensorization of network topologies, enabling parallel processing and significantly boosting computational speed and scalability by leveraging modern hardware accelerators. TensorNEAT is compatible with the [EvoX](https://github.com/EMI-Group/evox/) framewrok.
 
 ## Requirements
 TensorNEAT requires:
