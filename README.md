@@ -108,7 +108,6 @@ more examples are in `tensorneat/examples`.
 
 - Engage in discussions and share your experiences on [GitHub Discussion Board](https://github.com/EMI-Group/evox/discussions).
 - Join our QQ group (ID: 297969717).
-- Official Website: https://evox.group/
   
 ## Citing TensorNEAT
 
@@ -117,7 +116,6 @@ If you use TensorNEAT in your research and want to cite it in your work, please 
 @article{tensorneat,
   title = {{Tensorized} {NeuroEvolution} of {Augmenting} {Topologies} for {GPU} {Acceleration}},
   author = {Wang, Lishuang and Zhao, Mengfei and Liu, Enyu and Sun, Kebin and Cheng, Ran},
-  booktitle = {Proceedings of the Genetic and Evolutionary Computation Conference},
-  year = {2024},
-  series = {GECCO '24}
+  booktitle = {Proceedings of the Genetic and Evolutionary Computation Conference (GECCO)},
+  year = {2024}
 }
