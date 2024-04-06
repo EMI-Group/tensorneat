@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://arxiv.org/">
+  <a href="https://arxiv.org/abs/2301.12457">
     <img src="https://img.shields.io/badge/paper-arxiv-red?style=for-the-badge" alt="TensorNEAT Paper on arXiv">
   </a>
 </p>
