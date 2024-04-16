@@ -23,7 +23,7 @@ if __name__ == '__main__':
             ),
         ),
         problem=BraxEnv(
-            env_name='halhcheetah',
+            env_name='halfcheetah',
         ),
         generation_limit=10000,
         fitness_target=5000
