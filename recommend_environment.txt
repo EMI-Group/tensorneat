@@ -1,0 +1,9 @@
+brax==0.10.3
+flax==0.8.4
+gymnax==0.0.8
+jax==0.4.28
+jaxlib==0.4.28+cuda12.cudnn89
+jaxopt==0.8.3
+mujoco==3.1.4
+mujoco-mjx==3.1.4
+optax==0.2.2
