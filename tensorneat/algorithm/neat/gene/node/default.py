@@ -60,6 +60,16 @@ class DefaultNodeGene(BaseNodeGene):
         return jnp.array(
             [self.bias_init_mean, self.response_init_mean, self.activation_default, self.aggregation_default]
         )
+    
+    def new_random_attrs(self, key):   
+        return jnp.array([
+            mutate_float(key, self.bias_init_mean, self.bias_init_mean, self.bias_init_std,
+                         self.bias_mutate_power, self.bias_mutate_rate, self.bias_replace_rate),
+            mutate_float(key, self.response_init_mean, self.response_init_mean, self.response_init_std,
+                         self.response_mutate_power, self.response_mutate_rate, self.response_replace_rate),
+            self.activation_default,
+            self.aggregation_default,
+        ])
 
     def mutate(self, key, node):
         k1, k2, k3, k4 = jax.random.split(key, num=4)
