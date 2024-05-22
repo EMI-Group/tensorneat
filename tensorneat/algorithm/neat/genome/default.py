@@ -58,7 +58,7 @@ class DefaultGenome(BaseGenome):
 
             def hit():
                 ins = jax.vmap(self.conn_gene.forward, in_axes=(1, 0))(conns[:, :, i], values)
-                z = self.node_gene.forward(nodes_attrs[i], ins)
+                z = self.node_gene.forward(nodes_attrs[i], ins, is_output_node=jnp.isin(i, self.output_idx))
                 new_values = values.at[i].set(z)
                 return new_values
 

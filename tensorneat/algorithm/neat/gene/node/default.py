@@ -92,7 +92,10 @@ class DefaultNodeGene(BaseNodeGene):
         z = bias + res * z
 
         # the last output node should not be activated
-        if not is_output_node:
-            z = act(act_idx, z, self.activation_options)
+        z = jax.lax.cond(
+            is_output_node,
+            lambda: z,
+            lambda: act(act_idx, z, self.activation_options)
+        )
 
         return z

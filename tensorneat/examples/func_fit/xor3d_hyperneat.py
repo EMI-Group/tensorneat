@@ -28,14 +28,17 @@ if __name__ == '__main__':
                             activation_default=Act.tanh,
                             activation_options=(Act.tanh,),
                         ),
+                        output_transform=Act.tanh,  # the activation function for output node in NEAT
                     ),
                     pop_size=10000,
                     species_size=10,
                     compatibility_threshold=3.5,
+                    survival_threshold=0.03,
                 ),
             ),
-            activation=Act.sigmoid,
+            activation=Act.tanh,
             activate_time=10,
+            output_transform=Act.sigmoid,  # the activation function for output node in HyperNEAT
         ),
         problem=XOR3d(),
         generation_limit=300,
