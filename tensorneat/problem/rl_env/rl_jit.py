@@ -8,7 +8,6 @@ from .. import BaseProblem
 class RLEnv(BaseProblem):
     jitable = True
 
-    # TODO: move output transform to algorithm
     def __init__(self):
         super().__init__()
 

@@ -8,5 +8,5 @@ class BaseNodeGene(BaseGene):
     def __init__(self):
         super().__init__()
 
-    def forward(self, attrs, inputs):
+    def forward(self, attrs, inputs, is_output_node=False):
         raise NotImplementedError

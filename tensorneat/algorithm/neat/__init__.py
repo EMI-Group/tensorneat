@@ -1,3 +1,4 @@
+from .ga import *
 from .gene import *
 from .genome import *
 from .species import *
