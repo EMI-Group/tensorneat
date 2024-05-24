@@ -26,6 +26,17 @@ class DefaultConnGene(BaseConnGene):
 
     def new_custom_attrs(self):
         return jnp.array([self.weight_init_mean])
+    
+    def new_random_attrs(self, key):
+        return jnp.array([mutate_float(key,
+                            self.weight_init_mean,
+                            self.weight_init_mean,
+                            1.0,
+                            0,
+                            0,
+                            1.0,
+                            )
+        ])
 
     def mutate(self, key, conn):
         input_index = conn[0]

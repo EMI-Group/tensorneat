@@ -83,6 +83,7 @@ class Pipeline:
         print("start compile")
         tic = time.time()
         compiled_step = jax.jit(self.step).lower(ini_state).compile()
+
         print(f"compile finished, cost time: {time.time() - tic:.6f}s", )
         for _ in range(self.generation_limit):
 
@@ -90,6 +91,7 @@ class Pipeline:
 
             previous_pop = self.algorithm.ask(state.alg)
 
+                
             state, fitnesses = compiled_step(state)
 
             fitnesses = jax.device_get(fitnesses)
@@ -99,7 +101,13 @@ class Pipeline:
             if max(fitnesses) >= self.fitness_target:
                 print("Fitness limit reached!")
                 return state, self.best_genome
-
+            node= previous_pop[0][0][:,0]
+            node_count = jnp.sum(~jnp.isnan(node))
+            conn= previous_pop[1][0][:,0]
+            conn_count = jnp.sum(~jnp.isnan(conn))
+            if(w%5==0):
+                print("node_count",node_count)
+                print("conn_count",conn_count)
         print("Generation limit reached!")
         return state, self.best_genome
 
