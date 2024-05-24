@@ -25,19 +25,13 @@ class DefaultGenome(BaseGenome):
 
         if output_transform is not None:
             try:
-                aux = output_transform(jnp.zeros(num_outputs))
+                _ = output_transform(jnp.zeros(num_outputs))
             except Exception as e:
                 raise ValueError(f"Output transform function failed: {e}")
         self.output_transform = output_transform
 
     def transform(self, nodes, conns):
         u_conns = unflatten_conns(nodes, conns)
-
-        # DONE: Seems like there is a bug in this line
-        # conn_enable = jnp.where(~jnp.isnan(u_conns[0]), True, False)
-        # modified: exist conn and enable is true
-        # conn_enable = jnp.where( (~jnp.isnan(u_conns[0])) & (u_conns[0] == 1), True, False)
-        # advanced modified: when and only when enabled is True
         conn_enable = u_conns[0] == 1
 
         # remove enable attr
@@ -64,13 +58,7 @@ class DefaultGenome(BaseGenome):
 
             def hit():
                 ins = jax.vmap(self.conn_gene.forward, in_axes=(1, 0))(conns[:, :, i], values)
-                # ins = values * weights[:, i]
-
-                z = self.node_gene.forward(nodes_attrs[i], ins)
-                # z = agg(nodes[i, 4], ins, self.config.aggregation_options)  # z = agg(ins)
-                # z = z * nodes[i, 2] + nodes[i, 1]  # z = z * response + bias
-                # z = act(nodes[i, 3], z, self.config.activation_options)  # z = act(z)
-
+                z = self.node_gene.forward(nodes_attrs[i], ins, is_output_node=jnp.isin(i, self.output_idx))
                 new_values = values.at[i].set(z)
                 return new_values
 
@@ -78,7 +66,11 @@ class DefaultGenome(BaseGenome):
                 return values
 
             # the val of input nodes is obtained by the task, not by calculation
-            values = jax.lax.cond(jnp.isin(i, self.input_idx), miss, hit)
+            values = jax.lax.cond(
+                jnp.isin(i, self.input_idx),
+                miss,
+                hit
+            )
 
             return values, idx + 1
 
