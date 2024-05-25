@@ -9,7 +9,7 @@ class BaseGene:
     def __init__(self):
         pass
 
-    def setup(self, state=State()):
+    def setup(self, key, state=State()):
         return state
 
     def new_attrs(self, state, key):

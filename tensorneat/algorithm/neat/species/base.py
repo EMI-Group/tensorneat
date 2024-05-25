@@ -1,8 +1,9 @@
 from utils import State
 
+
 class BaseSpecies:
-    def setup(self, randkey):
-        raise NotImplementedError
+    def setup(self, key, state=State()):
+        return state
 
     def ask(self, state: State):
         raise NotImplementedError
