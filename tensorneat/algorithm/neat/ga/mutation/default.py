@@ -17,15 +17,15 @@ class DefaultMutation(BaseMutation):
         self.node_add = node_add
         self.node_delete = node_delete
 
-    def __call__(self, state, randkey, genome, nodes, conns, new_node_key):
-        k1, k2 = jax.random.split(randkey)
+    def __call__(self, state, key, genome, nodes, conns, new_node_key):
+        k1, k2 = jax.random.split(key)
 
         nodes, conns = self.mutate_structure(k1, genome, nodes, conns, new_node_key)
         nodes, conns = self.mutate_values(k2, genome, nodes, conns)
 
         return nodes, conns
 
-    def mutate_structure(self, randkey, genome, nodes, conns, new_node_key):
+    def mutate_structure(self, key, genome, nodes, conns, new_node_key):
         def mutate_add_node(key_, nodes_, conns_):
             i_key, o_key, idx = self.choice_connection_key(key_, conns_)
 
@@ -106,11 +106,11 @@ class DefaultMutation(BaseMutation):
                     is_already_exist,
                     already_exist,
                     lambda:
-                        jax.lax.cond(
-                            is_cycle,
-                            nothing,
-                            successful
-                        )
+                    jax.lax.cond(
+                        is_cycle,
+                        nothing,
+                        successful
+                    )
                 )
 
             elif genome.network_type == 'recurrent':
@@ -136,7 +136,7 @@ class DefaultMutation(BaseMutation):
                 successfully_delete_connection
             )
 
-        k1, k2, k3, k4 = jax.random.split(randkey, num=4)
+        k1, k2, k3, k4 = jax.random.split(key, num=4)
         r1, r2, r3, r4 = jax.random.uniform(k1, shape=(4,))
 
         def no(key_, nodes_, conns_):
@@ -149,8 +149,8 @@ class DefaultMutation(BaseMutation):
 
         return nodes, conns
 
-    def mutate_values(self, randkey, genome, nodes, conns):
-        k1, k2 = jax.random.split(randkey, num=2)
+    def mutate_values(self, key, genome, nodes, conns):
+        k1, k2 = jax.random.split(key, num=2)
         nodes_keys = jax.random.split(k1, num=nodes.shape[0])
         conns_keys = jax.random.split(k2, num=conns.shape[0])
 
@@ -163,11 +163,11 @@ class DefaultMutation(BaseMutation):
 
         return new_nodes, new_conns
 
-    def choice_node_key(self, rand_key, nodes, input_idx, output_idx,
+    def choice_node_key(self, key, nodes, input_idx, output_idx,
                         allow_input_keys: bool = False, allow_output_keys: bool = False):
         """
         Randomly choose a node key from the given nodes. It guarantees that the chosen node not be the input or output node.
-        :param rand_key:
+        :param key:
         :param nodes:
         :param input_idx:
         :param output_idx:
@@ -185,17 +185,17 @@ class DefaultMutation(BaseMutation):
         if not allow_output_keys:
             mask = jnp.logical_and(mask, ~jnp.isin(node_keys, output_idx))
 
-        idx = fetch_random(rand_key, mask)
+        idx = fetch_random(key, mask)
         key = jnp.where(idx != I_INT, nodes[idx, 0], jnp.nan)
         return key, idx
 
-    def choice_connection_key(self, rand_key, conns):
+    def choice_connection_key(self, key, conns):
         """
         Randomly choose a connection key from the given connections.
         :return: i_key, o_key, idx
         """
 
-        idx = fetch_random(rand_key, ~jnp.isnan(conns[:, 0]))
+        idx = fetch_random(key, ~jnp.isnan(conns[:, 0]))
         i_key = jnp.where(idx != I_INT, conns[idx, 0], jnp.nan)
         o_key = jnp.where(idx != I_INT, conns[idx, 1], jnp.nan)
 
