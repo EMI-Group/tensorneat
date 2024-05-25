@@ -8,5 +8,5 @@ class BaseConnGene(BaseGene):
     def __init__(self):
         super().__init__()
 
-    def forward(self, attrs, inputs):
+    def forward(self, state, attrs, inputs):
         raise NotImplementedError

@@ -1,3 +1,6 @@
+from utils import State
+
+
 class BaseGene:
     "Base class for node genes or connection genes."
     fixed_attrs = []
@@ -6,16 +9,19 @@ class BaseGene:
     def __init__(self):
         pass
 
-    def new_custom_attrs(self):
+    def setup(self, state=State()):
+        return state
+
+    def new_attrs(self, state, key):
         raise NotImplementedError
 
-    def mutate(self, randkey, gene):
+    def mutate(self, state, key, gene):
         raise NotImplementedError
 
-    def distance(self, gene1, gene2):
+    def distance(self, state, gene1, gene2):
         raise NotImplementedError
 
-    def forward(self, attrs, inputs):
+    def forward(self, state, attrs, inputs):
         raise NotImplementedError
 
     @property
