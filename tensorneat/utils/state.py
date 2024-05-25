@@ -7,7 +7,19 @@ class State:
     def __init__(self, **kwargs):
         self.__dict__['state_dict'] = kwargs
 
+    def registered_keys(self):
+        return self.state_dict.keys()
+
+    def register(self, **kwargs):
+        for key in kwargs:
+            if key in self.registered_keys():
+                raise ValueError(f"Key {key} already exists in state")
+        return State(**{**self.state_dict, **kwargs})
+
     def update(self, **kwargs):
+        for key in kwargs:
+            if key not in self.registered_keys():
+                raise ValueError(f"Key {key} does not exist in state")
         return State(**{**self.state_dict, **kwargs})
 
     def __getattr__(self, name):
