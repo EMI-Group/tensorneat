@@ -1,3 +1,10 @@
+from utils import State
+
+
 class BaseCrossover:
-    def __call__(self, randkey, genome, nodes1, nodes2, conns1, conns2):
+
+    def setup(self, state=State()):
+        return state
+
+    def __call__(self, state, key, genome, nodes1, nodes2, conns1, conns2):
         raise NotImplementedError

@@ -5,12 +5,12 @@ from .base import BaseCrossover
 
 class DefaultCrossover(BaseCrossover):
 
-    def __call__(self, randkey, genome, nodes1, conns1, nodes2, conns2):
+    def __call__(self, state, key, genome, nodes1, conns1, nodes2, conns2):
         """
         use genome1 and genome2 to generate a new genome
         notice that genome1 should have higher fitness than genome2 (genome1 is winner!)
         """
-        randkey_1, randkey_2, key = jax.random.split(randkey, 3)
+        randkey_1, randkey_2, key = jax.random.split(key, 3)
 
         # crossover nodes
         keys1, keys2 = nodes1[:, 0], nodes2[:, 0]

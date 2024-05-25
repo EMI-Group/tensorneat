@@ -17,7 +17,7 @@ class DefaultMutation(BaseMutation):
         self.node_add = node_add
         self.node_delete = node_delete
 
-    def __call__(self, randkey, genome, nodes, conns, new_node_key):
+    def __call__(self, state, randkey, genome, nodes, conns, new_node_key):
         k1, k2 = jax.random.split(randkey)
 
         nodes, conns = self.mutate_structure(k1, genome, nodes, conns, new_node_key)
