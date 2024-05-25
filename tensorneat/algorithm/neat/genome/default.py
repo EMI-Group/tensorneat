@@ -30,7 +30,7 @@ class DefaultGenome(BaseGenome):
                 raise ValueError(f"Output transform function failed: {e}")
         self.output_transform = output_transform
 
-    def transform(self, nodes, conns):
+    def transform(self, state, nodes, conns):
         u_conns = unflatten_conns(nodes, conns)
         conn_enable = u_conns[0] == 1
 
@@ -40,7 +40,7 @@ class DefaultGenome(BaseGenome):
 
         return seqs, nodes, u_conns
 
-    def forward(self, inputs, transformed):
+    def forward(self, state, inputs, transformed):
         cal_seqs, nodes, conns = transformed
 
         N = nodes.shape[0]
@@ -57,8 +57,8 @@ class DefaultGenome(BaseGenome):
             i = cal_seqs[idx]
 
             def hit():
-                ins = jax.vmap(self.conn_gene.forward, in_axes=(1, 0))(conns[:, :, i], values)
-                z = self.node_gene.forward(nodes_attrs[i], ins, is_output_node=jnp.isin(i, self.output_idx))
+                ins = jax.vmap(self.conn_gene.forward, in_axes=(None, 1, 0))(conns[:, :, i], values)
+                z = self.node_gene.forward(state, nodes_attrs[i], ins, is_output_node=jnp.isin(i, self.output_idx))
                 new_values = values.at[i].set(z)
                 return new_values
 

@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 from ..gene import BaseNodeGene, BaseConnGene, DefaultNodeGene, DefaultConnGene
-from utils import fetch_first
+from utils import fetch_first, State
 
 
 class BaseGenome:
@@ -24,13 +24,16 @@ class BaseGenome:
         self.node_gene = node_gene
         self.conn_gene = conn_gene
 
-    def transform(self, nodes, conns):
+    def setup(self, state=State()):
+        return state
+
+    def transform(self, state, nodes, conns):
         raise NotImplementedError
 
-    def forward(self, inputs, transformed):
+    def forward(self, state, inputs, transformed):
         raise NotImplementedError
 
-    def add_node(self, nodes, new_key: int, attrs):
+    def add_node(self, state, nodes, new_key: int, attrs):
         """
         Add a new node to the genome.
         The new node will place at the first NaN row.
@@ -40,14 +43,14 @@ class BaseGenome:
         new_nodes = nodes.at[pos, 0].set(new_key)
         return new_nodes.at[pos, 1:].set(attrs)
 
-    def delete_node_by_pos(self, nodes, pos):
+    def delete_node_by_pos(self, state, nodes, pos):
         """
         Delete a node from the genome.
         Delete the node by its pos in nodes.
         """
         return nodes.at[pos].set(jnp.nan)
 
-    def add_conn(self, conns, i_key, o_key, enable: bool, attrs):
+    def add_conn(self, state, conns, i_key, o_key, enable: bool, attrs):
         """
         Add a new connection to the genome.
         The new connection will place at the first NaN row.
@@ -57,7 +60,7 @@ class BaseGenome:
         new_conns = conns.at[pos, 0:3].set(jnp.array([i_key, o_key, enable]))
         return new_conns.at[pos, 3:].set(attrs)
 
-    def delete_conn_by_pos(self, conns, pos):
+    def delete_conn_by_pos(self, state, conns, pos):
         """
         Delete a connection from the genome.
         Delete the connection by its idx.
