@@ -24,7 +24,7 @@ class BaseGenome:
         self.node_gene = node_gene
         self.conn_gene = conn_gene
 
-    def setup(self, key, state=State()):
+    def setup(self, state=State()):
         return state
 
     def transform(self, state, nodes, conns):

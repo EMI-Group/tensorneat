@@ -9,13 +9,13 @@ class BaseGene:
     def __init__(self):
         pass
 
-    def setup(self, key, state=State()):
+    def setup(self, state=State()):
         return state
 
-    def new_attrs(self, state, key):
+    def new_attrs(self, state):
         raise NotImplementedError
 
-    def mutate(self, state, key, gene):
+    def mutate(self, state, gene):
         raise NotImplementedError
 
     def distance(self, state, gene1, gene2):
