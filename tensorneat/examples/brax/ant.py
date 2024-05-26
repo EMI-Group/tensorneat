@@ -4,7 +4,7 @@ from algorithm.neat import *
 from problem.rl_env import BraxEnv
 from utils import Act
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     pipeline = Pipeline(
         algorithm=NEAT(
             species=DefaultSpecies(
@@ -17,17 +17,17 @@ if __name__ == '__main__':
                         activation_options=(Act.tanh,),
                         activation_default=Act.tanh,
                     ),
-                    output_transform=Act.tanh
+                    output_transform=Act.tanh,
                 ),
                 pop_size=1000,
                 species_size=10,
             ),
         ),
         problem=BraxEnv(
-            env_name='ant',
+            env_name="ant",
         ),
         generation_limit=10000,
-        fitness_target=5000
+        fitness_target=5000,
     )
 
     # initialize state

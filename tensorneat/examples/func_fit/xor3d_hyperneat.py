@@ -5,17 +5,28 @@ from utils import Act
 
 from problem.func_fit import XOR3d
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     pipeline = Pipeline(
         algorithm=HyperNEAT(
             substrate=FullSubstrate(
                 input_coors=[(-1, -1), (0.333, -1), (-0.333, -1), (1, -1)],
                 hidden_coors=[
-                    (-1, -0.5), (0.333, -0.5), (-0.333, -0.5), (1, -0.5),
-                    (-1, 0), (0.333, 0), (-0.333, 0), (1, 0),
-                    (-1, 0.5), (0.333, 0.5), (-0.333, 0.5), (1, 0.5),
+                    (-1, -0.5),
+                    (0.333, -0.5),
+                    (-0.333, -0.5),
+                    (1, -0.5),
+                    (-1, 0),
+                    (0.333, 0),
+                    (-0.333, 0),
+                    (1, 0),
+                    (-1, 0.5),
+                    (0.333, 0.5),
+                    (-0.333, 0.5),
+                    (1, 0.5),
                 ],
-                output_coors=[(0, 1), ],
+                output_coors=[
+                    (0, 1),
+                ],
             ),
             neat=NEAT(
                 species=DefaultSpecies(
@@ -42,7 +53,7 @@ if __name__ == '__main__':
         ),
         problem=XOR3d(),
         generation_limit=300,
-        fitness_target=-1e-6
+        fitness_target=-1e-6,
     )
 
     # initialize state

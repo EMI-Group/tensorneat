@@ -19,11 +19,11 @@ def main():
         node_gene=DefaultNodeGene(
             activation_options=(Act.tanh,),
             activation_default=Act.tanh,
-        )
+        ),
     )
 
     transformed = genome.transform(nodes, conns)
-    print(*transformed, sep='\n')
+    print(*transformed, sep="\n")
 
     key = jax.random.key(0)
     dummy_input = jnp.zeros((8,))
@@ -31,5 +31,5 @@ def main():
     print(output)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

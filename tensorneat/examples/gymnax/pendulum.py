@@ -4,7 +4,7 @@ from algorithm.neat import *
 from problem.rl_env import GymNaxEnv
 from utils import Act
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     pipeline = Pipeline(
         algorithm=NEAT(
             species=DefaultSpecies(
@@ -17,17 +17,18 @@ if __name__ == '__main__':
                         activation_options=(Act.tanh,),
                         activation_default=Act.tanh,
                     ),
-                    output_transform=lambda out: out * 2  # the action of pendulum is [-2, 2]
+                    output_transform=lambda out: out
+                    * 2,  # the action of pendulum is [-2, 2]
                 ),
                 pop_size=10000,
                 species_size=10,
             ),
         ),
         problem=GymNaxEnv(
-            env_name='Pendulum-v1',
+            env_name="Pendulum-v1",
         ),
         generation_limit=10000,
-        fitness_target=0
+        fitness_target=0,
     )
 
     # initialize state

@@ -5,7 +5,7 @@ from algorithm.neat import *
 
 from problem.rl_env import GymNaxEnv
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     pipeline = Pipeline(
         algorithm=NEAT(
             species=DefaultSpecies(
@@ -20,10 +20,10 @@ if __name__ == '__main__':
             ),
         ),
         problem=GymNaxEnv(
-            env_name='Reacher-misc',
+            env_name="Reacher-misc",
         ),
         generation_limit=10000,
-        fitness_target =500
+        fitness_target=500,
     )
 
     # initialize state

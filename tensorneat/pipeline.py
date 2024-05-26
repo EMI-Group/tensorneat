@@ -10,14 +10,13 @@ from utils import State
 
 
 class Pipeline:
-
     def __init__(
-            self,
-            algorithm: BaseAlgorithm,
-            problem: BaseProblem,
-            seed: int = 42,
-            fitness_target: float = 1,
-            generation_limit: int = 1000,
+        self,
+        algorithm: BaseAlgorithm,
+        problem: BaseProblem,
+        seed: int = 42,
+        fitness_target: float = 1,
+        generation_limit: int = 1000,
     ):
         assert problem.jitable, "Currently, problem must be jitable"
 
@@ -31,32 +30,35 @@ class Pipeline:
         # print(self.problem.input_shape, self.problem.output_shape)
 
         # TODO: make each algorithm's input_num and output_num
-        assert algorithm.num_inputs == self.problem.input_shape[-1], \
-            f"algorithm input shape is {algorithm.num_inputs} but problem input shape is {self.problem.input_shape}"
+        assert (
+            algorithm.num_inputs == self.problem.input_shape[-1]
+        ), f"algorithm input shape is {algorithm.num_inputs} but problem input shape is {self.problem.input_shape}"
 
         self.best_genome = None
-        self.best_fitness = float('-inf')
+        self.best_fitness = float("-inf")
         self.generation_timestamp = None
 
     def setup(self, state=State()):
+        print("initializing")
         state = state.register(randkey=jax.random.PRNGKey(self.seed))
         state = self.algorithm.setup(state)
         state = self.problem.setup(state)
+        print("initializing finished")
         return state
 
     def step(self, state):
+
         randkey_, randkey = jax.random.split(state.randkey)
         keys = jax.random.split(randkey_, self.pop_size)
 
-        state, pop = self.algorithm.ask(state)
+        pop = self.algorithm.ask(state)
 
-        state, pop_transformed = jax.vmap(self.algorithm.transform, in_axes=(None, 0), out_axes=(None, 0))(state, pop)
+        pop_transformed = jax.vmap(self.algorithm.transform, in_axes=(None, 0))(
+            state, pop
+        )
 
-        state, fitnesses = jax.vmap(self.problem.evaluate, in_axes=(0, None, None, 0), out_axes=(None, 0))(
-            keys,
-            state,
-            self.algorithm.forward,
-            pop_transformed
+        fitnesses = jax.vmap(self.problem.evaluate, in_axes=(None, 0, None, 0))(
+            state, keys, self.algorithm.forward, pop_transformed
         )
 
         state = self.algorithm.tell(state, fitnesses)
@@ -67,13 +69,15 @@ class Pipeline:
         print("start compile")
         tic = time.time()
         compiled_step = jax.jit(self.step).lower(state).compile()
-        print(f"compile finished, cost time: {time.time() - tic:.6f}s", )
+        print(
+            f"compile finished, cost time: {time.time() - tic:.6f}s",
+        )
 
         for _ in range(self.generation_limit):
 
             self.generation_timestamp = time.time()
 
-            state, previous_pop = self.algorithm.ask(state)
+            previous_pop = self.algorithm.ask(state)
 
             state, fitnesses = compiled_step(state)
 
@@ -98,7 +102,12 @@ class Pipeline:
 
     def analysis(self, state, pop, fitnesses):
 
-        max_f, min_f, mean_f, std_f = max(fitnesses), min(fitnesses), np.mean(fitnesses), np.std(fitnesses)
+        max_f, min_f, mean_f, std_f = (
+            max(fitnesses),
+            min(fitnesses),
+            np.mean(fitnesses),
+            np.std(fitnesses),
+        )
 
         new_timestamp = time.time()
 
@@ -112,10 +121,14 @@ class Pipeline:
         member_count = jax.device_get(self.algorithm.member_count(state))
         species_sizes = [int(i) for i in member_count if i > 0]
 
-        print(f"Generation: {self.algorithm.generation(state)}",
-              f"species: {len(species_sizes)}, {species_sizes}",
-              f"fitness: {max_f:.6f}, {min_f:.6f}, {mean_f:.6f}, {std_f:.6f}, Cost time: {cost_time * 1000:.6f}ms")
+        print(
+            f"Generation: {self.algorithm.generation(state)}",
+            f"species: {len(species_sizes)}, {species_sizes}",
+            f"fitness: {max_f:.6f}, {min_f:.6f}, {mean_f:.6f}, {std_f:.6f}, Cost time: {cost_time * 1000:.6f}ms",
+        )
 
     def show(self, state, best, *args, **kwargs):
-        state, transformed = self.algorithm.transform(state, best)
-        self.problem.show(state.randkey, state, self.algorithm.forward, transformed, *args, **kwargs)
+        transformed = self.algorithm.transform(state, best)
+        self.problem.show(
+            state, state.randkey, self.algorithm.forward, transformed, *args, **kwargs
+        )

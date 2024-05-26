@@ -36,7 +36,9 @@ def main():
         elite_mask = jnp.zeros((1000,), dtype=jnp.bool_)
         elite_mask = elite_mask.at[:5].set(1)
 
-        state = algorithm.create_next_generation(jax.random.key(0), state, winner, losser, elite_mask)
+        state = algorithm.create_next_generation(
+            jax.random.key(0), state, winner, losser, elite_mask
+        )
         pop_nodes, pop_conns = algorithm.species.ask(state.species)
 
         transforms = batch_transform(pop_nodes, pop_conns)
@@ -48,5 +50,5 @@ def main():
             print(_)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

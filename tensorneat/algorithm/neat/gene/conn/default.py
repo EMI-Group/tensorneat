@@ -26,7 +26,7 @@ class DefaultConnGene(BaseConnGene):
         self.weight_replace_rate = weight_replace_rate
 
     def new_custom_attrs(self, state):
-        return state, jnp.array([self.weight_init_mean])
+        return jnp.array([self.weight_init_mean])
 
     def new_random_attrs(self, state, randkey):
         weight = (

@@ -116,3 +116,41 @@ def argmin_with_mask(arr, mask):
     masked_arr = jnp.where(mask, arr, jnp.inf)
     min_idx = jnp.argmin(masked_arr)
     return min_idx
+
+
+def add_node(nodes, new_key: int, attrs):
+    """
+    Add a new node to the genome.
+    The new node will place at the first NaN row.
+    """
+    exist_keys = nodes[:, 0]
+    pos = fetch_first(jnp.isnan(exist_keys))
+    new_nodes = nodes.at[pos, 0].set(new_key)
+    return new_nodes.at[pos, 1:].set(attrs)
+
+
+def delete_node_by_pos(nodes, pos):
+    """
+    Delete a node from the genome.
+    Delete the node by its pos in nodes.
+    """
+    return nodes.at[pos].set(jnp.nan)
+
+
+def add_conn(conns, i_key, o_key, enable: bool, attrs):
+    """
+    Add a new connection to the genome.
+    The new connection will place at the first NaN row.
+    """
+    con_keys = conns[:, 0]
+    pos = fetch_first(jnp.isnan(con_keys))
+    new_conns = conns.at[pos, 0:3].set(jnp.array([i_key, o_key, enable]))
+    return new_conns.at[pos, 3:].set(attrs)
+
+
+def delete_conn_by_pos(conns, pos):
+    """
+    Delete a connection from the genome.
+    Delete the connection by its idx.
+    """
+    return conns.at[pos].set(jnp.nan)

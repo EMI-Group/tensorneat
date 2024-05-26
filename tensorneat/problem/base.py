@@ -10,7 +10,7 @@ class BaseProblem:
         """initialize the state of the problem"""
         return state
 
-    def evaluate(self, randkey, state: State, act_func: Callable, params):
+    def evaluate(self, state: State, randkey, act_func: Callable, params):
         """evaluate one individual"""
         raise NotImplementedError
 
@@ -32,7 +32,7 @@ class BaseProblem:
         """
         raise NotImplementedError
 
-    def show(self, randkey, state: State, act_func: Callable, params, *args, **kwargs):
+    def show(self, state: State, randkey, act_func: Callable, params, *args, **kwargs):
         """
         show how a genome perform in this problem
         """

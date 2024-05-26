@@ -5,6 +5,7 @@ from utils import unflatten_conns, topological_sort, I_INF
 
 from . import BaseGenome
 from ..gene import BaseNodeGene, BaseConnGene, DefaultNodeGene, DefaultConnGene
+from ..ga import BaseMutation, BaseCrossover, DefaultMutation, DefaultCrossover
 
 
 class DefaultGenome(BaseGenome):
@@ -20,10 +21,19 @@ class DefaultGenome(BaseGenome):
         max_conns=4,
         node_gene: BaseNodeGene = DefaultNodeGene(),
         conn_gene: BaseConnGene = DefaultConnGene(),
+        mutation: BaseMutation = DefaultMutation(),
+        crossover: BaseCrossover = DefaultCrossover(),
         output_transform: Callable = None,
     ):
         super().__init__(
-            num_inputs, num_outputs, max_nodes, max_conns, node_gene, conn_gene
+            num_inputs,
+            num_outputs,
+            max_nodes,
+            max_conns,
+            node_gene,
+            conn_gene,
+            mutation,
+            crossover,
         )
 
         if output_transform is not None:

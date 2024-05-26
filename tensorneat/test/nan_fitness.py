@@ -19,7 +19,7 @@ def main():
         node_gene=DefaultNodeGene(
             activation_options=(Act.tanh,),
             activation_default=Act.tanh,
-        )
+        ),
     )
 
     transformed = genome.transform(nodes, conns)
@@ -35,7 +35,7 @@ def main():
     print(output)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     a = jnp.array([1, 3, 5, 6, 8])
     b = jnp.array([1, 2, 3])
     print(jnp.isin(a, b))

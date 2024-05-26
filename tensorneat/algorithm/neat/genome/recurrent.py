@@ -5,6 +5,7 @@ from utils import unflatten_conns
 
 from . import BaseGenome
 from ..gene import BaseNodeGene, BaseConnGene, DefaultNodeGene, DefaultConnGene
+from ..ga import BaseMutation, BaseCrossover, DefaultMutation, DefaultCrossover
 
 
 class RecurrentGenome(BaseGenome):
@@ -20,11 +21,20 @@ class RecurrentGenome(BaseGenome):
         max_conns: int,
         node_gene: BaseNodeGene = DefaultNodeGene(),
         conn_gene: BaseConnGene = DefaultConnGene(),
+        mutation: BaseMutation = DefaultMutation(),
+        crossover: BaseCrossover = DefaultCrossover(),
         activate_time: int = 10,
         output_transform: Callable = None,
     ):
         super().__init__(
-            num_inputs, num_outputs, max_nodes, max_conns, node_gene, conn_gene
+            num_inputs,
+            num_outputs,
+            max_nodes,
+            max_conns,
+            node_gene,
+            conn_gene,
+            mutation,
+            crossover,
         )
         self.activate_time = activate_time
 
