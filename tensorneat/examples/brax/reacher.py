@@ -17,6 +17,7 @@ if __name__ == "__main__":
                         activation_options=(Act.tanh,),
                         activation_default=Act.tanh,
                     ),
+                    output_transform=Act.tanh,
                 ),
                 pop_size=100,
                 species_size=10,

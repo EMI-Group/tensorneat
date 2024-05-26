@@ -9,11 +9,9 @@ if __name__ == "__main__":
     pipeline = Pipeline(
         algorithm=HyperNEAT(
             substrate=FullSubstrate(
-                input_coors=[(-1, -1), (0.333, -1), (-0.333, -1), (1, -1)],
+                input_coors=[(-1, -1), (0.333, -1), (-0.333, -1), (1, -1)],  # 3(XOR3d inputs) + 1(bias)
                 hidden_coors=[
-                    (-1, -0.5),
-                    (0.333, -0.5),
-                    (-0.333, -0.5),
+                    (-1, -0.5), (0.333, -0.5), (-0.333, -0.5),
                     (1, -0.5),
                     (-1, 0),
                     (0.333, 0),
@@ -25,14 +23,14 @@ if __name__ == "__main__":
                     (1, 0.5),
                 ],
                 output_coors=[
-                    (0, 1),
+                    (0, 1),  # one output
                 ],
             ),
             neat=NEAT(
                 species=DefaultSpecies(
                     genome=DefaultGenome(
-                        num_inputs=4,  # [-1, -1, -1, 0]
-                        num_outputs=1,
+                        num_inputs=4,  # [*coor1, *coor2]
+                        num_outputs=1,  # the weight of connection between two coor1 and coor2
                         max_nodes=50,
                         max_conns=100,
                         node_gene=DefaultNodeGene(

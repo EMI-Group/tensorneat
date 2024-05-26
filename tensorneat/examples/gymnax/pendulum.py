@@ -17,7 +17,7 @@ if __name__ == "__main__":
                         activation_options=(Act.tanh,),
                         activation_default=Act.tanh,
                     ),
-                    output_transform=lambda out: out
+                    output_transform=lambda out: Act.tanh(out)
                     * 2,  # the action of pendulum is [-2, 2]
                 ),
                 pop_size=10000,
@@ -28,7 +28,7 @@ if __name__ == "__main__":
             env_name="Pendulum-v1",
         ),
         generation_limit=10000,
-        fitness_target=0,
+        fitness_target=-10,
     )
 
     # initialize state

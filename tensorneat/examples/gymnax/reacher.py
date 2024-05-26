@@ -23,7 +23,7 @@ if __name__ == "__main__":
             env_name="Reacher-misc",
         ),
         generation_limit=10000,
-        fitness_target=500,
+        fitness_target=90,
     )
 
     # initialize state

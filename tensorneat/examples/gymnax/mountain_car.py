@@ -26,7 +26,7 @@ if __name__ == "__main__":
             env_name="MountainCar-v0",
         ),
         generation_limit=10000,
-        fitness_target=0,
+        fitness_target=-86,
     )
 
     # initialize state

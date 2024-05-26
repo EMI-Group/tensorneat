@@ -17,6 +17,7 @@ if __name__ == "__main__":
                         activation_options=(Act.tanh,),
                         activation_default=Act.tanh,
                     ),
+                    output_transform=Act.tanh
                 ),
                 pop_size=10000,
                 species_size=10,
@@ -26,7 +27,7 @@ if __name__ == "__main__":
             env_name="MountainCarContinuous-v0",
         ),
         generation_limit=10000,
-        fitness_target=500,
+        fitness_target=99,
     )
 
     # initialize state

@@ -1,4 +1,10 @@
+from utils import State
+
+
 class BaseSubstrate:
+    def setup(self, state=State()):
+        return state
+
     def make_nodes(self, query_res):
         raise NotImplementedError
 

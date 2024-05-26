@@ -5,8 +5,8 @@ from .rl_jit import RLEnv
 
 
 class BraxEnv(RLEnv):
-    def __init__(self, env_name: str = "ant", backend: str = "generalized"):
-        super().__init__()
+    def __init__(self, max_step=1000, env_name: str = "ant", backend: str = "generalized"):
+        super().__init__(max_step)
         self.env = envs.create(env_name=env_name, backend=backend)
 
     def env_step(self, randkey, env_state, action):

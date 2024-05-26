@@ -11,8 +11,8 @@ if __name__ == "__main__":
                 genome=DefaultGenome(
                     num_inputs=27,
                     num_outputs=8,
-                    max_nodes=50,
-                    max_conns=100,
+                    max_nodes=100,
+                    max_conns=200,
                     node_gene=DefaultNodeGene(
                         activation_options=(Act.tanh,),
                         activation_default=Act.tanh,
@@ -21,6 +21,8 @@ if __name__ == "__main__":
                 ),
                 pop_size=1000,
                 species_size=10,
+                compatibility_threshold=3.5,
+                survival_threshold=0.01,
             ),
         ),
         problem=BraxEnv(
