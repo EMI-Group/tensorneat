@@ -6,9 +6,9 @@ from utils import State
 class BaseProblem:
     jitable = None
 
-    def setup(self, randkey, state: State = State()):
+    def setup(self, state: State = State()):
         """initialize the state of the problem"""
-        pass
+        return state
 
     def evaluate(self, randkey, state: State, act_func: Callable, params):
         """evaluate one individual"""

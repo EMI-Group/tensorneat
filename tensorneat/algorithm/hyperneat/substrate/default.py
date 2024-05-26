@@ -3,7 +3,6 @@ from . import BaseSubstrate
 
 
 class DefaultSubstrate(BaseSubstrate):
-
     def __init__(self, num_inputs, num_outputs, coors, nodes, conns):
         self.inputs = num_inputs
         self.outputs = num_outputs

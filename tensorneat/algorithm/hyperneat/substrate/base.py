@@ -1,5 +1,4 @@
 class BaseSubstrate:
-
     def make_nodes(self, query_res):
         raise NotImplementedError
 

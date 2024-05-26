@@ -2,7 +2,6 @@ from utils import State
 
 
 class BaseCrossover:
-
     def setup(self, state=State()):
         return state
 

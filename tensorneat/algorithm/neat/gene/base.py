@@ -12,10 +12,15 @@ class BaseGene:
     def setup(self, state=State()):
         return state
 
-    def new_attrs(self, state):
+    def new_custom_attrs(self, state):
+        # the attrs which make the least influence on the network, used in add node or add conn in mutation
         raise NotImplementedError
 
-    def mutate(self, state, gene):
+    def new_random_attrs(self, state, randkey):
+        # random attributes of the gene. used in initialization.
+        raise NotImplementedError
+
+    def mutate(self, state, randkey, gene):
         raise NotImplementedError
 
     def distance(self, state, gene1, gene2):

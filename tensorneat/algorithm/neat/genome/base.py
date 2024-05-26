@@ -7,13 +7,13 @@ class BaseGenome:
     network_type = None
 
     def __init__(
-            self,
-            num_inputs: int,
-            num_outputs: int,
-            max_nodes: int,
-            max_conns: int,
-            node_gene: BaseNodeGene = DefaultNodeGene(),
-            conn_gene: BaseConnGene = DefaultConnGene(),
+        self,
+        num_inputs: int,
+        num_outputs: int,
+        max_nodes: int,
+        max_conns: int,
+        node_gene: BaseNodeGene = DefaultNodeGene(),
+        conn_gene: BaseConnGene = DefaultConnGene(),
     ):
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
@@ -25,6 +25,8 @@ class BaseGenome:
         self.conn_gene = conn_gene
 
     def setup(self, state=State()):
+        state = self.node_gene.setup(state)
+        state = self.conn_gene.setup(state)
         return state
 
     def transform(self, state, nodes, conns):

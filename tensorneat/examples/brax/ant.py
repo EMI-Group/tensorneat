@@ -16,7 +16,8 @@ if __name__ == '__main__':
                     node_gene=DefaultNodeGene(
                         activation_options=(Act.tanh,),
                         activation_default=Act.tanh,
-                    )
+                    ),
+                    output_transform=Act.tanh
                 ),
                 pop_size=1000,
                 species_size=10,

@@ -3,7 +3,6 @@ import jax.numpy as jnp
 
 
 class Act:
-
     @staticmethod
     def sigmoid(z):
         z = jnp.clip(5 * z, -10, 10)
@@ -36,11 +35,7 @@ class Act:
 
     @staticmethod
     def inv(z):
-        z = jnp.where(
-            z > 0,
-            jnp.maximum(z, 1e-7),
-            jnp.minimum(z, -1e-7)
-        )
+        z = jnp.where(z > 0, jnp.maximum(z, 1e-7), jnp.minimum(z, -1e-7))
         return 1 / z
 
     @staticmethod

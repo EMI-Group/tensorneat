@@ -3,20 +3,16 @@ from .default import DefaultSubstrate
 
 
 class FullSubstrate(DefaultSubstrate):
-
-    def __init__(self,
-                 input_coors=((-1, -1), (0, -1), (1, -1)),
-                 hidden_coors=((-1, 0), (0, 0), (1, 0)),
-                 output_coors=((0, 1),),
-                 ):
-        query_coors, nodes, conns = analysis_substrate(input_coors, output_coors, hidden_coors)
-        super().__init__(
-            len(input_coors),
-            len(output_coors),
-            query_coors,
-            nodes,
-            conns
+    def __init__(
+        self,
+        input_coors=((-1, -1), (0, -1), (1, -1)),
+        hidden_coors=((-1, 0), (0, 0), (1, 0)),
+        output_coors=((0, 1),),
+    ):
+        query_coors, nodes, conns = analysis_substrate(
+            input_coors, output_coors, hidden_coors
         )
+        super().__init__(len(input_coors), len(output_coors), query_coors, nodes, conns)
 
 
 def analysis_substrate(input_coors, output_coors, hidden_coors):
@@ -38,22 +34,30 @@ def analysis_substrate(input_coors, output_coors, hidden_coors):
     correspond_keys = np.zeros((total_conns, 2))
 
     # connect input to hidden
-    aux_coors, aux_keys = cartesian_product(input_idx, hidden_idx, input_coors, hidden_coors)
-    query_coors[0: si * sh, :] = aux_coors
-    correspond_keys[0: si * sh, :] = aux_keys
+    aux_coors, aux_keys = cartesian_product(
+        input_idx, hidden_idx, input_coors, hidden_coors
+    )
+    query_coors[0 : si * sh, :] = aux_coors
+    correspond_keys[0 : si * sh, :] = aux_keys
 
     # connect hidden to hidden
-    aux_coors, aux_keys = cartesian_product(hidden_idx, hidden_idx, hidden_coors, hidden_coors)
-    query_coors[si * sh: si * sh + sh * sh, :] = aux_coors
-    correspond_keys[si * sh: si * sh + sh * sh, :] = aux_keys
+    aux_coors, aux_keys = cartesian_product(
+        hidden_idx, hidden_idx, hidden_coors, hidden_coors
+    )
+    query_coors[si * sh : si * sh + sh * sh, :] = aux_coors
+    correspond_keys[si * sh : si * sh + sh * sh, :] = aux_keys
 
     # connect hidden to output
-    aux_coors, aux_keys = cartesian_product(hidden_idx, output_idx, hidden_coors, output_coors)
-    query_coors[si * sh + sh * sh:, :] = aux_coors
-    correspond_keys[si * sh + sh * sh:, :] = aux_keys
+    aux_coors, aux_keys = cartesian_product(
+        hidden_idx, output_idx, hidden_coors, output_coors
+    )
+    query_coors[si * sh + sh * sh :, :] = aux_coors
+    correspond_keys[si * sh + sh * sh :, :] = aux_keys
 
     nodes = np.concatenate((input_idx, output_idx, hidden_idx))[..., np.newaxis]
-    conns = np.zeros((correspond_keys.shape[0], 4), dtype=np.float32)  # input_idx, output_idx, enabled, weight
+    conns = np.zeros(
+        (correspond_keys.shape[0], 4), dtype=np.float32
+    )  # input_idx, output_idx, enabled, weight
     conns[:, 0:2] = correspond_keys
     conns[:, 2] = 1  # enabled is True
 

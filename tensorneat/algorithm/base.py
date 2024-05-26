@@ -2,8 +2,7 @@ from utils import State
 
 
 class BaseAlgorithm:
-
-    def setup(self, randkey):
+    def setup(self, state=State()):
         """initialize the state of the algorithm"""
 
         raise NotImplementedError
@@ -16,11 +15,11 @@ class BaseAlgorithm:
         """update the state of the algorithm"""
         raise NotImplementedError
 
-    def transform(self, individual):
+    def transform(self, state, individual):
         """transform the genome into a neural network"""
         raise NotImplementedError
 
-    def forward(self, inputs, transformed):
+    def forward(self, state, inputs, transformed):
         raise NotImplementedError
 
     @property
@@ -42,4 +41,3 @@ class BaseAlgorithm:
     def generation(self, state: State):
         # to analysis the algorithm
         raise NotImplementedError
-

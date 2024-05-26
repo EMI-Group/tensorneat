@@ -16,12 +16,12 @@ class FuncFit(BaseProblem):
         assert error_method in {'mse', 'rmse', 'mae', 'mape'}
         self.error_method = error_method
 
-    def setup(self, randkey, state: State = State()):
+    def setup(self, state: State = State()):
         return state
 
     def evaluate(self, randkey, state, act_func, params):
 
-        predict = jax.vmap(act_func, in_axes=(0, None))(self.inputs, params)
+        state, predict = jax.vmap(act_func, in_axes=(None, 0, None), out_axes=(None, 0))(state, self.inputs, params)
 
         if self.error_method == 'mse':
             loss = jnp.mean((predict - self.targets) ** 2)
@@ -38,12 +38,14 @@ class FuncFit(BaseProblem):
         else:
             raise NotImplementedError
 
-        return -loss
+        return state, -loss
 
     def show(self, randkey, state, act_func, params, *args, **kwargs):
-        predict = jax.vmap(act_func, in_axes=(0, None))(self.inputs, params)
+        state, predict = jax.vmap(act_func, in_axes=(None, 0, None), out_axes=(None, 0))(state, self.inputs, params)
         inputs, target, predict = jax.device_get([self.inputs, self.targets, predict])
-        loss = -self.evaluate(randkey, state, act_func, params)
+        state, loss = self.evaluate(randkey, state, act_func, params)
+        loss = -loss
+
         msg = ""
         for i in range(inputs.shape[0]):
             msg += f"input: {inputs[i]}, target: {target[i]}, predict: {predict[i]}\n"

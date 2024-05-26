@@ -3,9 +3,8 @@ from jax.tree_util import register_pytree_node_class
 
 @register_pytree_node_class
 class State:
-
     def __init__(self, **kwargs):
-        self.__dict__['state_dict'] = kwargs
+        self.__dict__["state_dict"] = kwargs
 
     def registered_keys(self):
         return self.state_dict.keys()

@@ -28,70 +28,53 @@ class Pipeline:
         self.generation_limit = generation_limit
         self.pop_size = self.algorithm.pop_size
 
-        print(self.problem.input_shape, self.problem.output_shape)
+        # print(self.problem.input_shape, self.problem.output_shape)
 
         # TODO: make each algorithm's input_num and output_num
         assert algorithm.num_inputs == self.problem.input_shape[-1], \
             f"algorithm input shape is {algorithm.num_inputs} but problem input shape is {self.problem.input_shape}"
 
-        # self.act_func = self.algorithm.act
-
-        # for _ in range(len(self.problem.input_shape) - 1):
-        #     self.act_func = jax.vmap(self.act_func, in_axes=(None, 0, None))
-
         self.best_genome = None
         self.best_fitness = float('-inf')
         self.generation_timestamp = None
 
-    def setup(self):
-        key = jax.random.PRNGKey(self.seed)
-        key, algorithm_key, evaluate_key = jax.random.split(key, 3)
-
-        # TODO: Problem should has setup function to maintain state
-        return State(
-            randkey=key,
-            alg=self.algorithm.setup(algorithm_key),
-            pro=self.problem.setup(evaluate_key),
-        )
+    def setup(self, state=State()):
+        state = state.register(randkey=jax.random.PRNGKey(self.seed))
+        state = self.algorithm.setup(state)
+        state = self.problem.setup(state)
+        return state
 
     def step(self, state):
-        key, sub_key = jax.random.split(state.randkey)
-        keys = jax.random.split(key, self.pop_size)
+        randkey_, randkey = jax.random.split(state.randkey)
+        keys = jax.random.split(randkey_, self.pop_size)
 
-        pop = self.algorithm.ask(state.alg)
+        state, pop = self.algorithm.ask(state)
 
-        pop_transformed = jax.vmap(self.algorithm.transform)(pop)
+        state, pop_transformed = jax.vmap(self.algorithm.transform, in_axes=(None, 0), out_axes=(None, 0))(state, pop)
 
-        fitnesses = jax.vmap(self.problem.evaluate, in_axes=(0, None, None, 0))(
-                        keys,
-                        state.pro,
-                        self.algorithm.forward,
-                        pop_transformed
-                    )
+        state, fitnesses = jax.vmap(self.problem.evaluate, in_axes=(0, None, None, 0), out_axes=(None, 0))(
+            keys,
+            state,
+            self.algorithm.forward,
+            pop_transformed
+        )
 
-        # fitnesses = jnp.where(jnp.isnan(fitnesses), -1e6, fitnesses)
+        state = self.algorithm.tell(state, fitnesses)
 
-        alg_state = self.algorithm.tell(state.alg, fitnesses)
+        return state.update(randkey=randkey), fitnesses
 
-        return state.update(
-            randkey=sub_key,
-            alg=alg_state,
-        ), fitnesses
-
-    def auto_run(self, ini_state):
-        state = ini_state
+    def auto_run(self, state):
         print("start compile")
         tic = time.time()
-        compiled_step = jax.jit(self.step).lower(ini_state).compile()
-
+        compiled_step = jax.jit(self.step).lower(state).compile()
         print(f"compile finished, cost time: {time.time() - tic:.6f}s", )
+
         for _ in range(self.generation_limit):
 
             self.generation_timestamp = time.time()
 
-            previous_pop = self.algorithm.ask(state.alg)
+            state, previous_pop = self.algorithm.ask(state)
 
-                
             state, fitnesses = compiled_step(state)
 
             fitnesses = jax.device_get(fitnesses)
@@ -101,13 +84,15 @@ class Pipeline:
             if max(fitnesses) >= self.fitness_target:
                 print("Fitness limit reached!")
                 return state, self.best_genome
-            node= previous_pop[0][0][:,0]
-            node_count = jnp.sum(~jnp.isnan(node))
-            conn= previous_pop[1][0][:,0]
-            conn_count = jnp.sum(~jnp.isnan(conn))
-            if(w%5==0):
-                print("node_count",node_count)
-                print("conn_count",conn_count)
+
+            # node = previous_pop[0][0][:, 0]
+            # node_count = jnp.sum(~jnp.isnan(node))
+            # conn = previous_pop[1][0][:, 0]
+            # conn_count = jnp.sum(~jnp.isnan(conn))
+            # if (w % 5 == 0):
+            #     print("node_count", node_count)
+            #     print("conn_count", conn_count)
+
         print("Generation limit reached!")
         return state, self.best_genome
 
@@ -124,13 +109,13 @@ class Pipeline:
             self.best_fitness = fitnesses[max_idx]
             self.best_genome = pop[0][max_idx], pop[1][max_idx]
 
-        member_count = jax.device_get(self.algorithm.member_count(state.alg))
+        member_count = jax.device_get(self.algorithm.member_count(state))
         species_sizes = [int(i) for i in member_count if i > 0]
 
-        print(f"Generation: {self.algorithm.generation(state.alg)}",
+        print(f"Generation: {self.algorithm.generation(state)}",
               f"species: {len(species_sizes)}, {species_sizes}",
               f"fitness: {max_f:.6f}, {min_f:.6f}, {mean_f:.6f}, {std_f:.6f}, Cost time: {cost_time * 1000:.6f}ms")
 
     def show(self, state, best, *args, **kwargs):
-        transformed = self.algorithm.transform(best)
-        self.problem.show(state.randkey, state.pro, self.algorithm.forward, transformed, *args, **kwargs)
+        state, transformed = self.algorithm.transform(state, best)
+        self.problem.show(state.randkey, state, self.algorithm.forward, transformed, *args, **kwargs)

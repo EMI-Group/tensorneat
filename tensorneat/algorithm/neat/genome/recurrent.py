@@ -10,19 +10,22 @@ from ..gene import BaseNodeGene, BaseConnGene, DefaultNodeGene, DefaultConnGene
 class RecurrentGenome(BaseGenome):
     """Default genome class, with the same behavior as the NEAT-Python"""
 
-    network_type = 'recurrent'
+    network_type = "recurrent"
 
-    def __init__(self,
-                 num_inputs: int,
-                 num_outputs: int,
-                 max_nodes: int,
-                 max_conns: int,
-                 node_gene: BaseNodeGene = DefaultNodeGene(),
-                 conn_gene: BaseConnGene = DefaultConnGene(),
-                 activate_time: int = 10,
-                 output_transform: Callable = None
-                 ):
-        super().__init__(num_inputs, num_outputs, max_nodes, max_conns, node_gene, conn_gene)
+    def __init__(
+        self,
+        num_inputs: int,
+        num_outputs: int,
+        max_nodes: int,
+        max_conns: int,
+        node_gene: BaseNodeGene = DefaultNodeGene(),
+        conn_gene: BaseConnGene = DefaultConnGene(),
+        activate_time: int = 10,
+        output_transform: Callable = None,
+    ):
+        super().__init__(
+            num_inputs, num_outputs, max_nodes, max_conns, node_gene, conn_gene
+        )
         self.activate_time = activate_time
 
         if output_transform is not None:
@@ -39,45 +42,37 @@ class RecurrentGenome(BaseGenome):
         conn_enable = u_conns[0] == 1
         u_conns = jnp.where(conn_enable, u_conns[1:, :], jnp.nan)
 
-        return state, nodes, u_conns
+        return nodes, u_conns
 
     def forward(self, state, inputs, transformed):
         nodes, conns = transformed
 
         N = nodes.shape[0]
         vals = jnp.full((N,), jnp.nan)
-        nodes_attrs = nodes[:, 1:]
+        nodes_attrs = nodes[:, 1:]  # remove index
 
-        def body_func(_, carry):
-            state_, values = carry
+        def body_func(_, values):
 
             # set input values
             values = values.at[self.input_idx].set(inputs)
 
             # calculate connections
-            state_, node_ins = jax.vmap(
-                jax.vmap(
-                    self.conn_gene.forward,
-                    in_axes=(None, 1, None),
-                    out_axes=(None, 0)
-                ),
+            node_ins = jax.vmap(
+                jax.vmap(self.conn_gene.forward, in_axes=(None, 1, None)),
                 in_axes=(None, 1, 0),
-                out_axes=(None, 0)
-            )(state_, conns, values)
+            )(state, conns, values)
 
             # calculate nodes
-            is_output_nodes = jnp.isin(
-                jnp.arange(N),
-                self.output_idx
+            is_output_nodes = jnp.isin(jnp.arange(N), self.output_idx)
+            values = jax.vmap(self.node_gene.forward, in_axes=(None, 0, 0, 0))(
+                state, nodes_attrs, node_ins.T, is_output_nodes
             )
-            state_, values = jax.vmap(
-                self.node_gene.forward,
-                in_axes=(None, 0, 0, 0),
-                out_axes=(None, 0)
-            )(state_, nodes_attrs, node_ins.T, is_output_nodes)
 
-            return state_, values
+            return values
 
-        state, vals = jax.lax.fori_loop(0, self.activate_time, body_func, (state, vals))
+        vals = jax.lax.fori_loop(0, self.activate_time, body_func, vals)
 
-        return state, vals[self.output_idx]
+        if self.output_transform is None:
+            return vals[self.output_idx]
+        else:
+            return self.output_transform(vals[self.output_idx])
