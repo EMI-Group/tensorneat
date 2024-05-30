@@ -39,6 +39,9 @@ class BaseGenome:
     def transform(self, state, nodes, conns):
         raise NotImplementedError
 
+    def restore(self, state, transformed):
+        raise NotImplementedError
+
     def forward(self, state, inputs, transformed):
         raise NotImplementedError
 
@@ -121,7 +124,7 @@ class BaseGenome:
 
         return nodes, conns
 
-    def update_by_batch(self, state, batch_input, nodes, conns):
+    def update_by_batch(self, state, batch_input, transformed):
         """
         Update the genome by a batch of data.
         """

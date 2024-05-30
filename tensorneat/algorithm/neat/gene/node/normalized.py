@@ -29,12 +29,12 @@ class NormalizedNode(BaseNodeGene):
         aggregation_default: callable = Agg.sum,
         aggregation_options: Tuple = (Agg.sum,),
         aggregation_replace_rate: float = 0.1,
-        alpha_init_mean: float = 0.0,
+        alpha_init_mean: float = 1.0,
         alpha_init_std: float = 1.0,
         alpha_mutate_power: float = 0.5,
         alpha_mutate_rate: float = 0.7,
         alpha_replace_rate: float = 0.1,
-        beta_init_mean: float = 1.0,
+        beta_init_mean: float = 0.0,
         beta_init_std: float = 1.0,
         beta_mutate_power: float = 0.5,
         beta_mutate_rate: float = 0.7,
@@ -92,7 +92,7 @@ class NormalizedNode(BaseNodeGene):
         alpha = jax.random.normal(k5, ()) * self.alpha_init_std + self.alpha_init_mean
         beta = jax.random.normal(k6, ()) * self.beta_init_std + self.beta_init_mean
 
-        return jnp.array([bias, act, agg, 0, 1, alpha, beta])
+        return jnp.array([bias, act, agg, mean, std, alpha, beta])
 
     def mutate(self, state, randkey, node):
         k1, k2, k3, k4, k5, k6 = jax.random.split(state.randkey, num=6)
@@ -178,13 +178,13 @@ class NormalizedNode(BaseNodeGene):
         batch_z = bias + batch_z
 
         # calculate mean
-        valid_values_count = jnp.sum(~jnp.isnan(batch_inputs))
-        valid_values_sum = jnp.sum(jnp.where(jnp.isnan(batch_inputs), 0, batch_inputs))
+        valid_values_count = jnp.sum(~jnp.isnan(batch_z))
+        valid_values_sum = jnp.sum(jnp.where(jnp.isnan(batch_z), 0, batch_z))
         mean = valid_values_sum / valid_values_count
 
         # calculate std
         std = jnp.sqrt(
-            jnp.sum(jnp.where(jnp.isnan(batch_inputs), 0, (batch_inputs - mean) ** 2))
+            jnp.sum(jnp.where(jnp.isnan(batch_z), 0, (batch_z - mean) ** 2))
             / valid_values_count
         )
 

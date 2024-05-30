@@ -1,7 +1,7 @@
 from typing import Callable
 
 import jax, jax.numpy as jnp
-from utils import unflatten_conns
+from utils import unflatten_conns, flatten_conns
 
 from . import BaseGenome
 from ..gene import BaseNodeGene, BaseConnGene, DefaultNodeGene, DefaultConnGene
@@ -54,11 +54,15 @@ class RecurrentGenome(BaseGenome):
 
         return nodes, u_conns
 
+    def restore(self, state, transformed):
+        nodes, u_conns = transformed
+        conns = flatten_conns(nodes, u_conns, C=self.max_conns)
+        return nodes, conns
+
     def forward(self, state, inputs, transformed):
         nodes, conns = transformed
 
-        N = nodes.shape[0]
-        vals = jnp.full((N,), jnp.nan)
+        vals = jnp.full((self.max_nodes,), jnp.nan)
         nodes_attrs = nodes[:, 1:]  # remove index
 
         def body_func(_, values):
@@ -73,7 +77,7 @@ class RecurrentGenome(BaseGenome):
             )(state, conns, values)
 
             # calculate nodes
-            is_output_nodes = jnp.isin(jnp.arange(N), self.output_idx)
+            is_output_nodes = jnp.isin(jnp.arange(self.max_nodes), self.output_idx)
             values = jax.vmap(self.node_gene.forward, in_axes=(None, 0, 0, 0))(
                 state, nodes_attrs, node_ins.T, is_output_nodes
             )
