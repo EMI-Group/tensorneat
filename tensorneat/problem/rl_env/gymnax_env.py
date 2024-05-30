@@ -4,8 +4,8 @@ from .rl_jit import RLEnv
 
 
 class GymNaxEnv(RLEnv):
-    def __init__(self, env_name, max_step=1000):
-        super().__init__(max_step)
+    def __init__(self, env_name, max_step=1000, record_episode=False):
+        super().__init__(max_step, record_episode)
         assert env_name in gymnax.registered_envs, f"Env {env_name} not registered"
         self.env, self.env_params = gymnax.make(env_name)
 

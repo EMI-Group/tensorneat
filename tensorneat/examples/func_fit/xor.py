@@ -20,14 +20,14 @@ if __name__ == "__main__":
                     output_transform=Act.sigmoid,  # the activation function for output node
                     mutation=DefaultMutation(
                         node_add=0.05,
-                        conn_add=0.2,
+                        conn_add=0.05,
                         node_delete=0,
                         conn_delete=0,
                     ),
                 ),
-                pop_size=10000,
-                species_size=10,
-                compatibility_threshold=3.5,
+                pop_size=100,
+                species_size=20,
+                compatibility_threshold=2,
                 survival_threshold=0.01,  # magic
             ),
         ),

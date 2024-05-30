@@ -8,11 +8,12 @@ from .. import BaseProblem
 class FuncFit(BaseProblem):
     jitable = True
 
-    def __init__(self, error_method: str = "mse"):
+    def __init__(self, error_method: str = "mse", return_data: bool = False):
         super().__init__()
 
         assert error_method in {"mse", "rmse", "mae", "mape"}
         self.error_method = error_method
+        self.return_data = return_data
 
     def setup(self, state: State = State()):
         return state
@@ -38,7 +39,10 @@ class FuncFit(BaseProblem):
         else:
             raise NotImplementedError
 
-        return -loss
+        if self.return_data:
+            return -loss, self.inputs
+        else:
+            return -loss
 
     def show(self, state, randkey, act_func, params, *args, **kwargs):
         predict = jax.vmap(act_func, in_axes=(None, 0, None))(
