@@ -23,6 +23,9 @@ class BaseGene:
     def mutate(self, state, randkey, gene):
         raise NotImplementedError
 
+    def crossover(self, state, randkey, gene1, gene2):
+        raise NotImplementedError
+
     def distance(self, state, gene1, gene2):
         raise NotImplementedError
 
