@@ -93,3 +93,6 @@ class DefaultGenome(BaseGenome):
             return vals[self.output_idx]
         else:
             return self.output_transform(vals[self.output_idx])
+
+    def update_by_batch(self, state, batch_input, nodes, conns):
+        pass

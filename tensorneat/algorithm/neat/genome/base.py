@@ -120,3 +120,9 @@ class BaseGenome:
         conns = conns.at[: len(conn_keys), 3:].set(random_conn_attrs)
 
         return nodes, conns
+
+    def update_by_batch(self, state, batch_input, nodes, conns):
+        """
+        Update the genome by a batch of data.
+        """
+        raise NotImplementedError

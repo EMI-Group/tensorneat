@@ -76,11 +76,11 @@ class NodeGeneWithoutResponse(BaseNodeGene):
         )
 
         act = mutate_int(
-            k3, node[3], self.activation_indices, self.activation_replace_rate
+            k3, node[2], self.activation_indices, self.activation_replace_rate
         )
 
         agg = mutate_int(
-            k4, node[4], self.aggregation_indices, self.aggregation_replace_rate
+            k4, node[3], self.aggregation_indices, self.aggregation_replace_rate
         )
 
         return jnp.array([index, bias, act, agg])
@@ -88,8 +88,8 @@ class NodeGeneWithoutResponse(BaseNodeGene):
     def distance(self, state, node1, node2):
         return (
             jnp.abs(node1[1] - node2[1])  # bias
-            + (node1[3] != node2[3])  # activation
-            + (node1[4] != node2[4])  # aggregation
+            + (node1[2] != node2[2])  # activation
+            + (node1[3] != node2[3])  # aggregation
         )
 
     def forward(self, state, attrs, inputs, is_output_node=False):
