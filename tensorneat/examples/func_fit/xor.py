@@ -11,8 +11,8 @@ if __name__ == "__main__":
                 genome=DefaultGenome(
                     num_inputs=3,
                     num_outputs=1,
-                    max_nodes=5,
-                    max_conns=10,
+                    max_nodes=50,
+                    max_conns=100,
                     node_gene=DefaultNodeGene(
                         activation_default=Act.tanh,
                         activation_options=(Act.tanh,),
@@ -21,8 +21,8 @@ if __name__ == "__main__":
                     mutation=DefaultMutation(
                         node_add=0.1,
                         conn_add=0.1,
-                        node_delete=0.1,
-                        conn_delete=0.1,
+                        node_delete=0.05,
+                        conn_delete=0.05,
                     ),
                 ),
                 pop_size=1000,

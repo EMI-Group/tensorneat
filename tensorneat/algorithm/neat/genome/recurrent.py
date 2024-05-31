@@ -47,19 +47,11 @@ class RecurrentGenome(BaseGenome):
 
     def transform(self, state, nodes, conns):
         u_conns = unflatten_conns(nodes, conns)
-
-        # remove un-enable connections and remove enable attr
-        conn_enable = u_conns[0] == 1
-        u_conns = jnp.where(conn_enable, u_conns[1:, :], jnp.nan)
-
         return nodes, u_conns
 
     def restore(self, state, transformed):
         nodes, u_conns = transformed
         conns = flatten_conns(nodes, u_conns, C=self.max_conns)
-
-        # restore enable
-        conns = jnp.insert(conns, obj=2, values=1, axis=1)
         return nodes, conns
 
     def forward(self, state, inputs, transformed):

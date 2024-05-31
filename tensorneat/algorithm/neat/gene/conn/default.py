@@ -38,10 +38,9 @@ class DefaultConnGene(BaseConnGene):
     def mutate(self, state, randkey, conn):
         input_index = conn[0]
         output_index = conn[1]
-        enabled = conn[2]
         weight = mutate_float(
             randkey,
-            conn[3],
+            conn[2],
             self.weight_init_mean,
             self.weight_init_std,
             self.weight_mutate_power,
@@ -49,12 +48,10 @@ class DefaultConnGene(BaseConnGene):
             self.weight_replace_rate,
         )
 
-        return jnp.array([input_index, output_index, enabled, weight])
+        return jnp.array([input_index, output_index, weight])
 
     def distance(self, state, attrs1, attrs2):
-        return (attrs1[2] != attrs2[2]) + jnp.abs(
-            attrs1[3] - attrs2[3]
-        )  # enable + weight
+        return jnp.abs(attrs1[0] - attrs2[0])
 
     def forward(self, state, attrs, inputs):
         weight = attrs[0]

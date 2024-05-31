@@ -106,21 +106,19 @@ class BaseGenome:
             self.input_idx, jnp.full_like(self.input_idx, new_node_key)
         ]
         conns = conns.at[self.input_idx, :2].set(input_conns)  # in-keys, out-keys
-        conns = conns.at[self.input_idx, 2].set(True)  # enable
 
         # output-hidden connections
         output_conns = jnp.c_[
             jnp.full_like(self.output_idx, new_node_key), self.output_idx
         ]
         conns = conns.at[self.output_idx, :2].set(output_conns)  # in-keys, out-keys
-        conns = conns.at[self.output_idx, 2].set(True)  # enable
 
         conn_keys = jax.random.split(k2, num=len(self.input_idx) + len(self.output_idx))
         # generate random attributes for conns
         random_conn_attrs = jax.vmap(
             self.conn_gene.new_random_attrs, in_axes=(None, 0)
         )(state, conn_keys)
-        conns = conns.at[: len(conn_keys), 3:].set(random_conn_attrs)
+        conns = conns.at[: len(conn_keys), 2:].set(random_conn_attrs)
 
         return nodes, conns
 

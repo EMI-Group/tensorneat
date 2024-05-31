@@ -168,15 +168,15 @@ def delete_node_by_pos(nodes, pos):
     return nodes.at[pos].set(jnp.nan)
 
 
-def add_conn(conns, i_key, o_key, enable: bool, attrs):
+def add_conn(conns, i_key, o_key, attrs):
     """
     Add a new connection to the genome.
     The new connection will place at the first NaN row.
     """
     con_keys = conns[:, 0]
     pos = fetch_first(jnp.isnan(con_keys))
-    new_conns = conns.at[pos, 0:3].set(jnp.array([i_key, o_key, enable]))
-    return new_conns.at[pos, 3:].set(attrs)
+    new_conns = conns.at[pos, 0:2].set(jnp.array([i_key, o_key]))
+    return new_conns.at[pos, 2:].set(attrs)
 
 
 def delete_conn_by_pos(conns, pos):

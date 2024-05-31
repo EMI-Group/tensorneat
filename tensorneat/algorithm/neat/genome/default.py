@@ -45,19 +45,15 @@ class DefaultGenome(BaseGenome):
 
     def transform(self, state, nodes, conns):
         u_conns = unflatten_conns(nodes, conns)
-        conn_enable = u_conns[0] == 1
+        conn_exist = ~jnp.isnan(u_conns[0])
 
-        # remove enable attr
-        u_conns = jnp.where(conn_enable, u_conns[1:, :], jnp.nan)
-        seqs = topological_sort(nodes, conn_enable)
+        seqs = topological_sort(nodes, conn_exist)
 
         return seqs, nodes, u_conns
 
     def restore(self, state, transformed):
         seqs, nodes, u_conns = transformed
         conns = flatten_conns(nodes, u_conns, C=self.max_conns)
-        # restore enable
-        conns = jnp.insert(conns, obj=2, values=1, axis=1)
         return nodes, conns
 
     def forward(self, state, inputs, transformed):
@@ -79,14 +75,15 @@ class DefaultGenome(BaseGenome):
                 ins = jax.vmap(self.conn_gene.forward, in_axes=(None, 1, 0))(
                     state, u_conns[:, :, i], values
                 )
+
                 z = self.node_gene.forward(
                     state,
                     nodes_attrs[i],
                     ins,
                     is_output_node=jnp.isin(i, self.output_idx),
                 )
-                new_values = values.at[i].set(z)
 
+                new_values = values.at[i].set(z)
                 return new_values
 
             # the val of input nodes is obtained by the task, not by calculation
