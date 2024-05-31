@@ -11,8 +11,8 @@ if __name__ == "__main__":
                 genome=DefaultGenome(
                     num_inputs=3,
                     num_outputs=1,
-                    max_nodes=100,
-                    max_conns=200,
+                    max_nodes=5,
+                    max_conns=10,
                     node_gene=DefaultNodeGene(
                         activation_default=Act.tanh,
                         activation_options=(Act.tanh,),

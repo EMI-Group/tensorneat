@@ -173,8 +173,27 @@ class Pipeline:
         member_count = jax.device_get(self.algorithm.member_count(state))
         species_sizes = [int(i) for i in member_count if i > 0]
 
+        pop = jax.device_get(pop)
+        pop_nodes, pop_conns = pop  # (P, N, NL), (P, C, CL)
+        nodes_cnt = (~np.isnan(pop_nodes[:, :, 0])).sum(axis=1)  # (P,)
+        conns_cnt = (~np.isnan(pop_conns[:, :, 0])).sum(axis=1)  # (P,)
+
+        max_node_cnt, min_node_cnt, mean_node_cnt = (
+            max(nodes_cnt),
+            min(nodes_cnt),
+            np.mean(nodes_cnt),
+        )
+
+        max_conn_cnt, min_conn_cnt, mean_conn_cnt = (
+            max(conns_cnt),
+            min(conns_cnt),
+            np.mean(conns_cnt),
+        )
+
         print(
             f"Generation: {self.algorithm.generation(state)}, Cost time: {cost_time * 1000:.2f}ms\n",
+            f"\tnode counts: max: {max_node_cnt}, min: {min_node_cnt}, mean: {mean_node_cnt:.2f}\n",
+            f"\tconn counts: max: {max_conn_cnt}, min: {min_conn_cnt}, mean: {mean_conn_cnt:.2f}\n",
             f"\tspecies: {len(species_sizes)}, {species_sizes}\n",
             f"\tfitness: valid cnt: {len(valid_fitnesses)}, max: {max_f:.4f}, min: {min_f:.4f}, mean: {mean_f:.4f}, std: {std_f:.4f}\n",
         )

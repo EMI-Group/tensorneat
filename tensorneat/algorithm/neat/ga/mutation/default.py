@@ -37,6 +37,10 @@ class DefaultMutation(BaseMutation):
         return nodes, conns
 
     def mutate_structure(self, state, randkey, genome, nodes, conns, new_node_key):
+
+        remain_node_space = jnp.isnan(nodes[:, 0]).sum()
+        remain_conn_space = jnp.isnan(conns[:, 0]).sum()
+
         def mutate_add_node(key_, nodes_, conns_):
             i_key, o_key, idx = self.choice_connection_key(key_, conns_)
 
@@ -68,7 +72,7 @@ class DefaultMutation(BaseMutation):
                 return new_nodes, new_conns
 
             return jax.lax.cond(
-                idx == I_INF,
+                (idx == I_INF) & (remain_node_space < 1) & (remain_conn_space < 2),
                 lambda: (nodes_, conns_),  # do nothing
                 successful_add_node,
             )
@@ -150,7 +154,9 @@ class DefaultMutation(BaseMutation):
                 return jax.lax.cond(
                     is_already_exist,
                     already_exist,
-                    lambda: jax.lax.cond(is_cycle, nothing, successful),
+                    lambda: jax.lax.cond(
+                        is_cycle & (remain_conn_space < 1), nothing, successful
+                    ),
                 )
 
             elif genome.network_type == "recurrent":
