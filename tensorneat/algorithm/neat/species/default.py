@@ -113,9 +113,6 @@ class DefaultSpecies(BaseSpecies):
         return state.pop_nodes, state.pop_conns
 
     def update_species(self, state, fitness):
-        # set nan to -inf
-        fitness = jnp.where(jnp.isnan(fitness), -jnp.inf, fitness)
-
         # update the fitness of each species
         state, species_fitness = self.update_species_fitness(state, fitness)
 

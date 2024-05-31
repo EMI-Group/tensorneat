@@ -116,6 +116,9 @@ class Pipeline:
                 state, keys, self.algorithm.forward, pop_transformed
             )
 
+        # replace nan with -inf
+        fitnesses = jnp.where(jnp.isnan(fitnesses), -jnp.inf, fitnesses)
+
         state = self.algorithm.tell(state, fitnesses)
 
         return state.update(randkey=randkey), fitnesses
@@ -149,7 +152,7 @@ class Pipeline:
 
     def analysis(self, state, pop, fitnesses):
 
-        valid_fitnesses = fitnesses[~np.isnan(fitnesses)]
+        valid_fitnesses = fitnesses[~np.isinf(fitnesses)]
 
         max_f, min_f, mean_f, std_f = (
             max(valid_fitnesses),

@@ -19,10 +19,10 @@ if __name__ == "__main__":
                     ),
                     output_transform=Act.sigmoid,  # the activation function for output node
                     mutation=DefaultMutation(
-                        node_add=0.05,
-                        conn_add=0.05,
-                        node_delete=0.05,
-                        conn_delete=0.05,
+                        node_add=0.1,
+                        conn_add=0.1,
+                        node_delete=0.1,
+                        conn_delete=0.1,
                     ),
                 ),
                 pop_size=1000,
