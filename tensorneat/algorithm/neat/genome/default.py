@@ -56,6 +56,8 @@ class DefaultGenome(BaseGenome):
     def restore(self, state, transformed):
         seqs, nodes, u_conns = transformed
         conns = flatten_conns(nodes, u_conns, C=self.max_conns)
+        # restore enable
+        conns = jnp.insert(conns, obj=2, values=1, axis=1)
         return nodes, conns
 
     def forward(self, state, inputs, transformed):
