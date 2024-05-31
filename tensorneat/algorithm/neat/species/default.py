@@ -113,6 +113,9 @@ class DefaultSpecies(BaseSpecies):
         return state.pop_nodes, state.pop_conns
 
     def update_species(self, state, fitness):
+        # set nan to -inf
+        fitness = jnp.where(jnp.isnan(fitness), -jnp.inf, fitness)
+
         # update the fitness of each species
         state, species_fitness = self.update_species_fitness(state, fitness)
 
@@ -121,6 +124,7 @@ class DefaultSpecies(BaseSpecies):
 
         # sort species_info by their fitness. (also push nan to the end)
         sort_indices = jnp.argsort(species_fitness)[::-1]
+
         state = state.update(
             species_keys=state.species_keys[sort_indices],
             best_fitness=state.best_fitness[sort_indices],

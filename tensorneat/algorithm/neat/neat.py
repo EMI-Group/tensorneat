@@ -44,8 +44,14 @@ class NEAT(BaseAlgorithm):
         nodes, conns = individual
         return self.genome.transform(state, nodes, conns)
 
+    def restore(self, state, transformed):
+        return self.genome.restore(state, transformed)
+
     def forward(self, state, inputs, transformed):
         return self.genome.forward(state, inputs, transformed)
+
+    def update_by_batch(self, state, batch_input, transformed):
+        return self.genome.update_by_batch(state, batch_input, transformed)
 
     @property
     def num_inputs(self):

@@ -21,11 +21,11 @@ if __name__ == "__main__":
                     mutation=DefaultMutation(
                         node_add=0.05,
                         conn_add=0.05,
-                        node_delete=0,
-                        conn_delete=0,
+                        node_delete=0.05,
+                        conn_delete=0.05,
                     ),
                 ),
-                pop_size=100,
+                pop_size=1000,
                 species_size=20,
                 compatibility_threshold=2,
                 survival_threshold=0.01,  # magic

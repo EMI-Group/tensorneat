@@ -178,18 +178,25 @@ class DefaultMutation(BaseMutation):
         def no(key_, nodes_, conns_):
             return nodes_, conns_
 
-        nodes, conns = jax.lax.cond(
-            r1 < self.node_add, mutate_add_node, no, k1, nodes, conns
-        )
-        nodes, conns = jax.lax.cond(
-            r2 < self.node_delete, mutate_delete_node, no, k2, nodes, conns
-        )
-        nodes, conns = jax.lax.cond(
-            r3 < self.conn_add, mutate_add_conn, no, k3, nodes, conns
-        )
-        nodes, conns = jax.lax.cond(
-            r4 < self.conn_delete, mutate_delete_conn, no, k4, nodes, conns
-        )
+        if self.node_add > 0:
+            nodes, conns = jax.lax.cond(
+                r1 < self.node_add, mutate_add_node, no, k1, nodes, conns
+            )
+
+        if self.node_delete > 0:
+            nodes, conns = jax.lax.cond(
+                r2 < self.node_delete, mutate_delete_node, no, k2, nodes, conns
+            )
+
+        if self.conn_add > 0:
+            nodes, conns = jax.lax.cond(
+                r3 < self.conn_add, mutate_add_conn, no, k3, nodes, conns
+            )
+
+        if self.conn_delete > 0:
+            nodes, conns = jax.lax.cond(
+                r4 < self.conn_delete, mutate_delete_conn, no, k4, nodes, conns
+            )
 
         return nodes, conns
 

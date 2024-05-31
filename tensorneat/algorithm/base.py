@@ -19,7 +19,13 @@ class BaseAlgorithm:
         """transform the genome into a neural network"""
         raise NotImplementedError
 
+    def restore(self, state, transformed):
+        raise NotImplementedError
+
     def forward(self, state, inputs, transformed):
+        raise NotImplementedError
+
+    def update_by_batch(self, state, batch_input, transformed):
         raise NotImplementedError
 
     @property

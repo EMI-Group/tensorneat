@@ -49,7 +49,10 @@ class FuncFit(BaseProblem):
             state, self.inputs, params
         )
         inputs, target, predict = jax.device_get([self.inputs, self.targets, predict])
-        loss = self.evaluate(state, randkey, act_func, params)
+        if self.return_data:
+            loss, _ = self.evaluate(state, randkey, act_func, params)
+        else:
+            loss = self.evaluate(state, randkey, act_func, params)
         loss = -loss
 
         msg = ""
