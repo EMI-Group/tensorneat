@@ -95,7 +95,7 @@ class NormalizedNode(BaseNodeGene):
         return jnp.array([bias, act, agg, mean, std, alpha, beta])
 
     def mutate(self, state, randkey, node):
-        k1, k2, k3, k4, k5, k6 = jax.random.split(state.randkey, num=6)
+        k1, k2, k3, k4, k5, k6 = jax.random.split(randkey, num=6)
         index = node[0]
 
         bias = mutate_float(

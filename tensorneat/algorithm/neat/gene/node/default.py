@@ -74,7 +74,7 @@ class DefaultNodeGene(BaseNodeGene):
         return jnp.array([bias, res, act, agg])
 
     def mutate(self, state, randkey, node):
-        k1, k2, k3, k4 = jax.random.split(state.randkey, num=4)
+        k1, k2, k3, k4 = jax.random.split(randkey, num=4)
         index = node[0]
 
         bias = mutate_float(
