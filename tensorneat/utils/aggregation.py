@@ -53,7 +53,7 @@ class Agg:
 AGG_ALL = (Agg.sum, Agg.product, Agg.max, Agg.min, Agg.maxabs, Agg.median, Agg.mean)
 
 
-def agg(idx, z, agg_funcs):
+def agg_func(idx, z, agg_funcs):
     """
     calculate activation function for inputs of node
     """

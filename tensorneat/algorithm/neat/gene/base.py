@@ -1,3 +1,4 @@
+import jax, jax.numpy as jnp
 from utils import State
 
 
@@ -12,21 +13,25 @@ class BaseGene:
     def setup(self, state=State()):
         return state
 
-    def new_custom_attrs(self, state):
-        # the attrs which make the least influence on the network, used in add node or add conn in mutation
+    def new_identity_attrs(self, state):
+        # the attrs which do identity transformation, used in mutate add node
         raise NotImplementedError
 
     def new_random_attrs(self, state, randkey):
         # random attributes of the gene. used in initialization.
         raise NotImplementedError
 
-    def mutate(self, state, randkey, gene):
+    def mutate(self, state, randkey, attrs):
         raise NotImplementedError
 
-    def crossover(self, state, randkey, gene1, gene2):
-        raise NotImplementedError
+    def crossover(self, state, randkey, attrs1, attrs2):
+        return jnp.where(
+            jax.random.normal(randkey, attrs1.shape) > 0,
+            attrs1,
+            attrs2,
+        )
 
-    def distance(self, state, gene1, gene2):
+    def distance(self, state, attrs1, attrs2):
         raise NotImplementedError
 
     def forward(self, state, attrs, inputs):

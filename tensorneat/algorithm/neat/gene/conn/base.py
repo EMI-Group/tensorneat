@@ -9,12 +9,9 @@ class BaseConnGene(BaseGene):
     def __init__(self):
         super().__init__()
 
-    def crossover(self, state, randkey, gene1, gene2):
-        return jnp.where(
-            jax.random.normal(randkey, gene1.shape) > 0,
-            gene1,
-            gene2,
-        )
+    def new_zero_attrs(self, state):
+        # the attrs which make the least influence on the network, used in mutate add conn
+        raise NotImplementedError
 
     def forward(self, state, attrs, inputs):
         raise NotImplementedError

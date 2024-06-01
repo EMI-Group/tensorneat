@@ -68,11 +68,18 @@ ACT_ALL = (
 )
 
 
-def act(idx, z, act_funcs):
+def act_func(idx, z, act_funcs):
     """
     calculate activation function for each node
     """
     idx = jnp.asarray(idx, dtype=jnp.int32)
     # change idx from float to int
-    res = jax.lax.switch(idx, act_funcs, z)
+
+    # -1 means identity activation
+    res = jax.lax.cond(
+        idx == -1,
+        lambda: z,
+        lambda: jax.lax.switch(idx, act_funcs, z),
+    )
+
     return res

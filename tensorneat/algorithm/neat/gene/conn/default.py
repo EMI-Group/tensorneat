@@ -25,8 +25,11 @@ class DefaultConnGene(BaseConnGene):
         self.weight_mutate_rate = weight_mutate_rate
         self.weight_replace_rate = weight_replace_rate
 
-    def new_custom_attrs(self, state):
-        return jnp.array([self.weight_init_mean])
+    def new_zero_attrs(self, state):
+        return jnp.array([0.0])  # weight = 0
+
+    def new_identity_attrs(self, state):
+        return jnp.array([1.0])  # weight = 1
 
     def new_random_attrs(self, state, randkey):
         weight = (
@@ -35,12 +38,11 @@ class DefaultConnGene(BaseConnGene):
         )
         return jnp.array([weight])
 
-    def mutate(self, state, randkey, conn):
-        input_index = conn[0]
-        output_index = conn[1]
+    def mutate(self, state, randkey, attrs):
+        weight = attrs[0]
         weight = mutate_float(
             randkey,
-            conn[2],
+            weight,
             self.weight_init_mean,
             self.weight_init_std,
             self.weight_mutate_power,
@@ -48,10 +50,12 @@ class DefaultConnGene(BaseConnGene):
             self.weight_replace_rate,
         )
 
-        return jnp.array([input_index, output_index, weight])
+        return jnp.array([weight])
 
     def distance(self, state, attrs1, attrs2):
-        return jnp.abs(attrs1[0] - attrs2[0])
+        weight1 = attrs1[0]
+        weight2 = attrs2[0]
+        return jnp.abs(weight1 - weight2)
 
     def forward(self, state, attrs, inputs):
         weight = attrs[0]
