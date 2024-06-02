@@ -56,10 +56,9 @@ def analysis_substrate(input_coors, output_coors, hidden_coors):
 
     nodes = np.concatenate((input_idx, output_idx, hidden_idx))[..., np.newaxis]
     conns = np.zeros(
-        (correspond_keys.shape[0], 4), dtype=np.float32
-    )  # input_idx, output_idx, enabled, weight
-    conns[:, 0:2] = correspond_keys
-    conns[:, 2] = 1  # enabled is True
+        (correspond_keys.shape[0], 3), dtype=np.float32
+    )  # input_idx, output_idx, weight
+    conns[:, :2] = correspond_keys
 
     return query_coors, nodes, conns
 

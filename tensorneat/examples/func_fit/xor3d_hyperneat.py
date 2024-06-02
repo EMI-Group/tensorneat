@@ -39,9 +39,9 @@ if __name__ == "__main__":
                         ),
                         output_transform=Act.tanh,  # the activation function for output node in NEAT
                     ),
-                    pop_size=10000,
+                    pop_size=1000,
                     species_size=10,
-                    compatibility_threshold=3.5,
+                    compatibility_threshold=2,
                     survival_threshold=0.03,
                 ),
             ),

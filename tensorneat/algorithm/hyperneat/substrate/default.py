@@ -14,7 +14,7 @@ class DefaultSubstrate(BaseSubstrate):
         return self.nodes
 
     def make_conn(self, query_res):
-        return self.conns.at[:, 3:].set(query_res)  # change weight
+        return self.conns.at[:, 2:].set(query_res)  # change weight
 
     @property
     def query_coors(self):
