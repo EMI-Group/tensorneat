@@ -2,7 +2,7 @@ from pipeline import Pipeline
 from algorithm.neat import *
 
 from problem.func_fit import XOR3d
-from utils import Act
+from utils import ACT_ALL, AGG_ALL, Act, Agg
 
 if __name__ == "__main__":
     pipeline = Pipeline(
@@ -15,17 +15,21 @@ if __name__ == "__main__":
                     max_conns=100,
                     node_gene=DefaultNodeGene(
                         activation_default=Act.tanh,
-                        activation_options=(Act.tanh,),
+                        # activation_options=(Act.tanh,),
+                        activation_options=ACT_ALL,
+                        aggregation_default=Agg.sum,
+                        # aggregation_options=(Agg.sum,),
+                        aggregation_options=AGG_ALL,
                     ),
                     output_transform=Act.sigmoid,  # the activation function for output node
                     mutation=DefaultMutation(
                         node_add=0.1,
                         conn_add=0.1,
-                        node_delete=0.05,
-                        conn_delete=0.05,
+                        node_delete=0,
+                        conn_delete=0,
                     ),
                 ),
-                pop_size=1000,
+                pop_size=100000,
                 species_size=20,
                 compatibility_threshold=2,
                 survival_threshold=0.01,  # magic

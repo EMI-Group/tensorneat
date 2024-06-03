@@ -36,7 +36,7 @@ class RLEnv(BaseProblem):
 
         def body_func(carry):
             obs, env_state, rng, done, tr, count, epis = carry  # tr -> total reward
-            action = act_func(state, obs, params)
+            action = act_func(state, params, obs)
             next_obs, next_env_state, reward, done, _ = self.step(
                 rng, env_state, action
             )

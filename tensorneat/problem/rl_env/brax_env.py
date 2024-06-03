@@ -51,7 +51,7 @@ class BraxEnv(RLEnv):
 
         def step(key, env_state, obs):
             key, _ = jax.random.split(key)
-            action = act_func(obs, params)
+            action = act_func(params, obs)
             obs, env_state, r, done, _ = self.step(randkey, env_state, action)
             return key, env_state, obs, r, done
 

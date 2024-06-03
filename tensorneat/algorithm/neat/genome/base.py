@@ -42,7 +42,7 @@ class BaseGenome:
     def restore(self, state, transformed):
         raise NotImplementedError
 
-    def forward(self, state, inputs, transformed):
+    def forward(self, state, transformed, inputs):
         raise NotImplementedError
 
     def execute_mutation(self, state, randkey, nodes, conns, new_node_key):

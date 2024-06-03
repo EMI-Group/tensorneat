@@ -163,8 +163,8 @@ class DefaultMutation(BaseMutation):
                 )
 
             if genome.network_type == "feedforward":
-                u_cons = unflatten_conns(nodes_, conns_)
-                conns_exist = ~jnp.isnan(u_cons[0, :, :])
+                u_conns = unflatten_conns(nodes_, conns_)
+                conns_exist = (u_conns != I_INF)
                 is_cycle = check_cycles(nodes_, conns_exist, from_idx, to_idx)
 
                 return jax.lax.cond(

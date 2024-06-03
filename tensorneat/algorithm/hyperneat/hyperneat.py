@@ -54,8 +54,8 @@ class HyperNEAT(BaseAlgorithm):
 
     def transform(self, state, individual):
         transformed = self.neat.transform(state, individual)
-        query_res = jax.vmap(self.neat.forward, in_axes=(None, 0, None))(
-            state, self.substrate.query_coors, transformed
+        query_res = jax.vmap(self.neat.forward, in_axes=(None, None, 0))(
+            state, transformed, self.substrate.query_coors
         )
         # mute the connection with weight below threshold
         query_res = jnp.where(

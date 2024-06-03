@@ -157,6 +157,15 @@ class NormalizedNode(BaseNodeGene):
 
         return z
 
+    def input_transform(self, state, attrs, inputs):
+        """
+        make transform in the input node.
+        the normalization also need be done in the first node.
+        """
+        bias, agg, act, mean, std, alpha, beta = attrs
+        inputs = (inputs - mean) / (std + self.eps) * alpha + beta  # normalization
+        return inputs
+
     def update_by_batch(self, state, attrs, batch_inputs, is_output_node=False):
 
         bias, agg, act, mean, std, alpha, beta = attrs
@@ -192,3 +201,31 @@ class NormalizedNode(BaseNodeGene):
         attrs = attrs.at[4].set(std)
 
         return batch_z, attrs
+
+    def update_input_transform(self, state, attrs, batch_inputs):
+        """
+        update the attrs for transformation in the input node.
+        default: do nothing
+        """
+        bias, agg, act, mean, std, alpha, beta = attrs
+
+        # calculate mean
+        valid_values_count = jnp.sum(~jnp.isnan(batch_inputs))
+        valid_values_sum = jnp.sum(jnp.where(jnp.isnan(batch_inputs), 0, batch_inputs))
+        mean = valid_values_sum / valid_values_count
+
+        # calculate std
+        std = jnp.sqrt(
+            jnp.sum(jnp.where(jnp.isnan(batch_inputs), 0, (batch_inputs - mean) ** 2))
+            / valid_values_count
+        )
+
+        batch_inputs = (batch_inputs - mean) / (
+            std + self.eps
+        ) * alpha + beta  # normalization
+
+        # update mean and std to the attrs
+        attrs = attrs.at[3].set(mean)
+        attrs = attrs.at[4].set(std)
+
+        return batch_inputs, attrs

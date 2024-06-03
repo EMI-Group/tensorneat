@@ -47,8 +47,8 @@ class NEAT(BaseAlgorithm):
     def restore(self, state, transformed):
         return self.genome.restore(state, transformed)
 
-    def forward(self, state, inputs, transformed):
-        return self.genome.forward(state, inputs, transformed)
+    def forward(self, state, transformed, inputs):
+        return self.genome.forward(state, transformed, inputs)
 
     def update_by_batch(self, state, batch_input, transformed):
         return self.genome.update_by_batch(state, batch_input, transformed)
