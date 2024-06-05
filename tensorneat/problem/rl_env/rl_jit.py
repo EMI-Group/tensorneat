@@ -1,20 +1,47 @@
 from functools import partial
+from typing import Callable
 
 import jax
 import jax.numpy as jnp
 
+from utils import State
 from .. import BaseProblem
 
 
 class RLEnv(BaseProblem):
     jitable = True
 
-    def __init__(self, max_step=1000, record_episode=False):
+    def __init__(self, max_step=1000, repeat_times=1, record_episode=False):
         super().__init__()
         self.max_step = max_step
         self.record_episode = record_episode
+        self.repeat_times = repeat_times
 
-    def evaluate(self, state, randkey, act_func, params):
+    def evaluate(self, state: State, randkey, act_func: Callable, params):
+        keys = jax.random.split(randkey, self.repeat_times)
+        if self.record_episode:
+            rewards, episodes = jax.vmap(
+                self.evaluate_once, in_axes=(None, 0, None, None)
+            )(state, keys, act_func, params)
+            episodes["obs"] = episodes["obs"].reshape(
+                self.max_step * self.repeat_times, *self.input_shape
+            )
+            episodes["action"] = episodes["action"].reshape(
+                self.max_step * self.repeat_times, *self.output_shape
+            )
+            episodes["reward"] = episodes["reward"].reshape(
+                self.max_step * self.repeat_times,
+            )
+
+            return rewards.mean(), episodes
+
+        else:
+            rewards = jax.vmap(self.evaluate_once, in_axes=(None, 0, None, None))(
+                state, keys, act_func, params
+            )
+            return rewards.mean()
+
+    def evaluate_once(self, state, randkey, act_func, params):
         rng_reset, rng_episode = jax.random.split(randkey)
         init_obs, init_env_state = self.reset(rng_reset)
 

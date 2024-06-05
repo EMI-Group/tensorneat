@@ -24,6 +24,7 @@ if __name__ == "__main__":
         ),
         problem=GymNaxEnv(
             env_name="CartPole-v1",
+            repeat_times=5
         ),
         generation_limit=10000,
         fitness_target=500,
