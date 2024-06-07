@@ -7,14 +7,21 @@ from ..rl_jit import RLEnv
 
 class Jumanji_2048(RLEnv):
     def __init__(
-        self, max_step=1000, repeat_times=1, record_episode=False, guarantee_invalid_action=True
+        self, guarantee_invalid_action=True, *args, **kwargs
     ):
-        super().__init__(max_step, repeat_times, record_episode)
+        super().__init__(*args, **kwargs)
         self.guarantee_invalid_action = guarantee_invalid_action
         self.env = jumanji.make("Game2048-v1")
 
     def env_step(self, randkey, env_state, action):
         action_mask = env_state["action_mask"]
+
+        ###################################################################
+
+        action = jnp.concatenate([action, jnp.full((4 - action.shape[0], ), -99999)])
+        action = (action - 1) / 15
+
+        ###################################################################
         if self.guarantee_invalid_action:
             score_with_mask = jnp.where(action_mask, action, -jnp.inf)
             action = jnp.argmax(score_with_mask)

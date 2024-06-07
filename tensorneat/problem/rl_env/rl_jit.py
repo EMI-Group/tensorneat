@@ -11,11 +11,18 @@ from .. import BaseProblem
 class RLEnv(BaseProblem):
     jitable = True
 
-    def __init__(self, max_step=1000, repeat_times=1, record_episode=False):
+    def __init__(
+        self,
+        max_step=1000,
+        repeat_times=1,
+        record_episode=False,
+        action_policy: Callable = None,
+    ):
         super().__init__()
         self.max_step = max_step
         self.record_episode = record_episode
         self.repeat_times = repeat_times
+        self.action_policy = action_policy
 
     def evaluate(self, state: State, randkey, act_func: Callable, params):
         keys = jax.random.split(randkey, self.repeat_times)
@@ -63,7 +70,11 @@ class RLEnv(BaseProblem):
 
         def body_func(carry):
             obs, env_state, rng, done, tr, count, epis = carry  # tr -> total reward
-            action = act_func(state, params, obs)
+            if self.action_policy is not None:
+                forward_func = lambda obs: act_func(state, params, obs)
+                action = self.action_policy(forward_func, obs)
+            else:
+                action = act_func(state, params, obs)
             next_obs, next_env_state, reward, done, _ = self.step(
                 rng, env_state, action
             )

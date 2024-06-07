@@ -16,7 +16,7 @@ if __name__ == "__main__":
                     max_nodes=50,
                     max_conns=100,
                     node_gene=KANNode(),
-                    conn_gene=BSplineConn(grid_cnt=10),
+                    conn_gene=BSplineConn(grid_cnt=6),
                     output_transform=Act.sigmoid,  # the activation function for output node
                     mutation=DefaultMutation(
                         node_add=0.1,
