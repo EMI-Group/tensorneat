@@ -47,3 +47,4 @@ if __name__ == "__main__":
     state, best = pipeline.auto_run(state)
     # show result
     pipeline.show(state, best)
+    pipeline.save(state=state)

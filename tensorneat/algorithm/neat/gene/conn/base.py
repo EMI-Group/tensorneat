@@ -22,3 +22,12 @@ class BaseConnGene(BaseGene):
             jax.vmap(self.forward, in_axes=(None, None, 0))(state, attrs, batch_inputs),
             attrs,
         )
+
+    def repr(self, state, conn, precision=2, idx_width=3, func_width=8):
+        in_idx, out_idx = conn[:2]
+        in_idx = int(in_idx)
+        out_idx = int(out_idx)
+
+        return "{}(in: {:<{idx_width}}, out: {:<{idx_width}})".format(
+            self.__class__.__name__, in_idx, out_idx, idx_width=idx_width
+        )

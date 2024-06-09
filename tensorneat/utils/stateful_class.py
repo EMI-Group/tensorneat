@@ -37,7 +37,7 @@ class StatefulBaseClass:
             if "aux_for_state" in obj.__dict__:
                 if warning:
                     warnings.warn(
-                        "This object state to load, ignore it",
+                        "This object has state to load, ignore it",
                         category=UserWarning,
                     )
                 del obj.__dict__["aux_for_state"]

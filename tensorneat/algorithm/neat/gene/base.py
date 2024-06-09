@@ -40,3 +40,6 @@ class BaseGene(StatefulBaseClass):
     @property
     def length(self):
         return len(self.fixed_attrs) + len(self.custom_attrs)
+
+    def repr(self, state, gene, precision=2):
+        raise NotImplementedError

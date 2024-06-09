@@ -41,15 +41,13 @@ class DefaultMutation(BaseMutation):
         return nodes, conns
 
     def mutate_structure(self, state, randkey, genome, nodes, conns, new_node_key):
-
-        remain_node_space = jnp.isnan(nodes[:, 0]).sum()
-        remain_conn_space = jnp.isnan(conns[:, 0]).sum()
-
         def mutate_add_node(key_, nodes_, conns_):
             """
             add a node while do not influence the output of the network
             """
 
+            remain_node_space = jnp.isnan(nodes_[:, 0]).sum()
+            remain_conn_space = jnp.isnan(conns_[:, 0]).sum()
             i_key, o_key, idx = self.choose_connection_key(
                 key_, conns_
             )  # choose a connection
@@ -83,7 +81,7 @@ class DefaultMutation(BaseMutation):
                 return new_nodes, new_conns
 
             return jax.lax.cond(
-                (idx == I_INF) & (remain_node_space < 1) & (remain_conn_space < 2),
+                (idx == I_INF) | (remain_node_space < 1) | (remain_conn_space < 2),
                 lambda: (nodes_, conns_),  # do nothing
                 successful_add_node,
             )
@@ -92,7 +90,6 @@ class DefaultMutation(BaseMutation):
             """
             delete a node
             """
-
             # randomly choose a node
             key, idx = self.choose_node_key(
                 key_,
@@ -126,6 +123,8 @@ class DefaultMutation(BaseMutation):
             """
             add a connection while do not influence the output of the network
             """
+
+            remain_conn_space = jnp.isnan(conns_[:, 0]).sum()
 
             # randomly choose two nodes
             k1_, k2_ = jax.random.split(key_, num=2)
@@ -164,7 +163,7 @@ class DefaultMutation(BaseMutation):
 
             if genome.network_type == "feedforward":
                 u_conns = unflatten_conns(nodes_, conns_)
-                conns_exist = (u_conns != I_INF)
+                conns_exist = u_conns != I_INF
                 is_cycle = check_cycles(nodes_, conns_exist, from_idx, to_idx)
 
                 return jax.lax.cond(

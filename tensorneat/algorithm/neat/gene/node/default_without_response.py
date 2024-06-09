@@ -98,3 +98,26 @@ class NodeGeneWithoutResponse(BaseNodeGene):
         )
 
         return z
+
+    def repr(self, state, node, precision=2, idx_width=3, func_width=8):
+        idx, bias, agg, act = node
+
+        idx = int(idx)
+        bias = round(float(bias), precision)
+        agg = int(agg)
+        act = int(act)
+
+        if act == -1:
+            act_func = Act.identity
+        else:
+            act_func = self.activation_options[act]
+        return "{}(idx={:<{idx_width}}, bias={:<{float_width}}, aggregation={:<{func_width}}, activation={:<{func_width}})".format(
+            self.__class__.__name__,
+            idx,
+            bias,
+            self.aggregation_options[agg].__name__,
+            act_func.__name__,
+            idx_width=idx_width,
+            float_width=precision + 3,
+            func_width=func_width,
+        )

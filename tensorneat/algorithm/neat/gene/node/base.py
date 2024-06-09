@@ -39,3 +39,11 @@ class BaseNodeGene(BaseGene):
             ),
             attrs,
         )
+
+    def repr(self, state, node, precision=2, idx_width=3, func_width=8):
+        idx = node[0]
+
+        idx = int(idx)
+        return "{}(idx={:<{idx_width}})".format(
+            self.__class__.__name__, idx, idx_width=idx_width
+        )
