@@ -1,10 +1,10 @@
 import jax, jax.numpy as jnp
 from ..gene import BaseNodeGene, BaseConnGene
 from ..ga import BaseMutation, BaseCrossover
-from utils import State
+from utils import State, StatefulBaseClass
 
 
-class BaseGenome:
+class BaseGenome(StatefulBaseClass):
     network_type = None
 
     def __init__(

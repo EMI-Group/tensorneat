@@ -1,4 +1,4 @@
-import jax, jax.numpy as jnp
+import jax
 from .. import BaseGene
 
 

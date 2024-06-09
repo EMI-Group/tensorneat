@@ -1,14 +1,11 @@
-from utils import State
+from utils import State, StatefulBaseClass
 from ..genome import BaseGenome
 
 
-class BaseSpecies:
+class BaseSpecies(StatefulBaseClass):
     genome: BaseGenome
     pop_size: int
     species_size: int
-
-    def setup(self, state=State()):
-        return state
 
     def ask(self, state: State):
         raise NotImplementedError

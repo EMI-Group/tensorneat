@@ -1,12 +1,7 @@
-from utils import State
+from utils import State, StatefulBaseClass
 
 
-class BaseAlgorithm:
-    def setup(self, state=State()):
-        """initialize the state of the algorithm"""
-
-        raise NotImplementedError
-
+class BaseAlgorithm(StatefulBaseClass):
     def ask(self, state: State):
         """require the population to be evaluated"""
         raise NotImplementedError

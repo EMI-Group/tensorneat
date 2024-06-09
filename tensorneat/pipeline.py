@@ -6,10 +6,10 @@ from algorithm import BaseAlgorithm
 from problem import BaseProblem
 from problem.rl_env import RLEnv
 from problem.func_fit import FuncFit
-from utils import State
+from utils import State, StatefulBaseClass
 
 
-class Pipeline:
+class Pipeline(StatefulBaseClass):
     def __init__(
         self,
         algorithm: BaseAlgorithm,

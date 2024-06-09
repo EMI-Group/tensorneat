@@ -30,6 +30,12 @@ class State:
     def __repr__(self):
         return f"State ({self.state_dict})"
 
+    def __getstate__(self):
+        return self.state_dict.copy()
+
+    def __setstate__(self, state):
+        self.__dict__["state_dict"] = state
+
     def tree_flatten(self):
         children = list(self.state_dict.values())
         aux_data = list(self.state_dict.keys())

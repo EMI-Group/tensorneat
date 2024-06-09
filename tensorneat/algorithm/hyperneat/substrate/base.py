@@ -1,9 +1,7 @@
-from utils import State
+from utils import StatefulBaseClass
 
 
-class BaseSubstrate:
-    def setup(self, state=State()):
-        return state
+class BaseSubstrate(StatefulBaseClass):
 
     def make_nodes(self, query_res):
         raise NotImplementedError

@@ -1,14 +1,10 @@
 from typing import Callable
 
-from utils import State
+from utils import State, StatefulBaseClass
 
 
-class BaseProblem:
+class BaseProblem(StatefulBaseClass):
     jitable = None
-
-    def setup(self, state: State = State()):
-        """initialize the state of the problem"""
-        return state
 
     def evaluate(self, state: State, randkey, act_func: Callable, params):
         """evaluate one individual"""

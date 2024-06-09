@@ -1,9 +1,6 @@
-from utils import State
+from utils import StatefulBaseClass
 
 
-class BaseMutation:
-    def setup(self, state=State()):
-        return state
-
+class BaseMutation(StatefulBaseClass):
     def __call__(self, state, randkey, genome, nodes, conns, new_node_key):
         raise NotImplementedError

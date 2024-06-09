@@ -1,17 +1,14 @@
 import jax, jax.numpy as jnp
-from utils import State
+from utils import State, StatefulBaseClass
 
 
-class BaseGene:
+class BaseGene(StatefulBaseClass):
     "Base class for node genes or connection genes."
     fixed_attrs = []
     custom_attrs = []
 
     def __init__(self):
         pass
-
-    def setup(self, state=State()):
-        return state
 
     def new_identity_attrs(self, state):
         # the attrs which do identity transformation, used in mutate add node
