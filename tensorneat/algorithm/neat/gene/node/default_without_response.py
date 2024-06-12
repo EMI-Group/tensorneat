@@ -137,7 +137,7 @@ class NodeGeneWithoutResponse(BaseNodeGene):
 
         idx = int(idx)
 
-        bias = np.array(bias, dtype=np.float32)
+        bias = jnp.float32(bias)
         agg = int(agg)
         act = int(act)
 

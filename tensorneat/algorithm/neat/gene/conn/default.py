@@ -82,7 +82,7 @@ class DefaultConnGene(BaseConnGene):
         return {
             "in": int(conn[0]),
             "out": int(conn[1]),
-            "weight": np.array(conn[2], dtype=np.float32),
+            "weight": jnp.float32(conn[2]),
         }
 
     def sympy_func(self, state, conn_dict, inputs, precision=None):

@@ -216,7 +216,6 @@ class DefaultGenome(BaseGenome):
                 symbols[i] = sp.Symbol(f"h{i}")
 
         nodes_exprs = {}
-
         args_symbols = {}
         for i in order:
 

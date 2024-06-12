@@ -7,6 +7,10 @@ class SympySum(sp.Function):
     def eval(cls, z):
         return sp.Add(*z)
 
+    @classmethod
+    def numerical_eval(cls, z, backend=np):
+        return backend.sum(z)
+
 
 class SympyProduct(sp.Function):
     @classmethod

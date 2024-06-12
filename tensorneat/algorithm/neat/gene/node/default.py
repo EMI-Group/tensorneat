@@ -163,8 +163,8 @@ class DefaultNodeGene(BaseNodeGene):
         idx, bias, res, agg, act = node
 
         idx = int(idx)
-        bias = np.array(bias, dtype=np.float32)
-        res = np.array(res, dtype=np.float32)
+        bias = jnp.float32(bias)
+        res = jnp.float32(res)
         agg = int(agg)
         act = int(act)
 
@@ -186,7 +186,7 @@ class DefaultNodeGene(BaseNodeGene):
         res = sp.symbols(f"n_{nd['idx']}_r")
 
         z = convert_to_sympy(nd["agg"])(inputs)
-        z = bias + z * res
+        z = bias + res * z
 
         if is_output_node:
             pass
