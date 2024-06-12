@@ -4,6 +4,10 @@ import jax.numpy as jnp
 
 class Agg:
     @staticmethod
+    def name2func(name):
+        return getattr(Agg, name)
+
+    @staticmethod
     def sum(z):
         z = jnp.where(jnp.isnan(z), 0, z)
         return jnp.sum(z, axis=0)

@@ -25,8 +25,3 @@ class KANNode(BaseNodeGene):
 
     def forward(self, state, attrs, inputs, is_output_node=False):
         return Agg.sum(inputs)
-
-    def repr(self, state, node, precision=2):
-        idx = node[0]
-        idx = int(idx)
-        return "{}(idx: {})".format(self.__class__.__name__, idx)

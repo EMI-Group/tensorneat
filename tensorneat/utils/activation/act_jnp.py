@@ -4,6 +4,10 @@ import jax.numpy as jnp
 
 class Act:
     @staticmethod
+    def name2func(name):
+        return getattr(Act, name)
+
+    @staticmethod
     def sigmoid(z):
         z = jnp.clip(5 * z, -10, 10)
         return 1 / (1 + jnp.exp(-z))

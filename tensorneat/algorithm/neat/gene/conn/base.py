@@ -31,3 +31,13 @@ class BaseConnGene(BaseGene):
         return "{}(in: {:<{idx_width}}, out: {:<{idx_width}})".format(
             self.__class__.__name__, in_idx, out_idx, idx_width=idx_width
         )
+
+    def to_dict(self, state, conn):
+        in_idx, out_idx = conn[:2]
+        return {
+            "in": int(in_idx),
+            "out": int(out_idx),
+        }
+
+    def sympy_func(self, state, conn_dict, inputs, precision=None):
+        raise NotImplementedError

@@ -84,3 +84,6 @@ class RecurrentGenome(BaseGenome):
             return vals[self.output_idx]
         else:
             return self.output_transform(vals[self.output_idx])
+
+    def sympy_func(self, state, network, precision=3):
+        raise ValueError("Sympy function is not supported for Recurrent Network!")

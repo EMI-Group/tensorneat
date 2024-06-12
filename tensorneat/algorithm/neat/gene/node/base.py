@@ -47,3 +47,12 @@ class BaseNodeGene(BaseGene):
         return "{}(idx={:<{idx_width}})".format(
             self.__class__.__name__, idx, idx_width=idx_width
         )
+
+    def to_dict(self, state, node):
+        idx = node[0]
+        return {
+            "idx": int(idx),
+        }
+
+    def sympy_func(self, state, node_dict, inputs, is_output_node=False, precision=None):
+        raise NotImplementedError

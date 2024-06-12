@@ -2,7 +2,16 @@ from typing import Tuple
 
 import jax, jax.numpy as jnp
 
-from utils import Act, Agg, act_func, agg_func, mutate_int, mutate_float
+from utils import (
+    Act,
+    Agg,
+    act_func,
+    agg_func,
+    mutate_int,
+    mutate_float,
+    convert_to_sympy,
+)
+
 from . import BaseNodeGene
 
 
@@ -121,3 +130,33 @@ class NodeGeneWithoutResponse(BaseNodeGene):
             float_width=precision + 3,
             func_width=func_width,
         )
+
+    def to_dict(self, state, node):
+        idx, bias, agg, act = node
+        return {
+            "idx": int(idx),
+            "bias": float(bias),
+            "agg": self.aggregation_options[int(agg)].__name__,
+            "act": self.activation_options[int(act)].__name__,
+        }
+
+    def sympy_func(
+        self, state, node_dict, inputs, is_output_node=False, precision=None
+    ):
+
+        bias = node_dict["bias"]
+        agg = node_dict["agg"]
+        act = node_dict["act"]
+
+        if precision is not None:
+            bias = round(bias, precision)
+
+        z = convert_to_sympy(agg)(inputs)
+        z = bias + z
+
+        if is_output_node:
+            return z
+        else:
+            z = convert_to_sympy(act)(z)
+
+        return z

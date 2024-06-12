@@ -2,7 +2,7 @@ import numpy as np
 import jax, jax.numpy as jnp
 from ..gene import BaseNodeGene, BaseConnGene
 from ..ga import BaseMutation, BaseCrossover
-from utils import State, StatefulBaseClass
+from utils import State, StatefulBaseClass, topological_sort_python
 
 
 class BaseGenome(StatefulBaseClass):
@@ -155,3 +155,112 @@ class BaseGenome(StatefulBaseClass):
     @classmethod
     def valid_cnt(cls, arr):
         return jnp.sum(~jnp.isnan(arr[:, 0]))
+
+    def get_conn_dict(self, state, conns):
+        conns = jax.device_get(conns)
+        conn_dict = {}
+        for conn in conns:
+            if np.isnan(conn[0]):
+                continue
+            cd = self.conn_gene.to_dict(state, conn)
+            in_idx, out_idx = cd["in"], cd["out"]
+            del cd["in"], cd["out"]
+            conn_dict[(in_idx, out_idx)] = cd
+        return conn_dict
+
+    def get_node_dict(self, state, nodes):
+        nodes = jax.device_get(nodes)
+        node_dict = {}
+        for node in nodes:
+            if np.isnan(node[0]):
+                continue
+            nd = self.node_gene.to_dict(state, node)
+            idx = nd["idx"]
+            del nd["idx"]
+            node_dict[idx] = nd
+        return node_dict
+
+    def network_dict(self, state, nodes, conns):
+        return {
+            "nodes": self.get_node_dict(state, nodes),
+            "conns": self.get_conn_dict(state, conns),
+        }
+
+    def get_input_idx(self):
+        return self.input_idx.tolist()
+
+    def get_output_idx(self):
+        return self.output_idx.tolist()
+
+    def sympy_func(self, state, network, precision=3):
+        raise NotImplementedError
+
+    def visualize(
+        self,
+        network,
+        rotate=0,
+        reverse_node_order=False,
+        size=(300, 300, 300),
+        color=("blue", "blue", "blue"),
+        save_path="network.svg",
+        save_dpi=800,
+        **kwargs,
+    ):
+        import networkx as nx
+        from matplotlib import pyplot as plt
+
+        nodes_list = list(network["nodes"])
+        conns_list = list(network["conns"])
+        input_idx = self.get_input_idx()
+        output_idx = self.get_output_idx()
+        topo_order, topo_layers = topological_sort_python(nodes_list, conns_list)
+        node2layer = {
+            node: layer for layer, nodes in enumerate(topo_layers) for node in nodes
+        }
+        if reverse_node_order:
+            topo_order = topo_order[::-1]
+
+        G = nx.DiGraph()
+
+        if not isinstance(size, tuple):
+            size = (size, size, size)
+        if not isinstance(color, tuple):
+            color = (color, color, color)
+
+        for node in topo_order:
+            if node in input_idx:
+                G.add_node(node, subset=node2layer[node], size=size[0], color=color[0])
+            elif node in output_idx:
+                G.add_node(node, subset=node2layer[node], size=size[2], color=color[2])
+            else:
+                G.add_node(node, subset=node2layer[node], size=size[1], color=color[1])
+
+        for conn in conns_list:
+            G.add_edge(conn[0], conn[1])
+        pos = nx.multipartite_layout(G)
+
+        def rotate_layout(pos, angle):
+            angle_rad = np.deg2rad(angle)
+            cos_angle, sin_angle = np.cos(angle_rad), np.sin(angle_rad)
+            rotated_pos = {}
+            for node, (x, y) in pos.items():
+                rotated_pos[node] = (
+                    cos_angle * x - sin_angle * y,
+                    sin_angle * x + cos_angle * y,
+                )
+            return rotated_pos
+
+        rotated_pos = rotate_layout(pos, rotate)
+
+        node_sizes = [n["size"] for n in G.nodes.values()]
+        node_colors = [n["color"] for n in G.nodes.values()]
+
+        nx.draw(
+            G,
+            with_labels=True,
+            pos=rotated_pos,
+            node_size=node_sizes,
+            node_color=node_colors,
+            **kwargs,
+        )
+        plt.savefig(save_path, dpi=save_dpi)

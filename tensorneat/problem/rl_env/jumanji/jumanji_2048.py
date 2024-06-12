@@ -18,8 +18,7 @@ class Jumanji_2048(RLEnv):
 
         ###################################################################
 
-        action = jnp.concatenate([action, jnp.full((4 - action.shape[0], ), -99999)])
-        action = (action - 1) / 15
+        # action = jnp.concatenate([action, jnp.full((4 - action.shape[0], ), -99999)])
 
         ###################################################################
         if self.guarantee_invalid_action:

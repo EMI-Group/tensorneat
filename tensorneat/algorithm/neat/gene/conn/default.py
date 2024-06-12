@@ -76,3 +76,17 @@ class DefaultConnGene(BaseConnGene):
             idx_width=idx_width,
             float_width=precision + 3,
         )
+
+    def to_dict(self, state, conn):
+        return {
+            "in": int(conn[0]),
+            "out": int(conn[1]),
+            "weight": float(conn[2]),
+        }
+
+    def sympy_func(self, state, conn_dict, inputs, precision=None):
+        weight = conn_dict["weight"]
+        if precision is not None:
+            weight = round(weight, precision)
+
+        return inputs * weight
