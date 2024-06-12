@@ -164,7 +164,6 @@ class BaseGenome(StatefulBaseClass):
                 continue
             cd = self.conn_gene.to_dict(state, conn)
             in_idx, out_idx = cd["in"], cd["out"]
-            del cd["in"], cd["out"]
             conn_dict[(in_idx, out_idx)] = cd
         return conn_dict
 
@@ -176,7 +175,6 @@ class BaseGenome(StatefulBaseClass):
                 continue
             nd = self.node_gene.to_dict(state, node)
             idx = nd["idx"]
-            del nd["idx"]
             node_dict[idx] = nd
         return node_dict
 
@@ -192,7 +190,7 @@ class BaseGenome(StatefulBaseClass):
     def get_output_idx(self):
         return self.output_idx.tolist()
 
-    def sympy_func(self, state, network, precision=3):
+    def sympy_func(self, state, network, sympy_output_transform=None):
         raise NotImplementedError
 
     def visualize(

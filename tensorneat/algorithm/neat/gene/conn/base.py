@@ -39,5 +39,5 @@ class BaseConnGene(BaseGene):
             "out": int(out_idx),
         }
 
-    def sympy_func(self, state, conn_dict, inputs, precision=None):
+    def sympy_func(self, state, conn_dict, inputs):
         raise NotImplementedError

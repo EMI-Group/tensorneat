@@ -28,3 +28,7 @@ if __name__ == '__main__':
 
     print(genome.repr(state, nodes, conns))
     print(network)
+
+    res = genome.sympy_func(state, network, precision=3)
+    print(res)
+

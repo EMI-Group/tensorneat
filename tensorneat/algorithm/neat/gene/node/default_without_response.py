@@ -1,7 +1,8 @@
 from typing import Tuple
 
 import jax, jax.numpy as jnp
-
+import numpy as np
+import sympy as sp
 from utils import (
     Act,
     Agg,
@@ -133,30 +134,36 @@ class NodeGeneWithoutResponse(BaseNodeGene):
 
     def to_dict(self, state, node):
         idx, bias, agg, act = node
+
+        idx = int(idx)
+
+        bias = np.array(bias, dtype=np.float32)
+        agg = int(agg)
+        act = int(act)
+
+        if act == -1:
+            act_func = Act.identity
+        else:
+            act_func = self.activation_options[act]
+
         return {
-            "idx": int(idx),
-            "bias": float(bias),
+            "idx": idx,
+            "bias": bias,
             "agg": self.aggregation_options[int(agg)].__name__,
-            "act": self.activation_options[int(act)].__name__,
+            "act": act_func.__name__,
         }
 
-    def sympy_func(
-        self, state, node_dict, inputs, is_output_node=False, precision=None
-    ):
+    def sympy_func(self, state, node_dict, inputs, is_output_node=False):
+        nd = node_dict
 
-        bias = node_dict["bias"]
-        agg = node_dict["agg"]
-        act = node_dict["act"]
+        bias = sp.symbols(f"n_{nd['idx']}_b")
 
-        if precision is not None:
-            bias = round(bias, precision)
+        z = convert_to_sympy(nd["agg"])(inputs)
 
-        z = convert_to_sympy(agg)(inputs)
         z = bias + z
-
         if is_output_node:
-            return z
+            pass
         else:
-            z = convert_to_sympy(act)(z)
+            z = convert_to_sympy(nd["act"])(z)
 
-        return z
+        return z, {bias: nd["bias"]}
