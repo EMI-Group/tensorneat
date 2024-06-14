@@ -270,7 +270,7 @@ class DefaultGenome(BaseGenome):
 
             fixed_args_output_funcs.append(f)
 
-        forward_func = lambda inputs: [f(inputs) for f in fixed_args_output_funcs]
+        forward_func = lambda inputs: jnp.array([f(inputs) for f in fixed_args_output_funcs])
 
         return (
             symbols,

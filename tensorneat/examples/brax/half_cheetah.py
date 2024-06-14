@@ -1,8 +1,15 @@
+import jax
+
 from pipeline import Pipeline
 from algorithm.neat import *
 
 from problem.rl_env import BraxEnv
 from utils import Act
+
+
+def sample_policy(randkey, obs):
+    return jax.random.uniform(randkey, (6,), minval=-1, maxval=1)
+
 
 if __name__ == "__main__":
     pipeline = Pipeline(
@@ -17,7 +24,7 @@ if __name__ == "__main__":
                         activation_options=(Act.tanh,),
                         activation_default=Act.tanh,
                     ),
-                    output_transform=Act.tanh
+                    output_transform=Act.tanh,
                 ),
                 pop_size=1000,
                 species_size=10,
@@ -25,6 +32,10 @@ if __name__ == "__main__":
         ),
         problem=BraxEnv(
             env_name="halfcheetah",
+            max_step=1000,
+            obs_normalization=True,
+            sample_episodes=1000,
+            sample_policy=sample_policy,
         ),
         generation_limit=10000,
         fitness_target=5000,
