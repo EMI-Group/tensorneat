@@ -43,7 +43,7 @@ class RLEnv(BaseProblem):
             assert sample_episodes > 0, "sample_size must be greater than 0"
             self.sample_policy = sample_policy
             self.sample_episodes = sample_episodes
-            self.obs_normalization = obs_normalization
+        self.obs_normalization = obs_normalization
 
     def setup(self, state=State()):
         if self.obs_normalization:

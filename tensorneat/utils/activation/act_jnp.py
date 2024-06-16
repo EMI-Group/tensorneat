@@ -14,7 +14,8 @@ class Act:
 
     @staticmethod
     def tanh(z):
-        return jnp.tanh(0.6 * z)
+        z = jnp.clip(0.6*z, -3, 3)
+        return jnp.tanh(z)
 
     @staticmethod
     def sin(z):

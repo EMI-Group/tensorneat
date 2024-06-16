@@ -45,11 +45,15 @@ class SympySigmoid(sp.Function):
 class SympyTanh(sp.Function):
     @classmethod
     def eval(cls, z):
-        return sp.tanh(0.6 * z)
+        if z.is_Number:
+            z = SympyClip(0.6 * z, -3, 3)
+            return sp.tanh(z)
+        return None
 
     @staticmethod
     def numerical_eval(z, backend=np):
-        return backend.tanh(0.6 * z)
+        z = backend.clip(0.6*z, -3, 3)
+        return backend.tanh(z)
 
 
 class SympySin(sp.Function):

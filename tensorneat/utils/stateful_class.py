@@ -1,3 +1,4 @@
+import json
 from typing import Optional
 from . import State
 import pickle
@@ -17,6 +18,15 @@ class StatefulBaseClass:
             self.__dict__["aux_for_state"] = state
         with open(path, "wb") as f:
             pickle.dump(self, f)
+
+    def show_config(self):
+        config = {}
+        for key, value in self.__dict__.items():
+            if isinstance(value, StatefulBaseClass):
+                config[str(key)] = value.show_config()
+            else:
+                config[str(key)] = str(value)
+        return config
 
     @classmethod
     def load(cls, path: str, with_state: bool = False, warning: bool = True):

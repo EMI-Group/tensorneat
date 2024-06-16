@@ -206,14 +206,15 @@ class DefaultGenome(BaseGenome):
         input_idx = self.get_input_idx()
         output_idx = self.get_output_idx()
         order, _ = topological_sort_python(set(network["nodes"]), set(network["conns"]))
+        hidden_idx = [i for i in network["nodes"] if i not in input_idx and i not in output_idx]
         symbols = {}
         for i in network["nodes"]:
             if i in input_idx:
-                symbols[i] = sp.Symbol(f"i{i}")
+                symbols[i] = sp.Symbol(f"i{i - min(input_idx)}")
             elif i in output_idx:
-                symbols[i] = sp.Symbol(f"o{i}")
+                symbols[i] = sp.Symbol(f"o{i - min(output_idx)}")
             else:  # hidden
-                symbols[i] = sp.Symbol(f"h{i}")
+                symbols[i] = sp.Symbol(f"h{i - min(hidden_idx)}")
 
         nodes_exprs = {}
         args_symbols = {}
