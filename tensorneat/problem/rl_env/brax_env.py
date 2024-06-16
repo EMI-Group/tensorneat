@@ -9,6 +9,7 @@ class BraxEnv(RLEnv):
         self, env_name: str = "ant", backend: str = "generalized", *args, **kwargs
     ):
         super().__init__(*args, **kwargs)
+        self.env_name = env_name
         self.env = envs.create(env_name=env_name, backend=backend)
 
     def env_step(self, randkey, env_state, action):
@@ -34,45 +35,49 @@ class BraxEnv(RLEnv):
         act_func,
         params,
         save_path=None,
-        height=512,
-        width=512,
-        duration=0.1,
+        height=480,
+        width=480,
         *args,
-        **kwargs
+        **kwargs,
     ):
 
         import jax
         import imageio
-        import numpy as np
         from brax.io import image
-        from tqdm import tqdm
 
         obs, env_state = self.reset(randkey)
         reward, done = 0.0, False
-        state_histories = []
+        state_histories = [env_state.pipeline_state]
 
         def step(key, env_state, obs):
             key, _ = jax.random.split(key)
-            action = act_func(params, obs)
+
+            if self.action_policy is not None:
+                forward_func = lambda obs: act_func(state, params, obs)
+                action = self.action_policy(key, forward_func, obs)
+            else:
+                action = act_func(state, params, obs)
+
             obs, env_state, r, done, _ = self.step(randkey, env_state, action)
             return key, env_state, obs, r, done
 
-        while not done:
+        jit_step = jax.jit(step)
+
+        for _ in range(self.max_step):
+            key, env_state, obs, r, done = jit_step(randkey, env_state, obs)
             state_histories.append(env_state.pipeline_state)
-            key, env_state, obs, r, done = jax.jit(step)(randkey, env_state, obs)
             reward += r
+            if done:
+                break
 
-        imgs = [
-            image.render_array(sys=self.env.sys, state=s, width=width, height=height)
-            for s in tqdm(state_histories, desc="Rendering")
-        ]
+        imgs = image.render_array(
+            sys=self.env.sys, trajectory=state_histories, height=height, width=width
+        )
 
-        def create_gif(image_list, gif_name, duration):
-            with imageio.get_writer(gif_name, mode="I", duration=duration) as writer:
-                for image in image_list:
-                    formatted_image = np.array(image, dtype=np.uint8)
-                    writer.append_data(formatted_image)
+        if save_path is None:
+            save_path = f"{self.env_name}.gif"
 
-        create_gif(imgs, save_path, duration=0.1)
+        imageio.mimsave(save_path, imgs, *args, **kwargs)
+
         print("Gif saved to: ", save_path)
         print("Total reward: ", reward)
