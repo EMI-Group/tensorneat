@@ -2,7 +2,7 @@ import jax, jax.numpy as jnp
 from .default import DefaultGenome
 
 
-class AdvanceInitialize(DefaultGenome):
+class HiddenInitialize(DefaultGenome):
     def __init__(self, hidden_cnt=8, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.hidden_cnt = hidden_cnt

@@ -1,7 +1,7 @@
 import jax, jax.numpy as jnp
 
 from algorithm.neat import *
-from algorithm.neat.genome.advance import AdvanceInitialize
+from algorithm.neat.genome.hidden import AdvanceInitialize
 from utils.graph import topological_sort_python
 
 if __name__ == '__main__':
