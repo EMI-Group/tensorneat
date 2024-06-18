@@ -2,6 +2,9 @@ import sympy as sp
 import numpy as np
 
 
+sigma_3 = 2.576
+
+
 class SympyClip(sp.Function):
     @classmethod
     def eval(cls, val, min_val, max_val):
@@ -26,14 +29,17 @@ class SympySigmoid(sp.Function):
     @classmethod
     def eval(cls, z):
         if z.is_Number:
-            z = SympyClip(5 * z, -10, 10)
-            return 1 / (1 + sp.exp(-z))
+            z = SympyClip(5 * z / sigma_3, -5, 5)
+            z = 1 / (1 + sp.exp(-z))
+            return z * sigma_3
         return None
 
     @staticmethod
     def numerical_eval(z, backend=np):
-        z = backend.clip(5 * z, -10, 10)
-        return 1 / (1 + backend.exp(-z))
+        z = backend.clip(5 * z / sigma_3, -5, 5)
+        z = 1 / (1 + backend.exp(-z))
+
+        return z * sigma_3  # (0, sigma_3)
 
     def _sympystr(self, printer):
         return f"sigmoid({self.args[0]})"
@@ -46,36 +52,56 @@ class SympyTanh(sp.Function):
     @classmethod
     def eval(cls, z):
         if z.is_Number:
-            z = SympyClip(0.6 * z, -3, 3)
+            z = SympyClip(5 * z / sigma_3, -5, 5)
+            return sp.tanh(z) * sigma_3
+        return None
+
+    @staticmethod
+    def numerical_eval(z, backend=np):
+        z = backend.clip(5 * z / sigma_3, -5, 5)
+        return backend.tanh(z) * sigma_3  # (-sigma_3, sigma_3)
+
+
+class SympyStandardTanh(sp.Function):
+    @classmethod
+    def eval(cls, z):
+        if z.is_Number:
+            z = SympyClip(5 * z / sigma_3, -5, 5)
             return sp.tanh(z)
         return None
 
     @staticmethod
     def numerical_eval(z, backend=np):
-        z = backend.clip(0.6*z, -3, 3)
-        return backend.tanh(z)
+        z = backend.clip(5 * z / sigma_3, -5, 5)
+        return backend.tanh(z)  # (-1, 1)
 
 
 class SympySin(sp.Function):
     @classmethod
     def eval(cls, z):
-        return sp.sin(z)
+        if z.is_Number:
+            z = SympyClip(sp.pi / 2 * z / sigma_3, -sp.pi / 2, sp.pi / 2)
+            return sp.sin(z) * sigma_3  # (-sigma_3, sigma_3)
+        return None
 
     @staticmethod
     def numerical_eval(z, backend=np):
-        return backend.sin(z)
+        z = backend.clip(backend.pi / 2 * z / sigma_3, -backend.pi / 2, backend.pi / 2)
+        return backend.sin(z) * sigma_3  # (-sigma_3, sigma_3)
 
 
 class SympyRelu(sp.Function):
     @classmethod
     def eval(cls, z):
         if z.is_Number:
-            return sp.Piecewise((z, z > 0), (0, True))
+            z = SympyClip(z, -sigma_3, sigma_3)
+            return sp.Max(z, 0)  # (0, sigma_3)
         return None
 
     @staticmethod
     def numerical_eval(z, backend=np):
-        return backend.maximum(z, 0)
+        z = backend.clip(z, -sigma_3, sigma_3)
+        return backend.maximum(z, 0)  # (0, sigma_3)
 
     def _sympystr(self, printer):
         return f"relu({self.args[0]})"
@@ -107,21 +133,14 @@ class SympyLelu(sp.Function):
 class SympyIdentity(sp.Function):
     @classmethod
     def eval(cls, z):
-        return z
+        if z.is_Number:
+            z = SympyClip(z, -sigma_3, sigma_3)
+            return z
+        return None
 
     @staticmethod
     def numerical_eval(z, backend=np):
-        return z
-
-
-class SympyClamped(sp.Function):
-    @classmethod
-    def eval(cls, z):
-        return SympyClip(z, -1, 1)
-
-    @staticmethod
-    def numerical_eval(z, backend=np):
-        return backend.clip(z, -1, 1)
+        return backend.clip(z, -sigma_3, sigma_3)
 
 
 class SympyInv(sp.Function):

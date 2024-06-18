@@ -2,6 +2,9 @@ import jax
 import jax.numpy as jnp
 
 
+sigma_3 = 2.576
+
+
 class Act:
     @staticmethod
     def name2func(name):
@@ -9,34 +12,41 @@ class Act:
 
     @staticmethod
     def sigmoid(z):
-        z = jnp.clip(5 * z, -10, 10)
-        return 1 / (1 + jnp.exp(-z))
+        z = jnp.clip(5 * z / sigma_3, -5, 5)
+        z = 1 / (1 + jnp.exp(-z))
+
+        return z * sigma_3  # (0, sigma_3)
 
     @staticmethod
     def tanh(z):
-        z = jnp.clip(0.6*z, -3, 3)
-        return jnp.tanh(z)
+        z = jnp.clip(5 * z / sigma_3, -5, 5)
+        return jnp.tanh(z) * sigma_3  # (-sigma_3, sigma_3)
+
+    @staticmethod
+    def standard_tanh(z):
+        z = jnp.clip(5 * z / sigma_3, -5, 5)
+        return jnp.tanh(z)  # (-1, 1)
 
     @staticmethod
     def sin(z):
-        return jnp.sin(z)
+        z = jnp.clip(jnp.pi / 2 * z / sigma_3, -jnp.pi / 2, jnp.pi / 2)
+        return jnp.sin(z) * sigma_3  # (-sigma_3, sigma_3)
 
     @staticmethod
     def relu(z):
-        return jnp.maximum(z, 0)
+        z = jnp.clip(z, -sigma_3, sigma_3)
+        return jnp.maximum(z, 0)  # (0, sigma_3)
 
     @staticmethod
     def lelu(z):
         leaky = 0.005
+        z = jnp.clip(z, -sigma_3, sigma_3)
         return jnp.where(z > 0, z, leaky * z)
 
     @staticmethod
     def identity(z):
+        z = jnp.clip(z, -sigma_3, sigma_3)
         return z
-
-    @staticmethod
-    def clamped(z):
-        return jnp.clip(z, -1, 1)
 
     @staticmethod
     def inv(z):
@@ -55,6 +65,7 @@ class Act:
 
     @staticmethod
     def abs(z):
+        z = jnp.clip(z, -1, 1)
         return jnp.abs(z)
 
 
@@ -65,7 +76,6 @@ ACT_ALL = (
     Act.relu,
     Act.lelu,
     Act.identity,
-    Act.clamped,
     Act.inv,
     Act.log,
     Act.exp,

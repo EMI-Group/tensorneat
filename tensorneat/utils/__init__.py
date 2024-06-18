@@ -20,7 +20,6 @@ name2sympy = {
     "relu": SympyRelu,
     "lelu": SympyLelu,
     "identity": SympyIdentity,
-    "clamped": SympyClamped,
     "inv": SympyInv,
     "log": SympyLog,
     "exp": SympyExp,
