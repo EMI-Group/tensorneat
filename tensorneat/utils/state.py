@@ -36,6 +36,9 @@ class State:
     def __setstate__(self, state):
         self.__dict__["state_dict"] = state
 
+    def __contains__(self, item):
+        return item in self.state_dict
+
     def tree_flatten(self):
         children = list(self.state_dict.values())
         aux_data = list(self.state_dict.keys())

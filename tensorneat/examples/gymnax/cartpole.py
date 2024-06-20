@@ -6,7 +6,7 @@ from algorithm.neat import *
 from problem.rl_env import GymNaxEnv
 
 
-def action_policy(forward_func, obs):
+def action_policy(randkey, forward_func, obs):
     return jnp.argmax(forward_func(obs))
 
 
@@ -27,7 +27,9 @@ if __name__ == "__main__":
                 species_size=10,
             ),
         ),
-        problem=GymNaxEnv(env_name="CartPole-v1", repeat_times=5, action_policy=action_policy),
+        problem=GymNaxEnv(
+            env_name="CartPole-v1", repeat_times=5, action_policy=action_policy
+        ),
         generation_limit=10000,
         fitness_target=500,
     )

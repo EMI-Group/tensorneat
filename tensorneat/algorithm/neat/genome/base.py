@@ -2,7 +2,7 @@ import numpy as np
 import jax, jax.numpy as jnp
 from ..gene import BaseNodeGene, BaseConnGene
 from ..ga import BaseMutation, BaseCrossover
-from utils import State, StatefulBaseClass, topological_sort_python
+from utils import State, StatefulBaseClass, topological_sort_python, hash_array
 
 
 class BaseGenome(StatefulBaseClass):
@@ -255,10 +255,14 @@ class BaseGenome(StatefulBaseClass):
 
         nx.draw(
             G,
-            with_labels=True,
             pos=rotated_pos,
             node_size=node_sizes,
             node_color=node_colors,
             **kwargs,
         )
         plt.savefig(save_path, dpi=save_dpi)
+
+    def hash(self, nodes, conns):
+        nodes_hashs = jax.vmap(hash_array)(nodes)
+        conns_hashs = jax.vmap(hash_array)(conns)
+        return hash_array(jnp.concatenate([nodes_hashs, conns_hashs]))

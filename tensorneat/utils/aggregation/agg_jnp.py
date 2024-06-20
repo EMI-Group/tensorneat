@@ -9,19 +9,19 @@ class Agg:
 
     @staticmethod
     def sum(z):
-        return jnp.sum(z, axis=0, where=~jnp.isnan(z))
+        return jnp.sum(z, axis=0, where=~jnp.isnan(z), initial=0)
 
     @staticmethod
     def product(z):
-        return jnp.prod(z, axis=0, where=~jnp.isnan(z))
+        return jnp.prod(z, axis=0, where=~jnp.isnan(z), initial=1)
 
     @staticmethod
     def max(z):
-        return jnp.max(z, axis=0, where=~jnp.isnan(z))
+        return jnp.max(z, axis=0, where=~jnp.isnan(z), initial=-jnp.inf)
 
     @staticmethod
     def min(z):
-        return jnp.min(z, axis=0, where=~jnp.isnan(z))
+        return jnp.min(z, axis=0, where=~jnp.isnan(z), initial=jnp.inf)
 
     @staticmethod
     def maxabs(z):

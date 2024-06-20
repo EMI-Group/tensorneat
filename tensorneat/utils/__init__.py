@@ -1,5 +1,3 @@
-import jax.numpy as jnp
-
 from utils.aggregation.agg_jnp import Agg, agg_func, AGG_ALL
 from .tools import *
 from .graph import *
@@ -15,7 +13,9 @@ from typing import Union
 
 name2sympy = {
     "sigmoid": SympySigmoid,
+    "standard_sigmoid": SympyStandardSigmoid,
     "tanh": SympyTanh,
+    "standard_tanh": SympyStandardTanh,
     "sin": SympySin,
     "relu": SympyRelu,
     "lelu": SympyLelu,

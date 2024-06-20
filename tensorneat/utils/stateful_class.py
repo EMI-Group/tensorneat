@@ -19,6 +19,21 @@ class StatefulBaseClass:
         with open(path, "wb") as f:
             pickle.dump(self, f)
 
+    def __getstate__(self):
+        # only pickle the picklable attributes
+        state = self.__dict__.copy()
+        non_picklable_keys = []
+        for key, value in state.items():
+            try:
+                pickle.dumps(value)
+            except Exception:
+                non_picklable_keys.append(key)
+
+        for key in non_picklable_keys:
+            state.pop(key)
+
+        return state
+
     def show_config(self):
         config = {}
         for key, value in self.__dict__.items():

@@ -12,19 +12,26 @@ class Act:
 
     @staticmethod
     def sigmoid(z):
-        z = jnp.clip(5 * z / sigma_3, -5, 5)
+        z = 5 * z / sigma_3
         z = 1 / (1 + jnp.exp(-z))
 
         return z * sigma_3  # (0, sigma_3)
 
     @staticmethod
+    def standard_sigmoid(z):
+        z = 5 * z / sigma_3
+        z = 1 / (1 + jnp.exp(-z))
+
+        return z  # (0, 1)
+
+    @staticmethod
     def tanh(z):
-        z = jnp.clip(5 * z / sigma_3, -5, 5)
+        z = 5 * z / sigma_3
         return jnp.tanh(z) * sigma_3  # (-sigma_3, sigma_3)
 
     @staticmethod
     def standard_tanh(z):
-        z = jnp.clip(5 * z / sigma_3, -5, 5)
+        z =5 * z / sigma_3
         return jnp.tanh(z)  # (-1, 1)
 
     @staticmethod

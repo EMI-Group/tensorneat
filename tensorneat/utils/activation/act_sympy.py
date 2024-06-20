@@ -25,21 +25,16 @@ class SympyClip(sp.Function):
         return rf"\mathrm{{clip}}\left({sp.latex(self.args[0])}, {self.args[1]}, {self.args[2]}\right)"
 
 
-class SympySigmoid(sp.Function):
+class SympySigmoid_(sp.Function):
     @classmethod
     def eval(cls, z):
-        if z.is_Number:
-            z = SympyClip(5 * z / sigma_3, -5, 5)
-            z = 1 / (1 + sp.exp(-z))
-            return z * sigma_3
-        return None
+        z = 1 / (1 + sp.exp(-z))
+        return z
 
     @staticmethod
     def numerical_eval(z, backend=np):
-        z = backend.clip(5 * z / sigma_3, -5, 5)
         z = 1 / (1 + backend.exp(-z))
-
-        return z * sigma_3  # (0, sigma_3)
+        return z
 
     def _sympystr(self, printer):
         return f"sigmoid({self.args[0]})"
@@ -48,32 +43,47 @@ class SympySigmoid(sp.Function):
         return rf"\mathrm{{sigmoid}}\left({sp.latex(self.args[0])}\right)"
 
 
+class SympySigmoid(sp.Function):
+    @classmethod
+    def eval(cls, z):
+        return SympySigmoid_(5 * z / sigma_3) * sigma_3
+
+
+class SympyStandardSigmoid(sp.Function):
+    @classmethod
+    def eval(cls, z):
+        return SympySigmoid_(5 * z / sigma_3)
+
+    # @staticmethod
+    # def numerical_eval(z, backend=np):
+    #     z = backend.clip(5 * z / sigma_3, -5, 5)
+    #     z = 1 / (1 + backend.exp(-z))
+    #
+    #     return z  # (0, 1)
+
+
 class SympyTanh(sp.Function):
     @classmethod
     def eval(cls, z):
-        if z.is_Number:
-            z = SympyClip(5 * z / sigma_3, -5, 5)
-            return sp.tanh(z) * sigma_3
-        return None
+        z = 5 * z / sigma_3
+        return sp.tanh(z) * sigma_3
 
-    @staticmethod
-    def numerical_eval(z, backend=np):
-        z = backend.clip(5 * z / sigma_3, -5, 5)
-        return backend.tanh(z) * sigma_3  # (-sigma_3, sigma_3)
+    # @staticmethod
+    # def numerical_eval(z, backend=np):
+    #     z = backend.clip(5 * z / sigma_3, -5, 5)
+    #     return backend.tanh(z) * sigma_3  # (-sigma_3, sigma_3)
 
 
 class SympyStandardTanh(sp.Function):
     @classmethod
     def eval(cls, z):
-        if z.is_Number:
-            z = SympyClip(5 * z / sigma_3, -5, 5)
-            return sp.tanh(z)
-        return None
+        z = 5 * z / sigma_3
+        return sp.tanh(z)
 
-    @staticmethod
-    def numerical_eval(z, backend=np):
-        z = backend.clip(5 * z / sigma_3, -5, 5)
-        return backend.tanh(z)  # (-1, 1)
+    # @staticmethod
+    # def numerical_eval(z, backend=np):
+    #     z = backend.clip(5 * z / sigma_3, -5, 5)
+    #     return backend.tanh(z)  # (-1, 1)
 
 
 class SympySin(sp.Function):

@@ -1,5 +1,5 @@
 import jax, jax.numpy as jnp
-from utils import State, StatefulBaseClass
+from utils import State, StatefulBaseClass, hash_array
 
 
 class BaseGene(StatefulBaseClass):
@@ -43,3 +43,6 @@ class BaseGene(StatefulBaseClass):
 
     def repr(self, state, gene, precision=2):
         raise NotImplementedError
+
+    def hash(self, gene):
+        return hash_array(gene)
