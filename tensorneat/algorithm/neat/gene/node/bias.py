@@ -1,7 +1,6 @@
 from typing import Tuple
 
 import jax, jax.numpy as jnp
-import numpy as np
 import sympy as sp
 from tensorneat.common import (
     Act,
@@ -16,7 +15,7 @@ from tensorneat.common import (
 from . import BaseNodeGene
 
 
-class NodeGeneWithoutResponse(BaseNodeGene):
+class BiasNode(BaseNodeGene):
     """
     Default node gene, with the same behavior as in NEAT-python.
     The attribute response is removed.

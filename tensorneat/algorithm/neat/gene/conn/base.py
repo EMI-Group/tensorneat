@@ -16,13 +16,6 @@ class BaseConnGene(BaseGene):
     def forward(self, state, attrs, inputs):
         raise NotImplementedError
 
-    def update_by_batch(self, state, attrs, batch_inputs):
-        # default: do not update attrs, but to calculate batch_res
-        return (
-            jax.vmap(self.forward, in_axes=(None, None, 0))(state, attrs, batch_inputs),
-            attrs,
-        )
-
     def repr(self, state, conn, precision=2, idx_width=3, func_width=8):
         in_idx, out_idx = conn[:2]
         in_idx = int(in_idx)

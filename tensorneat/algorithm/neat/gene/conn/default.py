@@ -1,9 +1,8 @@
 import jax.numpy as jnp
 import jax.random
-import numpy as np
 import sympy as sp
 from tensorneat.common import mutate_float
-from . import BaseConnGene
+from .base import BaseConnGene
 
 
 class DefaultConnGene(BaseConnGene):
