@@ -5,8 +5,8 @@ from jax import vmap, numpy as jnp
 import numpy as np
 import sympy as sp
 
-from . import BaseGenome
-from ..gene import DefaultNodeGene, DefaultConnGene
+from .base import BaseGenome
+from .gene import DefaultNodeGene, DefaultConnGene
 from .operations import DefaultMutation, DefaultCrossover, DefaultDistance
 from .utils import unflatten_conns, extract_node_attrs, extract_conn_attrs
 
@@ -102,7 +102,7 @@ class DefaultGenome(BaseGenome):
                     state,
                     nodes_attrs[i],
                     ins,
-                    is_output_node=jnp.isin(nodes[0], self.output_idx),  # nodes[0] -> the key of nodes
+                    is_output_node=jnp.isin(nodes[i, 0], self.output_idx),  # nodes[0] -> the key of nodes
                 )
 
                 # set new value

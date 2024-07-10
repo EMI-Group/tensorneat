@@ -1,16 +1,17 @@
 import jax, jax.numpy as jnp
+
+from .base import BaseSpecies
 from tensorneat.common import (
     State,
     rank_elements,
     argmin_with_mask,
     fetch_first,
 )
-from ..genome.utils import (
+from tensorneat.genome.utils import (
     extract_conn_attrs,
     extract_node_attrs,
 )
-from ..genome import BaseGenome
-from .base import BaseSpecies
+from tensorneat.genome import BaseGenome
 
 
 """

@@ -3,9 +3,9 @@ from jax import vmap, numpy as jnp
 from .utils import unflatten_conns
 
 from .base import BaseGenome
+from .gene import DefaultNodeGene, DefaultConnGene
 from .operations import DefaultMutation, DefaultCrossover, DefaultDistance
 from .utils import unflatten_conns, extract_node_attrs, extract_conn_attrs
-from ..gene import DefaultNodeGene, DefaultConnGene
 
 from tensorneat.common import attach_with_inf
 

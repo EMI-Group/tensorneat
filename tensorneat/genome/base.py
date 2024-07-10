@@ -3,7 +3,7 @@ from typing import Callable, Sequence
 import numpy as np
 import jax
 from jax import vmap, numpy as jnp
-from ..gene import BaseNodeGene, BaseConnGene
+from .gene import BaseNodeGene, BaseConnGene
 from .operations import BaseMutation, BaseCrossover, BaseDistance
 from tensorneat.common import (
     State,

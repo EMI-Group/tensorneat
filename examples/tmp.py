@@ -1,7 +1,7 @@
 import jax, jax.numpy as jnp
 
 from tensorneat.algorithm import NEAT
-from tensorneat.algorithm.neat import DefaultGenome, RecurrentGenome
+from tensorneat.genome import DefaultGenome, RecurrentGenome
 
 key = jax.random.key(0)
 genome = DefaultGenome(num_inputs=5, num_outputs=3, max_nodes=100, max_conns=500, init_hidden_layers=(1, 2 ,3))

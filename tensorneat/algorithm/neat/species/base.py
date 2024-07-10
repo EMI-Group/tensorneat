@@ -1,5 +1,5 @@
 from tensorneat.common import State, StatefulBaseClass
-from ..genome import BaseGenome
+from tensorneat.genome import BaseGenome
 
 
 class BaseSpecies(StatefulBaseClass):
