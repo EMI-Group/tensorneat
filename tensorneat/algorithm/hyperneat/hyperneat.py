@@ -2,7 +2,7 @@ from typing import Callable
 
 import jax, jax.numpy as jnp
 
-from utils import State, Act, Agg
+from tensorneat.common import State, Act, Agg
 from .. import BaseAlgorithm, NEAT
 from ..neat.gene import BaseNodeGene, BaseConnGene
 from ..neat.genome import RecurrentGenome

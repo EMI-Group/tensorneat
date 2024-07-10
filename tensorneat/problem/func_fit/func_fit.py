@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from utils import State
+from tensorneat.common import State
 from .. import BaseProblem
 
 

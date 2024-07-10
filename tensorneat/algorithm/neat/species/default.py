@@ -1,9 +1,11 @@
 import jax, jax.numpy as jnp
-from utils import (
+from tensorneat.common import (
     State,
     rank_elements,
     argmin_with_mask,
     fetch_first,
+)
+from ..genome.utils import (
     extract_conn_attrs,
     extract_node_attrs,
 )
@@ -635,7 +637,9 @@ class DefaultSpecies(BaseSpecies):
 
         # find next node key
         all_nodes_keys = state.pop_nodes[:, :, 0]
-        max_node_key = jnp.max(all_nodes_keys, where=~jnp.isnan(all_nodes_keys), initial=0)
+        max_node_key = jnp.max(
+            all_nodes_keys, where=~jnp.isnan(all_nodes_keys), initial=0
+        )
         next_node_key = max_node_key + 1
         new_node_keys = jnp.arange(self.pop_size) + next_node_key
 

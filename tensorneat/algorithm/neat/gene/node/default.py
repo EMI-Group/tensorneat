@@ -4,7 +4,7 @@ import numpy as np
 import jax, jax.numpy as jnp
 import sympy as sp
 
-from utils import (
+from tensorneat.common import (
     Act,
     Agg,
     act_func,

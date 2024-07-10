@@ -1,5 +1,5 @@
 import jax, jax.numpy as jnp
-from utils import State, StatefulBaseClass, hash_array
+from tensorneat.common import State, StatefulBaseClass, hash_array
 
 
 class BaseGene(StatefulBaseClass):

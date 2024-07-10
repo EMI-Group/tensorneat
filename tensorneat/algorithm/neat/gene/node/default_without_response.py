@@ -3,7 +3,7 @@ from typing import Tuple
 import jax, jax.numpy as jnp
 import numpy as np
 import sympy as sp
-from utils import (
+from tensorneat.common import (
     Act,
     Agg,
     act_func,

@@ -75,7 +75,7 @@ from pipeline import Pipeline
 from algorithm.neat import *
 
 from problem.rl_env import BraxEnv
-from utils import Act
+from tensorneat.utils import Act
 
 if __name__ == '__main__':
     pipeline = Pipeline(

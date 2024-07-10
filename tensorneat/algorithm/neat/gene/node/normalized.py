@@ -2,7 +2,7 @@ from typing import Tuple
 
 import jax, jax.numpy as jnp
 
-from utils import Act, Agg, act_func, agg_func, mutate_int, mutate_float
+from tensorneat.common import Act, Agg, act_func, agg_func, mutate_int, mutate_float
 from . import BaseNodeGene
 
 

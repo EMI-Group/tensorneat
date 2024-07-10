@@ -9,7 +9,7 @@ from algorithm import BaseAlgorithm
 from problem import BaseProblem
 from problem.rl_env import RLEnv
 from problem.func_fit import FuncFit
-from utils import State, StatefulBaseClass
+from tensorneat.common import State, StatefulBaseClass
 
 
 class Pipeline(StatefulBaseClass):

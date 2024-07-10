@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import jax.random
 import numpy as np
 import sympy as sp
-from utils import mutate_float
+from tensorneat.common import mutate_float
 from . import BaseConnGene
 
 

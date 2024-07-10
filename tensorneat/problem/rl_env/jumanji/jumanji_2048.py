@@ -1,7 +1,7 @@
 import jax, jax.numpy as jnp
 import jumanji
 
-from utils import State
+from tensorneat.common import State
 from ..rl_jit import RLEnv
 
 

@@ -1,6 +1,6 @@
 from typing import Callable
 
-from utils import State, StatefulBaseClass
+from tensorneat.common import State, StatefulBaseClass
 
 
 class BaseProblem(StatefulBaseClass):

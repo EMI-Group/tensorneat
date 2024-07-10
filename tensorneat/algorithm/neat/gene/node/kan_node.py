@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 from . import BaseNodeGene
-from utils import Agg
+from tensorneat.common import Agg
 
 
 class KANNode(BaseNodeGene):

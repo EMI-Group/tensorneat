@@ -1,11 +1,11 @@
 from typing import Callable
 
 import jax, jax.numpy as jnp
-from utils import unflatten_conns
+from .utils import unflatten_conns
 
 from . import BaseGenome
-from ..gene import BaseNodeGene, BaseConnGene, DefaultNodeGene, DefaultConnGene
-from ..ga import BaseMutation, BaseCrossover, DefaultMutation, DefaultCrossover
+from ..gene import DefaultNodeGene, DefaultConnGene
+from .operations import DefaultMutation, DefaultCrossover
 
 
 class RecurrentGenome(BaseGenome):
@@ -17,13 +17,13 @@ class RecurrentGenome(BaseGenome):
         self,
         num_inputs: int,
         num_outputs: int,
-        max_nodes: int,
-        max_conns: int,
-        node_gene: BaseNodeGene = DefaultNodeGene(),
-        conn_gene: BaseConnGene = DefaultConnGene(),
-        mutation: BaseMutation = DefaultMutation(),
-        crossover: BaseCrossover = DefaultCrossover(),
-        activate_time: int = 10,
+        max_nodes = 50,
+        max_conns = 100,
+        node_gene=DefaultNodeGene(),
+        conn_gene=DefaultConnGene(),
+        mutation=DefaultMutation(),
+        crossover=DefaultCrossover(),
+        activate_time=10,
         output_transform: Callable = None,
     ):
         super().__init__(
