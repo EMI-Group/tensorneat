@@ -34,9 +34,6 @@ class BaseGene(StatefulBaseClass):
     def forward(self, state, attrs, inputs):
         raise NotImplementedError
 
-    def update_by_batch(self, state, attrs, batch_inputs):
-        raise NotImplementedError
-
     @property
     def length(self):
         return len(self.fixed_attrs) + len(self.custom_attrs)

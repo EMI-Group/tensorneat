@@ -31,7 +31,7 @@ class BaseGenome(StatefulBaseClass):
         input_transform: Callable = None,
         init_hidden_layers: Sequence[int] = (),
     ):
-        
+
         # check transform functions
         if input_transform is not None:
             try:
@@ -64,7 +64,7 @@ class BaseGenome(StatefulBaseClass):
                     all_init_conns_in_idx.append(in_idx)
                     all_init_conns_out_idx.append(out_idx)
             all_init_nodes.extend(in_layer)
-        all_init_nodes.extend(layer_indices[-1])
+        all_init_nodes.extend(layer_indices[-1])  # output layer
 
         if max_nodes < len(all_init_nodes):
             raise ValueError(
@@ -75,7 +75,7 @@ class BaseGenome(StatefulBaseClass):
             raise ValueError(
                 f"max_conns={max_conns} must be greater than or equal to the number of initial connections={len(all_init_conns_in_idx)}"
             )
-        
+
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
         self.max_nodes = max_nodes

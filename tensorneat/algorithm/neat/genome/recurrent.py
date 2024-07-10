@@ -1,12 +1,13 @@
-from typing import Callable
-
-import jax, jax.numpy as jnp
+import jax
+from jax import vmap, numpy as jnp
 from .utils import unflatten_conns
 
-from . import BaseGenome
+from .base import BaseGenome
+from .operations import DefaultMutation, DefaultCrossover, DefaultDistance
+from .utils import unflatten_conns, extract_node_attrs, extract_conn_attrs
 from ..gene import DefaultNodeGene, DefaultConnGene
-from .operations import DefaultMutation, DefaultCrossover
 
+from tensorneat.common import attach_with_inf
 
 class RecurrentGenome(BaseGenome):
     """Default genome class, with the same behavior as the NEAT-Python"""
@@ -17,14 +18,17 @@ class RecurrentGenome(BaseGenome):
         self,
         num_inputs: int,
         num_outputs: int,
-        max_nodes = 50,
-        max_conns = 100,
+        max_nodes=50,
+        max_conns=100,
         node_gene=DefaultNodeGene(),
         conn_gene=DefaultConnGene(),
         mutation=DefaultMutation(),
         crossover=DefaultCrossover(),
+        distance=DefaultDistance(),
+        output_transform=None,
+        input_transform=None,
+        init_hidden_layers=(),
         activate_time=10,
-        output_transform: Callable = None,
     ):
         super().__init__(
             num_inputs,
@@ -35,29 +39,25 @@ class RecurrentGenome(BaseGenome):
             conn_gene,
             mutation,
             crossover,
+            distance,
+            output_transform,
+            input_transform,
+            init_hidden_layers,
         )
         self.activate_time = activate_time
-
-        if output_transform is not None:
-            try:
-                _ = output_transform(jnp.zeros(num_outputs))
-            except Exception as e:
-                raise ValueError(f"Output transform function failed: {e}")
-        self.output_transform = output_transform
 
     def transform(self, state, nodes, conns):
         u_conns = unflatten_conns(nodes, conns)
         return nodes, conns, u_conns
 
-    def restore(self, state, transformed):
+    def forward(self, state, transformed, inputs):
         nodes, conns, u_conns = transformed
-        return nodes, conns
-
-    def forward(self, state, inputs, transformed):
-        nodes, conns = transformed
 
         vals = jnp.full((self.max_nodes,), jnp.nan)
-        nodes_attrs = nodes[:, 1:]  # remove index
+
+        nodes_attrs = vmap(extract_node_attrs)(nodes)
+        conns_attrs = vmap(extract_conn_attrs)(conns)
+        expand_conns_attrs = attach_with_inf(conns_attrs, u_conns)
 
         def body_func(_, values):
 
@@ -65,14 +65,14 @@ class RecurrentGenome(BaseGenome):
             values = values.at[self.input_idx].set(inputs)
 
             # calculate connections
-            node_ins = jax.vmap(
-                jax.vmap(self.conn_gene.forward, in_axes=(None, 1, None)),
-                in_axes=(None, 1, 0),
-            )(state, conns, values)
+            node_ins = vmap(
+                vmap(self.conn_gene.forward, in_axes=(None, 0, None)),
+                in_axes=(None, 0, 0),
+            )(state, expand_conns_attrs, values)
 
             # calculate nodes
-            is_output_nodes = jnp.isin(jnp.arange(self.max_nodes), self.output_idx)
-            values = jax.vmap(self.node_gene.forward, in_axes=(None, 0, 0, 0))(
+            is_output_nodes = jnp.isin(nodes[:, 0], self.output_idx)
+            values = vmap(self.node_gene.forward, in_axes=(None, 0, 0, 0))(
                 state, nodes_attrs, node_ins.T, is_output_nodes
             )
 
@@ -87,3 +87,6 @@ class RecurrentGenome(BaseGenome):
 
     def sympy_func(self, state, network, precision=3):
         raise ValueError("Sympy function is not supported for Recurrent Network!")
+
+    def visualize(self, network):
+        raise ValueError("Visualize function is not supported for Recurrent Network!")
