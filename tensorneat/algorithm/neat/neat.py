@@ -1,4 +1,3 @@
-import jax, jax.numpy as jnp
 from tensorneat.common import State
 from .. import BaseAlgorithm
 from .species import *
