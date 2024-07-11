@@ -2,7 +2,7 @@ from tensorneat.pipeline import Pipeline
 from tensorneat.algorithm.neat import NEAT
 from tensorneat.genome import DefaultGenome, BiasNode
 
-from tensorneat.problem.rl_env import BraxEnv
+from tensorneat.problem.rl import BraxEnv
 from tensorneat.common import Act, Agg
 
 import jax, jax.numpy as jnp

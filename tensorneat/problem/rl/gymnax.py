@@ -6,7 +6,7 @@ from .rl_jit import RLEnv
 class GymNaxEnv(RLEnv):
     def __init__(self, env_name, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        assert env_name in gymnax.registered_envs, f"Env {env_name} not registered"
+        assert env_name in gymnax.registered_envs, f"Env {env_name} not registered in gymnax."
         self.env, self.env_params = gymnax.make(env_name)
 
     def env_step(self, randkey, env_state, action):
@@ -24,4 +24,4 @@ class GymNaxEnv(RLEnv):
         return self.env.action_space(self.env_params).shape
 
     def show(self, state, randkey, act_func, params, *args, **kwargs):
-        raise NotImplementedError("GymNax render must rely on gym 0.19.0(old version).")
+        raise NotImplementedError

@@ -1,11 +1,11 @@
 from typing import Callable
 
 import jax
-import jax.numpy as jnp
+from jax import vmap, numpy as jnp
 import numpy as np
 
+from ..base import BaseProblem
 from tensorneat.common import State
-from .. import BaseProblem
 
 
 class RLEnv(BaseProblem):
@@ -15,7 +15,6 @@ class RLEnv(BaseProblem):
         self,
         max_step=1000,
         repeat_times=1,
-        record_episode=False,
         action_policy: Callable = None,
         obs_normalization: bool = False,
         sample_policy: Callable = None,
@@ -34,7 +33,6 @@ class RLEnv(BaseProblem):
 
         super().__init__()
         self.max_step = max_step
-        self.record_episode = record_episode
         self.repeat_times = repeat_times
         self.action_policy = action_policy
 
@@ -57,11 +55,11 @@ class RLEnv(BaseProblem):
             )  # ignore act_func
 
             def sample(rk):
-                return self.evaluate_once(
+                return self._evaluate_once(
                     state, rk, dummy_act_func, None, dummy_sample_func, True
                 )
 
-            rewards, episodes = jax.jit(jax.vmap(sample))(keys)
+            rewards, episodes = jax.jit(vmap(sample))(keys)
 
             obs = jax.device_get(episodes["obs"])  # shape: (sample_episodes, max_step, *input_shape)
             obs = obs.reshape(
@@ -88,47 +86,21 @@ class RLEnv(BaseProblem):
 
     def evaluate(self, state: State, randkey, act_func: Callable, params):
         keys = jax.random.split(randkey, self.repeat_times)
-        if self.record_episode:
-            rewards, episodes = jax.vmap(
-                self.evaluate_once, in_axes=(None, 0, None, None, None, None, None)
-            )(
-                state,
-                keys,
-                act_func,
-                params,
-                self.action_policy,
-                True,
-                self.obs_normalization,
-            )
+        rewards = vmap(
+            self._evaluate_once, in_axes=(None, 0, None, None, None, None, None)
+        )(
+            state,
+            keys,
+            act_func,
+            params,
+            self.action_policy,
+            False,
+            self.obs_normalization,
+        )
 
-            episodes["obs"] = episodes["obs"].reshape(
-                self.max_step * self.repeat_times, *self.input_shape
-            )
-            episodes["action"] = episodes["action"].reshape(
-                self.max_step * self.repeat_times, *self.output_shape
-            )
-            episodes["reward"] = episodes["reward"].reshape(
-                self.max_step * self.repeat_times,
-            )
+        return rewards.mean()
 
-            return rewards.mean(), episodes
-
-        else:
-            rewards = jax.vmap(
-                self.evaluate_once, in_axes=(None, 0, None, None, None, None, None)
-            )(
-                state,
-                keys,
-                act_func,
-                params,
-                self.action_policy,
-                False,
-                self.obs_normalization,
-            )
-
-            return rewards.mean()
-
-    def evaluate_once(
+    def _evaluate_once(
         self,
         state,
         randkey,

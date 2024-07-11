@@ -22,7 +22,7 @@ if __name__ == "__main__":
         low_bounds=[-1, -1],
         upper_bounds=[1, 1],
         method="sample",
-        num_samples=1000,
+        num_samples=100,
     )
 
     pipeline = Pipeline(
@@ -42,7 +42,7 @@ if __name__ == "__main__":
             ),
         ),
         problem=custom_problem,
-        generation_limit=100,
+        generation_limit=50,
         fitness_target=-1e-4,
         seed=42,
     )

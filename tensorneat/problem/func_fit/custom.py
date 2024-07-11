@@ -1,6 +1,4 @@
-from typing import Callable, Union, List, Tuple, Sequence
-
-import jax
+from typing import Callable, Union, List, Tuple
 from jax import vmap, Array, numpy as jnp
 import numpy as np
 
