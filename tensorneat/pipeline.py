@@ -34,7 +34,7 @@ class Pipeline(StatefulBaseClass):
         self.generation_limit = generation_limit
         self.pop_size = self.algorithm.pop_size
 
-        # print(self.problem.input_shape, self.problem.output_shape)
+        np.random.seed(self.seed)
 
         # TODO: make each algorithm's input_num and output_num
         assert (
