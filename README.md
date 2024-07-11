@@ -94,7 +94,7 @@ network = algorithm.genome.network_dict(state, *best)
 algorithm.genome.visualize(network, save_path="./imgs/xor_network.svg")
 ```
 <div style="text-align: center;">
-    <img src="./imgs/xor_network.svg" alt="Visualization of the policy"  width="200" height="200">
+    <img src="./imgs/xor_network.svg" alt="Visualization of the policy"  width="300" height="300">
 </div>
 
 5. **Transform the network to latex formulas or python codes**:
