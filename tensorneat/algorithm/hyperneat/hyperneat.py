@@ -76,7 +76,7 @@ class HyperNEAT(BaseAlgorithm):
 
         h_nodes, h_conns = self.substrate.make_nodes(
             query_res
-        ), self.substrate.make_conn(query_res)
+        ), self.substrate.make_conns(query_res)
 
         return self.hyper_genome.transform(state, h_nodes, h_conns)
 

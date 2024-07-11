@@ -31,6 +31,7 @@ name2sympy = {
     "maxabs": SympyMaxabs,
     "mean": SympyMean,
     "clip": SympyClip,
+    "square": SympySquare,
 }
 
 

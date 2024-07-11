@@ -52,9 +52,9 @@ class DefaultNode(BaseNode):
         if isinstance(activation_options, Callable):
             activation_options = [activation_options]
 
-        if len(aggregation_options) == 1 and aggregation_default is None:
+        if aggregation_default is None:
             aggregation_default = aggregation_options[0]
-        if len(activation_options) == 1 and activation_default is None:
+        if activation_default is None:
             activation_default = activation_options[0]
 
         self.bias_init_mean = bias_init_mean

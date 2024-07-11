@@ -184,6 +184,12 @@ class SympyExp(sp.Function):
         return rf"\mathrm{{exp}}\left({sp.latex(self.args[0])}\right)"
 
 
+class SympySquare(sp.Function):
+    @classmethod
+    def eval(cls, z):
+        return sp.Pow(z, 2)
+
+
 class SympyAbs(sp.Function):
     @classmethod
     def eval(cls, z):

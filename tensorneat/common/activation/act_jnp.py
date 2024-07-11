@@ -70,6 +70,10 @@ class Act:
         return jnp.exp(z)
 
     @staticmethod
+    def square(z):
+        return jnp.pow(z, 2)
+
+    @staticmethod
     def abs(z):
         z = jnp.clip(z, -1, 1)
         return jnp.abs(z)

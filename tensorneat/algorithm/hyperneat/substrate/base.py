@@ -6,7 +6,7 @@ class BaseSubstrate(StatefulBaseClass):
     def make_nodes(self, query_res):
         raise NotImplementedError
 
-    def make_conn(self, query_res):
+    def make_conns(self, query_res):
         raise NotImplementedError
 
     @property

@@ -1,16 +1,39 @@
 import jax, jax.numpy as jnp
 
-arr = jnp.ones((10, 10))
-a = jnp.array([
-    [1, 2, 3],
-    [4, 5, 6]
-])
+from tensorneat.pipeline import Pipeline
+from tensorneat.algorithm.neat import NEAT
+from tensorneat.genome import DefaultGenome, DefaultNode, DefaultMutation, BiasNode
+from tensorneat.problem.func_fit import CustomFuncFit
+from tensorneat.common import Act, Agg
 
-def attach_with_inf(arr, idx):
-    target_dim = arr.ndim + idx.ndim - 1
-    expand_idx = jnp.expand_dims(idx, axis=tuple(range(idx.ndim, target_dim)))
 
-    return jnp.where(expand_idx == 1, jnp.nan, arr[idx])
+def pagie_polynomial(inputs):
+    x, y = inputs
+    return x + y
 
-b = attach_with_inf(arr, a)
-print(b)
+
+if __name__ == "__main__":
+    genome=DefaultGenome(
+        num_inputs=2,
+        num_outputs=1,
+        max_nodes=3,
+        max_conns=2,
+        init_hidden_layers=(),
+        node_gene=BiasNode(
+            activation_options=[Act.identity],
+            aggregation_options=[Agg.sum],
+        ),
+        output_transform=Act.identity,
+        mutation=DefaultMutation(
+            node_add=0,
+            node_delete=0,
+            conn_add=0.0,
+            conn_delete=0.0,
+        )
+    )
+    randkey = jax.random.PRNGKey(42)
+    state = genome.setup()
+    nodes, conns = genome.initialize(state, randkey)
+    print(genome)
+
+
