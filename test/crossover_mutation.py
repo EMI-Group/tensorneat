@@ -1,5 +1,5 @@
 import jax, jax.numpy as jnp
-from tensorneat.common import Act
+from tensorneat.common import ACT
 from algorithm.neat import *
 import numpy as np
 

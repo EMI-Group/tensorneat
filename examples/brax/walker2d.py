@@ -3,7 +3,7 @@ from tensorneat.algorithm.neat import NEAT
 from tensorneat.genome import DefaultGenome, BiasNode
 
 from tensorneat.problem.rl import BraxEnv
-from tensorneat.common import Act, Agg
+from tensorneat.common import ACT, AGG
 
 import jax, jax.numpy as jnp
 
@@ -26,10 +26,10 @@ if __name__ == "__main__":
                 num_outputs=6,
                 init_hidden_layers=(),
                 node_gene=BiasNode(
-                    activation_options=Act.tanh,
-                    aggregation_options=Agg.sum,
+                    activation_options=ACT.tanh,
+                    aggregation_options=AGG.sum,
                 ),
-                output_transform=Act.standard_tanh,
+                output_transform=ACT.standard_tanh,
             ),
         ),
         problem=BraxEnv(

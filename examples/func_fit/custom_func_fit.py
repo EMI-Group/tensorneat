@@ -4,7 +4,7 @@ from tensorneat.pipeline import Pipeline
 from tensorneat.algorithm.neat import NEAT
 from tensorneat.genome import DefaultGenome, DefaultNode, DefaultMutation, BiasNode
 from tensorneat.problem.func_fit import CustomFuncFit
-from tensorneat.common import Act, Agg
+from tensorneat.common import ACT, AGG
 
 
 def pagie_polynomial(inputs):
@@ -35,10 +35,10 @@ if __name__ == "__main__":
                 num_outputs=1,
                 init_hidden_layers=(),
                 node_gene=BiasNode(
-                    activation_options=[Act.identity, Act.inv, Act.square],
-                    aggregation_options=[Agg.sum, Agg.product],
+                    activation_options=[ACT.identity, ACT.inv, ACT.square],
+                    aggregation_options=[AGG.sum, AGG.product],
                 ),
-                output_transform=Act.identity,
+                output_transform=ACT.identity,
             ),
         ),
         problem=custom_problem,

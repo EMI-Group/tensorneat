@@ -2,7 +2,7 @@ from tensorneat.pipeline import Pipeline
 from tensorneat.algorithm.neat import NEAT
 from tensorneat.algorithm.hyperneat import HyperNEAT, FullSubstrate
 from tensorneat.genome import DefaultGenome
-from tensorneat.common import Act
+from tensorneat.common import ACT
 
 from tensorneat.problem.func_fit import XOR3d
 
@@ -22,12 +22,12 @@ if __name__ == "__main__":
                     num_inputs=4,  # size of query coors
                     num_outputs=1,
                     init_hidden_layers=(),
-                    output_transform=Act.standard_tanh,
+                    output_transform=ACT.standard_tanh,
                 ),
             ),
-            activation=Act.tanh,
+            activation=ACT.tanh,
             activate_time=10,
-            output_transform=Act.standard_sigmoid,
+            output_transform=ACT.standard_sigmoid,
         ),
         problem=XOR3d(),
         generation_limit=300,

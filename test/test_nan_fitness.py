@@ -1,5 +1,5 @@
 import jax, jax.numpy as jnp
-from tensorneat.common import Act
+from tensorneat.common import ACT
 from algorithm.neat import *
 import numpy as np
 
@@ -17,8 +17,8 @@ def main():
         max_nodes=20,
         max_conns=20,
         node_gene=DefaultNodeGene(
-            activation_options=(Act.tanh,),
-            activation_default=Act.tanh,
+            activation_options=(ACT.tanh,),
+            activation_default=ACT.tanh,
         ),
     )
 

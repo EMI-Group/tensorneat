@@ -4,10 +4,10 @@ import numpy as np
 import jax, jax.numpy as jnp
 import sympy as sp
 from tensorneat.common import (
-    Act,
-    Agg,
-    act_func,
-    agg_func,
+    ACT,
+    AGG,
+    apply_activation,
+    apply_aggregation,
     mutate_int,
     mutate_float,
     convert_to_sympy,
@@ -34,10 +34,10 @@ class BiasNode(BaseNode):
         bias_lower_bound: float = -5,
         bias_upper_bound: float = 5,
         aggregation_default: Optional[Callable] = None,
-        aggregation_options: Union[Callable, Sequence[Callable]] = Agg.sum,
+        aggregation_options: Union[Callable, Sequence[Callable]] = AGG.sum,
         aggregation_replace_rate: float = 0.1,
         activation_default: Optional[Callable] = None,
-        activation_options: Union[Callable, Sequence[Callable]] = Act.sigmoid,
+        activation_options: Union[Callable, Sequence[Callable]] = ACT.sigmoid,
         activation_replace_rate: float = 0.1,
     ):
         super().__init__()
@@ -73,7 +73,7 @@ class BiasNode(BaseNode):
     def new_identity_attrs(self, state):
         return jnp.array(
             [0, self.aggregation_default, -1]
-        )  # activation=-1 means Act.identity
+        )  # activation=-1 means ACT.identity
 
     def new_random_attrs(self, state, randkey):
         k1, k2, k3 = jax.random.split(randkey, num=3)
@@ -115,12 +115,12 @@ class BiasNode(BaseNode):
     def forward(self, state, attrs, inputs, is_output_node=False):
         bias, agg, act = attrs
 
-        z = agg_func(agg, inputs, self.aggregation_options)
+        z = apply_aggregation(agg, inputs, self.aggregation_options)
         z = bias + z
 
         # the last output node should not be activated
         z = jax.lax.cond(
-            is_output_node, lambda: z, lambda: act_func(act, z, self.activation_options)
+            is_output_node, lambda: z, lambda: apply_activation(act, z, self.activation_options)
         )
 
         return z
@@ -134,7 +134,7 @@ class BiasNode(BaseNode):
         act = int(act)
 
         if act == -1:
-            act_func = Act.identity
+            act_func = ACT.identity
         else:
             act_func = self.activation_options[act]
         return "{}(idx={:<{idx_width}}, bias={:<{float_width}}, aggregation={:<{func_width}}, activation={:<{func_width}})".format(
@@ -158,7 +158,7 @@ class BiasNode(BaseNode):
         act = int(act)
 
         if act == -1:
-            act_func = Act.identity
+            act_func = ACT.identity
         else:
             act_func = self.activation_options[act]
 

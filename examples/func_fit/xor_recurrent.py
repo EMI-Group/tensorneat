@@ -2,7 +2,7 @@ from tensorneat.pipeline import Pipeline
 from tensorneat.algorithm.neat import NEAT
 from tensorneat.genome import RecurrentGenome
 from tensorneat.problem.func_fit import XOR3d
-from tensorneat.common import Act, Agg
+from tensorneat.common import ACT, AGG
 
 if __name__ == "__main__":
     pipeline = Pipeline(
@@ -14,7 +14,7 @@ if __name__ == "__main__":
                 num_inputs=3,
                 num_outputs=1,
                 init_hidden_layers=(),
-                output_transform=Act.standard_sigmoid,
+                output_transform=ACT.standard_sigmoid,
                 activate_time=10,
             ),
         ),

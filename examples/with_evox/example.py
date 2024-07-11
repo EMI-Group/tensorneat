@@ -7,7 +7,7 @@ from tensorneat.examples.with_evox.evox_algorithm_adaptor import EvoXAlgorithmAd
 from tensorneat.examples.with_evox.tensorneat_monitor import TensorNEATMonitor
 from tensorneat.algorithm import NEAT
 from tensorneat.algorithm.neat import DefaultSpecies, DefaultGenome, DefaultNodeGene
-from tensorneat.common import Act
+from tensorneat.common import ACT
 
 neat_algorithm = NEAT(
     species=DefaultSpecies(
@@ -17,10 +17,10 @@ neat_algorithm = NEAT(
             max_nodes=200,
             max_conns=500,
             node_gene=DefaultNodeGene(
-                activation_options=(Act.standard_tanh,),
-                activation_default=Act.standard_tanh,
+                activation_options=(ACT.standard_tanh,),
+                activation_default=ACT.standard_tanh,
             ),
-            output_transform=Act.tanh,
+            output_transform=ACT.tanh,
         ),
         pop_size=10000,
         species_size=10,

@@ -1,0 +1,8 @@
+brax>=0.10.3
+jax>=0.4.28
+gymnax>=0.0.8
+jaxopt>=0.8.3
+optax>=0.2.2
+flax>=0.8.4
+mujoco>=3.1.4
+mujoco-mjx>=3.1.4
