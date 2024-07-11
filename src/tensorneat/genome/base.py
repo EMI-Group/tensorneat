@@ -10,7 +10,7 @@ from tensorneat.common import (
     StatefulBaseClass,
     hash_array,
 )
-from .utils import valid_cnt
+from .utils import valid_cnt, re_cound_idx
 
 
 class BaseGenome(StatefulBaseClass):
@@ -160,7 +160,11 @@ class BaseGenome(StatefulBaseClass):
 
         return nodes, conns
 
-    def network_dict(self, state, nodes, conns):
+    def network_dict(self, state, nodes, conns, whether_re_cound_idx=True):
+        if whether_re_cound_idx:
+            nodes, conns = re_cound_idx(
+                nodes, conns, self.get_input_idx(), self.get_output_idx()
+            )
         return {
             "nodes": self._get_node_dict(state, nodes),
             "conns": self._get_conn_dict(state, conns),

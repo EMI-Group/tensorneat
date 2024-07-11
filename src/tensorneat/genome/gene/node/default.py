@@ -209,7 +209,6 @@ class DefaultNode(BaseNode):
         bias = sp.symbols(f"n_{nd['idx']}_b")
         res = sp.symbols(f"n_{nd['idx']}_r")
 
-        print(nd["agg"])
         z = AGG.obtain_sympy(nd["agg"])(inputs)
         z = bias + res * z
 
