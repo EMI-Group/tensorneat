@@ -54,13 +54,6 @@ class SympyStandardSigmoid(sp.Function):
     def eval(cls, z):
         return SympySigmoid_(5 * z / sigma_3)
 
-    # @staticmethod
-    # def numerical_eval(z, backend=np):
-    #     z = backend.clip(5 * z / sigma_3, -5, 5)
-    #     z = 1 / (1 + backend.exp(-z))
-    #
-    #     return z  # (0, 1)
-
 
 class SympyTanh(sp.Function):
     @classmethod
@@ -68,22 +61,12 @@ class SympyTanh(sp.Function):
         z = 5 * z / sigma_3
         return sp.tanh(z) * sigma_3
 
-    # @staticmethod
-    # def numerical_eval(z, backend=np):
-    #     z = backend.clip(5 * z / sigma_3, -5, 5)
-    #     return backend.tanh(z) * sigma_3  # (-sigma_3, sigma_3)
-
 
 class SympyStandardTanh(sp.Function):
     @classmethod
     def eval(cls, z):
         z = 5 * z / sigma_3
         return sp.tanh(z)
-
-    # @staticmethod
-    # def numerical_eval(z, backend=np):
-    #     z = backend.clip(5 * z / sigma_3, -5, 5)
-    #     return backend.tanh(z)  # (-1, 1)
 
 
 class SympySin(sp.Function):
@@ -143,14 +126,7 @@ class SympyLelu(sp.Function):
 class SympyIdentity(sp.Function):
     @classmethod
     def eval(cls, z):
-        if z.is_Number:
-            z = SympyClip(z, -sigma_3, sigma_3)
-            return z
-        return None
-
-    @staticmethod
-    def numerical_eval(z, backend=np):
-        return backend.clip(z, -sigma_3, sigma_3)
+        return z
 
 
 class SympyInv(sp.Function):

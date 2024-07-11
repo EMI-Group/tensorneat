@@ -1,3 +1,5 @@
+from typing import Callable
+
 import jax
 from jax import vmap, numpy as jnp
 import numpy as np
@@ -18,10 +20,10 @@ class NEAT(BaseAlgorithm):
         species_elitism: int = 2,
         spawn_number_change_rate: float = 0.5,
         genome_elitism: int = 2,
-        survival_threshold: float = 0.2,
+        survival_threshold: float = 0.1,
         min_species_size: int = 1,
-        compatibility_threshold: float = 3.0,
-        species_fitness_func: callable = jnp.max,
+        compatibility_threshold: float = 2.0,
+        species_fitness_func: Callable = jnp.max,
     ):
         self.genome = genome
         self.pop_size = pop_size

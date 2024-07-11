@@ -6,7 +6,7 @@ import numpy as np
 import sympy as sp
 
 from .base import BaseGenome
-from .gene import DefaultNodeGene, DefaultConnGene
+from .gene import DefaultNode, DefaultConn
 from .operations import DefaultMutation, DefaultCrossover, DefaultDistance
 from .utils import unflatten_conns, extract_node_attrs, extract_conn_attrs
 
@@ -31,8 +31,8 @@ class DefaultGenome(BaseGenome):
         num_outputs: int,
         max_nodes=50,
         max_conns=100,
-        node_gene=DefaultNodeGene(),
-        conn_gene=DefaultConnGene(),
+        node_gene=DefaultNode(),
+        conn_gene=DefaultConn(),
         mutation=DefaultMutation(),
         crossover=DefaultCrossover(),
         distance=DefaultDistance(),

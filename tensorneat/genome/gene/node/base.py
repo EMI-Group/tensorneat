@@ -2,7 +2,7 @@ import jax, jax.numpy as jnp
 from .. import BaseGene
 
 
-class BaseNodeGene(BaseGene):
+class BaseNode(BaseGene):
     "Base class for node genes."
     fixed_attrs = ["index"]
 

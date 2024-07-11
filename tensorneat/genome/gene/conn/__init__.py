@@ -1,2 +1,2 @@
-from .base import BaseConnGene
-from .default import DefaultConnGene
+from .base import BaseConn
+from .default import DefaultConn

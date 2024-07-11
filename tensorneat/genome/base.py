@@ -3,7 +3,7 @@ from typing import Callable, Sequence
 import numpy as np
 import jax
 from jax import vmap, numpy as jnp
-from .gene import BaseNodeGene, BaseConnGene
+from .gene import BaseNode, BaseConn
 from .operations import BaseMutation, BaseCrossover, BaseDistance
 from tensorneat.common import (
     State,
@@ -22,8 +22,8 @@ class BaseGenome(StatefulBaseClass):
         num_outputs: int,
         max_nodes: int,
         max_conns: int,
-        node_gene: BaseNodeGene,
-        conn_gene: BaseConnGene,
+        node_gene: BaseNode,
+        conn_gene: BaseConn,
         mutation: BaseMutation,
         crossover: BaseCrossover,
         distance: BaseDistance,
@@ -92,7 +92,6 @@ class BaseGenome(StatefulBaseClass):
         self.output_idx = np.array(layer_indices[-1])
         self.all_init_nodes = np.array(all_init_nodes)
         self.all_init_conns = np.c_[all_init_conns_in_idx, all_init_conns_out_idx]
-        print(self.output_idx)
 
     def setup(self, state=State()):
         state = self.node_gene.setup(state)

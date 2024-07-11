@@ -23,9 +23,9 @@ from ...utils import (
 class DefaultMutation(BaseMutation):
     def __init__(
         self,
-        conn_add: float = 0.2,
+        conn_add: float = 0.1,
         conn_delete: float = 0,
-        node_add: float = 0.2,
+        node_add: float = 0.1,
         node_delete: float = 0,
     ):
         self.conn_add = conn_add

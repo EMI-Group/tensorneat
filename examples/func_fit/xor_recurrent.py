@@ -1,46 +1,31 @@
-from pipeline import Pipeline
-from algorithm.neat import *
-from algorithm.neat.gene.node.default_without_response import NodeGeneWithoutResponse
-
-from problem.func_fit import XOR3d
-from utils.activation import ACT_ALL, Act
+from tensorneat.pipeline import Pipeline
+from tensorneat.algorithm.neat import NEAT
+from tensorneat.genome import RecurrentGenome
+from tensorneat.problem.func_fit import XOR3d
+from tensorneat.common import Act, Agg
 
 if __name__ == "__main__":
     pipeline = Pipeline(
-        seed=0,
         algorithm=NEAT(
-            species=DefaultSpecies(
-                genome=RecurrentGenome(
-                    num_inputs=3,
-                    num_outputs=1,
-                    max_nodes=50,
-                    max_conns=100,
-                    activate_time=5,
-                    node_gene=NodeGeneWithoutResponse(
-                        activation_options=ACT_ALL, activation_replace_rate=0.2
-                    ),
-                    output_transform=Act.sigmoid,
-                    mutation=DefaultMutation(
-                        node_add=0.05,
-                        conn_add=0.2,
-                        node_delete=0,
-                        conn_delete=0,
-                    ),
-                ),
-                pop_size=10000,
-                species_size=10,
-                compatibility_threshold=3.5,
-                survival_threshold=0.03,
+            pop_size=10000,
+            species_size=20,
+            survival_threshold=0.01,
+            genome=RecurrentGenome(
+                num_inputs=3,
+                num_outputs=1,
+                init_hidden_layers=(),
+                output_transform=Act.standard_sigmoid,
+                activate_time=10,
             ),
         ),
         problem=XOR3d(),
-        generation_limit=10000,
-        fitness_target=-1e-8,
+        generation_limit=500,
+        fitness_target=-1e-6,  # float32 precision
+        seed=42,
     )
 
     # initialize state
     state = pipeline.setup()
-    # print(state)
     # run until terminate
     state, best = pipeline.auto_run(state)
     # show result

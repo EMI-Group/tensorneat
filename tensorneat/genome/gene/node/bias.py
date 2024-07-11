@@ -1,5 +1,6 @@
-from typing import Tuple
+from typing import Union, Sequence, Callable, Optional
 
+import numpy as np
 import jax, jax.numpy as jnp
 import sympy as sp
 from tensorneat.common import (
@@ -12,10 +13,10 @@ from tensorneat.common import (
     convert_to_sympy,
 )
 
-from . import BaseNodeGene
+from . import BaseNode
 
 
-class BiasNode(BaseNodeGene):
+class BiasNode(BaseNode):
     """
     Default node gene, with the same behavior as in NEAT-python.
     The attribute response is removed.
@@ -27,31 +28,46 @@ class BiasNode(BaseNodeGene):
         self,
         bias_init_mean: float = 0.0,
         bias_init_std: float = 1.0,
-        bias_mutate_power: float = 0.5,
-        bias_mutate_rate: float = 0.7,
-        bias_replace_rate: float = 0.1,
-        aggregation_default: callable = Agg.sum,
-        aggregation_options: Tuple = (Agg.sum,),
+        bias_mutate_power: float = 0.15,
+        bias_mutate_rate: float = 0.2,
+        bias_replace_rate: float = 0.015,
+        bias_lower_bound: float = -5,
+        bias_upper_bound: float = 5,
+        aggregation_default: Optional[Callable] = None,
+        aggregation_options: Union[Callable, Sequence[Callable]] = Agg.sum,
         aggregation_replace_rate: float = 0.1,
-        activation_default: callable = Act.sigmoid,
-        activation_options: Tuple = (Act.sigmoid,),
+        activation_default: Optional[Callable] = None,
+        activation_options: Union[Callable, Sequence[Callable]] = Act.sigmoid,
         activation_replace_rate: float = 0.1,
     ):
         super().__init__()
+
+        if isinstance(aggregation_options, Callable):
+            aggregation_options = [aggregation_options]
+        if isinstance(activation_options, Callable):
+            activation_options = [activation_options]
+
+        if len(aggregation_options) == 1 and aggregation_default is None:
+            aggregation_default = aggregation_options[0]
+        if len(activation_options) == 1 and activation_default is None:
+            activation_default = activation_options[0]
+
         self.bias_init_mean = bias_init_mean
         self.bias_init_std = bias_init_std
         self.bias_mutate_power = bias_mutate_power
         self.bias_mutate_rate = bias_mutate_rate
         self.bias_replace_rate = bias_replace_rate
+        self.bias_lower_bound = bias_lower_bound
+        self.bias_upper_bound = bias_upper_bound
 
         self.aggregation_default = aggregation_options.index(aggregation_default)
         self.aggregation_options = aggregation_options
-        self.aggregation_indices = jnp.arange(len(aggregation_options))
+        self.aggregation_indices = np.arange(len(aggregation_options))
         self.aggregation_replace_rate = aggregation_replace_rate
 
         self.activation_default = activation_options.index(activation_default)
         self.activation_options = activation_options
-        self.activation_indices = jnp.arange(len(activation_options))
+        self.activation_indices = np.arange(len(activation_options))
         self.activation_replace_rate = activation_replace_rate
 
     def new_identity_attrs(self, state):
@@ -62,6 +78,7 @@ class BiasNode(BaseNodeGene):
     def new_random_attrs(self, state, randkey):
         k1, k2, k3 = jax.random.split(randkey, num=3)
         bias = jax.random.normal(k1, ()) * self.bias_init_std + self.bias_init_mean
+        bias = jnp.clip(bias, self.bias_lower_bound, self.bias_upper_bound)
         agg = jax.random.choice(k2, self.aggregation_indices)
         act = jax.random.choice(k3, self.activation_indices)
 
@@ -80,7 +97,7 @@ class BiasNode(BaseNodeGene):
             self.bias_mutate_rate,
             self.bias_replace_rate,
         )
-
+        bias = jnp.clip(bias, self.bias_lower_bound, self.bias_upper_bound)
         agg = mutate_int(
             k2, agg, self.aggregation_indices, self.aggregation_replace_rate
         )

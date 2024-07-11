@@ -2,10 +2,10 @@ import jax.numpy as jnp
 import jax.random
 import sympy as sp
 from tensorneat.common import mutate_float
-from .base import BaseConnGene
+from .base import BaseConn
 
 
-class DefaultConnGene(BaseConnGene):
+class DefaultConn(BaseConn):
     "Default connection gene, with the same behavior as in NEAT-python."
 
     custom_attrs = ["weight"]
@@ -14,9 +14,9 @@ class DefaultConnGene(BaseConnGene):
         self,
         weight_init_mean: float = 0.0,
         weight_init_std: float = 1.0,
-        weight_mutate_power: float = 0.5,
-        weight_mutate_rate: float = 0.8,
-        weight_replace_rate: float = 0.1,
+        weight_mutate_power: float = 0.15,
+        weight_mutate_rate: float = 0.2,
+        weight_replace_rate: float = 0.015,
     ):
         super().__init__()
         self.weight_init_mean = weight_init_mean

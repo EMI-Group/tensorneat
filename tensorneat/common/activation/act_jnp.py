@@ -31,7 +31,7 @@ class Act:
 
     @staticmethod
     def standard_tanh(z):
-        z =5 * z / sigma_3
+        z = 5 * z / sigma_3
         return jnp.tanh(z)  # (-1, 1)
 
     @staticmethod
@@ -52,7 +52,6 @@ class Act:
 
     @staticmethod
     def identity(z):
-        z = jnp.clip(z, -sigma_3, sigma_3)
         return z
 
     @staticmethod

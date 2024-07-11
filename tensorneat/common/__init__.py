@@ -9,7 +9,7 @@ from .activation.act_jnp import Act, ACT_ALL, act_func
 from .aggregation.agg_sympy import *
 from .activation.act_sympy import *
 
-from typing import Union
+from typing import Callable, Union
 
 name2sympy = {
     "sigmoid": SympySigmoid,
@@ -34,7 +34,7 @@ name2sympy = {
 }
 
 
-def convert_to_sympy(func: Union[str, callable]):
+def convert_to_sympy(func: Union[str, Callable]):
     if isinstance(func, str):
         name = func
     else:

@@ -1,3 +1,3 @@
-from .base import BaseNodeGene
-from .default import DefaultNodeGene
+from .base import BaseNode
+from .default import DefaultNode
 from .bias import BiasNode

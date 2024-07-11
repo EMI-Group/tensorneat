@@ -1,8 +1,7 @@
-import jax
-from .. import BaseGene
+from ..base import BaseGene
 
 
-class BaseConnGene(BaseGene):
+class BaseConn(BaseGene):
     "Base class for connection genes."
     fixed_attrs = ["input_index", "output_index"]
 
