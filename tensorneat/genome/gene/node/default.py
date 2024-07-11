@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Union, Sequence, Callable
 
 import numpy as np
 import jax, jax.numpy as jnp
@@ -34,14 +34,20 @@ class DefaultNodeGene(BaseNodeGene):
         response_mutate_power: float = 0.5,
         response_mutate_rate: float = 0.7,
         response_replace_rate: float = 0.1,
-        aggregation_default: callable = Agg.sum,
-        aggregation_options: Tuple = (Agg.sum,),
+        aggregation_default: Callable = Agg.sum,
+        aggregation_options: Union[Callable, Sequence[Callable]] = Agg.sum,
         aggregation_replace_rate: float = 0.1,
-        activation_default: callable = Act.sigmoid,
-        activation_options: Tuple = (Act.sigmoid,),
+        activation_default: Callable = Act.sigmoid,
+        activation_options: Union[Callable, Sequence[Callable]] = Act.sigmoid,
         activation_replace_rate: float = 0.1,
     ):
         super().__init__()
+
+        if isinstance(aggregation_options, Callable):
+            aggregation_options = [aggregation_options]
+        if isinstance(activation_options, Callable):
+            activation_options = [activation_options]
+
         self.bias_init_mean = bias_init_mean
         self.bias_init_std = bias_init_std
         self.bias_mutate_power = bias_mutate_power

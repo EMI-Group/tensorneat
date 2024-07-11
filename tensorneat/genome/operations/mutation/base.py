@@ -8,5 +8,5 @@ class BaseMutation(StatefulBaseClass):
         self.genome = genome
         return state
 
-    def __call__(self, state, randkey, genome, nodes, conns, new_node_key):
+    def __call__(self, state, randkey, nodes, conns, new_node_key):
         raise NotImplementedError

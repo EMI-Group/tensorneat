@@ -14,13 +14,11 @@ class BaseAlgorithm(StatefulBaseClass):
         """transform the genome into a neural network"""
         raise NotImplementedError
 
-    def restore(self, state, transformed):
-        raise NotImplementedError
-
     def forward(self, state, transformed, inputs):
         raise NotImplementedError
 
-    def update_by_batch(self, state, batch_input, transformed):
+    def show_details(self, state: State, fitness):
+        """Visualize the running details of the algorithm"""
         raise NotImplementedError
 
     @property
@@ -29,16 +27,4 @@ class BaseAlgorithm(StatefulBaseClass):
 
     @property
     def num_outputs(self):
-        raise NotImplementedError
-
-    @property
-    def pop_size(self):
-        raise NotImplementedError
-
-    def member_count(self, state: State):
-        # to analysis the species
-        raise NotImplementedError
-
-    def generation(self, state: State):
-        # to analysis the algorithm
         raise NotImplementedError

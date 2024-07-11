@@ -13,7 +13,7 @@ class DefaultDistance(BaseDistance):
         self.compatibility_disjoint = compatibility_disjoint
         self.compatibility_weight = compatibility_weight
 
-    def __call__(self, state, nodes1, nodes2, conns1, conns2):
+    def __call__(self, state, nodes1, conns1, nodes2, conns2):
         """
         The distance between two genomes
         """
