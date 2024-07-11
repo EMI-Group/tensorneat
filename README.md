@@ -26,7 +26,7 @@ TensorNEAT is a JAX-based libaray for NeuroEvolution of Augmenting Topologies (N
 - JAX-based network for neuroevolution:
     - **Batch inference** across networks with different architectures, GPU-accelerated.
     - Evolve networks with **irregular structures** and **fully customize** their behavior.
-    - Visualize the network and represent it in **mathematical formulas** or codes.
+    - Visualize the network and represent it in **mathematical formulas** or **codes**.
 
 - GPU-accelerated NEAT implementation:
     - Run NEAT and HyperNEAT on GPUs.
@@ -78,15 +78,15 @@ pipeline.show(state, best)
   Obtain result in a few generations:
 ```
 Fitness limit reached!
-input: [0. 0. 0.], target: [0.], predict: [0.00066471]
-input: [0. 0. 1.], target: [1.], predict: [0.9992988]
-input: [0. 1. 0.], target: [1.], predict: [0.9988666]
-input: [0. 1. 1.], target: [0.], predict: [0.00107922]
-input: [1. 0. 0.], target: [1.], predict: [0.9987184]
-input: [1. 0. 1.], target: [0.], predict: [0.00093677]
-input: [1. 1. 0.], target: [0.], predict: [0.00060118]
-input: [1. 1. 1.], target: [1.], predict: [0.99927646]
-loss: 8.484730074087565e-07
+input: [0. 0. 0.], target: [0.], predict: [0.00037953]
+input: [0. 0. 1.], target: [1.], predict: [0.9990619]
+input: [0. 1. 0.], target: [1.], predict: [0.9991497]
+input: [0. 1. 1.], target: [0.], predict: [0.0004661]
+input: [1. 0. 0.], target: [1.], predict: [0.998262]
+input: [1. 0. 1.], target: [0.], predict: [0.00077246]
+input: [1. 1. 0.], target: [0.], predict: [0.00082464]
+input: [1. 1. 1.], target: [1.], predict: [0.99909043]
+loss: 8.861396736392635e-07
 ```
 4. **Visualize the best network**:
 ```python
