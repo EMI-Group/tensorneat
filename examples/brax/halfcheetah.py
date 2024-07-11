@@ -1,18 +1,18 @@
-import jax.numpy as jnp
-
 from tensorneat.pipeline import Pipeline
 from tensorneat.algorithm.neat import NEAT
 from tensorneat.genome import DefaultGenome, BiasNode
 
-from tensorneat.problem.rl import GymNaxEnv
+from tensorneat.problem.rl import BraxEnv
 from tensorneat.common import Act, Agg
 
+import jax
+
+
+def random_sample_policy(randkey, obs):
+    return jax.random.uniform(randkey, (6,), minval=-1.0, maxval=1.0)
 
 
 if __name__ == "__main__":
-    # the network has 3 outputs, the max one will be the action
-    # as the action of acrobot is {0, 1, 2}
-
     pipeline = Pipeline(
         algorithm=NEAT(
             pop_size=1000,
@@ -20,26 +20,32 @@ if __name__ == "__main__":
             survival_threshold=0.1,
             compatibility_threshold=1.0,
             genome=DefaultGenome(
-                num_inputs=6,
-                num_outputs=3,
+                max_nodes=100,
+                max_conns=200,
+                num_inputs=17,
+                num_outputs=6,
                 init_hidden_layers=(),
                 node_gene=BiasNode(
                     activation_options=Act.tanh,
                     aggregation_options=Agg.sum,
                 ),
-                output_transform=jnp.argmax,
+                output_transform=Act.standard_tanh,
             ),
         ),
-        problem=GymNaxEnv(
-            env_name="Acrobot-v1",
+        problem=BraxEnv(
+            env_name="halfcheetah",
+            max_step=1000,
+            obs_normalization=True,
+            sample_episodes=1000,
+            sample_policy=random_sample_policy,
         ),
         seed=42,
         generation_limit=100,
-        fitness_target=-60,
+        fitness_target=8000,
     )
 
     # initialize state
     state = pipeline.setup()
-
+    # print(state)
     # run until terminate
     state, best = pipeline.auto_run(state)

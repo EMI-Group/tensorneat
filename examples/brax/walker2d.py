@@ -9,7 +9,7 @@ import jax, jax.numpy as jnp
 
 
 def random_sample_policy(randkey, obs):
-    return jax.random.uniform(randkey, (6,))
+    return jax.random.uniform(randkey, (6,), minval=-1.0, maxval=1.0)
 
 
 if __name__ == "__main__":

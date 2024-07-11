@@ -1,70 +1,45 @@
-import jax
+import jax.numpy as jnp
 
-from pipeline import Pipeline
-from algorithm.neat import *
-from algorithm.hyperneat import *
+from tensorneat.pipeline import Pipeline
+from tensorneat.algorithm.neat import NEAT
+from tensorneat.algorithm.hyperneat import HyperNEAT, FullSubstrate
+from tensorneat.genome import DefaultGenome
 from tensorneat.common import Act
 
-from problem.rl_env import GymNaxEnv
+from tensorneat.problem import GymNaxEnv
 
 if __name__ == "__main__":
+
+    # the num of input_coors is 5
+    # 4 is for cartpole inputs, 1 is for bias
     pipeline = Pipeline(
         algorithm=HyperNEAT(
             substrate=FullSubstrate(
-                input_coors=[
-                    (-1, -1),
-                    (-0.5, -1),
-                    (0, -1),
-                    (0.5, -1),
-                    (1, -1),
-                ],  # 4(problem inputs) + 1(bias)
-                hidden_coors=[
-                    (-1, -0.5),
-                    (0.333, -0.5),
-                    (-0.333, -0.5),
-                    (1, -0.5),
-                    (-1, 0),
-                    (0.333, 0),
-                    (-0.333, 0),
-                    (1, 0),
-                    (-1, 0.5),
-                    (0.333, 0.5),
-                    (-0.333, 0.5),
-                    (1, 0.5),
-                ],
-                output_coors=[
-                    (-1, 1),
-                    (1, 1),  # one output
-                ],
+                input_coors=((-1, -1), (-0.5, -1), (0, -1), (0.5, -1), (1, -1)),
+                hidden_coors=((-1, 0), (0, 0), (1, 0)),
+                output_coors=((-1, 1), (1, 1)),
             ),
             neat=NEAT(
-                species=DefaultSpecies(
-                    genome=DefaultGenome(
-                        num_inputs=4,  # [*coor1, *coor2]
-                        num_outputs=1,  # the weight of connection between two coor1 and coor2
-                        max_nodes=50,
-                        max_conns=100,
-                        node_gene=DefaultNodeGene(
-                            activation_default=Act.tanh,
-                            activation_options=(Act.tanh,),
-                        ),
-                        output_transform=Act.tanh,  # the activation function for output node in NEAT
-                    ),
-                    pop_size=10000,
-                    species_size=10,
-                    compatibility_threshold=3.5,
-                    survival_threshold=0.03,
+                pop_size=10000,
+                species_size=20,
+                survival_threshold=0.01,
+                genome=DefaultGenome(
+                    num_inputs=4,  # size of query coors
+                    num_outputs=1,
+                    init_hidden_layers=(),
+                    output_transform=Act.standard_tanh,
                 ),
             ),
-            activation=Act.tanh,  # the activation function for output node in HyperNEAT
+            activation=Act.tanh,
             activate_time=10,
-            output_transform=jax.numpy.argmax,  # action of cartpole is in {0, 1}
+            output_transform=jnp.argmax,
         ),
         problem=GymNaxEnv(
             env_name="CartPole-v1",
+            repeat_times=5,
         ),
         generation_limit=300,
-        fitness_target=500,
+        fitness_target=-1e-6,
     )
 
     # initialize state
