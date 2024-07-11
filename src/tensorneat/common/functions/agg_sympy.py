@@ -17,11 +17,19 @@ class SympyProduct(sp.Function):
     def eval(cls, z):
         return sp.Mul(*z)
 
+    @classmethod
+    def numerical_eval(cls, z, backend=np):
+        return backend.product(z)
+
 
 class SympyMax(sp.Function):
     @classmethod
     def eval(cls, z):
         return sp.Max(*z)
+
+    @classmethod
+    def numerical_eval(cls, z, backend=np):
+        return backend.max(z)
 
 
 class SympyMin(sp.Function):

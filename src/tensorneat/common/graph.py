@@ -1,6 +1,5 @@
 """
-Some graph algorithm implemented in jax.
-Only used in feed-forward networks.
+Some graph algorithm implemented in jax and python.
 """
 
 import jax

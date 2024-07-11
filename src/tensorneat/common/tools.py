@@ -4,7 +4,9 @@ import numpy as np
 import jax
 from jax import numpy as jnp, Array, jit, vmap
 
-I_INF = np.iinfo(jnp.int32).max  # infinite int
+# infinite int, use to represent the unavialable index in int32 array.
+# as we can not use nan in int32 array
+I_INF = np.iinfo(jnp.int32).max  
 
 
 def attach_with_inf(arr, idx):
@@ -100,6 +102,9 @@ def argmin_with_mask(arr, mask):
 
 
 def hash_array(arr: Array):
+    """
+    Hash an array of uint32 to a single uint
+    """
     arr = jax.lax.bitcast_convert_type(arr, jnp.uint32)
 
     def update(i, hash_val):

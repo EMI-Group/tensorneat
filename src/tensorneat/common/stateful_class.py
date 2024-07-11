@@ -1,4 +1,3 @@
-import json
 from typing import Optional
 from . import State
 import pickle
