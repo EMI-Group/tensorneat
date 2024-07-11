@@ -19,7 +19,7 @@ class HyperNEAT(BaseAlgorithm):
         aggregation: Callable = AGG.sum,
         activation: Callable = ACT.sigmoid,
         activate_time: int = 10,
-        output_transform: Callable = ACT.standard_sigmoid,
+        output_transform: Callable = ACT.sigmoid,
     ):
         assert (
             substrate.query_coors.shape[1] == neat.num_inputs

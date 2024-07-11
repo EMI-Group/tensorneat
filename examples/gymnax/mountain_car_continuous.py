@@ -24,7 +24,7 @@ if __name__ == "__main__":
                     activation_options=ACT.tanh,
                     aggregation_options=AGG.sum,
                 ),
-                output_transform=ACT.standard_tanh,
+                output_transform=ACT.tanh,
             ),
         ),
         problem=GymNaxEnv(

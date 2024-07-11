@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-SCALE = 5
+SCALE = 3
 
 
 def scaled_sigmoid_(z):

@@ -27,7 +27,7 @@ if __name__ == "__main__":
                     num_inputs=4,  # size of query coors
                     num_outputs=1,
                     init_hidden_layers=(),
-                    output_transform=ACT.standard_tanh,
+                    output_transform=ACT.tanh,
                 ),
             ),
             activation=ACT.tanh,

@@ -1,29 +1,29 @@
 import jax
 import jax.numpy as jnp
 
-from evox import workflows, algorithms, problems
+from evox import workflows, problems
 
-from tensorneat.examples.with_evox.evox_algorithm_adaptor import EvoXAlgorithmAdaptor
-from tensorneat.examples.with_evox.tensorneat_monitor import TensorNEATMonitor
+from tensorneat.common.evox_adaptors import EvoXAlgorithmAdaptor, TensorNEATMonitor
 from tensorneat.algorithm import NEAT
-from tensorneat.algorithm.neat import DefaultSpecies, DefaultGenome, DefaultNodeGene
-from tensorneat.common import ACT
+from tensorneat.genome import DefaultGenome, BiasNode
+from tensorneat.common import ACT, AGG
 
 neat_algorithm = NEAT(
-    species=DefaultSpecies(
-        genome=DefaultGenome(
-            num_inputs=17,
-            num_outputs=6,
-            max_nodes=200,
-            max_conns=500,
-            node_gene=DefaultNodeGene(
-                activation_options=(ACT.standard_tanh,),
-                activation_default=ACT.standard_tanh,
-            ),
-            output_transform=ACT.tanh,
+    pop_size=1000,
+    species_size=20,
+    survival_threshold=0.1,
+    compatibility_threshold=1.0,
+    genome=DefaultGenome(
+        max_nodes=50,
+        max_conns=200,
+        num_inputs=17,
+        num_outputs=6,
+        init_hidden_layers=(),
+        node_gene=BiasNode(
+            activation_options=ACT.tanh,
+            aggregation_options=AGG.sum,
         ),
-        pop_size=10000,
-        species_size=10,
+        output_transform=ACT.tanh,
     ),
 )
 evox_algorithm = EvoXAlgorithmAdaptor(neat_algorithm)
@@ -37,11 +37,12 @@ problem = problems.neuroevolution.Brax(
     policy=evox_algorithm.forward,
     max_episode_length=1000,
     num_episodes=1,
-    backend="mjx"
 )
+
 
 def nan2inf(x):
     return jnp.where(jnp.isnan(x), -jnp.inf, x)
+
 
 # create a workflow
 workflow = workflows.StdWorkflow(
@@ -55,11 +56,11 @@ workflow = workflows.StdWorkflow(
 
 # init the workflow
 state = workflow.init(workflow_key)
-# state = workflow.enable_multi_devices(state)
-# run the workflow for 100 steps
-import time
 
+# enable multi devices
+state = workflow.enable_multi_devices(state)
+
+# run the workflow for 100 steps
 for i in range(100):
-    tic = time.time()
     train_info, state = workflow.step(state)
     monitor.show()

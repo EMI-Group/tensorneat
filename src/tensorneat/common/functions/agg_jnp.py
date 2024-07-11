@@ -23,18 +23,6 @@ def maxabs_(z):
     max_abs_index = jnp.argmax(abs_z)
     return z[max_abs_index]
 
-
-def median_(z):
-    n = jnp.sum(~jnp.isnan(z), axis=0)
-
-    z = jnp.sort(z)  # sort
-
-    idx1, idx2 = (n - 1) // 2, n // 2
-    median = (z[idx1] + z[idx2]) / 2
-
-    return median
-
-
 def mean_(z):
     sumation = sum_(z)
     valid_count = jnp.sum(~jnp.isnan(z), axis=0)

@@ -1,7 +1,7 @@
 import sympy as sp
 import numpy as np
 
-SCALE = 5
+SCALE = 3
 
 class SympySigmoid(sp.Function):
     @classmethod

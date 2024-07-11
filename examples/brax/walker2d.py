@@ -20,7 +20,7 @@ if __name__ == "__main__":
             survival_threshold=0.1,
             compatibility_threshold=1.0,
             genome=DefaultGenome(
-                max_nodes=100,
+                max_nodes=50,
                 max_conns=200,
                 num_inputs=17,
                 num_outputs=6,
@@ -29,7 +29,7 @@ if __name__ == "__main__":
                     activation_options=ACT.tanh,
                     aggregation_options=AGG.sum,
                 ),
-                output_transform=ACT.standard_tanh,
+                output_transform=ACT.tanh,
             ),
         ),
         problem=BraxEnv(

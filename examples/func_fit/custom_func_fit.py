@@ -6,7 +6,7 @@ from tensorneat.genome import DefaultGenome, DefaultNode, DefaultMutation, BiasN
 from tensorneat.problem.func_fit import CustomFuncFit
 from tensorneat.common import ACT, AGG
 
-
+# define a custom function fit problem
 def pagie_polynomial(inputs):
     x, y = inputs
     res = 1 / (1 + jnp.pow(x, -4)) + 1 / (1 + jnp.pow(y, -4))
@@ -14,9 +14,12 @@ def pagie_polynomial(inputs):
     # important! returns an array, NOT a scalar
     return jnp.array([res])
 
+# define custom activate function and register it
+def square(x):
+    return x ** 2
+ACT.add_func("square", square)
 
 if __name__ == "__main__":
-
     custom_problem = CustomFuncFit(
         func=pagie_polynomial,
         low_bounds=[-1, -1],

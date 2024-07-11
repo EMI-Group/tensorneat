@@ -14,7 +14,7 @@ if __name__ == "__main__":
                 num_inputs=3,
                 num_outputs=1,
                 init_hidden_layers=(),
-                output_transform=ACT.standard_sigmoid,
+                output_transform=ACT.sigmoid,
                 activate_time=10,
             ),
         ),
