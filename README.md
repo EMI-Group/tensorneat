@@ -22,94 +22,66 @@
 ## Introduction
 TensorNEAT is a JAX-based libaray for NeuroEvolution of Augmenting Topologies (NEAT) algorithms, focused on harnessing GPU acceleration to enhance the efficiency of evolving neural network structures for complex tasks. Its core mechanism involves the tensorization of network topologies, enabling parallel processing and significantly boosting computational speed and scalability by leveraging modern hardware accelerators. TensorNEAT is compatible with the [EvoX](https://github.com/EMI-Group/evox/) framewrok.
 
-## Requirements
-Due to the rapid iteration of JAX versions, configuring the runtime environment for TensorNEAT can be challenging. We recommend the following versions for the relevant libraries:
+## Key Features
+- JAX-based network for neuroevolution:
+    - **Batch inference** across networks with different architectures, GPU-accelerated.
+    - Evolve networks with **irregular structures** and **fully customize** their behavior.
+    - Visualize the network and represent it in **mathematical formulas**.
 
-- jax (0.4.28)
-- jaxlib (0.4.28+cuda12.cudnn89)
-- brax (0.10.3)
-- gymnax (0.0.8)
-  
-We provide detailed JAX-related environment references in [recommend_environment](recommend_environment.txt). If you encounter any issues while configuring the environment yourself, you can use this as a reference.
+- GPU-accelerated NEAT implementation:
+    - Run NEAT and HyperNEAT on GPUs.
+    - Achieve **500x** speedup compared to CPU-based NEAT libraries.
 
-## Example
-Simple Example for XOR problem:
+- Rich in extended content:
+    - Compatible with **EvoX** for multi-device and distributed support.
+    - Test neuroevolution algorithms on advanced **RL tasks** (Brax, Gymnax).
+
+## Basic API Usage
+Start your journey with TensorNEAT in a few simple steps:
+
+1. **Import necessary modules**:
 ```python
-from pipeline import Pipeline
-from algorithm.neat import *
-
-from problem.func_fit import XOR3d
-
-if __name__ == '__main__':
-    pipeline = Pipeline(
-        algorithm=NEAT(
-            species=DefaultSpecies(
-                genome=DefaultGenome(
-                    num_inputs=3,
-                    num_outputs=1,
-                    max_nodes=50,
-                    max_conns=100,
-                ),
-                pop_size=10000,
-                species_size=10,
-                compatibility_threshold=3.5,
-            ),
-        ),
-        problem=XOR3d(),
-        generation_limit=10000,
-        fitness_target=-1e-8
-    )
-
-    # initialize state
-    state = pipeline.setup()
-    # print(state)
-    # run until terminate
-    state, best = pipeline.auto_run(state)
-    # show result
-    pipeline.show(state, best)
+from tensorneat.pipeline import Pipeline
+from tensorneat import algorithm, genome, problem, common
 ```
 
-Simple Example for RL envs in Brax (Ant):
+2. **Configure the NEAT algorithm and define a problem**:
 ```python
-from pipeline import Pipeline
-from algorithm.neat import *
-
-from problem.rl_env import BraxEnv
-from tensorneat.utils import ACT
-
-if __name__ == '__main__':
-    pipeline = Pipeline(
-        algorithm=NEAT(
-            species=DefaultSpecies(
-                genome=DefaultGenome(
-                    num_inputs=27,
-                    num_outputs=8,
-                    max_nodes=50,
-                    max_conns=100,
-                    node_gene=DefaultNodeGene(
-                        activation_options=(ACT.tanh,),
-                        activation_default=ACT.tanh,
-                    )
-                ),
-                pop_size=1000,
-                species_size=10,
-            ),
-        ),
-        problem=BraxEnv(
-            env_name='ant',
-        ),
-        generation_limit=10000,
-        fitness_target=5000
-    )
-
-    # initialize state
-    state = pipeline.setup()
-    # print(state)
-    # run until terminate
-    state, best = pipeline.auto_run(state)
+algorithm = algorithm.NEAT(
+    pop_size=10000,
+    species_size=20,
+    survival_threshold=0.01,
+    genome=genome.DefaultGenome(
+        num_inputs=3,
+        num_outputs=1,
+        output_transform=common.ACT.sigmoid,
+    ),
+)
+problem = problem.XOR3d()
 ```
 
-more examples are in `tensorneat/examples`.
+3. **Initialize the pipeline and run**:
+```python
+pipeline = Pipeline(
+    algorithm,
+    problem,
+    generation_limit=200,
+    fitness_target=-1e-6,
+    seed=42,
+)
+state = pipeline.setup()
+# run until termination
+state, best = pipeline.auto_run(state)
+# show results
+pipeline.show(state, best)
+```
+
+## Installation
+Install `tensorneat` from the GitHub source code:
+```
+pip install git+https://github.com/EMI-Group/tensorneat.git
+```
+
 
 ## Community & Support
 
