@@ -9,7 +9,7 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-mypkg = ["*.txt", "*.json"]
+tensorneat = ["*.txt", "*.json"]
 
 [project]
 name = "tensorneat"
