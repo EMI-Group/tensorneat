@@ -36,6 +36,12 @@ TensorNEAT is a JAX-based libaray for NeuroEvolution of Augmenting Topologies (N
     - Compatible with **EvoX** for multi-device and distributed support.
     - Test neuroevolution algorithms on advanced **RL tasks** (Brax, Gymnax).
 
+## Installation
+Install `tensorneat` from the GitHub source code:
+```
+pip install git+https://github.com/EMI-Group/tensorneat.git
+```
+
 ## Basic API Usage
 Start your journey with TensorNEAT in a few simple steps:
 
@@ -110,7 +116,7 @@ print(latex_code)
 python_code = to_python_code(*sympy_res)
 print(python_code)
 ```
-Obtain latex formulas:
+Latex formulas:
 ```latex
 \begin{align}
 h_{0} &= \frac{1}{2.83 e^{5.66 h_{1} - 6.08 h_{2} - 3.03 i_{2}} + 1}\newline
@@ -119,7 +125,7 @@ h_{2} &= \frac{1}{0.27 e^{4.28 i_{1}} + 1}\newline
 o_{0} &= \frac{1}{0.68 e^{- 20.86 h_{0} + 11.12 h_{1} + 14.22 i_{0} - 1.96 i_{2}} + 1}\newline
 \end{align}
 ```
-Obtain python codes:
+Python codes:
 ```python
 h = np.zeros(3)
 o = np.zeros(1)
@@ -129,12 +135,45 @@ h[2] = 1/(0.269965*exp(4.279962*i[1]) + 1)
 o[0] = 1/(0.679321*exp(-20.860441*h[0] + 11.122242*h[1] + 14.216276*i[0] - 1.961642*i[2]) + 1)
 ```
 
+## Multi-device and Distributed Acceleration
+TensorNEAT doesn't natively support multi-device or distributed execution, but these features can be accessed via the EvoX framework. EvoX is a high-performance, distributed, GPU-accelerated framework for Evolutionary Algorithms. For more details, visit: [EvoX GitHub](https://github.com/EMI-Group/evox/).
 
-## Installation
-Install `tensorneat` from the GitHub source code:
+TensorNEAT includes an EvoX Adaptor, which allows TensorNEAT algorithms to run within the EvoX framework. Additionally, TensorNEAT provides a monitor for use with EvoX.
+
+Here is an example of creating an EvoX algorithm and monitor:
+```python
+from tensorneat.common.evox_adaptors import EvoXAlgorithmAdaptor, TensorNEATMonitor
+from tensorneat.algorithm import NEAT
+from tensorneat.genome import DefaultGenome, BiasNode
+from tensorneat.common import ACT, AGG
+
+# define algorithm in TensorNEAT
+neat_algorithm = NEAT(
+    pop_size=1000,
+    species_size=20,
+    survival_threshold=0.1,
+    compatibility_threshold=1.0,
+    genome=DefaultGenome(
+        max_nodes=50,
+        max_conns=200,
+        num_inputs=17,
+        num_outputs=6,
+        node_gene=BiasNode(
+            activation_options=ACT.tanh,
+            aggregation_options=AGG.sum,
+        ),
+        output_transform=ACT.tanh,
+    ),
+)
+# use adaptor to create EvoX algorithm
+evox_algorithm = EvoXAlgorithmAdaptor(neat_algorithm)
+# monitor in Evox
+monitor = TensorNEATMonitor(neat_algorithm, is_save=False)
 ```
-pip install git+https://github.com/EMI-Group/tensorneat.git
-```
+Using this code, you can run the NEAT algorithm within EvoX and leverage EvoX's multi-device and distributed capabilities. 
+
+For a complete example, see `./example/with_evox/walker2d_evox.py`, which demonstrates EvoX's multi-device functionality.
+
 
 
 ## Community & Support
