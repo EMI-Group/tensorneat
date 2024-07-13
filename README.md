@@ -37,7 +37,22 @@ TensorNEAT is a JAX-based libaray for NeuroEvolution of Augmenting Topologies (N
     - Test neuroevolution algorithms on advanced **RL tasks** (Brax, Gymnax).
 
 ## Installation
-Install `tensorneat` from the GitHub source code:
+
+1. Install the correct version of [JAX](https://github.com/google/jax). We recommend `jax >= 0.4.28`.
+
+For cpu version only, you may use:
+```
+pip install -U jax
+```
+
+For nvidia gpus, you may use:
+```
+pip install -U "jax[cuda12]"
+```
+For details of installing jax, please check https://github.com/google/jax.
+
+
+2. Install `tensorneat` from the GitHub source code:
 ```
 pip install git+https://github.com/EMI-Group/tensorneat.git
 ```
