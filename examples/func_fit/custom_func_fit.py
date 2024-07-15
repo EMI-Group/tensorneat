@@ -2,7 +2,7 @@ import jax.numpy as jnp
 
 from tensorneat.pipeline import Pipeline
 from tensorneat.algorithm.neat import NEAT
-from tensorneat.genome import DefaultGenome, DefaultNode, DefaultMutation, BiasNode
+from tensorneat.genome import DefaultGenome, BiasNode
 from tensorneat.problem.func_fit import CustomFuncFit
 from tensorneat.common import ACT, AGG
 
@@ -55,5 +55,4 @@ if __name__ == "__main__":
     # run until terminate
     state, best = pipeline.auto_run(state)
     # show result
-    # pipeline.show(state, best)
-    print(pipeline.algorithm.genome.repr(state, *best))
+    pipeline.show(state, best)
