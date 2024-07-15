@@ -267,6 +267,27 @@ h[2] = 1/(0.269965*exp(4.279962*i[1]) + 1)
 o[0] = 1/(0.679321*exp(-20.860441*h[0] + 11.122242*h[1] + 14.216276*i[0] - 1.961642*i[2]) + 1)
 ```
 
+## Installation
+1. Install the correct version of [JAX](https://github.com/google/jax). We recommend `jax >= 0.4.28`.
+
+For cpu version only, you may use:
+```
+pip install -U jax
+```
+
+For nvidia gpus, you may use:
+```
+pip install -U "jax[cuda12]"
+```
+For details of installing jax, please check https://github.com/google/jax.
+
+
+2. Install `tensorneat` from the GitHub source code:
+```
+pip install git+https://github.com/EMI-Group/tensorneat.git
+```
+
+
 ## Multi-device and Distributed Acceleration
 TensorNEAT doesn't natively support multi-device or distributed execution, but these features can be accessed via the EvoX framework. EvoX is a high-performance, distributed, GPU-accelerated framework for Evolutionary Algorithms. For more details, visit: [EvoX GitHub](https://github.com/EMI-Group/evox/).
 
@@ -306,33 +327,79 @@ Using this code, you can run the NEAT algorithm within EvoX and leverage EvoX's 
 
 For a complete example, see `./example/with_evox/walker2d_evox.py`, which demonstrates EvoX's multi-device functionality.
 
-## Installation
+## HyperNEAT
+TensorNEAT also implements the HyperNEAT algorithm. Here is a sample code to use it:
 
-1. Install the correct version of [JAX](https://github.com/google/jax). We recommend `jax >= 0.4.28`.
+```python
+from tensorneat.pipeline import Pipeline
+from tensorneat.algorithm.neat import NEAT
+from tensorneat.algorithm.hyperneat import HyperNEAT, FullSubstrate
+from tensorneat.genome import DefaultGenome
+from tensorneat.common import ACT
 
-For cpu version only, you may use:
-```
-pip install -U jax
+# Create the substrate for HyperNEAT.
+# This substrate is used to solve the XOR3d problem (3 inputs).
+# input_coors has 4 coordinates because we need an extra one to represent bias.
+substrate = FullSubstrate(
+    input_coors=((-1, -1), (-0.33, -1), (0.33, -1), (1, -1)),
+    hidden_coors=((-1, 0), (0, 0), (1, 0)),
+    output_coors=((0, 1),),
+)
+
+# The NEAT algorithm calculates the connection strength in the HyperNEAT substrate.
+# It has 4 inputs (in-node and out-node coordinates in substrates) and 1 output (connection strength).
+neat = NEAT(
+    pop_size=10000,
+    species_size=20,
+    survival_threshold=0.01,
+    genome=DefaultGenome(
+        num_inputs=4,  # size of query coordinates from the substrate
+        num_outputs=1,  # the connection strength
+        init_hidden_layers=(),
+        output_transform=ACT.tanh,
+    ),
+)
+
+# Define the HyperNEAT algorithm.
+algorithm = HyperNEAT(
+    substrate=substrate,
+    neat=neat,
+    activation=ACT.tanh,
+    activate_time=10,
+    output_transform=ACT.sigmoid,
+)
 ```
 
-For nvidia gpus, you may use:
-```
-pip install -U "jax[cuda12]"
-```
-For details of installing jax, please check https://github.com/google/jax.
+For a complete example, see `./examples/func_fit/xor_hyperneat.py` and `./examples/gymnax/cartpole_hyperneat.py`.
 
+## Future Work
 
-2. Install `tensorneat` from the GitHub source code:
-```
-pip install git+https://github.com/EMI-Group/tensorneat.git
-```
+1. Improve TensorNEAT documentation and tutorials.
+2. Implement more NEAT-related algorithms, such as ES-HyperNEAT.
+3. Add gradient descent support for networks in NEAT.
+4. Further optimize TensorNEAT to increase computation speed and reduce memory usage.
+
+We warmly welcome community developers to contribute to TensorNEAT and look forward to your pull requests!
 
 
 ## Community & Support
 
 - Engage in discussions and share your experiences on [GitHub Discussion Board](https://github.com/EMI-Group/evox/discussions).
 - Join our QQ group (ID: 297969717).
-  
+
+
+## Acknowledgements
+
+1. Thanks to Kenneth O. Stanley and Risto Miikkulainen for [the NEAT algorithm](https://ieeexplore.ieee.org/abstract/document/6790655), which has greatly advanced neuroevolution.
+
+2. Thanks to the Google team for [JAX](https://github.com/google/jax), making GPU programming easy and efficient.
+
+3. Thanks to [neat-python](https://github.com/CodeReclaimers/neat-python) and [pureples](https://github.com/ukuleleplayer/pureples) for their clear Python implementations of NEAT and HyperNEAT.
+
+4. Thanks to [Brax](https://github.com/google/brax) and [gymnax](https://github.com/RobertTLange/gymnax) for efficient benchmarking frameworks.
+
+5. Thanks to [EvoX](https://github.com/EMI-Group/evox) for multi-device and distributed support.
+
 ## Citing TensorNEAT
 
 If you use TensorNEAT in your research and want to cite it in your work, please use:
