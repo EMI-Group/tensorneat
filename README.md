@@ -398,7 +398,8 @@ We warmly welcome community developers to contribute to TensorNEAT and look forw
 
 4. Thanks to [Brax](https://github.com/google/brax) and [gymnax](https://github.com/RobertTLange/gymnax) for efficient benchmarking frameworks.
 
-5. Thanks to [EvoX](https://github.com/EMI-Group/evox) for multi-device and distributed support.
+5. Thanks to the [EvoX](https://github.com/EMI-Group/evox). Integrating with EvoX allows TensorNEAT to combine the NEAT algorithm with other evolutionary algorithms, expanding its potential. EvoX also provides multi-device and distributed support for TensorNEAT.
+
 
 ## Citing TensorNEAT
 
