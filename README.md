@@ -36,8 +36,7 @@ TensorNEAT is a JAX-based libaray for NeuroEvolution of Augmenting Topologies (N
     - Compatible with **EvoX** for multi-device and distributed support.
     - Test neuroevolution algorithms on advanced **RL tasks** (Brax, Gymnax).
 
-## Examples
-### Solving RL Tasks
+## Solving RL Tasks
 Using the NEAT algorithm to solve RL tasks. Here are some results:
 
 The following animations show the behaviors in Brax environments:
