@@ -13,16 +13,16 @@ class DefaultDistance(BaseDistance):
         self.compatibility_disjoint = compatibility_disjoint
         self.compatibility_weight = compatibility_weight
 
-    def __call__(self, state, nodes1, conns1, nodes2, conns2):
+    def __call__(self, state, genome, nodes1, conns1, nodes2, conns2):
         """
         The distance between two genomes
         """
-        d = self.node_distance(state, nodes1, nodes2) + self.conn_distance(
-            state, conns1, conns2
+        d = self.node_distance(state, genome, nodes1, nodes2) + self.conn_distance(
+            state, genome, conns1, conns2
         )
         return d
 
-    def node_distance(self, state, nodes1, nodes2):
+    def node_distance(self, state, genome, nodes1, nodes2):
         """
         The distance of the nodes part for two genomes
         """
@@ -50,7 +50,7 @@ class DefaultDistance(BaseDistance):
         # calculate the distance of homologous nodes
         fr_attrs = vmap(extract_node_attrs)(fr)
         sr_attrs = vmap(extract_node_attrs)(sr)
-        hnd = vmap(self.genome.node_gene.distance, in_axes=(None, 0, 0))(
+        hnd = vmap(genome.node_gene.distance, in_axes=(None, 0, 0))(
             state, fr_attrs, sr_attrs
         )  # homologous node distance
         hnd = jnp.where(jnp.isnan(hnd), 0, hnd)
@@ -65,7 +65,7 @@ class DefaultDistance(BaseDistance):
 
         return val
 
-    def conn_distance(self, state, conns1, conns2):
+    def conn_distance(self, state, genome, conns1, conns2):
         """
         The distance of the conns part for two genomes
         """
@@ -89,7 +89,7 @@ class DefaultDistance(BaseDistance):
 
         fr_attrs = vmap(extract_conn_attrs)(fr)
         sr_attrs = vmap(extract_conn_attrs)(sr)
-        hcd = vmap(self.genome.conn_gene.distance, in_axes=(None, 0, 0))(
+        hcd = vmap(genome.conn_gene.distance, in_axes=(None, 0, 0))(
             state, fr_attrs, sr_attrs
         )  # homologous connection distance
         hcd = jnp.where(jnp.isnan(hcd), 0, hcd)

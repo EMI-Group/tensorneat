@@ -184,6 +184,6 @@ class Pipeline(StatefulBaseClass):
 
     def show(self, state, best, *args, **kwargs):
         transformed = self.algorithm.transform(state, best)
-        self.problem.show(
+        return self.problem.show(
             state, state.randkey, self.algorithm.forward, transformed, *args, **kwargs
         )

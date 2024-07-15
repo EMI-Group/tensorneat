@@ -96,9 +96,9 @@ class BaseGenome(StatefulBaseClass):
     def setup(self, state=State()):
         state = self.node_gene.setup(state)
         state = self.conn_gene.setup(state)
-        state = self.mutation.setup(state, self)
-        state = self.crossover.setup(state, self)
-        state = self.distance.setup(state, self)
+        state = self.mutation.setup(state)
+        state = self.crossover.setup(state)
+        state = self.distance.setup(state)
         return state
 
     def transform(self, state, nodes, conns):
@@ -114,13 +114,13 @@ class BaseGenome(StatefulBaseClass):
         raise NotImplementedError
 
     def execute_mutation(self, state, randkey, nodes, conns, new_node_key):
-        return self.mutation(state, randkey, nodes, conns, new_node_key)
+        return self.mutation(state, self, randkey, nodes, conns, new_node_key)
 
     def execute_crossover(self, state, randkey, nodes1, conns1, nodes2, conns2):
-        return self.crossover(state, randkey, nodes1, conns1, nodes2, conns2)
+        return self.crossover(state, self, randkey, nodes1, conns1, nodes2, conns2)
 
     def execute_distance(self, state, nodes1, conns1, nodes2, conns2):
-        return self.distance(state, nodes1, conns1, nodes2, conns2)
+        return self.distance(state, self, nodes1, conns1, nodes2, conns2)
 
     def initialize(self, state, randkey):
         k1, k2 = jax.random.split(randkey)  # k1 for nodes, k2 for conns

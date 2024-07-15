@@ -1,4 +1,5 @@
-from jax import vmap, numpy as jnp
+from jax import vmap
+import numpy as np
 
 from .base import BaseSubstrate
 from tensorneat.genome.utils import set_conn_attrs
@@ -8,9 +9,9 @@ class DefaultSubstrate(BaseSubstrate):
     def __init__(self, num_inputs, num_outputs, coors, nodes, conns):
         self.inputs = num_inputs
         self.outputs = num_outputs
-        self.coors = jnp.array(coors)
-        self.nodes = jnp.array(nodes)
-        self.conns = jnp.array(conns)
+        self.coors = np.array(coors)
+        self.nodes = np.array(nodes)
+        self.conns = np.array(conns)
 
     def make_nodes(self, query_res):
         return self.nodes

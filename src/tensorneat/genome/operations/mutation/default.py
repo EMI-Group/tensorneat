@@ -33,17 +33,17 @@ class DefaultMutation(BaseMutation):
         self.node_add = node_add
         self.node_delete = node_delete
 
-    def __call__(self, state, randkey, nodes, conns, new_node_key):
+    def __call__(self, state, genome, randkey, nodes, conns, new_node_key):
         k1, k2 = jax.random.split(randkey)
 
         nodes, conns = self.mutate_structure(
-            state, k1, nodes, conns, new_node_key
+            state, genome, k1, nodes, conns, new_node_key
         )
-        nodes, conns = self.mutate_values(state, k2, nodes, conns)
+        nodes, conns = self.mutate_values(state, genome, k2, nodes, conns)
 
         return nodes, conns
 
-    def mutate_structure(self, state, randkey, nodes, conns, new_node_key):
+    def mutate_structure(self, state, genome, randkey, nodes, conns, new_node_key):
         def mutate_add_node(key_, nodes_, conns_):
             """
             add a node while do not influence the output of the network
@@ -62,7 +62,7 @@ class DefaultMutation(BaseMutation):
 
                 # add a new node with identity attrs
                 new_nodes = add_node(
-                    nodes_, new_node_key, self.genome.node_gene.new_identity_attrs(state)
+                    nodes_, new_node_key, genome.node_gene.new_identity_attrs(state)
                 )
 
                 # add two new connections
@@ -71,7 +71,7 @@ class DefaultMutation(BaseMutation):
                     new_conns,
                     i_key,
                     new_node_key,
-                    self.genome.conn_gene.new_identity_attrs(state),
+                    genome.conn_gene.new_identity_attrs(state),
                 )
                 # second is with the origin attrs
                 new_conns = add_conn(
@@ -97,8 +97,8 @@ class DefaultMutation(BaseMutation):
             key, idx = self.choose_node_key(
                 key_,
                 nodes_,
-                self.genome.input_idx,
-                self.genome.output_idx,
+                genome.input_idx,
+                genome.output_idx,
                 allow_input_keys=False,
                 allow_output_keys=False,
             )
@@ -136,8 +136,8 @@ class DefaultMutation(BaseMutation):
             i_key, from_idx = self.choose_node_key(
                 k1_,
                 nodes_,
-                self.genome.input_idx,
-                self.genome.output_idx,
+                genome.input_idx,
+                genome.output_idx,
                 allow_input_keys=True,
                 allow_output_keys=True,
             )
@@ -146,8 +146,8 @@ class DefaultMutation(BaseMutation):
             o_key, to_idx = self.choose_node_key(
                 k2_,
                 nodes_,
-                self.genome.input_idx,
-                self.genome.output_idx,
+                genome.input_idx,
+                genome.output_idx,
                 allow_input_keys=False,
                 allow_output_keys=True,
             )
@@ -161,10 +161,10 @@ class DefaultMutation(BaseMutation):
             def successful():
                 # add a connection with zero attrs
                 return nodes_, add_conn(
-                    conns_, i_key, o_key, self.genome.conn_gene.new_zero_attrs(state)
+                    conns_, i_key, o_key, genome.conn_gene.new_zero_attrs(state)
                 )
 
-            if self.genome.network_type == "feedforward":
+            if genome.network_type == "feedforward":
                 u_conns = unflatten_conns(nodes_, conns_)
                 conns_exist = u_conns != I_INF
                 is_cycle = check_cycles(nodes_, conns_exist, from_idx, to_idx)
@@ -175,7 +175,7 @@ class DefaultMutation(BaseMutation):
                     successful,
                 )
 
-            elif self.genome.network_type == "recurrent":
+            elif genome.network_type == "recurrent":
                 return jax.lax.cond(
                     is_already_exist | (remain_conn_space < 1),
                     nothing,
@@ -183,7 +183,7 @@ class DefaultMutation(BaseMutation):
                 )
 
             else:
-                raise ValueError(f"Invalid network type: {self.genome.network_type}")
+                raise ValueError(f"Invalid network type: {genome.network_type}")
 
         def mutate_delete_conn(key_, nodes_, conns_):
             # randomly choose a connection
@@ -223,19 +223,19 @@ class DefaultMutation(BaseMutation):
 
         return nodes, conns
 
-    def mutate_values(self, state, randkey, nodes, conns):
+    def mutate_values(self, state, genome, randkey, nodes, conns):
         k1, k2 = jax.random.split(randkey)
-        nodes_randkeys = jax.random.split(k1, num=self.genome.max_nodes)
-        conns_randkeys = jax.random.split(k2, num=self.genome.max_conns)
+        nodes_randkeys = jax.random.split(k1, num=genome.max_nodes)
+        conns_randkeys = jax.random.split(k2, num=genome.max_conns)
 
         node_attrs = vmap(extract_node_attrs)(nodes)
-        new_node_attrs = vmap(self.genome.node_gene.mutate, in_axes=(None, 0, 0))(
+        new_node_attrs = vmap(genome.node_gene.mutate, in_axes=(None, 0, 0))(
             state, nodes_randkeys, node_attrs
         )
         new_nodes = vmap(set_node_attrs)(nodes, new_node_attrs)
 
         conn_attrs = vmap(extract_conn_attrs)(conns)
-        new_conn_attrs = vmap(self.genome.conn_gene.mutate, in_axes=(None, 0, 0))(
+        new_conn_attrs = vmap(genome.conn_gene.mutate, in_axes=(None, 0, 0))(
             state, conns_randkeys, conn_attrs
         )
         new_conns = vmap(set_conn_attrs)(conns, new_conn_attrs)

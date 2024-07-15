@@ -11,14 +11,14 @@ from ...utils import (
 
 
 class DefaultCrossover(BaseCrossover):
-    def __call__(self, state, randkey, nodes1, conns1, nodes2, conns2):
+    def __call__(self, state, genome, randkey, nodes1, conns1, nodes2, conns2):
         """
         use genome1 and genome2 to generate a new genome
         notice that genome1 should have higher fitness than genome2 (genome1 is winner!)
         """
         randkey1, randkey2 = jax.random.split(randkey, 2)
-        randkeys1 = jax.random.split(randkey1, self.genome.max_nodes)
-        randkeys2 = jax.random.split(randkey2, self.genome.max_conns)
+        randkeys1 = jax.random.split(randkey1, genome.max_nodes)
+        randkeys2 = jax.random.split(randkey2, genome.max_conns)
 
         # crossover nodes
         keys1, keys2 = nodes1[:, 0], nodes2[:, 0]
@@ -33,7 +33,7 @@ class DefaultCrossover(BaseCrossover):
         new_node_attrs = jnp.where(
             jnp.isnan(node_attrs1) | jnp.isnan(node_attrs2),  # one of them is nan
             node_attrs1,  # not homologous genes or both nan, use the value of nodes1(winner)
-            vmap(self.genome.node_gene.crossover, in_axes=(None, 0, 0, 0))(
+            vmap(genome.node_gene.crossover, in_axes=(None, 0, 0, 0))(
                 state, randkeys1, node_attrs1, node_attrs2
             ),  # homologous or both nan
         )
@@ -49,7 +49,7 @@ class DefaultCrossover(BaseCrossover):
         new_conn_attrs = jnp.where(
             jnp.isnan(conns_attrs1) | jnp.isnan(conns_attrs2),
             conns_attrs1,  # not homologous genes or both nan, use the value of conns1(winner)
-            vmap(self.genome.conn_gene.crossover, in_axes=(None, 0, 0, 0))(
+            vmap(genome.conn_gene.crossover, in_axes=(None, 0, 0, 0))(
                 state, randkeys2, conns_attrs1, conns_attrs2
             ),  # homologous or both nan
         )

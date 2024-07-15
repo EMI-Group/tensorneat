@@ -13,7 +13,7 @@ from tensorneat.common import (
     get_func_name
 )
 
-from . import BaseNode
+from .base import BaseNode
 
 
 class BiasNode(BaseNode):

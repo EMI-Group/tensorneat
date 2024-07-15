@@ -1,3 +1,5 @@
+import pickle
+
 from jax.tree_util import register_pytree_node_class
 
 
@@ -38,6 +40,15 @@ class State:
 
     def __contains__(self, item):
         return item in self.state_dict
+
+    def save(self, file_name):
+        with open(file_name, "wb") as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, file_name):
+        with open(file_name, "rb") as f:
+            return pickle.load(f)
 
     def tree_flatten(self):
         children = list(self.state_dict.values())
