@@ -10,7 +10,7 @@
 </h1>
 
 <p align="center">
-🌟 TensorNEAT: Tensorized NEAT Implementation in JAX 🌟
+🌟 Tensorized NeuroEvolution of Augmenting Topologies (NEAT) for GPU Acceleration 🌟
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 </p>
 
 ## TensorNEAT @ GECCO 2024
-🎉🎉TensorNEAT has been awarded the **[GECCO 2024](https://gecco-2024.sigevo.org/HomePage) Best Paper** of the Neuroevolution Track! 🎉🎉
+🎉🎉TensorNEAT has been awarded the **[GECCO 2024](https://gecco-2024.sigevo.org/HomePage) Best Paper** ! 🎉🎉
 
 Many thanks to everyone who voted for us and supported TensorNEAT! We will continue to maintain the TensorNEAT project and look forward to advancing Neuroevolution together with you all!
 
