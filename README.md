@@ -10,7 +10,7 @@
 </h1>
 
 <p align="center">
-🌟 Tensorized NeuroEvolution of Augmenting Topologies (NEAT) for GPU Acceleration 🌟
+🌟 TensorNEAT: JAX-based NEAT Library for GPU Acceleration 🌟
 </p>
 
 <p align="center">
