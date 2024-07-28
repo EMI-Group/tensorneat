@@ -32,6 +32,9 @@ class DefaultDistance(BaseDistance):
 
         # align homologous nodes
         # this process is similar to np.intersect1d.
+        # For jnp.intersect1d is not compatible with JIT
+        # see: https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.intersect1d.html
+        
         nodes = jnp.concatenate((nodes1, nodes2), axis=0)
         keys = nodes[:, 0]
         sorted_indices = jnp.argsort(keys, axis=0)

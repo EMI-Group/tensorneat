@@ -9,8 +9,8 @@ __pycache__/
 .tmp/
 
 # Ignore files named exactly 'tmp' or 'aux'
-tmp
-aux
+tmp.*
+aux.*
 
 # Python Bytecode
 __pycache__/

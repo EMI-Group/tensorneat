@@ -1,6 +1,5 @@
 import jax
 from jax import vmap, numpy as jnp
-
 from .base import BaseCrossover
 from ...utils import (
     extract_node_attrs,
