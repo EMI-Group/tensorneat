@@ -84,7 +84,7 @@ class TensorNEATMonitor(Monitor):
 
         if self.is_save:
             # save best
-            best_genome = jax.device_get((pop[0][max_idx], pop[1][max_idx]))
+            best_genome = jax.device_get(self.best_genome)
             file_name = os.path.join(
                 self.genome_dir, f"{generation}.npz"
             )
