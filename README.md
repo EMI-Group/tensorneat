@@ -20,7 +20,7 @@
 </p>
 
 ## TensorNEAT @ GECCO 2024
-TensorNEAT has been selected to recieve the **[GECCO 2024](https://gecco-2024.sigevo.org/HomePage) Best Paper Award** 🏆
+TensorNEAT has been selected to recieve the **[GECCO 2024 Best Paper Award](https://gecco-2024.sigevo.org/Best-Paper-Awards)** 🏆
 
 Many thanks to everyone who has been supporting TensorNEAT, and we will remain committed to advancing TensorNEAT for future 'open-endedness'!
 
