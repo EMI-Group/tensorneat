@@ -37,7 +37,7 @@ class BaseGenome(StatefulBaseClass):
             try:
                 _ = input_transform(jnp.zeros(num_inputs))
             except Exception as e:
-                raise ValueError(f"Output transform function failed: {e}")
+                raise ValueError(f"Input transform function failed: {e}")
 
         if output_transform is not None:
             try:
