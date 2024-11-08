@@ -411,12 +411,16 @@ We warmly welcome community developers to contribute to TensorNEAT and look forw
 If you use TensorNEAT in your research and want to cite it in your work, please use:
 ```
 @inproceedings{10.1145/3638529.3654210,
-    author = {Wang, Lishuang and Zhao, Mengfei and Liu, Enyu and Sun, Kebin and Cheng, Ran},
-    title = {Tensorized NeuroEvolution of Augmenting Topologies for GPU Acceleration},
-    year = {2024},
-    doi = {10.1145/3638529.3654210},
-    pages = {1156–1164},
-    numpages = {9},
-    location = {Melbourne, VIC, Australia},
-    series = {GECCO '24}
+  author = {Wang, Lishuang and Zhao, Mengfei and Liu, Enyu and Sun, Kebin and Cheng, Ran},
+  title = {Tensorized NeuroEvolution of Augmenting Topologies for GPU Acceleration},
+  year = {2024},
+  isbn = {9798400704949},
+  doi = {10.1145/3638529.3654210},
+  booktitle = {Proceedings of the Genetic and Evolutionary Computation Conference},
+  pages = {1156–1164},
+  numpages = {9},
+  keywords = {neuroevolution, GPU acceleration, algorithm library},
+  location = {Melbourne, VIC, Australia},
+  series = {GECCO '24}
 }
+
