@@ -271,6 +271,12 @@ class SpeciesController(StatefulBaseClass):
             previous_size
             + (target_spawn_number - previous_size) * self.spawn_number_change_rate
         )
+
+        # maintain min_species_size, this will not influence nan
+        spawn_number = jnp.where(
+            spawn_number < self.min_species_size, self.min_species_size, spawn_number
+        )
+        # convert to int, this will also make nan to 0
         spawn_number = spawn_number.astype(jnp.int32)
 
         # must control the sum of spawn_number to be equal to pop_size
@@ -287,10 +293,13 @@ class SpeciesController(StatefulBaseClass):
         the species with higher fitness will have more members
         """
 
-        species_keys = species_state.species_keys
-
         # the fitness of each species
         species_fitness = species_state.best_fitness
+
+        # normalize the fitness before calculating the spawn number
+        # consider that the fitness may be negative
+        # in this way the species with the lowest fitness will have spawn_number = 0
+        species_fitness = species_fitness - jnp.min(species_fitness)
 
         # calculate the spawn number rate by the fitness of each species
         spawn_number_rate = species_fitness / jnp.sum(
@@ -306,6 +315,12 @@ class SpeciesController(StatefulBaseClass):
             previous_size
             + (target_spawn_number - previous_size) * self.spawn_number_change_rate
         )
+        # maintain min_species_size, this will not influence nan
+        spawn_number = jnp.where(
+            spawn_number < self.min_species_size, self.min_species_size, spawn_number
+        )
+
+        # convert to int, this will also make nan to 0
         spawn_number = spawn_number.astype(jnp.int32)
 
         # must control the sum of spawn_number to be equal to pop_size
