@@ -24,7 +24,14 @@ class NEAT(BaseAlgorithm):
         min_species_size: int = 1,
         compatibility_threshold: float = 2.0,
         species_fitness_func: Callable = jnp.max,
+        species_number_calculate_by: str = "rank",
     ):
+
+        assert species_number_calculate_by in [
+            "rank",
+            "fitness",
+        ], "species_number_calculate_by should be either 'rank' or 'fitness'"
+
         self.genome = genome
         self.pop_size = pop_size
         self.species_controller = SpeciesController(
@@ -38,6 +45,7 @@ class NEAT(BaseAlgorithm):
             min_species_size,
             compatibility_threshold,
             species_fitness_func,
+            species_number_calculate_by,
         )
 
     def setup(self, state=State()):
