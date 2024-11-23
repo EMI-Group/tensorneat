@@ -331,3 +331,4 @@ class DefaultGenome(BaseGenome):
             **kwargs,
         )
         plt.savefig(save_path, dpi=save_dpi)
+        plt.close()

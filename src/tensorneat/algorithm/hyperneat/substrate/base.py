@@ -3,6 +3,8 @@ from tensorneat.common import StatefulBaseClass
 
 class BaseSubstrate(StatefulBaseClass):
 
+    connection_type = None
+
     def make_nodes(self, query_res):
         raise NotImplementedError
 

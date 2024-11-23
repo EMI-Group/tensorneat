@@ -78,6 +78,8 @@ class HyperNEAT(BaseAlgorithm):
             query_res
         ), self.substrate.make_conns(query_res)
 
+        h_nodes, h_conns = jax.device_put([h_nodes, h_conns])
+
         return self.hyper_genome.transform(state, h_nodes, h_conns)
 
     def forward(self, state, transformed, inputs):

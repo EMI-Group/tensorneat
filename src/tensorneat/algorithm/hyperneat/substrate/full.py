@@ -3,6 +3,9 @@ from .default import DefaultSubstrate
 
 
 class FullSubstrate(DefaultSubstrate):
+
+    connection_type = "recurrent"
+
     def __init__(
         self,
         input_coors=((-1, -1), (0, -1), (1, -1)),
@@ -60,6 +63,7 @@ def analysis_substrate(input_coors, output_coors, hidden_coors):
     )  # input_idx, output_idx, weight
     conns[:, :2] = correspond_keys
 
+    print(query_coors, nodes, conns)
     return query_coors, nodes, conns
 
 
