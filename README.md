@@ -389,7 +389,7 @@ We warmly welcome community developers to contribute to TensorNEAT and look forw
 
 ## Community & Support
 
-- Engage in discussions and share your experiences on [GitHub Discussion Board](https://github.com/EMI-Group/evox/discussions).
+- Engage in discussions and share your experiences on [GitHub Issues](https://github.com/EMI-Group/tensorneat/issues).
 - Join our QQ group (ID: 297969717).
 
 
