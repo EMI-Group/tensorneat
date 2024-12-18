@@ -113,8 +113,12 @@ class BaseGenome(StatefulBaseClass):
     def visualize(self):
         raise NotImplementedError
 
-    def execute_mutation(self, state, randkey, nodes, conns, new_node_key):
-        return self.mutation(state, self, randkey, nodes, conns, new_node_key)
+    def execute_mutation(
+        self, state, randkey, nodes, conns, new_node_key, new_conn_keys
+    ):
+        return self.mutation(
+            state, self, randkey, nodes, conns, new_node_key, new_conn_keys
+        )
 
     def execute_crossover(self, state, randkey, nodes1, conns1, nodes2, conns2):
         return self.crossover(state, self, randkey, nodes1, conns1, nodes2, conns2)
@@ -144,19 +148,31 @@ class BaseGenome(StatefulBaseClass):
         conns = jnp.full((self.max_conns, self.conn_gene.length), jnp.nan)
         # create input and output indices
         conn_indices = self.all_init_conns
+
+        # create connection initial history markers
+        conn_markers = jnp.arange(all_conns_cnt)
+
         # create conn attrs
         rand_keys_c = jax.random.split(k2, num=all_conns_cnt)
-        conns_attr_func = jax.vmap(
+        conns_attrs = jax.vmap(
             self.conn_gene.new_random_attrs,
             in_axes=(
                 None,
                 0,
             ),
-        )
-        conns_attrs = conns_attr_func(state, rand_keys_c)
+        )(state, rand_keys_c)
 
-        conns = conns.at[:all_conns_cnt, :2].set(conn_indices)  # set conn indices
-        conns = conns.at[:all_conns_cnt, 2:].set(conns_attrs)  # set conn attrs
+        # set conn indices
+        conns = conns.at[:all_conns_cnt, :2].set(conn_indices)
+
+        # set conn history markers if needed
+        if "historical_marker" in self.conn_gene.fixed_attrs:
+            conns = conns.at[:all_conns_cnt, 2].set(conn_markers)
+
+        # set conn attrs
+        conns = conns.at[:all_conns_cnt, len(self.conn_gene.fixed_attrs) :].set(
+            conns_attrs
+        )
 
         return nodes, conns
 

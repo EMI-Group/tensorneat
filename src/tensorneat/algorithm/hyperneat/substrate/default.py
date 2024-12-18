@@ -2,7 +2,7 @@ from jax import vmap
 import numpy as np
 
 from .base import BaseSubstrate
-from tensorneat.genome.utils import set_conn_attrs
+from tensorneat.genome.utils import set_gene_attrs
 
 
 class DefaultSubstrate(BaseSubstrate):
@@ -21,7 +21,8 @@ class DefaultSubstrate(BaseSubstrate):
 
     def make_conns(self, query_res):
         # change weight of conns
-        return vmap(set_conn_attrs)(self.conns, query_res)
+        # the last column is the weight
+        return self.conns.at[:, -1].set(query_res)
 
     @property
     def query_coors(self):

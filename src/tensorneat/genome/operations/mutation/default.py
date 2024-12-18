@@ -13,10 +13,8 @@ from ...utils import (
     add_conn,
     delete_node_by_pos,
     delete_conn_by_pos,
-    extract_node_attrs,
-    extract_conn_attrs,
-    set_node_attrs,
-    set_conn_attrs,
+    extract_gene_attrs, 
+    set_gene_attrs
 )
 
 
@@ -33,17 +31,28 @@ class DefaultMutation(BaseMutation):
         self.node_add = node_add
         self.node_delete = node_delete
 
-    def __call__(self, state, genome, randkey, nodes, conns, new_node_key):
+    def __call__(
+        self, state, genome, randkey, nodes, conns, new_node_key, new_conn_key
+    ):
+        assert (
+            new_node_key.shape == ()
+        )  # scalar, as there is max one new node in each mutation
+        assert new_conn_key.shape == (
+            3,
+        )  # there are max 3 new connections (mutate add node + mutate add conn)
+
         k1, k2 = jax.random.split(randkey)
 
         nodes, conns = self.mutate_structure(
-            state, genome, k1, nodes, conns, new_node_key
+            state, genome, k1, nodes, conns, new_node_key, new_conn_key
         )
         nodes, conns = self.mutate_values(state, genome, k2, nodes, conns)
 
         return nodes, conns
 
-    def mutate_structure(self, state, genome, randkey, nodes, conns, new_node_key):
+    def mutate_structure(
+        self, state, genome, randkey, nodes, conns, new_node_key, new_conn_key
+    ):
         def mutate_add_node(key_, nodes_, conns_):
             """
             add a node while do not influence the output of the network
@@ -57,27 +66,33 @@ class DefaultMutation(BaseMutation):
 
             def successful_add_node():
                 # remove the original connection and record its attrs
-                original_attrs = extract_conn_attrs(conns_[idx])
+                original_attrs = extract_gene_attrs(genome.conn_gene, conns_[idx])
                 new_conns = delete_conn_by_pos(conns_, idx)
 
                 # add a new node with identity attrs
                 new_nodes = add_node(
-                    nodes_, new_node_key, genome.node_gene.new_identity_attrs(state)
+                    nodes_, jnp.array([new_node_key]), genome.node_gene.new_identity_attrs(state)
                 )
+
+                # whether to use historical marker in connection
+                if "historical_marker" in genome.conn_gene.fixed_attrs:
+                    fix_attrs1 = jnp.array([i_key, new_node_key, new_conn_key[0]])
+                    fix_attrs2 = jnp.array([new_node_key, o_key, new_conn_key[1]])
+                else:
+                    fix_attrs1 = jnp.array([i_key, new_node_key])
+                    fix_attrs2 = jnp.array([new_node_key, o_key])
 
                 # add two new connections
                 # first is with identity attrs
                 new_conns = add_conn(
                     new_conns,
-                    i_key,
-                    new_node_key,
+                    fix_attrs1,
                     genome.conn_gene.new_identity_attrs(state),
                 )
                 # second is with the origin attrs
                 new_conns = add_conn(
                     new_conns,
-                    new_node_key,
-                    o_key,
+                    fix_attrs2,
                     original_attrs,
                 )
 
@@ -160,8 +175,12 @@ class DefaultMutation(BaseMutation):
 
             def successful():
                 # add a connection with zero attrs
+                if "historical_marker" in genome.conn_gene.fixed_attrs:
+                    new_fix_attrs = jnp.array([i_key, o_key, new_conn_key[2]])
+                else:
+                    new_fix_attrs = jnp.array([i_key, o_key])
                 return nodes_, add_conn(
-                    conns_, i_key, o_key, genome.conn_gene.new_zero_attrs(state)
+                    conns_, new_fix_attrs, genome.conn_gene.new_zero_attrs(state)
                 )
 
             if genome.network_type == "feedforward":
@@ -228,17 +247,25 @@ class DefaultMutation(BaseMutation):
         nodes_randkeys = jax.random.split(k1, num=genome.max_nodes)
         conns_randkeys = jax.random.split(k2, num=genome.max_conns)
 
-        node_attrs = vmap(extract_node_attrs)(nodes)
+        node_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(
+            genome.node_gene, nodes
+        )
         new_node_attrs = vmap(genome.node_gene.mutate, in_axes=(None, 0, 0))(
             state, nodes_randkeys, node_attrs
         )
-        new_nodes = vmap(set_node_attrs)(nodes, new_node_attrs)
+        new_nodes = vmap(set_gene_attrs, in_axes=(None, 0, 0))(
+            genome.node_gene, nodes, new_node_attrs
+        )
 
-        conn_attrs = vmap(extract_conn_attrs)(conns)
+        conn_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(
+            genome.conn_gene, conns
+        )
         new_conn_attrs = vmap(genome.conn_gene.mutate, in_axes=(None, 0, 0))(
             state, conns_randkeys, conn_attrs
         )
-        new_conns = vmap(set_conn_attrs)(conns, new_conn_attrs)
+        new_conns = vmap(set_gene_attrs, in_axes=(None, 0, 0))(
+            genome.conn_gene, conns, new_conn_attrs
+        )
 
         # nan nodes not changed
         new_nodes = jnp.where(jnp.isnan(nodes), jnp.nan, new_nodes)

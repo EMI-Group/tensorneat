@@ -1,7 +1,8 @@
 from jax import vmap, numpy as jnp
 
 from .base import BaseDistance
-from ...utils import extract_node_attrs, extract_conn_attrs
+from ...gene import BaseGene
+from ...utils import extract_gene_attrs
 
 
 class DefaultDistance(BaseDistance):
@@ -17,83 +18,47 @@ class DefaultDistance(BaseDistance):
         """
         The distance between two genomes
         """
-        d = self.node_distance(state, genome, nodes1, nodes2) + self.conn_distance(
-            state, genome, conns1, conns2
-        )
-        return d
+        node_distance = self.gene_distance(state, genome.node_gene, nodes1, nodes2)
+        conn_distance = self.gene_distance(state, genome.conn_gene, conns1, conns2)
+        return node_distance + conn_distance
 
-    def node_distance(self, state, genome, nodes1, nodes2):
+
+    def gene_distance(self, state, gene: BaseGene, genes1, genes2):
         """
-        The distance of the nodes part for two genomes
+        The distance between to genes
+        genes1: 2-D jax array with shape
+        genes2: 2-D jax array with shape
+        gene1.shape == gene2.shape
         """
-        node_cnt1 = jnp.sum(~jnp.isnan(nodes1[:, 0]))
-        node_cnt2 = jnp.sum(~jnp.isnan(nodes2[:, 0]))
-        max_cnt = jnp.maximum(node_cnt1, node_cnt2)
+        cnt1 = jnp.sum(~jnp.isnan(genes1[:, 0]))
+        cnt2 = jnp.sum(~jnp.isnan(genes2[:, 0]))
+        max_cnt = jnp.maximum(cnt1, cnt2)
 
         # align homologous nodes
-        # this process is similar to np.intersect1d.
-        nodes = jnp.concatenate((nodes1, nodes2), axis=0)
-        keys = nodes[:, 0]
-        sorted_indices = jnp.argsort(keys, axis=0)
-        nodes = nodes[sorted_indices]
-        nodes = jnp.concatenate(
-            [nodes, jnp.full((1, nodes.shape[1]), jnp.nan)], axis=0
+        # this process is similar to np.intersect1d in higher dimension
+        total_genes = jnp.concatenate((genes1, genes2), axis=0)
+        identifiers = total_genes[:, : len(gene.fixed_attrs)]
+        sorted_identifiers = jnp.lexsort(identifiers.T[::-1])
+        total_genes = total_genes[sorted_identifiers]
+        total_genes = jnp.concatenate(
+            [total_genes, jnp.full((1, total_genes.shape[1]), jnp.nan)], axis=0
         )  # add a nan row to the end
-        fr, sr = nodes[:-1], nodes[1:]  # first row, second row
+        fr, sr = total_genes[:-1], total_genes[1:]  # first row, second row
 
-        # flag location of homologous nodes
-        intersect_mask = (fr[:, 0] == sr[:, 0]) & ~jnp.isnan(nodes[:-1, 0])
+        # intersect part of two genes
+        intersect_mask = jnp.all(
+            fr[:, : len(gene.fixed_attrs)] == sr[:, : len(gene.fixed_attrs)], axis=1
+        ) & ~jnp.isnan(fr[:, 0])
 
-        # calculate the count of non_homologous of two genomes
-        non_homologous_cnt = node_cnt1 + node_cnt2 - 2 * jnp.sum(intersect_mask)
+        non_homologous_cnt = cnt1 + cnt2 - 2 * jnp.sum(intersect_mask)
 
-        # calculate the distance of homologous nodes
-        fr_attrs = vmap(extract_node_attrs)(fr)
-        sr_attrs = vmap(extract_node_attrs)(sr)
-        hnd = vmap(genome.node_gene.distance, in_axes=(None, 0, 0))(
-            state, fr_attrs, sr_attrs
-        )  # homologous node distance
-        hnd = jnp.where(jnp.isnan(hnd), 0, hnd)
-        homologous_distance = jnp.sum(hnd * intersect_mask)
+        fr_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(gene, fr)
+        sr_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(gene, sr)
 
-        val = (
-            non_homologous_cnt * self.compatibility_disjoint
-            + homologous_distance * self.compatibility_weight
-        )
-
-        val = jnp.where(max_cnt == 0, 0, val / max_cnt)  # normalize
-
-        return val
-
-    def conn_distance(self, state, genome, conns1, conns2):
-        """
-        The distance of the conns part for two genomes
-        """
-        con_cnt1 = jnp.sum(~jnp.isnan(conns1[:, 0]))
-        con_cnt2 = jnp.sum(~jnp.isnan(conns2[:, 0]))
-        max_cnt = jnp.maximum(con_cnt1, con_cnt2)
-
-        cons = jnp.concatenate((conns1, conns2), axis=0)
-        keys = cons[:, :2]
-        sorted_indices = jnp.lexsort(keys.T[::-1])
-        cons = cons[sorted_indices]
-        cons = jnp.concatenate(
-            [cons, jnp.full((1, cons.shape[1]), jnp.nan)], axis=0
-        )  # add a nan row to the end
-        fr, sr = cons[:-1], cons[1:]  # first row, second row
-
-        # both genome has such connection
-        intersect_mask = jnp.all(fr[:, :2] == sr[:, :2], axis=1) & ~jnp.isnan(fr[:, 0])
-
-        non_homologous_cnt = con_cnt1 + con_cnt2 - 2 * jnp.sum(intersect_mask)
-
-        fr_attrs = vmap(extract_conn_attrs)(fr)
-        sr_attrs = vmap(extract_conn_attrs)(sr)
-        hcd = vmap(genome.conn_gene.distance, in_axes=(None, 0, 0))(
-            state, fr_attrs, sr_attrs
-        )  # homologous connection distance
-        hcd = jnp.where(jnp.isnan(hcd), 0, hcd)
-        homologous_distance = jnp.sum(hcd * intersect_mask)
+        # homologous gene distance
+        hgd = vmap(gene.distance, in_axes=(None, 0, 0))(state, fr_attrs, sr_attrs)
+        hgd = jnp.where(jnp.isnan(hgd), 0, hgd)
+        homologous_distance = jnp.sum(hgd * intersect_mask)
 
         val = (
             non_homologous_cnt * self.compatibility_disjoint

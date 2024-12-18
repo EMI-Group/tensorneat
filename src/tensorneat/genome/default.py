@@ -8,7 +8,7 @@ import sympy as sp
 from .base import BaseGenome
 from .gene import DefaultNode, DefaultConn
 from .operations import DefaultMutation, DefaultCrossover, DefaultDistance
-from .utils import unflatten_conns, extract_node_attrs, extract_conn_attrs
+from .utils import unflatten_conns, extract_gene_attrs, extract_gene_attrs
 
 from tensorneat.common import (
     topological_sort,
@@ -16,7 +16,7 @@ from tensorneat.common import (
     I_INF,
     attach_with_inf,
     ACT,
-    AGG
+    AGG,
 )
 
 
@@ -73,8 +73,8 @@ class DefaultGenome(BaseGenome):
 
         ini_vals = jnp.full((self.max_nodes,), jnp.nan)
         ini_vals = ini_vals.at[self.input_idx].set(inputs)
-        nodes_attrs = vmap(extract_node_attrs)(nodes)
-        conns_attrs = vmap(extract_conn_attrs)(conns)
+        nodes_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(self.node_gene, nodes)
+        conns_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(self.conn_gene, conns)
 
         def cond_fun(carry):
             values, idx = carry

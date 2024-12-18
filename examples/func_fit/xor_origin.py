@@ -1,12 +1,20 @@
 from tensorneat.pipeline import Pipeline
 from tensorneat import algorithm, genome, problem
+from tensorneat.genome import OriginNode, OriginConn
 from tensorneat.common import ACT
+
+"""
+Solving XOR-3d problem with OriginGene
+See https://github.com/EMI-Group/tensorneat/issues/11
+"""
 
 algorithm = algorithm.NEAT(
     pop_size=10000,
     species_size=20,
     survival_threshold=0.01,
     genome=genome.DefaultGenome(
+        node_gene=OriginNode(),
+        conn_gene=OriginConn(),
         num_inputs=3,
         num_outputs=1,
         max_nodes=7,
