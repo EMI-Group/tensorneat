@@ -299,7 +299,8 @@ class SpeciesController(StatefulBaseClass):
         # normalize the fitness before calculating the spawn number
         # consider that the fitness may be negative
         # in this way the species with the lowest fitness will have spawn_number = 0
-        species_fitness = species_fitness - jnp.min(species_fitness)
+        # 2025.1.31 updated, add +1 to avoid 0
+        species_fitness = species_fitness - jnp.min(species_fitness) + 1
 
         # calculate the spawn number rate by the fitness of each species
         spawn_number_rate = species_fitness / jnp.sum(
