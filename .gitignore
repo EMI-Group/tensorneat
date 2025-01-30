@@ -115,3 +115,5 @@ cython_debug/
 *.log
 *.pot
 *.mo
+
+tutorials/.ipynb_checkpoints/*
