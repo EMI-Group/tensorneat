@@ -33,3 +33,10 @@ class BaseProblem(StatefulBaseClass):
         show how a genome perform in this problem
         """
         raise NotImplementedError
+
+    def show_details(self, state: State, randkey, act_func: Callable, pop_params, *args, **kwargs):
+        """
+        show the running details of the problem
+        this function will be automaticly call in pipeline.auto_run()
+        """
+        pass
