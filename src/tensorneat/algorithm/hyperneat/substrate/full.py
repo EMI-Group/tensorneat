@@ -63,7 +63,7 @@ def analysis_substrate(input_coors, output_coors, hidden_coors):
     )  # input_idx, output_idx, weight
     conns[:, :2] = correspond_keys
 
-    print(query_coors, nodes, conns)
+    # print(query_coors, nodes, conns)
     return query_coors, nodes, conns
 
 
