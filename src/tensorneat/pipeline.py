@@ -106,7 +106,7 @@ class Pipeline(StatefulBaseClass):
         if self.show_problem_details:
             self.compiled_pop_transform_func = (
                 jax.jit(jax.vmap(self.algorithm.transform, in_axes=(None, 0)))
-                .lower(self.algorithm.ask(state))
+                .lower(state, self.algorithm.ask(state))
                 .compile()
             )
 
