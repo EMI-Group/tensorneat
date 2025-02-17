@@ -1,2 +1,1 @@
-sphinx-apidoc
 sphinx_rtd_theme
