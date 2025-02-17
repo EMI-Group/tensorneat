@@ -24,6 +24,11 @@ extensions = [
     'sphinx.ext.viewcode',
 ]
 
+autodoc_mock_imports = [
+    "evox"
+]
+
+
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
