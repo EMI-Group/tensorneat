@@ -12,7 +12,7 @@ TensorNEAT documentation
 
    source/tensorneat
 
-.. automodule:: tensorneat
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. .. automodule:: tensorneat
+..    :members:
+..    :undoc-members:
+..    :show-inheritance:
