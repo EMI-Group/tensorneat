@@ -1,7 +1,7 @@
 import os
 import sys
-script_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(script_dir, '..', 'src'))
+sys.path.insert(0, os.path.abspath('.'))
+sys.path.insert(0, os.path.abspath('../src'))
 
 # Configuration file for the Sphinx documentation builder.
 #
@@ -23,6 +23,11 @@ extensions = [
     'sphinx.ext.napoleon',
     'sphinx.ext.viewcode',
 ]
+
+autodoc_mock_imports = [
+    "evox"
+]
+
 
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
