@@ -11,3 +11,8 @@ TensorNEAT documentation
    :caption: Contents:
 
    source/tensorneat
+
+.. automodule:: tensorneat
+   :members:
+   :undoc-members:
+   :show-inheritance:
