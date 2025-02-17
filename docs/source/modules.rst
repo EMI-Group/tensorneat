@@ -1,5 +1,5 @@
-src
-===
+tensorneat
+==========
 
 .. toctree::
    :maxdepth: 4
