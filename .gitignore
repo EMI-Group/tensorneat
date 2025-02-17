@@ -117,3 +117,4 @@ cython_debug/
 *.mo
 
 tutorials/.ipynb_checkpoints/*
+docs/_build/*
