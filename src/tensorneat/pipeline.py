@@ -83,6 +83,13 @@ class Pipeline(StatefulBaseClass):
         return state
 
     def step(self, state):
+        """
+        returns: 
+            state, previous_pop, fitnesses
+        state: updated state
+        previous_pop: previous population
+        fitnesses: fitnesses of previous population
+        """
 
         randkey_, randkey = jax.random.split(state.randkey)
 
