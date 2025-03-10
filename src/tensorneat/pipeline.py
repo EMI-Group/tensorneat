@@ -232,7 +232,7 @@ class Pipeline(StatefulBaseClass):
 
         if self.show_problem_details:
             pop_transformed = self.compiled_pop_transform_func(
-                state, self.algorithm.ask(state)
+                state, pop #using previous pop instead of requesting the new one from state here
             )
             self.problem.show_details(
                 state, state.randkey, self.algorithm.forward, pop_transformed
