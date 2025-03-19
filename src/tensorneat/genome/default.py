@@ -251,6 +251,7 @@ class DefaultGenome(BaseGenome):
             nodes_exprs,
             output_exprs,
             forward_func,
+            network["topo_order"]
         )
 
     def visualize(
