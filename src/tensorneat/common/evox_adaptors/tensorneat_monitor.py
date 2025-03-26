@@ -44,22 +44,35 @@ class TensorNEATMonitor(Monitor):
             if not os.path.exists(self.genome_dir):
                 os.makedirs(self.genome_dir)
 
+    def clear_history(self):
+        self.alg_state: TensorNEATState = None
+        self.fitness = None
+        self.best_fitness = -np.inf
+        self.best_genome = None
+
     def hooks(self):
         return ["pre_tell"]
 
-    def pre_tell(self, state: EvoXState, cand_sol, transformed_cand_sol, fitness, transformed_fitness):
+    def pre_tell(self, monitor_state, workflow_state, transformed_fitness):
         io_callback(
             self.store_info,
             None,
-            state,
+            workflow_state,
             transformed_fitness,
         )
+        return monitor_state 
 
     def store_info(self, state: EvoXState, fitness):
         self.alg_state: TensorNEATState = state.query_state("algorithm").alg_state
         self.fitness = jax.device_get(fitness)
 
     def show(self):
+        io_callback(
+            self._show,
+            None
+        )
+
+    def _show(self):
         pop = self.tensorneat_algorithm.ask(self.alg_state)
         generation = int(self.alg_state.generation)
 

@@ -119,3 +119,5 @@ cython_debug/
 tutorials/.ipynb_checkpoints/*
 docs/_build/*
 examples/func_fit/evolving_state.pkl
+
+src/evox/*
