@@ -51,7 +51,6 @@ workflow = workflows.StdWorkflow(
     solution_transforms=[jax.jit(jax.vmap(evox_algorithm.transform))],
     fitness_transforms=[nan2inf],
     monitors=[monitor],
-    opt_direction="max",
 )
 
 # init the workflow
