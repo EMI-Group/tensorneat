@@ -1,13 +1,16 @@
-
 from tensorneat.pipeline import Pipeline
 from tensorneat.algorithm.neat import NEAT
-from tensorneat.genome import DefaultGenome, BiasNode, DefaultConn,DefaultMutation
+from tensorneat.genome import DefaultGenome, BiasNode, DefaultConn, DefaultMutation
 
-from problem.rl import MujocoEnv
+from tensorneat.problem.rl import MujocoEnv
 from tensorneat.common import ACT, AGG
 import jax
+
+
 def random_sample_policy(randkey, obs):
     return jax.random.uniform(randkey, (8,), minval=-1.0, maxval=1.0)
+
+
 if __name__ == "__main__":
     pipeline = Pipeline(
         algorithm=NEAT(
