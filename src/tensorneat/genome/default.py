@@ -13,6 +13,7 @@ from .utils import unflatten_conns, extract_gene_attrs, extract_gene_attrs
 from tensorneat.common import (
     topological_sort,
     topological_sort_python,
+    find_useful_nodes,
     I_INF,
     attach_with_inf,
     ACT,
@@ -131,6 +132,11 @@ class DefaultGenome(BaseGenome):
         )
         network["topo_order"] = topo_order
         network["topo_layers"] = topo_layers
+        network["useful_nodes"] = find_useful_nodes(
+            set(network["nodes"]), 
+            set(network["conns"]), 
+            set(self.output_idx)
+        )
         return network
 
     def sympy_func(
@@ -251,7 +257,8 @@ class DefaultGenome(BaseGenome):
             nodes_exprs,
             output_exprs,
             forward_func,
-            network["topo_order"]
+            network["topo_order"],
+            network["useful_nodes"]
         )
 
     def visualize(

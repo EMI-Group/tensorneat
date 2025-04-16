@@ -94,7 +94,28 @@ def topological_sort_python(
 
     return topo_order, topo_layer
 
-
+def find_useful_nodes(
+    nodes: Union[Set[int], List[int]],
+    conns: Union[Set[Tuple[int, int]], List[Tuple[int, int]]],
+    output_idx: Set[int],
+) -> Set[int]:
+    """
+    Find all useful nodes (really contribute to outputs)
+    """
+    useful_nodes = set()
+    useful_nodes = useful_nodes | output_idx
+    while True:
+        aux = set()
+        for in_, out in conns:
+            if out in useful_nodes and in_ not in useful_nodes:
+                aux.add(in_)
+        if len(aux) == 0:  # no new nodes
+            break
+        else:
+            useful_nodes = useful_nodes | aux
+    # print(f"All nodes cnt={len(nodes)}, useful nodes cnt={len(useful_nodes)}")
+    return useful_nodes            
+        
 @jit
 def check_cycles(nodes: Array, conns: Array, from_idx, to_idx) -> Array:
     """

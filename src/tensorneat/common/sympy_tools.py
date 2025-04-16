@@ -43,11 +43,14 @@ def replace_variable_names(expression, mode):
     return expression_str
 
 
-def to_latex_code(symbols, args_symbols, input_symbols, nodes_exprs, output_exprs, forward_func, topo_order):
+def to_latex_code(symbols, args_symbols, input_symbols, nodes_exprs, output_exprs, forward_func, topo_order, useful_nodes):
     input_cnt, hidden_cnt, output_cnt, norm_symbols = analysis_nodes_exprs(nodes_exprs)
     res = "\\begin{align}\n"
     
     for i in topo_order[input_cnt: ]:
+        # do not add node that does not contribute to output; useful nodes may be nan and cause error
+        if i not in useful_nodes:
+            continue
         symbol = symbols[i]
         expr = nodes_exprs[symbol].subs(args_symbols).subs(norm_symbols)
         rounded_expr = round_expr(expr, 2)
@@ -58,7 +61,7 @@ def to_latex_code(symbols, args_symbols, input_symbols, nodes_exprs, output_expr
     return res
 
 
-def to_python_code(symbols, args_symbols, input_symbols, nodes_exprs, output_exprs, forward_func, topo_order):
+def to_python_code(symbols, args_symbols, input_symbols, nodes_exprs, output_exprs, forward_func, topo_order, useful_nodes):
     input_cnt, hidden_cnt, output_cnt, norm_symbols = analysis_nodes_exprs(nodes_exprs)
     res = ""
     if hidden_cnt > 0:
@@ -66,6 +69,9 @@ def to_python_code(symbols, args_symbols, input_symbols, nodes_exprs, output_exp
     res += f"o = np.zeros({output_cnt})\n"
 
     for i in topo_order[input_cnt: ]:
+        # do not add node that does not contribute to output; useful nodes may be nan and cause error
+        if i not in useful_nodes:
+            continue
         symbol = symbols[i]
         expr = nodes_exprs[symbol].subs(args_symbols).subs(norm_symbols)
         rounded_expr = round_expr(expr, 6)

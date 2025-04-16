@@ -98,7 +98,7 @@ def re_cound_idx(nodes, conns, input_idx, output_idx):
     for i, key in enumerate(nodes[:, 0]):
         if np.isnan(key):
             continue
-        if np.in1d(key, input_idx + output_idx):
+        if np.isin(key, input_idx + output_idx):
             continue
         old2new[int(key)] = next_key
         next_key += 1
