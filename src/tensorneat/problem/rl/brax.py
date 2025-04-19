@@ -1,6 +1,4 @@
 import jax.numpy as jnp
-from brax import envs
-
 from .rl_jit import RLEnv, norm_obs
 
 
@@ -8,6 +6,7 @@ class BraxEnv(RLEnv):
     def __init__(
         self, env_name: str = "ant", backend: str = "generalized", *args, **kwargs
     ):
+        from brax import envs
         super().__init__(*args, **kwargs)
         self.env_name = env_name
         self.env = envs.create(env_name=env_name, backend=backend)

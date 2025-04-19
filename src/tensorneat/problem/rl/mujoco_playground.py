@@ -1,7 +1,5 @@
 import jax.numpy as jnp
 from jax import Array
-from mujoco_playground import registry
-
 from .rl_jit import RLEnv, norm_obs
 
 
@@ -9,6 +7,7 @@ class MujocoEnv(RLEnv):
     def __init__(
         self, env_name: str = "SwimmerSwimmer6", *args, **kwargs
     ):
+        from mujoco_playground import registry
         super().__init__(*args, **kwargs)
         self.env_name = env_name
         self.env = registry.load(env_name=env_name)

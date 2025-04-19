@@ -1,10 +1,9 @@
-import gymnax
-
 from .rl_jit import RLEnv
 
 
 class GymNaxEnv(RLEnv):
     def __init__(self, env_name, *args, **kwargs):
+        import gymnax
         super().__init__(*args, **kwargs)
         assert env_name in gymnax.registered_envs, f"Env {env_name} not registered in gymnax."
         self.env, self.env_params = gymnax.make(env_name)
