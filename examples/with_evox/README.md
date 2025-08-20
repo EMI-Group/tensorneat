@@ -5,5 +5,5 @@ To run this example, please install EvoX with the [jax-version branch: (v0.9.1-d
 
 Use this command to install EvoX's JAX Version:
 ```bash
-pip install git+https://github.com/EMI-Group/evox/tree/v0.9.1-dev
+pip install "git+https://github.com/EMI-Group/evox@v0.9.1-dev"
 ```
