@@ -296,6 +296,15 @@ pip install git+https://github.com/EMI-Group/tensorneat.git
 ## Multi-device and Distributed Acceleration
 TensorNEAT doesn't natively support multi-device or distributed execution, but these features can be accessed via the EvoX framework. EvoX is a high-performance, distributed, GPU-accelerated framework for Evolutionary Algorithms. For more details, visit: [EvoX GitHub](https://github.com/EMI-Group/evox/).
 
+**Notice**: As the latest EvoX has been migrated to the PyTorch backend, we need to install the JAX-Version EvoX to run multi-device EvoX. 
+The current JAX-Version Evox branch is [v0.9.1-dev](https://github.com/EMI-Group/evox/tree/v0.9.1-dev).
+
+Use 
+```bash
+pip install git+https://github.com/EMI-Group/evox/tree/v0.9.1-dev
+```
+to install the JAX based EvoX.
+
 TensorNEAT includes an EvoX Adaptor, which allows TensorNEAT algorithms to run within the EvoX framework. Additionally, TensorNEAT provides a monitor for use with EvoX.
 
 Here is an example of creating an EvoX algorithm and monitor:
