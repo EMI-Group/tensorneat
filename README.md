@@ -301,7 +301,7 @@ The current JAX-Version Evox branch is [v0.9.1-dev](https://github.com/EMI-Group
 
 Use 
 ```bash
-pip install git+https://github.com/EMI-Group/evox/tree/v0.9.1-dev
+pip install "git+https://github.com/EMI-Group/evox@v0.9.1-dev"
 ```
 to install the JAX based EvoX.
 
