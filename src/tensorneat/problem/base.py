@@ -5,6 +5,7 @@ from tensorneat.common import State, StatefulBaseClass
 
 class BaseProblem(StatefulBaseClass):
     jitable = None
+    requires_stateful_policy = False
 
     def evaluate(self, state: State, randkey, act_func: Callable, params):
         """evaluate one individual"""

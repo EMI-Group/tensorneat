@@ -1,3 +1,4 @@
+from email import policy
 import json
 import os
 import warnings
@@ -101,8 +102,12 @@ class Pipeline(StatefulBaseClass):
 
         if not self.using_multidevice:
             keys = jax.random.split(randkey_, self.pop_size)
+            if self.problem.requires_stateful_policy:
+                act_fun = self.algorithm.stateful_policy_api()
+            else:
+                act_fun = self.algorithm.forward
             fitnesses = jax.vmap(self.problem.evaluate, in_axes=(None, 0, None, 0))(
-                state, keys, self.algorithm.forward, pop_transformed
+                state, keys, act_fun, pop_transformed
             )
         else: # using_multidevice
             num_devices = jax.device_count()

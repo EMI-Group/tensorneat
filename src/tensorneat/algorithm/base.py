@@ -1,4 +1,4 @@
-from tensorneat.common import State, StatefulBaseClass
+from tensorneat.common import State, StatefulBaseClass, PolicyAPI, _wrap_stateless
 
 
 class BaseAlgorithm(StatefulBaseClass):
@@ -20,6 +20,10 @@ class BaseAlgorithm(StatefulBaseClass):
     def show_details(self, state: State, fitness):
         """Visualize the running details of the algorithm"""
         raise NotImplementedError
+    
+    def stateful_policy_api(self) -> PolicyAPI:
+        """Give Stateful forward function of this algorithm"""
+        return _wrap_stateless(self.forward)
 
     @property
     def num_inputs(self):

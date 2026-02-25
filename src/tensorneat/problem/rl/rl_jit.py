@@ -5,11 +5,12 @@ from jax import vmap, numpy as jnp
 import numpy as np
 
 from ..base import BaseProblem
-from tensorneat.common import State
+from tensorneat.common import PolicyAPI, State
 
 
 class RLEnv(BaseProblem):
     jitable = True
+    requires_stateful_policy = True
 
     def __init__(
         self,
@@ -84,14 +85,14 @@ class RLEnv(BaseProblem):
             print("obs_std: ", obs_std)
         return state
 
-    def evaluate(self, state: State, randkey, act_func: Callable, params):
+    def evaluate(self, state: State, randkey, policy: PolicyAPI, params):
         keys = jax.random.split(randkey, self.repeat_times)
         rewards = vmap(
             self._evaluate_once, in_axes=(None, 0, None, None, None, None, None)
         )(
             state,
             keys,
-            act_func,
+            policy,
             params,
             self.action_policy,
             False,
@@ -104,7 +105,7 @@ class RLEnv(BaseProblem):
         self,
         state,
         randkey,
-        act_func,
+        policy,
         params,
         action_policy,
         record_episode,
@@ -112,6 +113,7 @@ class RLEnv(BaseProblem):
     ):
         rng_reset, rng_episode = jax.random.split(randkey)
         init_obs, init_env_state = self.reset(rng_reset)
+        init_rollout_state = policy.init_rollout_state(state, params)
 
         if record_episode:
             obs_array = jnp.full((self.max_step, *self.input_shape), jnp.nan)
@@ -126,13 +128,14 @@ class RLEnv(BaseProblem):
             episode = None
 
         def cond_func(carry):
-            _, _, _, done, _, count, _, rk = carry
+            _, _, _, _, done, _, count, _, rk = carry
             return ~done & (count < self.max_step)
 
         def body_func(carry):
             (
                 obs,
                 env_state,
+                rollout_state,
                 rng,
                 done,
                 tr,
@@ -144,11 +147,7 @@ class RLEnv(BaseProblem):
             if normalize_obs:
                 obs = norm_obs(state, obs)
 
-            if action_policy is not None:
-                forward_func = lambda obs: act_func(state, params, obs)
-                action = action_policy(rk, forward_func, obs)
-            else:
-                action = act_func(state, params, obs)
+            action, next_rollout_state = policy.forward_step(state, params, obs, rollout_state)
             next_obs, next_env_state, reward, done, _ = self.step(
                 rng, env_state, action
             )
@@ -162,6 +161,7 @@ class RLEnv(BaseProblem):
             return (
                 next_obs,
                 next_env_state,
+                next_rollout_state,
                 next_rng,
                 done,
                 tr + reward,
@@ -170,10 +170,10 @@ class RLEnv(BaseProblem):
                 jax.random.split(rk)[0],
             )
 
-        _, _, _, _, total_reward, _, episode, _ = jax.lax.while_loop(
+        _, _, _, _, _, total_reward, _, episode, _ = jax.lax.while_loop(
             cond_func,
             body_func,
-            (init_obs, init_env_state, rng_episode, False, 0.0, 0, episode, randkey),
+            (init_obs, init_env_state, init_rollout_state, rng_episode, False, 0.0, 0, episode, randkey),
         )
 
         if record_episode:
