@@ -99,14 +99,15 @@ class Pipeline(StatefulBaseClass):
             state, pop
         )
 
+        if self.problem.requires_stateful_policy:
+            act_func = self.algorithm.stateful_policy_api()
+        else:
+            act_func = self.algorithm.get_forward()
+        
         if not self.using_multidevice:
             keys = jax.random.split(randkey_, self.pop_size)
-            if self.problem.requires_stateful_policy:
-                act_fun = self.algorithm.stateful_policy_api()
-            else:
-                act_fun = self.algorithm.forward
             fitnesses = jax.vmap(self.problem.evaluate, in_axes=(None, 0, None, 0))(
-                state, keys, act_fun, pop_transformed
+                state, keys, act_func, pop_transformed
             )
         else: # using_multidevice
             num_devices = jax.device_count()
@@ -121,7 +122,7 @@ class Pipeline(StatefulBaseClass):
 
             fitnesses = jax.pmap(
                 lambda key_slice, pop_slice: jax.vmap(self.problem.evaluate, in_axes=(None, 0, None, 0))(
-                    state, key_slice, self.algorithm.forward, pop_slice
+                    state, key_slice, act_func, pop_slice
                 ),
                 axis_name='devices',
                 in_axes=(0, 0)

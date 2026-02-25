@@ -14,7 +14,7 @@ class BaseAlgorithm(StatefulBaseClass):
         """transform the genome into a neural network"""
         raise NotImplementedError
 
-    def forward(self, state, transformed, inputs):
+    def get_forward(self):
         raise NotImplementedError
 
     def show_details(self, state: State, fitness):
@@ -23,7 +23,7 @@ class BaseAlgorithm(StatefulBaseClass):
     
     def stateful_policy_api(self) -> PolicyAPI:
         """Give Stateful forward function of this algorithm"""
-        return _wrap_stateless(self.forward)
+        return _wrap_stateless(self.get_forward())
 
     @property
     def num_inputs(self):

@@ -95,8 +95,8 @@ class NEAT(BaseAlgorithm):
         nodes, conns = individual
         return self.genome.transform(state, nodes, conns)
 
-    def forward(self, state, transformed, inputs):
-        return self.genome.forward(state, transformed, inputs)
+    def get_forward(self):
+        return self.genome.forward
 
     @property
     def num_inputs(self):

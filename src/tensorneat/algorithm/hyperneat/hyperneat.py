@@ -55,7 +55,7 @@ class HyperNEAT(BaseAlgorithm):
 
     def transform(self, state, individual):
         transformed = self.neat.transform(state, individual)
-        query_res = vmap(self.neat.forward, in_axes=(None, None, 0))(
+        query_res = vmap(self.neat.get_forward(), in_axes=(None, None, 0))(
             state, transformed, self.substrate.query_coors
         )
         # mute the connection with weight weight threshold
@@ -82,12 +82,14 @@ class HyperNEAT(BaseAlgorithm):
 
         return self.hyper_genome.transform(state, h_nodes, h_conns)
 
-    def forward(self, state, transformed, inputs):
+    def get_forward(self):
         # add bias
-        inputs_with_bias = jnp.concatenate([inputs, jnp.array([1])])
+        def forward(state, transformed, inputs):
+            inputs_with_bias = jnp.concatenate([inputs, jnp.array([1])])
 
-        res = self.hyper_genome.forward(state, transformed, inputs_with_bias)
-        return res
+            res = self.hyper_genome.forward(state, transformed, inputs_with_bias)
+            return res
+        return forward
 
     @property
     def num_inputs(self):
