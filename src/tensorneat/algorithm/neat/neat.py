@@ -6,7 +6,7 @@ import numpy as np
 
 from .species import SpeciesController
 from .. import BaseAlgorithm
-from tensorneat.common import State
+from tensorneat.common import State, PolicyAPI
 from tensorneat.genome import BaseGenome
 
 
@@ -97,6 +97,12 @@ class NEAT(BaseAlgorithm):
 
     def get_forward(self):
         return self.genome.forward
+    
+    def init_rollout_state(self):
+        return self.genome.init_rollout_state
+
+    def stateful_policy_api(self) -> PolicyAPI:
+        return PolicyAPI(self.get_forward(), self.init_rollout_state())
 
     @property
     def num_inputs(self):

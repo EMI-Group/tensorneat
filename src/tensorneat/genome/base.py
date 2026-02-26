@@ -107,6 +107,9 @@ class BaseGenome(StatefulBaseClass):
     def forward(self, state, transformed, inputs):
         raise NotImplementedError
 
+    def init_rollout_state(self):
+        raise NotImplementedError
+
     def sympy_func(self):
         raise NotImplementedError
 
