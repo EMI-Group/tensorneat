@@ -9,7 +9,7 @@ class BaseNode(BaseGene):
     def __init__(self):
         super().__init__()
 
-    def forward(self, state, attrs, inputs, is_output_node=False):
+    def forward(self, state, attrs, inputs, is_output_node=False, valid_mask=None):
         raise NotImplementedError
 
     def repr(self, state, node, precision=2, idx_width=3, func_width=8):
