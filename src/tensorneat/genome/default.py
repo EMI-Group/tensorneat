@@ -77,48 +77,52 @@ class DefaultGenome(BaseGenome):
         nodes_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(self.node_gene, nodes)
         conns_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(self.conn_gene, conns)
 
-        def cond_fun(carry):
-            values, idx = carry
-            return (idx < self.max_nodes) & (
-                cal_seqs[idx] != I_INF
-            )  # not out of bounds and next node exists
-
-        def body_func(carry):
-            values, idx = carry
+        def body_func(idx, values):
             i = cal_seqs[idx]
 
-            def input_node():
+            def valid_node():
+                def input_node():
+                    return values
+
+                def otherwise():
+                    conn_indices = u_conns[:, i]
+                    conn_exists = conn_indices != I_INF
+                    src_valid = ~jnp.isnan(values)
+                    valid_mask = conn_exists & src_valid
+
+                    hit_attrs = attach_with_inf(
+                        conns_attrs, conn_indices
+                    )
+                    ins = vmap(self.conn_gene.forward, in_axes=(None, 0, 0))(
+                        state, hit_attrs, values
+                    )
+
+                    z = self.node_gene.forward(
+                        state,
+                        nodes_attrs[i],
+                        ins,
+                        is_output_node=jnp.isin(
+                            nodes[i, 0], self.output_idx
+                        ),
+                        valid_mask=valid_mask,
+                    )
+
+                    has_valid = jnp.any(valid_mask)
+                    new_values = jax.lax.cond(
+                        has_valid,
+                        lambda: values.at[i].set(z),
+                        lambda: values,
+                    )
+                    return new_values
+
+                return jax.lax.cond(jnp.isin(i, self.input_idx), input_node, otherwise)
+
+            def invalid_node():
                 return values
 
-            def otherwise():
-                # calculate connections
-                conn_indices = u_conns[:, i]
-                hit_attrs = attach_with_inf(
-                    conns_attrs, conn_indices
-                )  # fetch conn attrs
-                ins = vmap(self.conn_gene.forward, in_axes=(None, 0, 0))(
-                    state, hit_attrs, values
-                )
+            return jax.lax.cond(i != I_INF, valid_node, invalid_node)
 
-                # calculate nodes
-                z = self.node_gene.forward(
-                    state,
-                    nodes_attrs[i],
-                    ins,
-                    is_output_node=jnp.isin(
-                        nodes[i, 0], self.output_idx
-                    ),  # nodes[0] -> the key of nodes
-                )
-
-                # set new value
-                new_values = values.at[i].set(z)
-                return new_values
-
-            values = jax.lax.cond(jnp.isin(i, self.input_idx), input_node, otherwise)
-
-            return values, idx + 1
-
-        vals, _ = jax.lax.while_loop(cond_fun, body_func, (ini_vals, 0))
+        vals = jax.lax.fori_loop(0, self.max_nodes, body_func, ini_vals)
 
         if self.output_transform is None:
             return vals[self.output_idx]

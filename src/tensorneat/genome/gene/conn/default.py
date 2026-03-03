@@ -65,7 +65,9 @@ class DefaultConn(BaseConn):
 
     def forward(self, state, attrs, inputs):
         weight = attrs[0]
-        return inputs * weight
+        safe_w = jnp.where(jnp.isnan(weight), 0.0, weight)
+        safe_i = jnp.where(jnp.isnan(inputs), 0.0, inputs)
+        return safe_i * safe_w
 
     def repr(self, state, conn, precision=2, idx_width=3, func_width=8):
         in_idx, out_idx, weight = conn
