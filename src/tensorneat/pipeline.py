@@ -23,6 +23,7 @@ class Pipeline(StatefulBaseClass):
         save_dir=None,
         show_problem_details: bool = False,
         using_multidevice: bool = False,
+        eval_batch_size: int = None,
     ):
         assert problem.jitable, "Currently, problem must be jitable"
 
@@ -32,6 +33,12 @@ class Pipeline(StatefulBaseClass):
         self.fitness_target = fitness_target
         self.generation_limit = generation_limit
         self.pop_size = self.algorithm.pop_size
+
+        self.eval_batch_size = eval_batch_size
+        if eval_batch_size is not None:
+            assert self.pop_size % eval_batch_size == 0, (
+                f"pop_size ({self.pop_size}) must be divisible by eval_batch_size ({eval_batch_size})"
+            )
 
         np.random.seed(self.seed)
 
@@ -101,9 +108,12 @@ class Pipeline(StatefulBaseClass):
 
         if not self.using_multidevice:
             keys = jax.random.split(randkey_, self.pop_size)
-            fitnesses = jax.vmap(self.problem.evaluate, in_axes=(None, 0, None, 0))(
-                state, keys, self.algorithm.forward, pop_transformed
-            )
+            if self.eval_batch_size is None or self.eval_batch_size >= self.pop_size:
+                fitnesses = jax.vmap(self.problem.evaluate, in_axes=(None, 0, None, 0))(
+                    state, keys, self.algorithm.forward, pop_transformed
+                )
+            else:
+                fitnesses = self._batched_evaluate(state, keys, pop_transformed)
         else: # using_multidevice
             num_devices = jax.device_count()
             assert self.pop_size % num_devices == 0, "if you want to use multiple gpus, pop_size must be divisible by jax.device_count()"
@@ -132,6 +142,25 @@ class Pipeline(StatefulBaseClass):
         state = self.algorithm.tell(state, fitnesses)
 
         return state.update(randkey=randkey), previous_pop, fitnesses
+
+    def _batched_evaluate(self, state, keys, pop_transformed):
+        bs = self.eval_batch_size
+        n_batches = self.pop_size // bs
+        all_fitnesses = []
+
+        for i in range(n_batches):
+            start = i * bs
+            end = start + bs
+            batch_keys = keys[start:end]
+            batch_params = jax.tree_map(lambda x: x[start:end], pop_transformed)
+
+            batch_fitnesses = jax.vmap(
+                self.problem.evaluate, in_axes=(None, 0, None, 0)
+            )(state, batch_keys, self.algorithm.forward, batch_params)
+
+            all_fitnesses.append(batch_fitnesses)
+
+        return jnp.concatenate(all_fitnesses, axis=0)
 
     def auto_run(self, state):
         print("start compile")
