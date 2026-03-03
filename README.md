@@ -29,7 +29,7 @@ TensorNEAT is a JAX-based libaray for NeuroEvolution of Augmenting Topologies (N
 
 ## Key Features
 - JAX-based network for neuroevolution:
-    - **Batch inference** across networks with different architectures, GPU-accelerated.
+    - **Batch inference** and **gradient computation** across networks with different architectures, GPU-accelerated.
     - Evolve networks with **irregular structures** and **fully customize** their behavior.
     - Visualize the network and represent it in **mathematical formulas** or **codes**.
 
