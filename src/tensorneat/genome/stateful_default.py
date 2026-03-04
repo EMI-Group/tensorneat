@@ -41,7 +41,7 @@ class StatefulDefaultGenome(DefaultGenome):
             init_hidden_layers,
         )
 
-    def forward(self, state, transformed, inputs, rollout_state):
+    def forward(self, state, transformed, inputs, current_rollout_state):
 
         if self.input_transform is not None:
             inputs = self.input_transform(inputs)
@@ -75,35 +75,30 @@ class StatefulDefaultGenome(DefaultGenome):
                 ins = vmap(self.conn_gene.forward, in_axes=(None, 0, 0))(
                     state, hit_attrs, values
                 )
-                # Add rollout/hidden state
-                ins = jnp.append(rollout_state[i], ins)
 
                 # calculate nodes
-                z = self.node_gene.forward(
+                z, h_new = self.node_gene.forward(
                     state,
                     nodes_attrs[i],
                     ins,
+                    rollout_state[i],
                     is_output_node=jnp.isin(
                         nodes[i, 0], self.output_idx
                     ),  # nodes[0] -> the key of nodes
                 )
-                output, new_node_rollout_state = z
 
                 # set new value
-                new_values = values.at[i].set(output)
-                new_rollout_state = rollout_state.at[i].set(new_node_rollout_state)
+                new_values = values.at[i].set(z)
+                new_rollout_state = rollout_state.at[i].set(h_new)
                 return new_values, new_rollout_state
 
-            values, rollout_state = jax.lax.cond(jnp.isin(i, self.input_idx), input_node, otherwise)
+            values, n_rollout_state = jax.lax.cond(jnp.isin(i, self.input_idx), input_node, otherwise)
 
-            return values, rollout_state, idx + 1
+            return values, n_rollout_state, idx + 1
 
-        vals, rollout_state, _ = jax.lax.while_loop(cond_fun, body_func, (ini_vals, rollout_state, 0))
+        vals, rollout_state_new, _ = jax.lax.while_loop(cond_fun, body_func, (ini_vals, current_rollout_state, 0))
 
         if self.output_transform is None:
-            return vals[self.output_idx], rollout_state
+            return vals[self.output_idx], rollout_state_new
         else:
-            return self.output_transform(vals[self.output_idx]), rollout_state
-        
-    def init_rollout_state(self, state, params):
-        return jnp.zeros((self.max_nodes,))
+            return self.output_transform(vals[self.output_idx]), rollout_state_new

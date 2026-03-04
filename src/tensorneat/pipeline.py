@@ -103,7 +103,7 @@ class Pipeline(StatefulBaseClass):
             act_func = self.algorithm.stateful_policy_api()
         else:
             act_func = self.algorithm.get_forward()
-        
+        # jax.debug.breakpoint()
         if not self.using_multidevice:
             keys = jax.random.split(randkey_, self.pop_size)
             fitnesses = jax.vmap(self.problem.evaluate, in_axes=(None, 0, None, 0))(
@@ -146,6 +146,7 @@ class Pipeline(StatefulBaseClass):
                 message=r"The jitted function .* includes a pmap. Using jit-of-pmap can lead to inefficient data movement"
             )
             compiled_step = jax.jit(self.step).lower(state).compile()
+            # compiled_step = self.step
 
         if self.show_problem_details:
             self.compiled_pop_transform_func = (
