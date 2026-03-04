@@ -6,8 +6,8 @@ import numpy as np
 
 from .species import SpeciesController
 from .. import BaseAlgorithm
-from tensorneat.common import State, PolicyAPI
-from tensorneat.genome import BaseGenome
+from tensorneat.common import State, PolicyAPI, _wrap_stateless
+from tensorneat.genome import BaseGenome, StatefulDefaultGenome
 
 
 class NEAT(BaseAlgorithm):
@@ -102,8 +102,11 @@ class NEAT(BaseAlgorithm):
         return self.genome.init_rollout_state
 
     def stateful_policy_api(self) -> PolicyAPI:
-        return PolicyAPI(self.get_forward(), self.init_rollout_state())
-
+        if isinstance(self.genome, StatefulDefaultGenome):
+            return PolicyAPI(self.get_forward(), self.init_rollout_state())
+        else:
+            return _wrap_stateless(self.get_forward())
+        
     @property
     def num_inputs(self):
         return self.genome.num_inputs
