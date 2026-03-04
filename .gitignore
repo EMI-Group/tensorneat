@@ -122,3 +122,4 @@ examples/func_fit/evolving_state.pkl
 
 src/evox/*
 uv.lock
+experiments
