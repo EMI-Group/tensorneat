@@ -73,10 +73,10 @@ class Pipeline(StatefulBaseClass):
 
         if self.is_save:
             # self.save(state=state, path=os.path.join(self.save_dir, "pipeline.pkl"))
-            with open(os.path.join(self.save_dir, "config.txt"), "w") as f:
+            with open(os.path.join(self.save_dir, "config.json"), "w") as f:
                 f.write(json.dumps(self.show_config(), indent=4))
             # create log file
-            with open(os.path.join(self.save_dir, "log.txt"), "w") as f:
+            with open(os.path.join(self.save_dir, "log.csv"), "w") as f:
                 f.write("Generation,Max,Min,Mean,Std,Cost Time\n")
 
         print("initializing finished")
@@ -226,7 +226,7 @@ class Pipeline(StatefulBaseClass):
                 )
 
             # append log
-            with open(os.path.join(self.save_dir, "log.txt"), "a") as f:
+            with open(os.path.join(self.save_dir, "log.csv"), "a") as f:
                 f.write(f"{generation},{max_f},{min_f},{mean_f},{std_f},{cost_time}\n")
 
         print(
