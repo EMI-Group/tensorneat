@@ -146,21 +146,25 @@ class Pipeline(StatefulBaseClass):
     def _batched_evaluate(self, state, keys, pop_transformed):
         bs = self.eval_batch_size
         n_batches = self.pop_size // bs
-        all_fitnesses = []
 
-        for i in range(n_batches):
-            start = i * bs
-            end = start + bs
-            batch_keys = keys[start:end]
-            batch_params = jax.tree_map(lambda x: x[start:end], pop_transformed)
+        batched_keys = keys.reshape(n_batches, bs, *keys.shape[1:])
+        batched_params = jax.tree_map(
+            lambda x: x.reshape(n_batches, bs, *x.shape[1:]),
+            pop_transformed,
+        )
 
-            batch_fitnesses = jax.vmap(
+        def scan_body(carry, inputs):
+            b_keys, b_params = inputs
+            b_fit = jax.vmap(
                 self.problem.evaluate, in_axes=(None, 0, None, 0)
-            )(state, batch_keys, self.algorithm.forward, batch_params)
+            )(state, b_keys, self.algorithm.forward, b_params)
+            return carry, b_fit
 
-            all_fitnesses.append(batch_fitnesses)
+        _, all_fitnesses = jax.lax.scan(
+            scan_body, None, (batched_keys, batched_params)
+        )
 
-        return jnp.concatenate(all_fitnesses, axis=0)
+        return all_fitnesses.reshape(-1)
 
     def auto_run(self, state):
         print("start compile")
