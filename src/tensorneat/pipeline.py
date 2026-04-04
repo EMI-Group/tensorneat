@@ -23,8 +23,13 @@ class Pipeline(StatefulBaseClass):
         save_dir=None,
         show_problem_details: bool = False,
         using_multidevice: bool = False,
-        eval_batch_size: int = None,
+        pop_batch_size: int = None,
     ):
+        """
+        Args:
+            pop_batch_size: Overrides ``algorithm.pop_batch_size`` if provided.
+                See :class:`NEAT` for semantics.
+        """
         assert problem.jitable, "Currently, problem must be jitable"
 
         self.algorithm = algorithm
@@ -34,10 +39,13 @@ class Pipeline(StatefulBaseClass):
         self.generation_limit = generation_limit
         self.pop_size = self.algorithm.pop_size
 
-        self.eval_batch_size = eval_batch_size
-        if eval_batch_size is not None:
-            assert self.pop_size % eval_batch_size == 0, (
-                f"pop_size ({self.pop_size}) must be divisible by eval_batch_size ({eval_batch_size})"
+        if pop_batch_size is not None:
+            self.algorithm.pop_batch_size = pop_batch_size
+
+        self.pop_batch_size = getattr(self.algorithm, 'pop_batch_size', None)
+        if self.pop_batch_size is not None:
+            assert self.pop_size % self.pop_batch_size == 0, (
+                f"pop_size ({self.pop_size}) must be divisible by pop_batch_size ({self.pop_batch_size})"
             )
 
         np.random.seed(self.seed)
@@ -102,25 +110,28 @@ class Pipeline(StatefulBaseClass):
 
         pop = self.algorithm.ask(state)
 
-        pop_transformed = jax.vmap(self.algorithm.transform, in_axes=(None, 0))(
-            state, pop
-        )
-
         if not self.using_multidevice:
             keys = jax.random.split(randkey_, self.pop_size)
-            if self.eval_batch_size is None or self.eval_batch_size >= self.pop_size:
+            if self.pop_batch_size is None or self.pop_batch_size >= self.pop_size:
+                pop_transformed = jax.vmap(self.algorithm.transform, in_axes=(None, 0))(
+                    state, pop
+                )
                 fitnesses = jax.vmap(self.problem.evaluate, in_axes=(None, 0, None, 0))(
                     state, keys, self.algorithm.forward, pop_transformed
                 )
             else:
-                fitnesses = self._batched_evaluate(state, keys, pop_transformed)
+                fitnesses = self._batched_evaluate(state, keys, pop)
         else: # using_multidevice
             num_devices = jax.device_count()
             assert self.pop_size % num_devices == 0, "if you want to use multiple gpus, pop_size must be divisible by jax.device_count()"
             pop_size_per_device = self.pop_size // num_devices
 
+            pop_transformed = jax.vmap(self.algorithm.transform, in_axes=(None, 0))(
+                state, pop
+            )
+
             keys = jax.random.split(randkey_, (num_devices, pop_size_per_device))
-            split_pop_transformed = jax.tree_map(
+            split_pop_transformed = jax.tree_util.tree_map(
                 lambda x: x.reshape(num_devices, pop_size_per_device, *x.shape[1:]),
                 pop_transformed
             )
@@ -143,24 +154,34 @@ class Pipeline(StatefulBaseClass):
 
         return state.update(randkey=randkey), previous_pop, fitnesses
 
-    def _batched_evaluate(self, state, keys, pop_transformed):
-        bs = self.eval_batch_size
+    def _batched_evaluate(self, state, keys, pop):
+        """Batched transform + evaluate using lax.scan instead of Python for-loop.
+        See: https://github.com/EMI-Group/tensorneat/issues/39
+        """
+        bs = self.pop_batch_size
         n_batches = self.pop_size // bs
-        all_fitnesses = []
 
-        for i in range(n_batches):
-            start = i * bs
-            end = start + bs
-            batch_keys = keys[start:end]
-            batch_params = jax.tree_map(lambda x: x[start:end], pop_transformed)
+        batched_keys = keys.reshape(n_batches, bs, *keys.shape[1:])
+        batched_pop = jax.tree_util.tree_map(
+            lambda x: x.reshape(n_batches, bs, *x.shape[1:]),
+            pop,
+        )
 
-            batch_fitnesses = jax.vmap(
+        def scan_body(carry, inputs):
+            b_keys, b_pop = inputs
+            b_transformed = jax.vmap(self.algorithm.transform, in_axes=(None, 0))(
+                state, b_pop
+            )
+            b_fit = jax.vmap(
                 self.problem.evaluate, in_axes=(None, 0, None, 0)
-            )(state, batch_keys, self.algorithm.forward, batch_params)
+            )(state, b_keys, self.algorithm.forward, b_transformed)
+            return carry, b_fit
 
-            all_fitnesses.append(batch_fitnesses)
+        _, all_fitnesses = jax.lax.scan(
+            scan_body, None, (batched_keys, batched_pop)
+        )
 
-        return jnp.concatenate(all_fitnesses, axis=0)
+        return all_fitnesses.reshape(-1)
 
     def auto_run(self, state):
         print("start compile")

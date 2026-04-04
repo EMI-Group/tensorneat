@@ -122,4 +122,8 @@ examples/func_fit/evolving_state.pkl
 
 src/evox/*
 .ai/
+.cursor/
 experiment/
+
+# Benchmark baseline data
+test/benchmark_baseline/
