@@ -145,13 +145,14 @@ class DefaultNode(BaseNode):
             + (act1 != act2)  # activation
         )
 
-    def forward(self, state, attrs, inputs, is_output_node=False):
+    def forward(self, state, attrs, inputs, is_output_node=False, valid_mask=None):
         bias, res, agg, act = attrs
 
-        z = apply_aggregation(agg, inputs, self.aggregation_options)
+        if valid_mask is None:
+            valid_mask = ~jnp.isnan(inputs)
+        z = apply_aggregation(agg, inputs, self.aggregation_options, valid_mask)
         z = bias + res * z
 
-        # the last output node should not be activated
         z = jax.lax.cond(
             is_output_node, lambda: z, lambda: apply_activation(act, z, self.activation_options)
         )

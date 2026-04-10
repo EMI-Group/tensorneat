@@ -29,7 +29,7 @@ TensorNEAT is a JAX-based libaray for NeuroEvolution of Augmenting Topologies (N
 
 ## Key Features
 - JAX-based network for neuroevolution:
-    - **Batch inference** across networks with different architectures, GPU-accelerated.
+    - **Batch inference** and **gradient computation** across networks with different architectures, GPU-accelerated.
     - Evolve networks with **irregular structures** and **fully customize** their behavior.
     - Visualize the network and represent it in **mathematical formulas** or **codes**.
 
@@ -178,6 +178,37 @@ state, best = pipeline.auto_run(state)
 pipeline.show(state, best)
 ```
 More examples of function fitting tasks in TensorNEAT can be found in `./examples/func_fit`.
+
+## Gradient Descent Support
+
+TensorNEAT supports gradient-based optimization of network parameters. Thanks to JAX's automatic differentiation, you can compute gradients through networks with different topologies and optimize them in parallel — no special handling needed.
+
+The `genome.grad` method provides a simple interface:
+
+```python
+loss, (grad_nodes, grad_conns) = genome.grad(state, nodes, conns, inputs, loss_fn)
+```
+
+- `state, nodes, conns, inputs` — the same arguments used for a forward pass.
+- `loss_fn` — a function that takes the network outputs and returns a scalar loss, e.g. `lambda preds: jnp.mean((preds - targets) ** 2)`.
+- Returns the loss value and gradients for `nodes` and `conns`. Gradients for structural fields (indices, function types) and NaN padding are automatically zeroed out.
+
+A minimal gradient descent loop looks like this:
+
+```python
+loss_fn = lambda preds: jnp.mean((preds - targets) ** 2)
+
+def grad_step(nodes, conns, state):
+    loss, (grads_n, grads_c) = genome.grad(state, nodes, conns, inputs, loss_fn)
+    return nodes - lr * grads_n, conns - lr * grads_c, loss
+
+batch_grad_step = jax.jit(jax.vmap(grad_step, in_axes=(0, 0, None)))
+pop_nodes, pop_conns, losses = batch_grad_step(pop_nodes, pop_conns, state)
+```
+
+This works even when each individual in the population has a **different topology** — `vmap` handles the batching transparently.
+
+See `./examples/func_fit/xor_grad.py` for a complete example that initializes a population, mutates them into diverse topologies, and optimizes all of them with pure gradient descent. 
 
 ## Basic API Usage
 Start your journey with TensorNEAT in a few simple steps:
@@ -390,7 +421,7 @@ For a complete example, see `./examples/func_fit/xor_hyperneat.py` and `./exampl
 
 1. Improve TensorNEAT documentation and tutorials.
 2. Implement more NEAT-related algorithms, such as ES-HyperNEAT.
-3. Add gradient descent support for networks in NEAT.
+3. ~~Add gradient descent support for networks in NEAT.~~ ✅ Done!
 4. Further optimize TensorNEAT to increase computation speed and reduce memory usage.
 
 We warmly welcome community developers to contribute to TensorNEAT and look forward to your pull requests!

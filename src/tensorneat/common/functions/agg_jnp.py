@@ -1,29 +1,29 @@
 import jax.numpy as jnp
 
 
-def sum_(z):
-    return jnp.sum(z, axis=0, where=~jnp.isnan(z), initial=0)
+def sum_(z, mask):
+    return jnp.sum(z, axis=0, where=mask, initial=0)
 
 
-def product_(z):
-    return jnp.prod(z, axis=0, where=~jnp.isnan(z), initial=1)
+def product_(z, mask):
+    return jnp.prod(z, axis=0, where=mask, initial=1)
 
 
-def max_(z):
-    return jnp.max(z, axis=0, where=~jnp.isnan(z), initial=-jnp.inf)
+def max_(z, mask):
+    return jnp.max(z, axis=0, where=mask, initial=-jnp.inf)
 
 
-def min_(z):
-    return jnp.min(z, axis=0, where=~jnp.isnan(z), initial=jnp.inf)
+def min_(z, mask):
+    return jnp.min(z, axis=0, where=mask, initial=jnp.inf)
 
 
-def maxabs_(z):
-    z = jnp.where(jnp.isnan(z), 0, z)
+def maxabs_(z, mask):
+    z = jnp.where(mask, z, 0)
     abs_z = jnp.abs(z)
     max_abs_index = jnp.argmax(abs_z)
     return z[max_abs_index]
 
-def mean_(z):
-    sumation = sum_(z)
-    valid_count = jnp.sum(~jnp.isnan(z), axis=0)
-    return sumation / valid_count
+def mean_(z, mask):
+    s = jnp.sum(z, axis=0, where=mask, initial=0)
+    valid_count = jnp.sum(mask, axis=0)
+    return s / valid_count

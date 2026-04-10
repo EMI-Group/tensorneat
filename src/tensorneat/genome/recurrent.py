@@ -7,7 +7,7 @@ from .gene import DefaultNode, DefaultConn
 from .operations import DefaultMutation, DefaultCrossover, DefaultDistance
 from .utils import unflatten_conns, extract_gene_attrs, extract_gene_attrs
 
-from tensorneat.common import attach_with_inf
+from tensorneat.common import attach_with_inf, I_INF
 
 class RecurrentGenome(BaseGenome):
     """Default genome class, with the same behavior as the NEAT-Python"""
@@ -59,22 +59,29 @@ class RecurrentGenome(BaseGenome):
         conns_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(self.conn_gene, conns)
         expand_conns_attrs = attach_with_inf(conns_attrs, u_conns)
 
-        def body_func(_, values):
+        conn_exists = (u_conns != I_INF).T
+        node_exists = ~jnp.isnan(nodes[:, 0])
 
-            # set input values
+        def body_func(_, values):
             values = values.at[self.input_idx].set(inputs)
 
-            # calculate connections
+            src_valid = ~jnp.isnan(values)
+            valid_masks = conn_exists & src_valid[jnp.newaxis, :]
+
             node_ins = vmap(
                 vmap(self.conn_gene.forward, in_axes=(None, 0, None)),
                 in_axes=(None, 0, 0),
             )(state, expand_conns_attrs, values)
 
-            # calculate nodes
             is_output_nodes = jnp.isin(nodes[:, 0], self.output_idx)
-            values = vmap(self.node_gene.forward, in_axes=(None, 0, 0, 0))(
-                state, nodes_attrs, node_ins.T, is_output_nodes
+            new_values = vmap(self.node_gene.forward, in_axes=(None, 0, 0, 0, 0))(
+                state, nodes_attrs, node_ins.T, is_output_nodes,
+                valid_masks,
             )
+
+            has_valid_inputs = jnp.any(valid_masks, axis=1)
+            use_new = node_exists & has_valid_inputs
+            values = jnp.where(use_new, new_values, values)
 
             return values
 

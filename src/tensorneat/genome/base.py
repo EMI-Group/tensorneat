@@ -116,6 +116,36 @@ class BaseGenome(StatefulBaseClass):
     def visualize(self):
         raise NotImplementedError
 
+    def grad(self, state, nodes, conns, inputs, loss_fn):
+        """Compute loss and gradients w.r.t. the continuous parameters in nodes and conns.
+
+        Args:
+            state: the algorithm state.
+            nodes: node gene array.
+            conns: connection gene array.
+            inputs: input data, shape ``(batch, num_inputs)`` or ``(num_inputs,)``.
+            loss_fn: ``(outputs) -> scalar``.
+
+        Returns:
+            (loss, (grad_nodes, grad_conns)).
+        """
+        def _inner(nodes, conns):
+            transformed = self.transform(state, nodes, conns)
+            if inputs.ndim == 1:
+                outputs = self.forward(state, transformed, inputs)
+            else:
+                outputs = jax.vmap(self.forward, in_axes=(None, None, 0))(
+                    state, transformed, inputs
+                )
+            return loss_fn(outputs)
+
+        loss, (grad_nodes, grad_conns) = jax.value_and_grad(
+            _inner, argnums=(0, 1)
+        )(nodes, conns)
+        grad_nodes = jnp.where(jnp.isnan(nodes), 0.0, grad_nodes)
+        grad_conns = jnp.where(jnp.isnan(conns), 0.0, grad_conns)
+        return loss, (grad_nodes, grad_conns)
+
     def execute_mutation(
         self, state, randkey, nodes, conns, new_node_key, new_conn_keys
     ):

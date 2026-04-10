@@ -25,7 +25,20 @@ class NEAT(BaseAlgorithm):
         compatibility_threshold: float = 2.0,
         species_fitness_func: Callable = jnp.max,
         species_number_calculate_by: str = "rank",
+        pop_batch_size: int = None,
     ):
+        """
+        Args:
+            pop_batch_size: If set, population-level vmap operations (transform,
+                evaluate, mutation) are split into sequential batches of this size
+                via ``jax.lax.scan``, reducing GPU peak memory from O(pop) to
+                O(pop_batch_size).  Must evenly divide ``pop_size``.
+                When ``None`` (default), the full population is processed in a
+                single vmap — fastest, but requires enough GPU memory for the
+                entire population's intermediate tensors at once.
+
+                See: https://github.com/EMI-Group/tensorneat/issues/41
+        """
 
         assert species_number_calculate_by in [
             "rank",
@@ -34,6 +47,14 @@ class NEAT(BaseAlgorithm):
 
         self.genome = genome
         self.pop_size = pop_size
+        self.pop_batch_size = pop_batch_size
+
+        if pop_batch_size is not None:
+            assert pop_size % pop_batch_size == 0, (
+                f"pop_size ({pop_size}) must be divisible by "
+                f"pop_batch_size ({pop_batch_size})"
+            )
+
         self.species_controller = SpeciesController(
             pop_size,
             species_size,
@@ -160,11 +181,14 @@ class NEAT(BaseAlgorithm):
         )  # new_nodes, new_conns
 
         # batch mutation
-        m_n_nodes, m_n_conns = vmap(
-            self.genome.execute_mutation, in_axes=(None, 0, 0, 0, 0, 0)
-        )(
-            state, mutate_randkeys, n_nodes, n_conns, new_node_keys, new_conn_markers
-        )  # mutated_new_nodes, mutated_new_conns
+        mutation_args = (mutate_randkeys, n_nodes, n_conns,
+                         new_node_keys, new_conn_markers)
+        m_n_nodes, m_n_conns = self._vmap_or_scan(
+            lambda args: vmap(
+                self.genome.execute_mutation, in_axes=(None, 0, 0, 0, 0, 0)
+            )(state, *args),
+            mutation_args,
+        )
 
         # elitism don't mutate
         pop_nodes = jnp.where(elite_mask[:, None, None], n_nodes, m_n_nodes)
@@ -174,6 +198,30 @@ class NEAT(BaseAlgorithm):
             randkey=randkey,
             pop_nodes=pop_nodes,
             pop_conns=pop_conns,
+        )
+
+    def _vmap_or_scan(self, vmap_fn, args):
+        """
+        If pop_batch_size is set, split args into batches and use lax.scan
+        to reduce peak memory; otherwise run a single full-population vmap.
+        """
+        bs = self.pop_batch_size
+        if bs is None or bs >= self.pop_size:
+            return vmap_fn(args)
+
+        n_batches = self.pop_size // bs
+
+        batched_args = jax.tree_util.tree_map(
+            lambda x: x.reshape(n_batches, bs, *x.shape[1:]), args
+        )
+
+        def scan_body(carry, batch):
+            return carry, vmap_fn(batch)
+
+        _, results = jax.lax.scan(scan_body, None, batched_args)
+
+        return jax.tree_util.tree_map(
+            lambda x: x.reshape(self.pop_size, *x.shape[2:]), results
         )
 
     def show_details(self, state, fitness):

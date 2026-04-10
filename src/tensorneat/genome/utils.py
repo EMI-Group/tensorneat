@@ -5,6 +5,36 @@ import numpy as np
 from .gene import BaseGene
 from tensorneat.common import fetch_first, I_INF
 
+_FLOAT_MAX = jnp.finfo(jnp.float32).max
+
+
+def _batch_key_to_index(query_keys, ref_keys):
+    """
+    Map each scalar query key to its index in ref_keys via argsort + searchsorted.
+    O(C log N) time, O(C + N) memory — replaces the old vmap linear scan which was
+    O(C * N) and caused OOM at large max_conns.
+    Returns I_INF for NaN queries or unmatched keys.
+
+    See: https://github.com/EMI-Group/tensorneat/issues/38
+    """
+    N = ref_keys.shape[0]
+
+    nan_ref = jnp.isnan(ref_keys)
+    nan_query = jnp.isnan(query_keys)
+    safe_ref = jnp.where(nan_ref, _FLOAT_MAX, ref_keys)
+    safe_query = jnp.where(nan_query, _FLOAT_MAX - 1, query_keys)
+
+    sort_idx = jnp.argsort(safe_ref)
+    sorted_ref = safe_ref[sort_idx]
+
+    pos = jnp.searchsorted(sorted_ref, safe_query, side="left")
+    pos = jnp.clip(pos, 0, N - 1)
+
+    original_idx = sort_idx[pos]
+    matched = (ref_keys[original_idx] == query_keys) & ~nan_query
+
+    return jnp.where(matched, original_idx, I_INF)
+
 
 def unflatten_conns(nodes, conns):
     """
@@ -17,15 +47,9 @@ def unflatten_conns(nodes, conns):
     node_keys = nodes[:, 0]
     i_keys, o_keys = conns[:, 0], conns[:, 1]
 
-    def key_to_indices(key, keys):
-        return fetch_first(key == keys)
+    i_idxs = _batch_key_to_index(i_keys, node_keys)
+    o_idxs = _batch_key_to_index(o_keys, node_keys)
 
-    i_idxs = vmap(key_to_indices, in_axes=(0, None))(i_keys, node_keys)
-    o_idxs = vmap(key_to_indices, in_axes=(0, None))(o_keys, node_keys)
-
-    # Is interesting that jax use clip when attach data in array
-    # however, it will do nothing when setting values in an array
-    # put the index of connections in the unflatten array
     unflatten = (
         jnp.full((N, N), I_INF, dtype=jnp.int32)
         .at[i_idxs, o_idxs]
