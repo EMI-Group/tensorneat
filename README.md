@@ -210,6 +210,40 @@ This works even when each individual in the population has a **different topolog
 
 See `./examples/func_fit/xor_grad.py` for a complete example that initializes a population, mutates them into diverse topologies, and optimizes all of them with pure gradient descent. 
 
+## Bounding Feed-Forward Adjacency Memory
+
+TensorNEAT's fixed-shape graph representation is what makes whole populations
+compatible with JAX transformations and accelerator execution. The trade-off is
+that feed-forward inference currently expands every genome to a
+`max_nodes x max_nodes` adjacency, so memory grows with the configured node
+capacity even when evolved graphs are sparse.
+
+For workloads that reserve many nodes but can bound fan-in, `DefaultGenome` can
+instead store at most `K` inbound connection indices per node:
+
+```python
+genome = DefaultGenome(
+    num_inputs=3,
+    num_outputs=1,
+    max_nodes=512,
+    max_conns=2048,
+    max_in_degree=64,
+)
+```
+
+This changes the transformed adjacency shape from
+`(max_nodes, max_nodes)` to `(max_nodes, K)`. The cap is checked against the
+initial topology and enforced when adding connections through
+`DefaultMutation`. A transformed genome that violates the cap produces NaN
+outputs rather than silently dropping connections.
+
+The default, `max_in_degree=None`, keeps the existing dense implementation
+unchanged. This option currently applies only to `DefaultGenome`;
+`RecurrentGenome` continues to use its dense recurrent representation.
+It is complementary to `pop_batch_size`: batching bounds how many genomes are
+transformed at once, while `max_in_degree` bounds each transformed genome's
+feed-forward adjacency.
+
 ## Basic API Usage
 Start your journey with TensorNEAT in a few simple steps:
 
@@ -463,4 +497,3 @@ If you use TensorNEAT in your research and want to cite it in your work, please 
   keywords = {Neuroevolution, GPU Acceleration, Algorithm Library}
 }
 ```
-
