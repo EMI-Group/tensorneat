@@ -36,6 +36,83 @@ def _batch_key_to_index(query_keys, ref_keys):
     return jnp.where(matched, original_idx, I_INF)
 
 
+def map_conn_endpoints(nodes, conns):
+    """
+    Resolve flat connection endpoint keys to node-row indices.
+
+    Returns ``(src_rows, dst_rows, valid)`` arrays with shape ``(C,)``.
+    ``valid`` is false for padded connections and dangling endpoints.
+    """
+    node_keys = nodes[:, 0]
+    src_rows = _batch_key_to_index(conns[:, 0], node_keys)
+    dst_rows = _batch_key_to_index(conns[:, 1], node_keys)
+    valid = (
+        ~jnp.isnan(conns[:, 0])
+        & ~jnp.isnan(conns[:, 1])
+        & (src_rows != I_INF)
+        & (dst_rows != I_INF)
+    )
+    return src_rows, dst_rows, valid
+
+
+def build_padded_inbound_adj(
+    src_rows, dst_rows, valid, max_nodes, max_in_degree
+):
+    """
+    Pack flat connections into a bounded inbound adjacency.
+
+    The returned ``adj_conns`` has shape ``(max_nodes, max_in_degree)`` and
+    stores row indices into the original connection array. Empty slots contain
+    ``I_INF``. Slots are sorted by source-node row to preserve the reduction
+    order of the legacy dense representation.
+
+    ``overflow`` is true when an admissible destination has more inbound
+    connections than the configured cap.
+    """
+    max_conns = src_rows.shape[0]
+    conn_rows = jnp.arange(max_conns, dtype=jnp.int32)
+    admissible = (
+        valid
+        & (src_rows >= 0)
+        & (src_rows < max_nodes)
+        & (dst_rows >= 0)
+        & (dst_rows < max_nodes)
+    )
+
+    # Pack in the source-row order used by the legacy dense representation.
+    # Invalid connections sort to the tail and are subsequently dropped.
+    safe_src = jnp.where(admissible, src_rows, max_nodes)
+    safe_dst = jnp.where(admissible, dst_rows, max_nodes)
+    order = jnp.lexsort((conn_rows, safe_src, safe_dst))
+    sorted_conn_rows = conn_rows[order]
+    sorted_dst = dst_rows[order]
+    sorted_admissible = admissible[order]
+
+    def assign_slot(counts, item):
+        dst, is_admissible = item
+        safe_dst = jnp.where(is_admissible, dst, 0)
+        slot = counts[safe_dst]
+        counts = counts.at[safe_dst].add(is_admissible.astype(jnp.int32))
+        return counts, slot
+
+    _, slots = jax.lax.scan(
+        assign_slot,
+        jnp.zeros((max_nodes,), dtype=jnp.int32),
+        (sorted_dst, sorted_admissible),
+    )
+
+    within_cap = sorted_admissible & (slots < max_in_degree)
+    overflow = jnp.any(sorted_admissible & ~within_cap)
+    safe_dst = jnp.where(within_cap, sorted_dst, max_nodes)
+
+    adj_conns = (
+        jnp.full((max_nodes, max_in_degree), I_INF, dtype=jnp.int32)
+        .at[safe_dst, slots]
+        .set(sorted_conn_rows, mode="drop")
+    )
+    return adj_conns, overflow
+
+
 def unflatten_conns(nodes, conns):
     """
     transform the (C, CL) connections to (N, N), which contains the idx of the connection in conns

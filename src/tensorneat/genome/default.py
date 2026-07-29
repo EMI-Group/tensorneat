@@ -8,10 +8,16 @@ import sympy as sp
 from .base import BaseGenome
 from .gene import DefaultNode, DefaultConn
 from .operations import DefaultMutation, DefaultCrossover, DefaultDistance
-from .utils import unflatten_conns, extract_gene_attrs, extract_gene_attrs
+from .utils import (
+    build_padded_inbound_adj,
+    extract_gene_attrs,
+    map_conn_endpoints,
+    unflatten_conns,
+)
 
 from tensorneat.common import (
     topological_sort,
+    topological_sort_flat,
     topological_sort_python,
     find_useful_nodes,
     I_INF,
@@ -40,6 +46,7 @@ class DefaultGenome(BaseGenome):
         output_transform=None,
         input_transform=None,
         init_hidden_layers=(),
+        max_in_degree=None,
     ):
 
         super().__init__(
@@ -57,7 +64,41 @@ class DefaultGenome(BaseGenome):
             init_hidden_layers,
         )
 
+        if max_in_degree is not None:
+            if not isinstance(max_in_degree, (int, np.integer)):
+                raise TypeError("max_in_degree must be an integer or None")
+            max_in_degree = int(max_in_degree)
+            if max_in_degree < 1:
+                raise ValueError("max_in_degree must be greater than or equal to 1")
+            if max_in_degree > max_nodes:
+                raise ValueError(
+                    f"max_in_degree={max_in_degree} exceeds max_nodes={max_nodes}"
+                )
+
+            initial_source_widths = [num_inputs] + list(init_hidden_layers)
+            initial_max_in_degree = max(initial_source_widths, default=0)
+            if initial_max_in_degree > max_in_degree:
+                raise ValueError(
+                    "The initial topology requires inbound degree "
+                    f"{initial_max_in_degree}, which exceeds "
+                    f"max_in_degree={max_in_degree}"
+                )
+
+        self.max_in_degree = max_in_degree
+
     def transform(self, state, nodes, conns):
+        if self.max_in_degree is not None:
+            src_rows, dst_rows, valid = map_conn_endpoints(nodes, conns)
+            seqs = topological_sort_flat(nodes, src_rows, dst_rows, valid)
+            adj_conns, overflow = build_padded_inbound_adj(
+                src_rows,
+                dst_rows,
+                valid,
+                self.max_nodes,
+                self.max_in_degree,
+            )
+            return seqs, nodes, conns, adj_conns, src_rows, overflow
+
         u_conns = unflatten_conns(nodes, conns)
         conn_exist = u_conns != I_INF
 
@@ -66,6 +107,8 @@ class DefaultGenome(BaseGenome):
         return seqs, nodes, conns, u_conns
 
     def forward(self, state, transformed, inputs):
+        if self.max_in_degree is not None:
+            return self._forward_padded(state, transformed, inputs)
 
         if self.input_transform is not None:
             inputs = self.input_transform(inputs)
@@ -128,6 +171,82 @@ class DefaultGenome(BaseGenome):
             return vals[self.output_idx]
         else:
             return self.output_transform(vals[self.output_idx])
+
+    def _forward_padded(self, state, transformed, inputs):
+        if self.input_transform is not None:
+            inputs = self.input_transform(inputs)
+
+        cal_seqs, nodes, conns, adj_conns, src_rows, overflow = transformed
+
+        def overflow_output():
+            return jnp.full((self.num_outputs,), jnp.nan)
+
+        def calculate_output():
+            ini_vals = jnp.full((self.max_nodes,), jnp.nan)
+            ini_vals = ini_vals.at[self.input_idx].set(inputs)
+            nodes_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(
+                self.node_gene, nodes
+            )
+            conns_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(
+                self.conn_gene, conns
+            )
+
+            def body_func(idx, values):
+                i = cal_seqs[idx]
+
+                def valid_node():
+                    def input_node():
+                        return values
+
+                    def otherwise():
+                        conn_rows = adj_conns[i]
+                        filled = conn_rows != I_INF
+                        safe_conn_rows = jnp.where(filled, conn_rows, 0)
+                        source_rows = src_rows[safe_conn_rows]
+                        safe_source_rows = jnp.where(filled, source_rows, 0)
+
+                        source_values = values[safe_source_rows]
+                        valid_mask = filled & ~jnp.isnan(source_values)
+                        safe_source_values = jnp.where(
+                            valid_mask, source_values, 0.0
+                        )
+                        conn_attrs = conns_attrs[safe_conn_rows]
+                        node_inputs = vmap(
+                            self.conn_gene.forward, in_axes=(None, 0, 0)
+                        )(state, conn_attrs, safe_source_values)
+
+                        value = self.node_gene.forward(
+                            state,
+                            nodes_attrs[i],
+                            node_inputs,
+                            is_output_node=jnp.isin(
+                                nodes[i, 0], self.output_idx
+                            ),
+                            valid_mask=valid_mask,
+                        )
+                        return jax.lax.cond(
+                            jnp.any(valid_mask),
+                            lambda: values.at[i].set(value),
+                            lambda: values,
+                        )
+
+                    return jax.lax.cond(
+                        jnp.isin(i, self.input_idx), input_node, otherwise
+                    )
+
+                return jax.lax.cond(
+                    i != I_INF, valid_node, lambda: values
+                )
+
+            values = jax.lax.fori_loop(
+                0, self.max_nodes, body_func, ini_vals
+            )
+            output = values[self.output_idx]
+            if self.output_transform is not None:
+                output = self.output_transform(output)
+            return output
+
+        return jax.lax.cond(overflow, overflow_output, calculate_output)
 
     def network_dict(self, state, nodes, conns):
         network = super().network_dict(state, nodes, conns)

@@ -6,9 +6,11 @@ from tensorneat.common import (
     fetch_random,
     I_INF,
     check_cycles,
+    check_cycles_flat,
 )
 from ...utils import (
     unflatten_conns,
+    map_conn_endpoints,
     add_node,
     add_conn,
     delete_node_by_pos,
@@ -184,12 +186,42 @@ class DefaultMutation(BaseMutation):
                 )
 
             if genome.network_type == "feedforward":
-                u_conns = unflatten_conns(nodes_, conns_)
-                conns_exist = u_conns != I_INF
-                is_cycle = check_cycles(nodes_, conns_exist, from_idx, to_idx)
+                max_in_degree = getattr(genome, "max_in_degree", None)
+                if max_in_degree is None:
+                    destination_is_full = False
+                    u_conns = unflatten_conns(nodes_, conns_)
+                    conns_exist = u_conns != I_INF
+                    is_cycle = check_cycles(
+                        nodes_, conns_exist, from_idx, to_idx
+                    )
+                else:
+                    valid_conn = ~jnp.isnan(conns_[:, 0])
+                    in_degree = jnp.sum(
+                        (
+                            valid_conn
+                            & (conns_[:, 1] == o_key)
+                        ).astype(jnp.int32)
+                    )
+                    destination_is_full = (
+                        in_degree >= max_in_degree
+                    )
+                    src_rows, dst_rows, valid = map_conn_endpoints(
+                        nodes_, conns_
+                    )
+                    is_cycle = check_cycles_flat(
+                        nodes_,
+                        src_rows,
+                        dst_rows,
+                        valid,
+                        from_idx,
+                        to_idx,
+                    )
 
                 return jax.lax.cond(
-                    is_already_exist | is_cycle | (remain_conn_space < 1),
+                    is_already_exist
+                    | is_cycle
+                    | (remain_conn_space < 1)
+                    | destination_is_full,
                     nothing,
                     successful,
                 )

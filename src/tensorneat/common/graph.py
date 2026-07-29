@@ -115,7 +115,116 @@ def find_useful_nodes(
             useful_nodes = useful_nodes | aux
     # print(f"All nodes cnt={len(nodes)}, useful nodes cnt={len(useful_nodes)}")
     return useful_nodes            
-        
+
+
+def topological_sort_flat(
+    nodes: Array, src_rows: Array, dst_rows: Array, valid: Array
+) -> Array:
+    """
+    Topologically sort nodes directly from flat connection endpoints.
+
+    This is Kahn's algorithm over ``(C,)`` source and destination row arrays.
+    It avoids constructing the dense ``(N, N)`` connectivity matrix used by
+    :func:`topological_sort`.
+    """
+    max_nodes = nodes.shape[0]
+    node_exists = ~jnp.isnan(nodes[:, 0])
+    admissible = (
+        valid
+        & (src_rows != I_INF)
+        & (dst_rows != I_INF)
+        & (src_rows >= 0)
+        & (src_rows < max_nodes)
+        & (dst_rows >= 0)
+        & (dst_rows < max_nodes)
+    )
+
+    safe_dst = jnp.where(admissible, dst_rows, 0)
+    in_degree = (
+        jnp.zeros((max_nodes,), dtype=jnp.int32)
+        .at[safe_dst]
+        .add(admissible.astype(jnp.int32))
+    )
+
+    def cond_func(carry):
+        _, _, in_degree_, processed_ = carry
+        ready = (in_degree_ == 0) & node_exists & ~processed_
+        return fetch_first(ready) != I_INF
+
+    def body_func(carry):
+        order_, idx_, in_degree_, processed_ = carry
+        ready = (in_degree_ == 0) & node_exists & ~processed_
+        node = fetch_first(ready)
+
+        order_ = order_.at[idx_].set(node)
+        processed_ = processed_.at[node].set(True)
+
+        emitted = admissible & (src_rows == node)
+        safe_target = jnp.where(emitted, dst_rows, 0)
+        decrement = (
+            jnp.zeros_like(in_degree_)
+            .at[safe_target]
+            .add(emitted.astype(jnp.int32))
+        )
+        return order_, idx_ + 1, in_degree_ - decrement, processed_
+
+    order = jnp.full((max_nodes,), I_INF, dtype=jnp.int32)
+    processed = jnp.zeros((max_nodes,), dtype=bool)
+    order, _, _, _ = jax.lax.while_loop(
+        cond_func, body_func, (order, 0, in_degree, processed)
+    )
+    return order
+
+
+def check_cycles_flat(
+    nodes: Array,
+    src_rows: Array,
+    dst_rows: Array,
+    valid: Array,
+    from_idx,
+    to_idx,
+) -> Array:
+    """
+    Check a candidate connection directly against flat endpoint arrays.
+
+    Adding ``from_idx -> to_idx`` creates a cycle exactly when ``from_idx`` is
+    reachable from ``to_idx`` through the existing connections. This traversal
+    uses ``O(N + C)`` storage instead of rebuilding a dense ``(N, N)`` matrix.
+    """
+    max_nodes = nodes.shape[0]
+    admissible = (
+        valid
+        & (src_rows != I_INF)
+        & (dst_rows != I_INF)
+        & (src_rows >= 0)
+        & (src_rows < max_nodes)
+        & (dst_rows >= 0)
+        & (dst_rows < max_nodes)
+    )
+    safe_src = jnp.where(admissible, src_rows, 0)
+    safe_dst = jnp.where(admissible, dst_rows, 0)
+
+    visited = jnp.zeros((max_nodes,), dtype=bool)
+    new_visited = visited.at[to_idx].set(True)
+
+    def cond_func(carry):
+        visited_, new_visited_ = carry
+        stable = jnp.all(visited_ == new_visited_)
+        found_source = new_visited_[from_idx]
+        return ~(stable | found_source)
+
+    def body_func(carry):
+        _, visited_ = carry
+        reached_edges = admissible & visited_[safe_src]
+        new_visited_ = visited_.at[safe_dst].max(reached_edges)
+        return visited_, new_visited_
+
+    _, visited = jax.lax.while_loop(
+        cond_func, body_func, (visited, new_visited)
+    )
+    return visited[from_idx]
+
+
 @jit
 def check_cycles(nodes: Array, conns: Array, from_idx, to_idx) -> Array:
     """
