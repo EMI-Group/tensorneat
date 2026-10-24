@@ -349,6 +349,9 @@ class SpeciesController(StatefulBaseClass):
             survive_size = jnp.floor(self.survival_threshold * members_num).astype(
                 jnp.int32
             )
+            # keep at least two parents (as neat-python does), but never more than
+            # the species has: sorted_member_indices continues with non-members
+            survive_size = jnp.maximum(survive_size, jnp.minimum(2, members_num))
 
             select_pro = (p_idx < survive_size) / survive_size
             fa, ma = jax.random.choice(
@@ -359,11 +362,11 @@ class SpeciesController(StatefulBaseClass):
                 p=select_pro,
             )
 
-            # elite
-            fa = jnp.where(p_idx < self.genome_elitism, sorted_member_indices, fa)
-            ma = jnp.where(p_idx < self.genome_elitism, sorted_member_indices, ma)
-            elite = jnp.where(p_idx < self.genome_elitism, True, False)
-            return fa, ma, elite
+            # elite, limited to the members of the species
+            is_elite = p_idx < jnp.minimum(self.genome_elitism, members_num)
+            fa = jnp.where(is_elite, sorted_member_indices, fa)
+            ma = jnp.where(is_elite, sorted_member_indices, ma)
+            return fa, ma, is_elite
 
         # choose parents to crossover in each species
         # fas, mas, elites: (self.species_size, self.pop_size)
