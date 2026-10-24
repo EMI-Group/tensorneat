@@ -300,12 +300,16 @@ class SpeciesController(StatefulBaseClass):
         # consider that the fitness may be negative
         # in this way the species with the lowest fitness will have spawn_number = 0
         # 2025.1.31 updated, add +1 to avoid 0
-        species_fitness = species_fitness - jnp.min(species_fitness) + 1
+        # empty and stagnated species slots hold nan, so take the minimum over the
+        # live species only; jnp.min would return nan and spoil every species
+        is_valid = jnp.isfinite(species_fitness)
+        min_fitness = jnp.min(species_fitness, initial=jnp.inf, where=is_valid)
+        species_fitness = jnp.where(
+            is_valid, species_fitness - min_fitness + 1, jnp.nan
+        )
 
         # calculate the spawn number rate by the fitness of each species
-        spawn_number_rate = species_fitness / jnp.sum(
-            species_fitness, where=~jnp.isnan(species_fitness)
-        )
+        spawn_number_rate = species_fitness / jnp.sum(species_fitness, where=is_valid)
         target_spawn_number = jnp.floor(
             spawn_number_rate * self.pop_size
         )  # calculate member
