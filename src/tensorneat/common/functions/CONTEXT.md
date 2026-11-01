@@ -76,6 +76,8 @@ No bitcast exists in evoxc, which changes nothing here: activations and aggregat
 `ACT` / `AGG` pair every option with an `sp.Function` subclass in the same order; `FunctionManager.__init__` validates the pairing by class name (`SympyScaledSigmoid` → `scaled_sigmoid`) and raises `ValueError` on a mismatch, which is what makes the legacy `"inv" → SympyIdentity` bug impossible to reintroduce.
 Each sympy class is a constructor-time rewriter (`SympySigmoid(z)` returns `1/(1+exp(-z))`), so generated formulas are plain sympy expressions; `SympyClip` is the exception and defines `numerical_eval`, exposed through `sympy_module()` for `sp.lambdify`.
 `sp.lambdify(..., modules=["numpy", AGG.sympy_module(), ACT.sympy_module()])` is the sanctioned codegen path; `sympy_module(backend)` accepts `"numpy"` only and raises `ValueError` for anything else (the JAX backend disappeared with the rewrite).
+`sympy_module()` emits a `partial(cls.numerical_eval, backend=numpy)` for every counterpart **and** every `extra_sympy_classes` entry that defines `numerical_eval` — `SympyClip` is such a helper (`ACT_SYMPY_HELPERS`), because `SympyExp` builds it while not being an option itself; the binding is by keyword, since `numerical_eval(val, min_val, max_val, backend=np)` would otherwise receive numpy as `val`.
+The codegen path is exercised, not aspirational: every activation and aggregation round-trips through `cls(expr)` → `sp.lambdify` → numeric evaluation (a module-level smoke test in `test/unit/` should keep that true).
 Shared numeric constants (`SCALE`, `LELU_SLACK`, `INV_EPS`, `LOG_EPS`, `EXP_CLIP`) live in `act.py` and are imported by `act_sympy.py`, so the two representations cannot drift.
 
 ## Design Decisions
