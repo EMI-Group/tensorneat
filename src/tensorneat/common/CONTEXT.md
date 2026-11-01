@@ -85,7 +85,7 @@ Sentinels `I_INF`, `KEY_MAX`; `batch_offsets(p, r)`, `flat_gather(x, idx)`, `mas
 `Transformed` `NamedTuple`; `derive_schedule` (`@evoxc.defn`); the internal steps as plain helper functions (`key_slot_table`, `slot_lookup`, `edge_group_rank`, `cum_in_degree`, `incoming_table`, `node_levels`) so they are individually testable; `validate_schedule(transformed)` host-side invariant checker used by tests.
 
 ### `functions/`
-`ACT`/`AGG` registries (`FunctionManager` with `name2index`/`index2spec` and `get_random`-style sampling for gene initialisation), evoxc-native activation kernels, masked aggregation over the `K` axis, and the sympy counterparts used by interpretability codegen. See `functions/CONTEXT.md`.
+Exports exactly `ACT`, `AGG`, `FunctionManager`, `apply_activation(z, act_ids)`, `apply_aggregation(z, mask, agg_ids)`: `ACT`/`AGG` are `FunctionManager`s over 12 activations and 6 aggregations in a fixed, parity-critical order; activations are elementwise `(z) -> z'`, aggregations reduce the last axis of a `(P, N, K)` contribution tensor with neutral padding. See `functions/CONTEXT.md`.
 
 ### `sympy_tools.py`
 Host-only (`sympy`, `numpy`, regex): `analysis_nodes_exprs`, `round_expr`, `replace_variable_names`, `to_latex_code`, `to_python_code` — the 8-tuple contract of `Genome.sympy_func` is unchanged from the pre-rewrite library.
