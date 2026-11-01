@@ -154,6 +154,6 @@ The speciation distance table is verified by bit-identity of a whole run: `fitne
 | --- | --- |
 | `./neat.py` | `NEAT`: population cycle (`setup`/`ask`/`transform`/`forward`/`tell`), fitness sanitising, next-generation creation, `pop_batch_size` scan chunking, host-side `show_details`. |
 | `./species.py` | `SpeciesState` (frozen dataclass) and `SpeciesController`: species fitness, stagnation, descending sort, spawn allocation, parent pairing, block layout, fixed-length speciation scans. |
-| `./_kernels.py` | Plain graph helpers behind `species.py`: constants, payload helpers, sort/prefix-sum primitives, membership, spawn allocation, block layout, parent pairing, the two speciation scans, payload reading. |
+| `./_kernels.py` | Plain graph helpers behind `species.py`: constants, payload helpers, sort/prefix-sum primitives, membership, spawn allocation, block layout, parent pairing, `distance_table` (the hoisted phase-1 compatibility table) and the two speciation scans, payload reading. |
 | `./_validation.py` | Host-side constructor validators shared by `species.py` and `neat.py`. |
 | `./__init__.py` | Re-exports `NEAT`, `SpeciesController`, `SpeciesState`. |
