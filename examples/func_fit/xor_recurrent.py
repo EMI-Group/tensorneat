@@ -17,6 +17,10 @@ if __name__ == "__main__":
                 num_inputs=3,
                 num_outputs=1,
                 max_nodes=16,
+                # a recurrent network can accumulate many incoming edges per node,
+                # and the in-degree window is a static: size it generously or the
+                # run stops with "the execution schedule dropped N connection(s)"
+                max_in_degree=16,
                 # a recurrent genome is tick-unrolled, so `activate_time` is the
                 # cost knob: the forward pass runs that many relaxation ticks
                 activate_time=10,
