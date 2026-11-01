@@ -14,7 +14,7 @@ Every test that depends on source code that is still a design skeleton carries a
 `test_crossover.py` — parent 1 keeps the structure, per-attribute 50/50 where keys align, parent 1 attributes where they do not, padding, self-crossover identity, `find_homologous` exactness.
 `test_distance.py` — zero at identity, symmetry, monotonicity in non-homologous genes and in `|delta|`, empty pair is `0` not `NaN`, batched equals pairwise, determinism.
 `test_host_helpers.py` — `network_dict`/`repr`/`hash`/`sympy_func` (8-tuple + one exact formula)/`visualize` (lazy `matplotlib`, `tmp_path`, `Agg`), and the recurrent refusal.
-`conftest.py` — the five lazily resolved modules (`genome`, `common`, `payloads`, `oracle`, `runner`) and the three graph-glue fixtures (`run_kernel`, `run_transform`, `run_forward`).
+`conftest.py` — the five lazily resolved modules (`genome`, `common`, `payloads`, `oracle`, `runner`), the three graph-glue fixtures (`run_kernel`, `run_transform`, `run_forward`) and the module-scoped `evoxc.Executable` cache they share.
 
 ## Conventions
 Nothing imports `tensorneat` or `support` at module scope: `import tensorneat` still raises `NotImplementedError` (a `State()` default argument in a design skeleton), so every input is a `scope="module"` fixture resolved through `support.lazy.require`.
