@@ -32,12 +32,15 @@ Structural mutation keys (`new_node_keys`, `new_conn_keys`) are **allocated by t
 
 ## Execution schedule (`Transformed`, owned by `../common/tensorization.py`)
 Per-population, batch-first, static shapes; field names are a binding contract with `common`:
-- `in_src (P, max_nodes, K) int32` — flat index into `reshape(values, (P*max_nodes,))` of the source row of the k-th incoming edge of each node row; in range (0) where the slot is empty.
-- `in_conn (P, max_nodes, K) int32` — flat index into `reshape(conn_attrs, (P*max_conns,))` of the same slot.
-- `in_valid (P, max_nodes, K) bool` — True where that slot holds a real connection.
-- `node_level (P, max_nodes) int32` — depth (longest path from an input node; inputs are 0), `I_INF` for absent rows; zeros in the recurrent variant.
-- `node_exists (P, max_nodes) bool`, `overflow (P,) bool` — row validity, and "some node's in-degree exceeded `K`".
-- static metadata `K`, `max_nodes`, `max_conns` as Python ints.
+- `src (P, max_conns) int32`, `dst (P, max_conns) int32` — source/destination node slot of each connection row (`I_INF` = absent row or unmatched key); `edge_valid (P, max_conns) bool` — real edge with both endpoints matched.
+- `in_conn (P, max_nodes, K) int32` — connection-row index of the k-th incoming edge of node slot `i`; `I_INF` padding.
+- `in_src (P, max_nodes, K) int32` — source **node slot** of that same edge, a per-individual index in `[0, max_nodes)` (not a flat `P*N` index); `I_INF` in the same positions as `in_conn`.
+- `in_valid (P, max_nodes, K) bool` — True where the slot holds a live edge; equals `in_conn != I_INF`.
+- `node_level (P, max_nodes) int32` — longest-path depth (inputs = 0); `I_INF` for absent, unreachable or cyclic nodes.
+- `node_exists (P, max_nodes) bool` — row validity; `topo_key (P, max_nodes) int32` — `node_level * max_nodes + slot`.
+- `input_slot (P, num_inputs) int32`, `output_slot (P, num_outputs) int32` — node slot holding each input/output key, in key order; `I_INF` when unmatched.
+- `edge_overflow (P,) int32` — valid edges dropped because their in-group rank reached `K`; the `overflow` property is `edge_overflow > 0` (there is no `overflow` field).
+- No Python statics live in the pytree: `pop_size`, `max_nodes`, `max_conns`, `max_in_degree`, `key_span` are build-time arguments of `derive_schedule` and part of the executable cache key.
 `K` is the genome's `max_in_degree`; slots are filled in increasing connection-row order so a node's window ordering is canonical and stable across runs.
 
 ## Forward algebra (feedforward)
