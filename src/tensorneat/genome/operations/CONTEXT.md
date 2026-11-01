@@ -6,7 +6,7 @@ This node also owns the structural invariants that keep the execution schedule v
 Operators never allocate RNG keys or structural keys: the algorithm draws `key` and allocates `new_node_keys`/`new_conn_keys`, so a `(seed, config, shape)` triple reproduces a run.
 
 ## Call contract (binding for `genome/base.py` and `algorithm/`)
-- `BaseMutation.__call__(state, genome, key, node_keys, node_attrs, conn_keys, conn_attrs, new_node_keys (P,), new_conn_keys (P, 3) kid) -> GenomeTensors` — validates the two key shapes (`ConfigError`), then `split_n(key, 2)` and runs the structural stage before the value stage.
+- `BaseMutation.__call__(state, genome, key, node_keys, node_attrs, conn_keys, conn_attrs, new_node_keys (P,), new_conn_keys (P, 3) -> GenomeTensors` — validates the two key shapes (`ConfigError`), then `split_n(key, 2)` and runs the structural stage before the value stage.
 - `new_conn_keys` columns: `0` = add-node identity edge, `1` = add-node copy edge, `2` = plain add-connection edge; each becomes the `historical_marker` when the conn gene declares one.
 - `BaseCrossover.__call__(state, genome, key, node_keys1, node_attrs1, conn_keys1, conn_attrs1, node_keys2, node_attrs2, conn_keys2, conn_attrs2) -> GenomeTensors` — `genome1` is the fitter parent and keeps its keys; identical parent shapes are required (`ConfigError`).
 - `BaseDistance.__call__(state, genome, node_keys1, node_attrs1, conn_keys1, conn_attrs1, node_keys2, node_attrs2, conn_keys2, conn_attrs2) -> (P,) float32` — the algorithm forms the pairs; distances are `0` for an empty pair and never NaN.
