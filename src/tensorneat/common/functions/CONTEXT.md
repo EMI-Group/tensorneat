@@ -86,10 +86,10 @@ One dispatch call, `(P, N, K) = (100, 50, 8)`:
 | `apply_activation` | 10 | 74 (12 options, identity skipped) |
 | `apply_aggregation` | 8 | 62 (6 options) |
 | one level: `apply_activation(apply_aggregation(...))` | 17 | 135 |
-| whole `DefaultGenome.forward` (`max_depth = 16` unrolled steps) | 615 | 2503 |
+| whole `DefaultGenome.forward` (`max_nodes=50`, `max_conns=100`, `max_depth = 16` unrolled steps) | 621 | 2509 |
 
-The reduction came from removing the redundant id `cast` (the gene's `prepare` already casts), the identity option's `equal`/`select` pair, the per-option duplicate of `select(mask, z, 0.0)` (now shared through `_Window`), the duplicate live-edge count (`mean` and the guard now share it), the `has_valid` guard when every option is `zero_on_empty`, and the separate zeroed accumulator (`743 → 615` and `2679 → 2503` for a whole forward pass).
-Per level this node now owns ~26 % of the `DefaultGenome` forward-pass op count (17 of the ~38 ops one level costs), down from ~54 % (25 of ~46); the rest is the genome's gather/combine work.
+What keeps the count there: the id `cast` is skipped (the gene's `prepare` already casts), an `is_identity` option emits no `equal`/`select` pair, the neutral-padded window is built once per distinct neutral through `_Window` (`sum`/`mean`/`maxabs` share `select(mask, z, 0.0)`), `mean` and the `has_valid` guard share one live-edge count, the guard itself is skipped when every option is `zero_on_empty`, and no separate zeroed accumulator is emitted (the first `select` carries the `else` value).
+Per level this node owns ~26 % of the `DefaultGenome` forward-pass op count (17 of the ~38 ops one level costs); the rest is the genome's gather/combine work.
 
 ## Measured cost (median of 15 `evoxc.run` calls, build cached, single-threaded)
 One level kernel (`apply_activation ∘ apply_aggregation`) over `(P, 50, 8)` messages, `agg_ids`/`act_ids` int32, one option each: 0.31 ms / 1.18 ms / 2.54 ms for P = 100 / 500 / 1000; with both canonical option lists 2.38 ms / 10.27 ms / 17.84 ms.
