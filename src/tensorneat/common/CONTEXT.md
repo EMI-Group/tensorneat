@@ -49,6 +49,14 @@ Consequence: `state.register/update(...)` must be *reassigned*; `state.x = v` an
 `to_latex_code(...)` / `to_python_code(...)` — both take the 8-tuple produced by `DefaultGenome.sympy_func` (`symbols, args_symbols, input_symbols, nodes_exprs, output_exprs, forward_func, topo_order, useful_nodes`); iterate `topo_order[input_cnt:]`, skip nodes not in `useful_nodes`, `subs` args/norm symbols, round to 2 (latex) / 6 (python), and emit `\begin{align}` lines or `h = np.zeros(...)`/`o = np.zeros(...)` assignments.
 The `input_symbols`, `output_exprs` and `forward_func` parameters are accepted but unused by both code generators.
 
+## JAX Usage Map
+`@jit`: `tools.fetch_first`, `tools.fetch_random`, `tools.rank_elements` (`@partial(jit, static_argnames=["reverse"])`), `tools.mutate_float`, `tools.mutate_int`, `graph.topological_sort`, `graph.check_cycles`.
+Jit-compatible but undecorated (pure jnp/lax, traced by callers): `tools.attach_with_inf`, `tools.argmin_with_mask`, `tools.hash_array`, `functions.apply_activation`, `functions.apply_aggregation`, all `act_jnp` / `agg_jnp` functions.
+`lax.while_loop`: `graph.topological_sort` (Kahn loop over `in_degree`), `graph.check_cycles` (boolean transitive closure). `lax.fori_loop`: `tools.hash_array` (over `arr.size`).
+`lax.switch`: `apply_activation` (per-node activation) and `apply_aggregation` (per-node aggregation). `lax.cond`: both of those plus the empty-mask shortcut.
+`vmap`: not used in this node; callers vmap `attach_with_inf`/`hash_array`/gene `forward` (e.g. `genome/operations/crossover/default.py`, `genome/recurrent.py`).
+Host-side python/numpy (never traced): `graph.topological_sort_python`, `graph.find_useful_nodes`, all of `sympy_tools.py`, all `FunctionManager` methods, `State.save/load`, `StatefulBaseClass.show_config`, everything in `evox_adaptors` outside `io_callback`.
+
 ## Tensorization Trick (how this node's helpers form it)
 Step 1, host/`transform`: `../genome/utils.py::unflatten_conns(nodes, conns)` maps the ragged `(max_conns, ...)` rows to a dense `(max_nodes, max_nodes)` int32 matrix `u_conns` holding the connection row index, with `I_INF` where no connection exists (`jnp.full(..., I_INF).at[i_idxs, o_idxs].set(jnp.arange(C))`).
 Step 2, `transform` (feedforward): `topological_sort(nodes, u_conns != I_INF)` returns `cal_seqs`, a fixed-length `(max_nodes,)` int32 order, so the variable-length graph becomes a `lax.fori_loop(0, max_nodes, ...)` with per-iteration validity masks.
