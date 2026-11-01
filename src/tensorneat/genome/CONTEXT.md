@@ -67,7 +67,10 @@ No control-flow (region) op exists in the forward, so reverse-mode works; but th
 - Only float inputs are differentiable: `node_attrs` and `conn_attrs` are the differentiated arguments; keys and the schedule are non-differentiated int inputs (an int32 *differentiated* argument is a hard `TransformError`).
 - `sort`/`argsort` have no AD rule, so the schedule derivation must **not** be inside the differentiated graph — this is why `grad` takes an already-derived `transformed` and returns its own graph.
 Attribute gradients are masked at the graph input (`select(exists & ~isnan(a), a, 0)`), so padding rows gradient to exactly `0`.
-Known evoxc limitation (reported, not fixed here): its `gather` VJP scatters with *put* semantics, so gradients through a fan-out gather under-accumulate; `evoxc` needs `scatter_add` before `grad` is numerically exact on evolved topologies.
+`grad` does **not** differentiate the plain forward: evoxc 0.1.0 derives a `gather` VJP with *put* semantics, so the fan-out gathers of the window step under-accumulate and the gradient is wrong wherever a node feeds several edges.
+Instead `grad` differentiates a mathematically identical **dense** pass built beside the plain one: a per-individual `W (P, N, N)` weight matrix scattered from the conn-gene `weight` column (unique `(dst, src)` cells, `0` elsewhere), `agg = dot(W, xs)` per level, and the live-slot gate `live_count = dot(live_matrix, ~isnan(values))` — `dot`'s VJP is exact.
+`_dense_forward` produces the same values as `forward` (checked to 1e-6), so the gradients are the gradients of the plain forward even though the ops differ: sum aggregation is `dot`, mean aggregation is the same `dot` divided by `maximum(live_count, 1)`.
+`grad` still returns an `evoxc.Graph` for the Pipeline to cache/compile/run; the plan (`W` cells, live matrix, level masks) is host-computed once per graph inside `_dense_plan`.
 
 ## Static invariants (performance knobs, never silent)
 - `max_in_degree` (`K`, default `max(initial in-degree, 4)`): enforced by `execute_mutation`, which refuses an added connection that would push a node past `K`; `initialize` rejects an `init_hidden_layers` layout that needs more.
@@ -88,6 +91,19 @@ Known evoxc limitation (reported, not fixed here): its `gather` VJP scatters wit
 - `activation == -1` means **identity** everywhere; the legacy `lax.switch(-1, ...)` clamped to the last option, so `BiasNode` split nodes silently used the wrong activation.
 - Activation/aggregation options are evaluated for **all** configured options and selected with `select`, so a non-total option (division by zero, `log`/`sqrt` of a possibly negative value) can poison gradients even where it is not selected; single-option configurations emit no selection op at all.
 - Random draws differ from the JAX build by construction (`evoxc.random` vs `jax.random`), so parity with `benchmarks/legacy_jax` is asserted on kernels for given genomes (forward, grad, distance), not on RNG-dependent operator output.
+
+## Known Issues / Notes for Agents
+**evoxc 0.1.0 `gather` VJP has put semantics** (`evoxc/transforms/rules.py`: `g_x = scatter(zeros_like(x), idx, ct)`), so any gather with duplicate indices silently keeps one contribution instead of accumulating them.
+That defect hits both the window gather of `values` in the plain forward and `gather(conn_attrs, in_conn)`, so no gradient may be taken through the window formulation until evoxc ships a scatter-add; the defect is unfixed here on purpose.
+`_dense_plan` therefore never gathers attributes: it reads the edge list (`conn_attrs[:, :, weight]`, `conn_exists`, `in_src`, `dst`) and scatters into unique cells.
+All scatter indices in `_dense_plan` are collision-free across the population burst because the flattened cell index carries a per-individual stride (`p * (N*N + 1)`) plus one dump cell (`N*N`) for unused rows, which is sliced off after the scatter.
+Only those float writes can collide-free-scatter; a plain `(P, N, N)` scatter would let different individuals write the same flattened cell.
+`_dense_plan` is host-side NumPy over `Transformed` only (schedule is static), so it costs one Python pass per compiled graph and nothing per generation.
+`_node_step`, `_hit_conn_attrs` and `_gather_slots` remain the only plain-forward path and must keep their per-level op budget; the exact path is used exclusively by `grad`.
+`grad` refuses at graph-build time what the dense formulation cannot represent: a non-`"feedforward"` genome, `aggregation_options` other than a single `AGG.sum`/`AGG.mean` (the `ConfigError` names the offending option), a conn gene without a `weight` column, duplicate `(dst, src)` pairs, and edges with no incoming-window slot (`ShapeBoundError` — a `max_in_degree` rebuild signal, never a silent drop).
+Attribute gradients are masked at the graph input (`select(exists & ~isnan(a), a, 0)`) and cleaned at the output (`select(isnan(g), 0, g)`), so padding rows, absent rows and non-weight attribute columns (option ids, historical markers) gradient to exactly `0`.
+Finite-difference check of the current path (XOR-shaped 2→3→1, `max_nodes=10`, `max_conns=20`, `DefaultNode`/`DefaultConn`, h=1e-3): connection weight `max rel 4.7e-5`, node bias `max rel 2.1e-6`, node response `max rel 4.7e-5` — at the FD noise floor.
+Cost of the exact path on the numpy backend (`P=1000`, `max_nodes=50`, `max_conns=100`, 9 unrolled levels): ≈13 ms for the dense forward without AD and ≈88 ms per compiled `grad` run, against ≈0.9 s to trace+lower+compile the graph once per shape signature.
 
 ## Test Strategy
 `test/unit/genome/` — numpy backend, no optional dependency: payload layouts and padding sentinels, `initialize` row/key invariant, forward on hand-built XOR networks (including unconnected-node NaN poisoning), `-1` activation identity, in-degree overflow handling, mutation/crossover/distance invariants (counts, key uniqueness, capacity).
