@@ -212,6 +212,9 @@ Host-only, pure Python (stdlib + `errors.GraphError`), never traced: `decode_gra
 ### `sympy_tools.py`
 Host-only (`re` + `sympy`, no numpy, no evoxc): `analysis_nodes_exprs`, `round_expr`, `replace_variable_names`, `to_latex_code`, `to_python_code` — the 8-tuple contract of `Genome.sympy_func` is unchanged from the pre-rewrite library, and `to_python_code` emits the legacy line-by-line source (allocate `h`/`o`, then assignment lines) rather than a `def`.
 It is deliberately not re-exported by `common.__init__` (its only consumer is `Genome.sympy_func`, which imports `..common.sympy_tools` directly), so the package surface stays what the contract lists.
+`to_latex_code` and `to_python_code` take the 8-tuple **unpacked** (`to_latex_code(*genome.sympy_func(state, network))`), i.e. eight positional arguments `(symbols, args_symbols, input_symbols, nodes_exprs, output_exprs, forward_func, topo_order, useful_nodes)`; `symbols` and `topo_order` are keyed by the genome's node **keys**, while `nodes_exprs`/`output_exprs` are keyed by **sympy Symbols**, and `forward_func` is accepted for signature compatibility only (never called).
+Both renderers iterate `topo_order[input_cnt:]` with `input_cnt` from `analysis_nodes_exprs`, which counts *both* the raw `i<k>` and the transformed `norm<k>` symbol of every input — so a genome with `I` inputs silently omits up to `I` useful hidden nodes from the LaTeX/Python output.
+That off-by-`I` slice is legacy-identical (`benchmarks/legacy_jax/tensorneat_legacy/common/sympy_tools.py`), kept for parity; changing it is a parity decision, not a bug fix.
 
 ## evoxc idioms and gotchas (validated on this box)
 - `@evoxc.defn` + `evoxc.build(fn, *TensorSpec, backend=..., device=...)`; the numpy reference interpreter is the default and is enough for `test/unit`.
