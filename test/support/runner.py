@@ -66,7 +66,14 @@ def tensor(value: Any) -> evoxc.Tensor:
 
 
 def spec_like(value: Any) -> evoxc.TensorSpec:
-    """Build the ``TensorSpec`` of a concrete array, so a call site can just pass data."""
+    """Build the ``TensorSpec`` of a concrete tensor, so a call site can just pass data.
+
+    Accepts a numpy array or an already-wrapped ``evoxc.Tensor`` — the latter
+    matters for RNG keys, whose rank-0 ``int64`` dtype cannot be recovered by
+    ``np.asarray`` on a ``Tensor`` (it has no ``__array__``).
+    """
+    if isinstance(value, evoxc.Tensor):
+        return evoxc.TensorSpec(tuple(value.shape), value.dtype)
     array = np.asarray(value)
     try:
         dtype = _DTYPES[array.dtype]
