@@ -76,6 +76,13 @@ Gene payload encoding is genome-owned and opaque here — in particular evoxc ha
 `pipeline`: creates `randkey`, calls `setup`, drives `ask → transform → forward/evaluate → tell`, and calls `show_details` on host-readable values.
 `problem`: `evaluate(state, keys, act_fn, transformed)` where `act_fn` is `algorithm.forward` partially applied — the problem owns the dataset tiling into the population axis.
 
+## Known Risks (evoxc)
+`evoxc.scan` de-sugars to `while` + gather/scatter, so a wide carry trips iree's affinity analysis on CUDA/ROCm; the numpy backend is the reference and packed carries are the mitigation.
+Data-dependent `while_loop` trip counts work on numpy and iree/llvm-cpu but not on iree CUDA/ROCm or tvm — the reason every loop in this subtree is fixed-length.
+`cumsum` does not export on compiler backends, hence prefix sums are triangular matmuls.
+`evoxc.constant` warns above 1 MiB, which bounds how large a substrate coordinate table may be before it must become an explicit pipeline input.
+`evoxc` has no `io_callback`/print op, so all logging stays in `show_details` on the host side.
+
 ## Constraints
 No `jax` / `torch` import anywhere in this subtree; `import tensorneat` must stay free of them (release gate).
 No Python branching, `bool()`, `len()` or host reads on traced values; static Python `if`/`for` over constructor configuration is fine and unrolls at trace time.
