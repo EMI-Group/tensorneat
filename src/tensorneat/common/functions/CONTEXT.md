@@ -100,7 +100,7 @@ The forward pass is worth ≈3–5 % of a generation at P=500–1000; the rest i
 Remaining hot spots inside this node, in order:
 1. `select(mask, z, 0.0)` (1.37 ms) plus `reduce_sum` (0.87 ms) at P = 1000 — the mandatory neutral-padded window of a single aggregation level; together they are 88 % of that level's run time. Dropping the padding would require the *genome* to guarantee that dead slots are exactly `0.0` (it currently only NaN-sanitizes them), i.e. a genome-side contract change plus a `zero_on_empty`-style opt-in, not a change here.
 2. The `equal`/`select` cascade of a multi-option list (2 ops per option over `(P, N)`): unavoidable while the id is gene data rather than a shape.
-3. `maxabs` costs 0.85 ms more per level than `sum` at P = 1000 (argmax + 7 `reshape`s + `flat_gather`); `flat_gather` additionally emits an `(P*N, 1)` int32 offsets constant and ~4 index-range guards per call (see `common/tools.py`, not this node).
+3. `maxabs` costs 0.85 ms more per level than `sum` at P = 1000 (argmax + 7 `reshape`s + `flat_gather`); `flat_gather` additionally emits a `(P, 1)` int32 offsets constant plus ~4 index-range guards per call even though an `argmax` result is provably in range (see `common/tools.py`, not this node).
 4. `constant` ops are *not* shared between literals: every `0.0` / `1.0` / `index` literal becomes its own `constant` op (2 of the 17 one-option ops are the dispatchers' `else`-value and `equal` literals), and a constant op costs build time and a per-run materialisation, not just its op count.
 
 ## Shapes, dtypes, sentinels
