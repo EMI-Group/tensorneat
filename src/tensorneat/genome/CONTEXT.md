@@ -32,7 +32,8 @@ The shared window step is `_hit_conn_attrs` + `_node_step` + `_output_values`, a
 - `execute_mutation(state, key, genome, new_node_keys (P,), new_conn_keys (P,3)) -> GenomeTensors`
 - `execute_crossover(state, key, genome1, genome2) -> GenomeTensors`
 - `execute_distance(state, genome1, genome2) -> (P,)` — pairwise, batched over pairs; the algorithm forms the pairs.
-- Host-only (NumPy in, Python out, never traced): `network_dict`, `sympy_func`, `visualize`, `repr`, `hash`, `get_input_idx`, `get_output_idx` — the non-`sympy_func`/`visualize` ones live in `host.py::BaseGenomeHost`, so each takes **one** individual: `_individual` raises `TensorNEATError` telling the caller to slice first, e.g. `GenomeTensors(*(a[i:i+1] for a in payload))` (there is no `payload.of(i)`).
+- Host-only, NumPy in / Python out, never traced: `network_dict(state, genome, whether_re_cound_idx=True)`, `repr(state, genome, precision=2)`, `get_input_idx()`, `get_output_idx()` (and the family-implemented `sympy_func(state, network, ...)` / `visualize(network, ...)`), which live in `host.py::BaseGenomeHost`; each payload-taking one needs a `GenomeTensors` holding **one** individual as a `P == 1` batch, because `_split_payload` rejects a `(N,)` row and `_individual` then raises `ConfigError` (a `TensorNEATError`) telling the caller to slice first: `GenomeTensors(*(array[p : p + 1] for array in payload))` (there is no `payload.of(i)`).
+- `hash(genome) -> (P,) uint32` is **not** host-only despite living in `host.py`: it is an in-graph kernel over the whole population (`evoxc` ops require an active trace, so an eager call raises `TraceError`).
 `GenomeTensors` is a namedtuple-like pytree of exactly the four payload arrays; every kernel takes and returns it by field, never by column offsets.
 Structural mutation keys (`new_node_keys`, `new_conn_keys`) are **allocated by the caller** (globally unique across the population) and passed in as int32 tensors — they are not RNG draws.
 
