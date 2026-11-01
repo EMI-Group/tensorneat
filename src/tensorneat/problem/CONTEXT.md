@@ -64,8 +64,9 @@ A problem is pure host-side configuration (`StatefulBaseClass`) plus plain-Pytho
 - `FuncFit.setup`/`CartPole.setup` still come from `common.stateful_class.StatefulBaseClass.setup`, which is a skeleton while `common` is implemented (no shipped problem registers keys, so `evaluate` never calls it).
 
 ## Notes for Agents
-- CartPole cost is interpreter-bound, not batch-bound: a measured 500-step scan with a ~30-op body takes ~165 ms per `evaluate` at `P=100` and ~300 ms at `P=1000` on the numpy reference interpreter, but ~30 ms at `P=100` when built with `backend="iree"` (llvm-cpu); a real genome forward is heavier per step than the measured toy linear policy.
-- Practical guidance for RL runs: `backend="iree"` for anything beyond smoke tests, or a smaller `max_step` on numpy.
+- CartPole cost is interpreter-bound on numpy and horizon-bound on iree: a measured `max_step=500` scan with a toy linear `(B,4)->(B,2)` policy costs ≈180 ms per `evaluate` at `P=100` and ≈315 ms at `P=1000` on the numpy reference backend, versus ≈24 ms at `P=100` and ≈310 ms at `P=1000` with `backend="iree"` (llvm-cpu, build ≈1.3 s per shape); a real genome forward is heavier per step than the toy policy.
+- `max_step=50` costs ≈18 ms (numpy, `P=100`) / 2.1 ms (iree); cost is linear in the horizon, so shrinking `max_step` is the cheap lever on numpy.
+- Practical guidance for RL runs: `backend="iree"` for anything beyond smoke tests at small-to-moderate populations, and measure before assuming a win at `P ≳ 1000`.
 - TVM cannot compile this node's rollouts at all (it rejects `if`/`while`/gather/scatter), so `CartPole` is numpy / iree / xla only — a TVM build must fail loudly, never fall back.
 
 ## Routing Table
