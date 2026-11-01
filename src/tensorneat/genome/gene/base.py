@@ -32,8 +32,11 @@ def column(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
     """Read one static column of the last axis of a traced tensor.
 
     evoxc's static indexing rejects ``Ellipsis``/``None``, so ``tensor[..., i]`` is
-    not available inside a graph; this builds the explicit key
-    ``tensor[:, ..., i]`` for the tensor's actual rank.
+    not available inside a graph; this builds the explicit key for the tensor's
+    actual rank. The slice keeps the indexed axis (``i:i+1``) and the trailing
+    ``reshape`` drops it, because the reverse-mode rule of an axis-dropping integer
+    index has no usable cotangent shape -- a sliced-then-reshaped read is
+    differentiable, which is what ``Genome.grad`` needs for every gene attribute.
 
     Args:
         tensor: Any traced tensor whose last axis is the gene column axis.
@@ -42,8 +45,9 @@ def column(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
     Returns:
         ``tensor.shape[:-1]``-shaped view of column ``index``.
     """
-    slicer = (slice(None),) * (len(tensor.shape) - 1) + (index,)
-    return tensor[slicer]
+    rank = len(tensor.shape)
+    slicer = (slice(None),) * (rank - 1) + (slice(index, index + 1),)
+    return evoxc.reshape(tensor[slicer], tuple(tensor.shape[:-1]))
 
 
 def hash_int32(keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
