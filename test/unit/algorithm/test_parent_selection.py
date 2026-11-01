@@ -7,18 +7,20 @@ its contract is a mixture of algebra and randomness, and the tests check the alg
 exactly and the randomness only through the bounds it must respect:
 
 * the survivor count is ``clamp(floor(survival_threshold * member_count), 1,
-  member_count)`` — floored at one so a one-member species is legal, and capped at
-  the member count so the non-member tail of the ranking (all ``-inf``) can never be
-  drawn;
+  min(member_count, pop_size))`` — floored at one so a one-member species is legal,
+  and capped at the member count so the non-member tail of the ranking (all
+  ``-inf``) can never be drawn (the implementation spells the cap as
+  ``max(min(member_count, pop_size), 1)``, which is the same value for every live
+  species with at least one member — the floor covers the empty slot);
 * a one-member species yields **two identical parents** (self-crossover, which is the
   identity) instead of the legacy zero-survivor division that produced a NaN
   probability vector and made ``random.choice`` fail;
-* elite slots — the first ``genome_elitism`` slots of every species block — are
-  pinned to that species' **best** member, so an elite child is the unmutated
-  crossover of the champion with itself;
+* elite slots — the slots with ``idx_in_block < genome_elitism`` of every species
+  block — are pinned to that species' **best** member, so an elite child is the
+  unmutated crossover of the champion with itself;
 * the winner/loser decision always makes the **fitter** genome parent 1 (the
   order-sensitive argument of ``execute_crossover``: parent 1's structure is kept),
-  with ties going to the first draw;
+  with ties going to the first draw (the father, ``>=``);
 * every population slot draws its parents from **its own** species block, and the
   block layout assigns each slot to exactly one block;
 * the draw depends on the supplied ``evoxc.random`` key and on nothing else — the
@@ -29,11 +31,12 @@ Oracles used here (never the implementation)
 --------------------------------------------
 * :func:`species_ranking` — the documented ranking
   (``argsort`` of the masked fitness, stable ascending, then reversed to reproduce
-  the legacy tie order) computed on the host from ``fitness``/``idx2species``.
+  the legacy tie order, i.e. exactly what ``_sort_desc_legacy`` defines) computed on
+  the host from ``fitness``/``idx2species``.
 * :func:`survivor_count` — the documented clamp formula, written out.
-* :func:`expected_block_layout` — the ``loc``/``idx_in_block`` mapping by the
-  definition (see ``./test_spawn.py``), so "draws from its own block" is checked
-  against the block a slot *should* belong to.
+* :func:`expected_block_layout` — the ``loc``/``idx_in_block`` mapping by its
+  definition, so "draws from its own block" is checked against the block a slot
+  *should* belong to.
 * ``np.array_equal`` — determinism and RNG independence.
 
 Gotchas this module encodes
@@ -41,17 +44,21 @@ Gotchas this module encodes
 * ``_pair_parents`` returns **row indices into the current population**, not ranks:
   a test compares against ``species_ranking(...)[rank]``, never against the rank.
 * The ranking is over ``select(membership, fitness, -inf)``, so the tail of the
-  ranking holds non-members.  The survivor cap is what makes that tail unreachable —
-  a test that leaves ``survival_threshold = 1.0`` cannot observe it, so every
-  bounding test uses a threshold that makes the survivor prefix strictly smaller
-  than the member count.
-* Ties are ordered by the legacy reversal, so the tests use **distinct** fitness
-  values within a species; with a tie the rank order itself would be the thing under
-  test, and that is pinned separately by ``test_the_fitter_parent_is_always_parent_one``
-  (the ``>=`` comparison, not the sort order).
+  ranking holds non-members.  The survivor cap is what makes that tail unreachable;
+  at ``survival_threshold = 1.0`` the bound degenerates to "any member", which is
+  why the parametrised table keeps the ``0.1``/``0.5`` regimes next to it (those
+  make the survivor prefix strictly smaller than the member count).
+* Ties are ordered by the legacy reversal, so the fitness tables in the elite and
+  prefix tests use **distinct** values within a species; the tie order itself is
+  pinned separately by :func:`test_the_fitter_parent_is_always_parent_one`, which
+  also runs on a table with a tie at the top of both species.
 * ``elite_mask`` is per population slot and spans *every* block, so "the elites are
-  pinned" is asserted block by block (``loc(p) == i and idx_in_block(p) <
+  pinned" is asserted block by block (``loc(p) == i`` and ``idx_in_block(p) <
   genome_elitism``), not as a prefix of the whole population.
+* A live species may own a block of ``spawn == 0`` slots in the middle of the table
+  (only *dead* slots are guaranteed to trail after the descending sort); the block
+  layout has to skip such a species, which is why one table below has a live,
+  empty species between two populated ones.
 
 Backend is ``"numpy"`` throughout; no optional dependency, no ``jax``/``torch``, no
 network.
@@ -62,13 +69,30 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+#: Population size of the hand-built tables — the ``POP_SIZE`` of `./conftest.py`,
+#: repeated here so the oracles below can be called on their own.
+POP_SIZE = 8
+#: Species-slot capacity of the same tables (two live, two dead by default).
+SPECIES_SIZE = 4
+
 #: The fixture population: rows ``0..4`` are species key ``0.0``, rows ``5..7`` are
 #: key ``1.0``.  Fitness is distinct inside each species and the species maxima are
 #: ``0.9`` (row 1) and ``0.8`` (row 6), which is what the elite assertions compare
 #: against.
 FITNESS = np.array([0.1, 0.9, 0.5, 0.7, 0.3, 0.2, 0.8, 0.4], dtype=np.float32)
-#: The spawn allocation matching that population (sums to ``8``).
+#: The same table with a two-way tie at the top of *both* species (rows ``0``/``1``
+#: at ``0.9`` and rows ``6``/``7`` at ``0.8``).
+TIED_FITNESS = np.array([0.9, 0.9, 0.5, 0.7, 0.3, 0.2, 0.8, 0.8], dtype=np.float32)
+#: The spawn allocation matching :data:`FITNESS`/``GROUPS_DEFAULT`` (sums to ``8``).
 SPAWN = np.array([5, 3, 0, 0], dtype=np.int32)
+#: A spawn vector with a live, **empty** species in the middle, so the block index
+#: and the species slot index deliberately differ (sums to ``8``).
+MIDDLE_EMPTY_SPAWN = np.array([3, 0, 5, 0], dtype=np.int32)
+
+#: ``(key, member rows)`` per species slot, for the ``FITNESS``/``SPAWN`` table.
+GROUPS_DEFAULT = ((0.0, (0, 1, 2, 3, 4)), (1.0, (5, 6, 7)))
+#: The same for :data:`MIDDLE_EMPTY_SPAWN`: slot ``1`` is live but owns no row.
+GROUPS_MIDDLE_EMPTY = ((0.0, (0, 1, 2)), (1.0, ()), (2.0, (3, 4, 5, 6, 7)))
 
 
 # --------------------------------------------------------------------------- #
@@ -77,9 +101,17 @@ SPAWN = np.array([5, 3, 0, 0], dtype=np.int32)
 
 
 def survivor_count(survival_threshold, members):
-    """``clamp(floor(survival_threshold * members), 1, members)``, the documented count."""
+    """``clamp(floor(survival_threshold * members), 1, min(members, pop_size))``.
+
+    Args:
+        survival_threshold: The controller's ``survival_threshold``.
+        members: A live species' ``member_count`` (``1 <= members <= pop_size``).
+
+    Returns:
+        int: The number of best-ranked members eligible as parents.
+    """
     floored = int(np.floor(survival_threshold * members))
-    return int(min(max(floored, 1), members))
+    return int(min(max(floored, 1), min(int(members), POP_SIZE)))
 
 
 def species_ranking(fitness, idx2species, key):
@@ -115,6 +147,12 @@ def expected_block_layout(spawn):
         tuple: ``(loc, idx_in_block)``, both ``(P,)`` int arrays.
 
     Notes:
+        ``loc(p)`` is the **last** ``i`` with ``spawn[i] > 0`` and ``E[i] <= p``
+        (``E`` the exclusive prefix sum), and ``idx_in_block(p) = p - E[loc(p)]``.
+        It is the *last qualifying block* rather than the *count* of qualifying
+        blocks, because a live species may own no slot in the middle of the table
+        (only dead slots are guaranteed to trail after the sort).
+
         Deliberately a local copy of :func:`test_spawn.expected_block_layout` rather
         than an import from the sibling module: a test module must stay importable on
         its own, and importing one test module from another would turn a change in
@@ -135,6 +173,81 @@ def expected_block_layout(spawn):
     return loc, offset
 
 
+# --------------------------------------------------------------------------- #
+# host helpers
+# --------------------------------------------------------------------------- #
+
+
+def species_table(species_state, groups):
+    """Build a sorted ``SpeciesState`` whose live species own the given rows.
+
+    Args:
+        species_state: The factory fixture of `./conftest.py`.
+        groups: ``(species_key, rows)`` pairs, one per species *slot*, in slot order.
+            ``rows`` may be empty — the slot is still live (its key is finite), which
+            is how the "live but zero-spawn species in the middle" table is built.
+
+    Returns:
+        A ``SpeciesState`` with ``member_count`` = the row count per slot and
+        ``idx2species`` mapping every listed row to its key (``NaN`` elsewhere).
+
+    Notes:
+        ``best_fitness``/``last_improved`` are zero-filled on live slots and ``NaN``
+        on dead ones: ``_pair_parents`` never reads either, and a dead slot is dead
+        *only* because ``species_keys`` is ``NaN``.  The centre payload arrays keep
+        the fixture's zero fill for the same reason.
+    """
+    keys = np.full(SPECIES_SIZE, np.nan, np.float32)
+    best = np.full(SPECIES_SIZE, np.nan, np.float32)
+    improved = np.full(SPECIES_SIZE, np.nan, np.float32)
+    counts = np.full(SPECIES_SIZE, np.nan, np.float32)
+    idx2species = np.full(POP_SIZE, np.nan, np.float32)
+    for slot, (key, rows) in enumerate(groups):
+        keys[slot] = np.float32(key)
+        best[slot] = np.float32(0.0)
+        improved[slot] = np.float32(0.0)
+        counts[slot] = np.float32(len(rows))
+        idx2species[list(rows)] = np.float32(key)
+    return species_state(
+        species_keys=keys,
+        best_fitness=best,
+        last_improved=improved,
+        member_count=counts,
+        idx2species=idx2species,
+    )
+
+
+def rank_in_species(parent, fitness, idx2species, key):
+    """Rank of population row ``parent`` inside its species (``0`` = fittest).
+
+    Raises:
+        AssertionError: when ``parent`` is not a member of ``key`` at all — that is
+            the interesting failure of a parent draw, so it is reported with the
+            member list instead of an empty-array ``IndexError``.
+    """
+    ranking = species_ranking(fitness, idx2species, key)
+    matches = np.flatnonzero(ranking == parent)
+    assert matches.size == 1, (
+        f"population row {parent} is not a member of species key {key}; "
+        f"that species owns rows {ranking.tolist()}"
+    )
+    return int(matches[0])
+
+
+def assert_parent_indices(winner, loser):
+    """Both parent arrays are ``(P,)`` integer row indices into the population."""
+    for name, parent in (("winner", winner), ("loser", loser)):
+        assert isinstance(parent, np.ndarray), f"{name} is not an ndarray: {type(parent)!r}"
+        assert parent.shape == (POP_SIZE,), f"{name} has shape {parent.shape}"
+        assert np.issubdtype(parent.dtype, np.integer), (
+            f"{name} dtype {parent.dtype} is not integral"
+        )
+        assert not np.any(np.isnan(parent)), f"{name} contains NaN: {parent}"
+        assert np.all((parent >= 0) & (parent < POP_SIZE)), (
+            f"{name} is outside the population: {parent}"
+        )
+
+
 def pair(species_kernel, controller, bookkeeping, key, spawn=SPAWN, fitness=FITNESS):
     """Run ``_pair_parents`` through the shared runner and return ``(winner, loser, elite)``.
 
@@ -151,7 +264,12 @@ def pair(species_kernel, controller, bookkeeping, key, spawn=SPAWN, fitness=FITN
         tuple: ``(winner, loser, elite_mask)`` as host numpy arrays, ``(P,)`` each.
     """
     return species_kernel(
-        "_pair_parents", controller, bookkeeping, key, np.asarray(spawn), np.asarray(fitness)
+        "_pair_parents",
+        bookkeeping,
+        key,
+        np.asarray(spawn),
+        np.asarray(fitness),
+        controller=controller,
     )
 
 
@@ -167,7 +285,7 @@ def pair(species_kernel, controller, bookkeeping, key, spawn=SPAWN, fitness=FITN
         (0.5, 5, 2),  # floor(2.5) == 2 members
         (1.0, 5, 5),  # capped at the member count
         (0.1, 1, 1),  # the one-member species: floor(0.1) == 0 -> one member
-        (2.0, 3, 3),  # an over-large threshold is capped, not an IndexError
+        (0.9, 3, 2),  # floor(2.7) == 2 of a three-member species
     ],
 )
 def test_parents_come_only_from_the_survivor_prefix(
@@ -179,13 +297,49 @@ def test_parents_come_only_from_the_survivor_prefix(
     Oracle: :func:`survivor_count` and :func:`species_ranking`; the drawn rows are
     mapped back to their rank inside the species and asserted ``< expected``.  The
     table pins the three interesting regimes — the floor at one (``0.1 * 5`` and the
-    one-member species), the plain floor (``0.5 * 5``), and the cap at the member
-    count (``1.0`` and a threshold above ``1``, which must not read past the block).
+    one-member species), the plain floor (``0.5 * 5``, ``0.9 * 3``), and the cap at
+    the member count (``1.0``, which must not read past the block).  Species ``0``
+    owns ``members`` rows and species ``1`` the rest, so the bound is checked against
+    both species: the population-axis ranking is ``(S, P)`` wide and a stale
+    survivor count could just as well read past *another* block.
+
+    A threshold above ``1`` is not a pairing case any more: ``SpeciesController``
+    validates ``survival_threshold`` as a ``(0, 1]`` unit interval and raises
+    ``TensorNEATError``, so the cap is exercised with ``1.0`` here and the rejection
+    belongs to the constructor suite.
     """
-    pytest.skip(
-        "not implemented: parents drawn from the survivor prefix only "
-        "(owner: algorithm/neat/species.SpeciesController._pair_parents)"
+    groups = ((0.0, tuple(range(members))), (1.0, tuple(range(members, POP_SIZE))))
+    bookkeeping = species_table(species_state, groups)
+    # The spawn vector is ``(S,)`` wide like every species field: the two trailing
+    # dead slots receive zero population slots.
+    spawn = np.array([members, POP_SIZE - members, 0, 0], dtype=np.int32)
+    # The parametrisation is a statement about the *documented* clamp; assert it so a
+    # wrong expectation cannot silently weaken the bound below.
+    counts = bookkeeping.member_count
+    assert int(counts[0]) == members and int(counts[1]) == POP_SIZE - members
+    assert survivor_count(survival_threshold, members) == expected
+
+    winner, loser, elite = pair(
+        species_kernel,
+        controller(survival_threshold=survival_threshold),
+        bookkeeping,
+        evoxc_key,
+        spawn=spawn,
     )
+    assert_parent_indices(winner, loser)
+    assert elite.shape == (POP_SIZE,)
+
+    loc, _idx_in_block = expected_block_layout(spawn)
+    for slot in range(POP_SIZE):
+        block = int(loc[slot])
+        key = float(bookkeeping.species_keys[block])
+        survivors = survivor_count(survival_threshold, int(counts[block]))
+        for parent in (int(winner[slot]), int(loser[slot])):
+            rank = rank_in_species(parent, FITNESS, bookkeeping.idx2species, key)
+            assert rank < survivors, (
+                f"slot {slot} drew population row {parent} at rank {rank} of species "
+                f"{key}, but only the best {survivors} members are parents"
+            )
 
 
 def test_a_one_member_species_yields_two_identical_parents(
@@ -194,16 +348,40 @@ def test_a_one_member_species_yields_two_identical_parents(
     """Invariant: a species with one member produces ``winner == loser ==`` that member.
 
     Oracle: a state whose second species owns exactly one row; both parent vectors
-    must equal that row for the slot in its block, and every value must be a finite
-    row index.  This is the documented fix of the legacy zero-survivor division
-    (``high = max(survive_size, 1)``): the old probability vector divided by zero,
-    produced NaN and made ``random.choice`` fail, whereas a self-crossover is the
-    identity and is therefore the correct outcome.
+    must equal that row for the slot in its block, and every value must be a real
+    population index.  This is the documented fix of the legacy zero-survivor
+    division (``high = max(survive_size, 1)``): the old probability vector divided by
+    zero, produced NaN and made ``random.choice`` fail, whereas a self-crossover is
+    the identity and is therefore the correct outcome.  ``genome_elitism = 0`` keeps
+    the elite pinning out of the way, so the assertion is about the **draw** and not
+    about the elite shortcut (which would give the same answer for the wrong reason).
     """
-    pytest.skip(
-        "not implemented: one-member species self-crosses instead of dividing by zero "
-        "(owner: algorithm/neat/species.SpeciesController._pair_parents)"
+    # The lone member of species ``1.0``, which owns the only slot of its block.
+    lone = POP_SIZE - 1
+    bookkeeping = species_table(
+        species_state, ((0.0, tuple(range(lone))), (1.0, (lone,)))
     )
+    spawn = np.array([lone, 1, 0, 0], dtype=np.int32)
+    winner, loser, elite = pair(
+        species_kernel,
+        controller(genome_elitism=0),
+        bookkeeping,
+        evoxc_key,
+        spawn=spawn,
+    )
+
+    assert_parent_indices(winner, loser)
+    assert not np.any(elite), "genome_elitism = 0 must not mark any slot"
+    assert winner[lone] == lone and loser[lone] == lone, (
+        "the one-member species must draw its only member twice, but drew "
+        f"winner={winner[lone]}, loser={loser[lone]}"
+    )
+    assert winner[lone] == loser[lone]
+    # ``survival_threshold = 0.1`` leaves every live species with exactly one
+    # survivor, so block ``0`` must repeat its own best member in every slot as well;
+    # a NaN from the legacy division would show up as an out-of-range or
+    # non-integral index in the checks above.
+    assert np.all(winner[:lone] == winner[0]) and np.all(loser[:lone] == loser[0])
 
 
 # --------------------------------------------------------------------------- #
@@ -211,26 +389,73 @@ def test_a_one_member_species_yields_two_identical_parents(
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.parametrize("genome_elitism", [1, 2, 3])
 def test_elite_slots_are_pinned_to_the_species_best_member(
-    species, controller, species_state, species_kernel, evoxc_key
+    species, controller, species_state, species_kernel, evoxc_key, genome_elitism
 ):
     """Invariant: for an elite slot, both parents are the best member of its own species.
 
-    Oracle: :func:`expected_block_layout` gives ``loc(p)``; when ``idx_in_block(p) <
-    genome_elitism`` the test requires ``winner[p] == loser[p] ==
-    species_ranking(...)[0]`` for that block.  With the fixture table that is row
-    ``1`` for the two elite slots of block ``0`` and row ``6`` for the two of block
-    ``1``, so a mis-sliced block or a wrong elite width shows up as an exact row
-    mismatch rather than a fuzzy set difference.
+    Oracle: :func:`expected_block_layout` gives ``loc``/``idx_in_block``; every slot
+    with ``idx_in_block < genome_elitism`` must satisfy ``winner == loser ==
+    species_ranking(...)[0]`` for its own block.  With the fixture table that is row
+    ``1`` for the elite slots of block ``0`` and row ``6`` for those of block ``1``,
+    so a mis-sliced block or a wrong elite width shows up as an exact row mismatch
+    rather than a fuzzy set difference.  The widths cover a partial first block
+    (``1``), the suite default (``2``) and a width that swallows a whole three-slot
+    block (``3``).  Non-elite slots are still members of their own species, so the
+    pin cannot be "achieved" by drawing garbage elsewhere.
+
+    ``survival_threshold = 1.0`` is what gives the assertion teeth: with the suite
+    default of ``0.1`` every live species has a survivor count of one, so the plain
+    draw would hand back the species best member anyway and *removing* the elite
+    pinning would go unnoticed.  At ``1.0`` the survivor set is the whole species and
+    only the pin can put the best member in both parent slots.
     """
-    pytest.skip(
-        "not implemented: elite slots pinned to the species best member "
-        "(owner: algorithm/neat/species.SpeciesController._pair_parents)"
+    bookkeeping = species_state()
+    winner, loser, elite = pair(
+        species_kernel,
+        controller(genome_elitism=genome_elitism, survival_threshold=1.0),
+        bookkeeping,
+        evoxc_key,
     )
 
+    assert_parent_indices(winner, loser)
+    loc, idx_in_block = expected_block_layout(SPAWN)
+    keys = bookkeeping.species_keys
+    idx2species = bookkeeping.idx2species
 
+    elite_slots = np.flatnonzero(idx_in_block < genome_elitism)
+    assert elite_slots.size, "the parametrised width must select at least one slot"
+    for slot in elite_slots:
+        key = float(keys[int(loc[slot])])
+        best = int(species_ranking(FITNESS, idx2species, key)[0])
+        assert int(winner[slot]) == best, (
+            f"elite slot {slot} of species {key} drew winner {int(winner[slot])}, "
+            f"expected the species best member {best}"
+        )
+        assert int(loser[slot]) == best, (
+            f"elite slot {slot} of species {key} drew loser {int(loser[slot])}, "
+            f"expected the species best member {best}"
+        )
+    # Membership only: an out-of-species parent fails inside ``rank_in_species``.
+    for slot in range(POP_SIZE):
+        key = float(keys[int(loc[slot])])
+        for parent in (int(winner[slot]), int(loser[slot])):
+            rank_in_species(parent, FITNESS, idx2species, key)
+
+
+@pytest.mark.parametrize(
+    ("spawn", "groups"),
+    [
+        (SPAWN, GROUPS_DEFAULT),
+        (MIDDLE_EMPTY_SPAWN, GROUPS_MIDDLE_EMPTY),
+    ],
+    ids=["dense", "middle-empty"],
+)
+@pytest.mark.parametrize("genome_elitism", [0, 1, 2])
 def test_elite_mask_covers_the_leading_slots_of_every_block(
-    species, controller, species_state, species_kernel, evoxc_key
+    species, controller, species_state, species_kernel, evoxc_key,
+    spawn, groups, genome_elitism,
 ):
     """Invariant: ``elite_mask`` is True exactly for ``idx_in_block(p) < genome_elitism``.
 
@@ -238,12 +463,37 @@ def test_elite_mask_covers_the_leading_slots_of_every_block(
     against the returned mask.  The mask is what ``NEAT.tell`` uses to keep the
     crossover child unmutated, so an off-by-one here would silently mutate the
     champion — and a mask that covered only the first block would let the second
-    species lose its elites.
+    species lose its elites.  The second table has a live, zero-spawn species in the
+    middle: a mask computed from the species *slot* instead of the block index would
+    mark the wrong slots there.  ``genome_elitism = 0`` pins the empty-mask edge.
     """
-    pytest.skip(
-        "not implemented: elite mask marks the leading slots of every species block "
-        "(owner: algorithm/neat/species.SpeciesController._pair_parents)"
+    bookkeeping = species_table(species_state, groups)
+    winner, loser, elite = pair(
+        species_kernel,
+        controller(genome_elitism=genome_elitism),
+        bookkeeping,
+        evoxc_key,
+        spawn=spawn,
     )
+
+    assert_parent_indices(winner, loser)
+    assert elite.shape == (POP_SIZE,)
+    assert elite.dtype == np.bool_, f"elite_mask dtype is {elite.dtype}"
+    loc, idx_in_block = expected_block_layout(spawn)
+    np.testing.assert_array_equal(elite, idx_in_block < genome_elitism)
+
+    # The same statement block by block, so a failure names the block that is off.
+    for block in range(SPECIES_SIZE):
+        if int(spawn[block]) <= 0:
+            assert not np.any(loc == block), (
+                f"zero-spawn species slot {block} owns population slots"
+            )
+            continue
+        slots = np.flatnonzero(loc == block)
+        assert slots.size == int(spawn[block])
+        np.testing.assert_array_equal(
+            elite[slots], np.arange(int(spawn[block])) < genome_elitism
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -251,39 +501,98 @@ def test_elite_mask_covers_the_leading_slots_of_every_block(
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.parametrize(
+    ("survival_threshold", "fitness"),
+    [
+        (1.0, FITNESS),
+        (0.5, FITNESS),
+        (1.0, TIED_FITNESS),
+    ],
+    ids=["all-members", "two-survivors", "tied-at-the-top"],
+)
 def test_the_fitter_parent_is_always_parent_one(
-    species, controller, species_state, species_kernel, evoxc_key
+    species, controller, species_state, species_kernel, evoxc_key,
+    survival_threshold, fitness,
 ):
     """Invariant: ``fitness[winner] >= fitness[loser]`` for every population slot.
 
     Oracle: the two drawn rows compared through the fitness vector — the very
-    comparison the kernel documents (``>=``, so a tie keeps the first draw as parent
-    1).  ``execute_crossover`` is order-sensitive (parent 1's structure is kept), so
-    a flipped comparison does not merely swap two equal-quality parents: it changes
-    the topology of every child.
+    comparison the kernel documents (``>=``, so a tie keeps the first draw, the
+    father, as parent 1).  ``execute_crossover`` is order-sensitive (parent 1's
+    structure is kept), so a flipped comparison does not merely swap two
+    equal-quality parents: it changes the topology of every child.
+
+    ``genome_elitism = 0`` keeps the pinned slots (where both parents are the same
+    row by construction) out of the comparison, so the draw is what is measured.  The
+    three cases make the inequality strict somewhere for the tie-free table
+    (survivor sets of five and three, and of two and one), while the tied table
+    proves that equal fitness is not re-ordered into a "fitter loser".
     """
-    pytest.skip(
-        "not implemented: winner is the fitter parent (ties to the first draw) "
-        "(owner: algorithm/neat/species.SpeciesController._pair_parents)"
+    bookkeeping = species_state()
+    winner, loser, elite = pair(
+        species_kernel,
+        controller(genome_elitism=0, survival_threshold=survival_threshold),
+        bookkeeping,
+        evoxc_key,
+        fitness=fitness,
     )
+
+    assert_parent_indices(winner, loser)
+    assert not np.any(elite), "genome_elitism = 0 must not mark any slot"
+    drawn = np.asarray(fitness)
+    assert np.all(drawn[winner] >= drawn[loser]), (
+        "a slot made the less fit genome parent 1: "
+        f"winner fitness {drawn[winner].tolist()} vs loser fitness {drawn[loser].tolist()}"
+    )
+    if np.unique(drawn).size == POP_SIZE:
+        # Teeth: on a tie-free table at least one slot must have drawn two
+        # differently-fitnessed parents, otherwise the >= above is vacuous.
+        assert np.any(drawn[winner] > drawn[loser]), (
+            "no slot drew two differently-fitnessed parents: "
+            f"winner={winner.tolist()} loser={loser.tolist()}"
+        )
 
 
 def test_every_slot_draws_from_its_own_species_block(
-    species, controller, species_state, species_kernel, evoxc_key
+    species, controller, species_state, species_kernel, raw_kernel, evoxc_key
 ):
     """Invariant: both parents of slot ``p`` are members of the species of block ``loc(p)``.
 
-    Oracle: :func:`expected_block_layout` for ``loc`` and a
+    Oracle: :func:`expected_block_layout` for ``loc`` (cross-checked against
+    ``_block_layout`` itself, so a disagreement names which side is wrong) and an
     ``idx2species[parent] == species_keys[loc(p)]`` membership test on both parents,
-    over a spawn vector with a zero-spawn species in the middle (``[3, 0, 5, 0]``) so
-    the block index and the species slot index deliberately differ.  This is the
-    ``flat = loc * pop_size + idx_in_block`` gather: an implementation that confused
-    the flattened index with the species slot would cross two species' parents.
+    over a spawn vector with a live, zero-spawn species in the middle
+    (``[3, 0, 5, 0]``) so the block index and the species slot index deliberately
+    differ.  This is the ``flat = loc * pop_size + idx_in_block`` gather: an
+    implementation that confused the flattened index with the species slot would
+    cross two species' parents, and one that treated the zero-spawn species as a
+    block would hand population slots to a species with no members.
     """
-    pytest.skip(
-        "not implemented: block flattening maps every slot to its own species' parents "
-        "(owner: algorithm/neat/species.SpeciesController._pair_parents)"
+    spawn = MIDDLE_EMPTY_SPAWN
+    bookkeeping = species_table(species_state, GROUPS_MIDDLE_EMPTY)
+    winner, loser, _elite = pair(
+        species_kernel, controller(genome_elitism=0), bookkeeping, evoxc_key, spawn=spawn
     )
+
+    assert_parent_indices(winner, loser)
+    loc, idx_in_block = expected_block_layout(spawn)
+    kernel_loc, kernel_idx = raw_kernel("_block_layout", spawn)
+    np.testing.assert_array_equal(kernel_loc, loc)
+    np.testing.assert_array_equal(kernel_idx, idx_in_block)
+    # The table is what makes this test bite: block 0 -> species 0, block 1 is empty,
+    # block 2 -> species 2.  A species-slot/block-index mix-up lands on species 1.
+    assert loc.tolist() == [0, 0, 0, 2, 2, 2, 2, 2]
+    assert not np.any(loc == 1), "the empty species must own no population slot"
+
+    keys = bookkeeping.species_keys
+    idx2species = bookkeeping.idx2species
+    for slot in range(POP_SIZE):
+        owner = float(keys[int(loc[slot])])
+        for parent in (int(winner[slot]), int(loser[slot])):
+            assert float(idx2species[parent]) == owner, (
+                f"slot {slot} (owned by species {owner}) drew population row "
+                f"{parent} of species {float(idx2species[parent])}"
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -298,12 +607,37 @@ def test_draws_do_not_depend_on_the_numpy_global_rng(
 
     Oracle: run ``_pair_parents`` twice with the same ``evoxc`` key while the numpy
     global RNG is at two different states (``np.random.seed(0)`` then
-    ``np.random.seed(123456)``); all three outputs must be ``np.array_equal``.
-    Reproducibility is defined on ``(seed, config, shape)``, so a host RNG draw — or
-    a host ``random.choice`` — would break every seeded experiment while the tests
-    still passed a "same key, same result" check in one process.
+    ``np.random.seed(123456)``); all three outputs must be ``np.array_equal``, and the
+    drawn parents must still be members of their own species.  Reproducibility is
+    defined on ``(seed, config, shape)``, so a host RNG draw — or a host
+    ``random.choice`` — would break every seeded experiment while a single-process
+    "same key, same result" check still passed.
     """
-    pytest.skip(
-        "not implemented: parent draws depend on the evoxc key only "
-        "(owner: algorithm/neat/species.SpeciesController._pair_parents)"
-    )
+    bookkeeping = species_state()
+    settings = controller(genome_elitism=0, survival_threshold=1.0)
+    saved = np.random.get_state()
+    try:
+        np.random.seed(0)
+        first = pair(species_kernel, settings, bookkeeping, evoxc_key)
+        np.random.seed(123456)
+        second = pair(species_kernel, settings, bookkeeping, evoxc_key)
+    finally:
+        np.random.set_state(saved)
+
+    for name, left, right in zip(("winner", "loser", "elite"), first, second):
+        np.testing.assert_array_equal(
+            np.asarray(left),
+            np.asarray(right),
+            err_msg=f"{name} changed when only the numpy global RNG state changed",
+        )
+
+    winner, loser, elite = first
+    assert_parent_indices(winner, loser)
+    assert not np.any(elite)
+    # The draws are members of the slot's own species, not just deterministic.
+    loc, _idx_in_block = expected_block_layout(SPAWN)
+    keys = bookkeeping.species_keys
+    for slot in range(POP_SIZE):
+        owner = float(keys[int(loc[slot])])
+        for parent in (int(winner[slot]), int(loser[slot])):
+            rank_in_species(parent, FITNESS, bookkeeping.idx2species, owner)
