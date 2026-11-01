@@ -42,8 +42,8 @@ class HyperNEATFeedForward(HyperNEAT):
         ``num_outputs`` and ``pop_size`` are inherited unchanged -- including
         ``transform``'s decode algebra (static ``(P, Q, C)`` query grid, ``C = neat.num_inputs``,
         query axis fused into the
-        population axis, weight map into ``[-max_weight, max_weight]``, gene payload assembled by the
-        gene-level builders) and ``forward``'s trailing bias column.  Only the executor genome
+        population axis, weight map into ``[-max_weight, max_weight]``, gene payload assembled from
+        the substrate tables) and ``forward``'s trailing bias column.  Only the executor genome
         differs, so this file declares no kernels of its own.
     """
 
@@ -88,7 +88,15 @@ class HyperNEATFeedForward(HyperNEAT):
             ``_genome_cls``, ``_required_connection_type`` and ``_genome_extra_kwargs()``; this
             override exists only to drop ``activate_time`` from the public signature.
         """
-        raise NotImplementedError
+        super().__init__(
+            substrate,
+            neat,
+            weight_threshold,
+            max_weight,
+            aggregation,
+            activation,
+            output_transform=output_transform,
+        )
 
     def _genome_extra_kwargs(self) -> dict:
         """Return no extra genome kwargs: a feedforward genome has no recurrent horizon.
@@ -97,7 +105,7 @@ class HyperNEATFeedForward(HyperNEAT):
             dict: ``{}``, in contrast to the recurrent variant's ``{"activate_time":
             self.activate_time}``.
         """
-        raise NotImplementedError
+        return {}
 
 
 __all__ = ["HyperNEATFeedForward"]
