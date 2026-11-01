@@ -1,0 +1,99 @@
+import jax
+from jax import vmap, numpy as jnp
+from .utils import unflatten_conns
+
+from .base import BaseGenome
+from .gene import DefaultNode, DefaultConn
+from .operations import DefaultMutation, DefaultCrossover, DefaultDistance
+from .utils import unflatten_conns, extract_gene_attrs, extract_gene_attrs
+
+from tensorneat_legacy.common import attach_with_inf, I_INF
+
+class RecurrentGenome(BaseGenome):
+    """Default genome class, with the same behavior as the NEAT-Python"""
+
+    network_type = "recurrent"
+
+    def __init__(
+        self,
+        num_inputs: int,
+        num_outputs: int,
+        max_nodes=50,
+        max_conns=100,
+        node_gene=DefaultNode(),
+        conn_gene=DefaultConn(),
+        mutation=DefaultMutation(),
+        crossover=DefaultCrossover(),
+        distance=DefaultDistance(),
+        output_transform=None,
+        input_transform=None,
+        init_hidden_layers=(),
+        activate_time=10,
+    ):
+        super().__init__(
+            num_inputs,
+            num_outputs,
+            max_nodes,
+            max_conns,
+            node_gene,
+            conn_gene,
+            mutation,
+            crossover,
+            distance,
+            output_transform,
+            input_transform,
+            init_hidden_layers,
+        )
+        self.activate_time = activate_time
+
+    def transform(self, state, nodes, conns):
+        u_conns = unflatten_conns(nodes, conns)
+        return nodes, conns, u_conns
+
+    def forward(self, state, transformed, inputs):
+        nodes, conns, u_conns = transformed
+
+        vals = jnp.full((self.max_nodes,), jnp.nan)
+
+        nodes_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(self.node_gene, nodes)
+        conns_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(self.conn_gene, conns)
+        expand_conns_attrs = attach_with_inf(conns_attrs, u_conns)
+
+        conn_exists = (u_conns != I_INF).T
+        node_exists = ~jnp.isnan(nodes[:, 0])
+
+        def body_func(_, values):
+            values = values.at[self.input_idx].set(inputs)
+
+            src_valid = ~jnp.isnan(values)
+            valid_masks = conn_exists & src_valid[jnp.newaxis, :]
+
+            node_ins = vmap(
+                vmap(self.conn_gene.forward, in_axes=(None, 0, None)),
+                in_axes=(None, 0, 0),
+            )(state, expand_conns_attrs, values)
+
+            is_output_nodes = jnp.isin(nodes[:, 0], self.output_idx)
+            new_values = vmap(self.node_gene.forward, in_axes=(None, 0, 0, 0, 0))(
+                state, nodes_attrs, node_ins.T, is_output_nodes,
+                valid_masks,
+            )
+
+            has_valid_inputs = jnp.any(valid_masks, axis=1)
+            use_new = node_exists & has_valid_inputs
+            values = jnp.where(use_new, new_values, values)
+
+            return values
+
+        vals = jax.lax.fori_loop(0, self.activate_time, body_func, vals)
+
+        if self.output_transform is None:
+            return vals[self.output_idx]
+        else:
+            return self.output_transform(vals[self.output_idx])
+
+    def sympy_func(self, state, network, precision=3):
+        raise ValueError("Sympy function is not supported for Recurrent Network!")
+
+    def visualize(self, network):
+        raise ValueError("Visualize function is not supported for Recurrent Network!")

@@ -13,33 +13,46 @@ tensorneat = ["*.txt", "*.json"]
 
 [project]
 name = "tensorneat"
-version = "0.1.0"
+version = "0.2.0"
 authors = [{ name = "Lishuang Wang", email = "wanglishuang22@gmail.com" }]
-description = "tensorneat"
+description = "NEAT / HyperNEAT neuroevolution on the EvoX Compiler (evoxc)"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: BSD License",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-
+# The computation layer is evoxc (pure Python + numpy by default); jax/torch are
+# NOT runtime dependencies. Compiled backends are opt-in extras.
 dependencies = [
-    "brax >= 0.10.3",
-    "jax >= 0.4.28",
-    "gymnax >= 0.0.8",
-    "jaxopt >= 0.8.3",
-    "optax >= 0.2.2",
-    "flax >= 0.8.4",
-    "mujoco >= 3.1.4",
-    "mujoco-mjx >= 3.1.4",
+    "evoxc >= 0.1.0",
+    "numpy >= 1.24",
     "networkx >= 3.3",
     "matplotlib >= 3.9.0",
     "sympy >= 1.12.1",
 ]
 
+[project.optional-dependencies]
+iree = ["evoxc[iree]"]
+tvm = ["evoxc[tvm]"]
+compilers = ["evoxc[compilers]"]
+# `bench` installs the frozen legacy JAX implementation, used as the timing
+# baseline and numerical oracle by benchmarks/ and test/parity/.
+bench = ["jax >= 0.4.28", "pytest >= 8.0"]
+test = ["pytest >= 8.0"]
+docs = ["sphinx >= 7.0", "sphinx-rtd-theme"]
+
 [project.urls]
 "Homepage" = "https://github.com/EMI-Group/tensorneat"
 "Bug Tracker" = "https://github.com/EMI-Group/tensorneat/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+addopts = "-q"
+markers = [
+    "parity: compares against the frozen legacy JAX implementation (needs the `bench` extra)",
+    "slow: takes more than a few seconds",
+]
