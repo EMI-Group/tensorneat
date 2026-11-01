@@ -400,6 +400,64 @@ def read_population(state: Any, pop: Any = None) -> Any:
     )
 
 
+#: Largest ``species_size * pop_size`` table that is hoisted into one batched
+#: ``distance_fn`` call.
+#:
+#: The compatibility kernel is row-independent, so a ``(k * P)`` batch returns
+#: exactly the same floats as ``k`` batches of ``P``; the *cost* is not the same,
+#: though.  Per call the numpy interpreter pays a fixed dispatch cost (measured
+#: ~2.7 ms) on a hundred-odd ops, while a batch of ``rows`` pairs costs ~5 us per
+#: row in population-tiling and buffer allocation.  Batching therefore wins only
+#: while the whole table stays small: at ``pop_size=100, species_size=20`` one
+#: 2000-row call is ~28 % cheaper than the 20 broadcast calls it replaces, while
+#: at ``pop_size=1000`` the same table costs ~10 % more because the interpreter is
+#: then row-bound and the 20 separate (in-scan) calls reuse their buffers from a
+#: warm cache.  ``TABLE_ROWS`` is the measured crossover: below it the table is
+#: hoisted, above it the per-slot call inside the scan is kept.
+TABLE_ROWS = 2000
+
+
+def distance_table(
+    state: Any,
+    template: Any,
+    centres: Any,
+    population: Any,
+    pop_size: int,
+    species_size: int,
+    distance_fn: Callable,
+) -> Any:
+    """``(species_size, pop_size)`` compatibility distances in one batched call.
+
+    ``centres`` and ``population`` are the four split payload arrays.  Every centre
+    row is broadcast against the whole population and the resulting
+    ``species_size * pop_size`` pairs are handed to ``distance_fn`` as a single
+    batch, so the per-call dispatch cost is paid once instead of once per species
+    slot.
+
+    Bit-identity: the compatibility kernel is strictly row-independent (elementwise
+    per-pair ops plus per-row reductions over the gene axis, one sorted alignment
+    per row), so one ``(k * P)`` batch yields exactly the same per-row floats as
+    ``k`` batches of ``P``.
+    """
+    rows = species_size * pop_size
+    tiled_centres = []
+    for field in centres:
+        rest = tuple(field.shape[1:])
+        full = enp.broadcast_to(enp.expand_dims(field, 1), (species_size, pop_size) + rest)
+        tiled_centres.append(evoxc.reshape(full, (rows,) + rest))
+    tiled_population = []
+    for field in population:
+        rest = tuple(field.shape[1:])
+        full = enp.broadcast_to(enp.expand_dims(field, 0), (species_size, pop_size) + rest)
+        tiled_population.append(evoxc.reshape(full, (rows,) + rest))
+    distances = distance_fn(
+        state,
+        payload_like(template, *tiled_centres),
+        payload_like(template, *tiled_population),
+    )
+    return evoxc.reshape(distances, (species_size, pop_size))
+
+
 def speciate(
     state: Any,
     species_state: Any,
@@ -424,6 +482,17 @@ def speciate(
     ``next_species_key``) on a dead slot when anything is still unassigned.  An
     iteration with nothing to do performs no write, which reproduces the legacy
     early-exit ``while_loop`` on a static trip count.
+
+    Scan 1's distance rows are hoisted: iteration ``slot`` reads the centre row it
+    inherited and only ever writes *its own* row, so the whole
+    ``(species_size, pop_size)`` table is the same before the scan starts and is
+    computed by :func:`distance_table` (one call when the table fits
+    ``TABLE_ROWS``, otherwise the call stays inside the scan, see that constant).
+    Scan 2's rows cannot be hoisted as a whole: a *created* species takes the
+    first unassigned genome as its centre, so the row a dead slot needs depends on
+    the assignments made by every earlier iteration (and the row of *that* genome
+    is not in any precomputable table short of a ``pop_size x pop_size`` one).
+    Scan 2 therefore keeps the per-slot call.
     """
     keys_ext = enp.concatenate(
         [species_state.species_keys, enp.reshape(species_state.next_species_key, (1,))],
@@ -437,6 +506,30 @@ def speciate(
         species_state.center_node_attrs,
         species_state.center_conn_keys,
         species_state.center_conn_attrs,
+    )
+    # Phase-1 distances are fully precomputable: iteration ``slot`` reads the
+    # centre row it inherited and writes only its OWN row, so no earlier iteration
+    # can change row ``slot``.  When the whole table fits one interpreter batch the
+    # ``species_size`` calls collapse into a single one (bit-identical, see
+    # ``distance_table``); above ``TABLE_ROWS`` the per-slot call inside the scan is
+    # cheaper and is kept.
+    first_distances = (
+        distance_table(
+            state,
+            population,
+            (
+                species_state.center_node_keys,
+                species_state.center_node_attrs,
+                species_state.center_conn_keys,
+                species_state.center_conn_attrs,
+            ),
+            tuple(population),
+            pop_size,
+            species_size,
+            distance_fn,
+        )
+        if species_size * pop_size <= TABLE_ROWS
+        else None
     )
 
     def centre_payload(node_keys, node_attrs, conn_keys, conn_attrs, slot):
@@ -466,8 +559,11 @@ def speciate(
         assign, dist, keys_ext, node_keys, node_attrs, conn_keys, conn_attrs = carry
         key_slot = evoxc.gather(keys_ext, slot, axis=0)
         live = evoxc.logical_not(evoxc.isnan(key_slot))
-        centre = centre_payload(node_keys, node_attrs, conn_keys, conn_attrs, slot)
-        distances = distance_fn(state, centre, population)
+        if first_distances is None:
+            centre = centre_payload(node_keys, node_attrs, conn_keys, conn_attrs, slot)
+            distances = distance_fn(state, centre, population)
+        else:
+            distances = evoxc.gather(first_distances, slot, axis=0)
         pending = evoxc.isnan(assign)
         any_pending = evoxc.reduce_max(pending, axes=0)
         # ``argmin_with_mask`` folds "nothing left to claim" into the ``I_INF``

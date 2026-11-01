@@ -487,6 +487,17 @@ class SpeciesController(StatefulBaseClass):
             "``best_fitness`` was NaN before this call and the key is live now";
             it is reused instead of re-deriving the same mask with ``isnan`` on
             two fields.
+
+        Note:
+            **Scan 1's distances are hoisted.**  An iteration reads the centre row
+            it inherited and only ever writes its own row, so every row is already
+            final when the scan starts and the whole ``(S, P)`` table is built by
+            one ``distance_table`` call whenever it fits ``TABLE_ROWS``
+            (``_kernels.py``); above that size the call stays inside the scan,
+            which measures faster because the interpreter then reuses the same
+            warm buffers.  Scan 2 cannot be hoisted the same way: a *created*
+            species takes the first unassigned genome as its centre, so the row a
+            dead slot needs depends on the assignments of every earlier iteration.
         """
         population = self._population(state, pop)
         values = _kernels.speciate(
