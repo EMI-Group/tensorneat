@@ -92,9 +92,10 @@ What keeps the count there: the id `cast` is skipped (the gene's `prepare` alrea
 Per level this node owns ~26 % of the `DefaultGenome` forward-pass op count (17 of the ~38 ops one level costs); the rest is the genome's gather/combine work.
 
 ## Measured cost (median of 15 `evoxc.run` calls, build cached, single-threaded)
-One level kernel (`apply_activation ∘ apply_aggregation`) over `(P, 50, 8)` messages, `agg_ids`/`act_ids` int32, one option each: 0.31 ms / 1.18 ms / 2.54 ms for P = 100 / 500 / 1000; with both canonical option lists 2.38 ms / 10.27 ms / 17.84 ms.
-Build (cached per shape by the Pipeline, not per generation): 5–7 ms for the one-option level graph, 42–45 ms for the canonical one.
-End-to-end `Pipeline.step` (XOR, pop 100/500/1000, build excluded): 180 ms / 560 ms / 1150 ms median per generation in this worktree.
+One level kernel (`apply_activation ∘ apply_aggregation`) over `(P, 50, 8)` messages, `agg_ids`/`act_ids` int32, one option each: 0.35 ms / 1.41 ms / 2.68 ms for P = 100 / 500 / 1000; with both canonical option lists 2.38 ms / 10.3 ms / 17.8 ms.
+Build (cached per shape by the Pipeline, not per generation): 5–6 ms for the one-option level graph, ~45 ms for the canonical one.
+End-to-end `Pipeline.step` (XOR, `max_nodes=50`, `max_conns=100`, `species_size=20`, pop 100/500/1000, build excluded): ≈290 ms / ≈840 ms / ≈2.1 s per generation, with individual generations scattering ±30 % on a shared machine, so the dispatch share of a generation (~1 % at P=100, ~5 % at P=500) only shows up as a few percent of wall time.
+The forward pass is worth ≈3–5 % of a generation at P=500–1000; the rest is schedule derivation, mutation/crossover, speciation and selection.
 
 Remaining hot spots inside this node, in order:
 1. `select(mask, z, 0.0)` (1.37 ms) plus `reduce_sum` (0.87 ms) at P = 1000 — the mandatory neutral-padded window of a single aggregation level; together they are 88 % of that level's run time. Dropping the padding would require the *genome* to guarantee that dead slots are exactly `0.0` (it currently only NaN-sanitizes them), i.e. a genome-side contract change plus a `zero_on_empty`-style opt-in, not a change here.
