@@ -1,41 +1,44 @@
 # tensorneat — package architecture
 
 ## Intent
-This package is the NEAT/HyperNEAT toolchain built on the EvoX Compiler.
-It owns three things only: (1) the **tensorization** of variable topology into fixed-shape arrays, (2) the **kernel contract** shared by genome / algorithm / problem, and (3) the **compile site** (`pipeline.py`) that turns one generation into a single evoxc executable.
-Everything below `genome/`, `algorithm/`, `problem/`, `common/` implements that contract; nothing outside `src/` may be imported by it.
+This package is the NEAT/HyperNEAT toolchain built on the EvoX Compiler (`evoxc`), replacing the pre-rewrite JAX implementation module for module.
+It owns three things only: (1) **tensorization** of variable topology into fixed-shape arrays, (2) the **kernel contract** shared by genome / algorithm / problem, and (3) the **compile site** (`pipeline.py`) that turns one generation into a single evoxc executable.
 
 ## Kernel Contract (binding for all child nodes)
-**Batch-first.** Population is always axis 0 and shapes are static at build time. `vmap` is NOT used over functions containing `scan`/`cond`/`while_loop` (evoxc defers that) — every kernel is written once, already batched, with control flow appearing at its outermost level.
-**Gene payload.** `nodes (P, max_nodes, node_len)` and `conns (P, max_conns, conn_len)` are integer arrays carrying gene keys in the leading columns (`nodes[:,:,:1]` = node key, `conns[:,:,:2]` = (in_key, out_key)); float gene attributes are bitcast into int slots exactly as the pre-rewrite library did, so genetic operators remain integer-bit-twiddling kernels. Unused rows are NaN-encoded.
-**Execution schedule.** `Genome.transform(state, nodes, conns)` returns a batch-first `Transformed` pytree describing *how to execute*: topological order, a per-node incoming-edge table (padded to a static width, `I_INF`-free), and per-node depth/level plus aggregation masks.
-The schedule derivation is an in-graph kernel (no host round-trip) and its cost must be edge-proportional, never `max_nodes²` per node.
-**Edge proportionality.** A forward pass touches work proportional to real connections and depth: the pre-rewrite `u_conns` formulation gathered a full `max_nodes`-wide column per node per genome, and that quadratic waste is the main reason the legacy baseline is slow.
-**Genome.** `initialize(state, key) -> (nodes, conns)`; `transform`; `forward(state, transformed, inputs (P,*in)) -> (P,*out)`; `grad(state, nodes, conns, inputs, loss_fn) -> (loss (P,), grads)`; `execute_mutation/crossover/distance(state, keys, ...)`. Host-only helpers (`network_dict`, `sympy_func`, `visualize`, `repr`, `hash`) stay pure Python and never enter a graph.
-**Algorithm.** `ask(state) -> pop`, `transform(state, pop)`, `forward(state, transformed, inputs)`, `tell(state, fitness) -> state`, `num_inputs`, `num_outputs`, `pop_size`.
-**Problem.** `evaluate(state, keys, act_fn, transformed) -> fitness (P,)` where `act_fn` maps a `(P, *input_shape)` batch to `(P, *output_shape)`; datasets are tiled into the population axis inside the graph instead of being vmapped per sample. `input_shape`/`output_shape` are declared.
-**State.** Immutable host container (`State.register/update/remove`) holding configuration, evoxc RNG keys and tensors; the only mutation-free store used by `Pipeline`.
+**Batch-first.** The population is axis 0 and every shape is static at build time.
+`vmap` is never applied over a function containing `scan`/`cond`/`while_loop` (evoxc defers that), so kernels are written already batched, with control flow only at their outermost level — and genome kernels unroll the depth loop at trace time instead of using `scan`, because a region op cannot be batched or differentiated.
+**Split gene payload.** `evoxc` has no bitcast/reinterpret op, so a mixed-dtype gene row is impossible: `node_keys (P,max_nodes) int32` + `node_attrs (P,max_nodes,A) float32`, `conn_keys (P,max_conns,2..3) int32` + `conn_attrs (P,max_conns,W) float32`. Absent rows are `I_INF` in key arrays and NaN in attr arrays. Mutation therefore twiddles int keys and float attrs separately.
+**Execution schedule.** `Genome.transform(state, node_keys, node_attrs, conn_keys, conn_attrs)` returns the `Transformed` pytree defined in `./common/CONTEXT.md` (authority: that table, not this one) — topological level, per-node incoming-edge window of static width `K` (`in_src`, `in_conn`, `in_valid`), `node_exists`, `input_slot`/`output_slot`, `overflow`.
+`common/tensorization.py::derive_schedule` derives it **inside the graph** with cost `O(P·(C log C + N·K·D))` — never the legacy `max_nodes²` matrix.
+**Edge proportionality.** A forward pass touches work proportional to real connections and depth: the pre-rewrite `u_conns` formulation gathered a full `max_nodes`-wide column per node per genome, which is the main reason the legacy baseline is slow.
+**Genome.** `initialize(state, key, pop_size)` (pop_size is static; evoxc keys are rank-0 so randomness is one key plus batched output shapes); `transform`; `forward(state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, inputs (P,*in)) -> (P,*out)`; `grad(...) -> (loss (P,), (grad_attrs, ...))` built by `evoxc.grad` over the float attrs only (the schedule, being `sort`-derived, has no AD rule); `execute_mutation/crossover/distance`.
+Host-only helpers (`network_dict`, `sympy_func`, `visualize`, `repr`, `hash`) stay pure Python and never enter a graph.
+**Algorithm.** `ask(state) -> pop`, `transform(state, pop)`, `forward(...)`, `tell(state, fitness) -> state`, `num_inputs`, `num_outputs`, `pop_size`.
+**Problem.** `evaluate(state, key, act_fn, transformed) -> fitness (P,)` executed inside the active trace; **`key` is a single rank-0 evoxc key** (there is no batched key type), `act_fn` maps `(P*S, *input_shape)` to `(P*S, *output_shape)`, and `input_shape`/`output_shape` are **per-sample**. Datasets and rollouts are tiled into the population axis inside the graph; NaN fitness becomes `-inf` as the last op of every problem. `evaluate` is a plain helper, never `@evoxc.defn` (a defn cannot call another defn).
+**Randomness.** `evoxc.random` stateless keys only; no `numpy.random`/`jax.random` anywhere on the compute path. Draw order intentionally differs from the legacy library, so parity is kernel-level on identical inputs, never trajectory-level.
+**State.** Immutable host container (`State.register/update/remove` + pytree registration) holding configuration, evoxc keys and tensors.
 
 ## Public API Surface
-`tensorneat.Pipeline`, `tensorneat.algorithm.{NEAT,HyperNEAT}`, `tensorneat.genome.{DefaultGenome,RecurrentGenome,...}`, `tensorneat.problem.{XOR,XOR3d,CustomFuncFit,CartPole}`, `tensorneat.common.{ACT,AGG,State}`.
-`pipeline.py` exposes `Pipeline(algorithm, problem, seed=42, fitness_target=1, generation_limit=1000, backend="numpy", device=None, compile_options=None, is_save=False, save_dir=None, is_detailed=True, show_problem_details=False)` with `setup`, `step`, `auto_run`, `show`.
-`Pipeline.step` is the single compile site: one evoxc graph per (shape signature) covering ask → transform → evaluate → tell; `auto_run` caches the executable and loops on the host (logging, checkpointing, early stop).
-Fitness is maximized; NaN/infinite fitness is mapped to `-inf` before selection so broken topologies cannot win.
+`tensorneat.Pipeline`, `tensorneat.algorithm.{NEAT,HyperNEAT,HyperNEATFeedForward}`, `tensorneat.genome.{DefaultGenome,RecurrentGenome,DefaultNode,BiasNode,OriginNode,DefaultConn,OriginConn,...}`, `tensorneat.problem.{XOR,XOR3d,CustomFuncFit,FuncFit,CartPole}`, `tensorneat.common.{ACT,AGG,State,TensorNEATError}`.
+`pipeline.py` exposes `Pipeline(algorithm, problem, seed=42, fitness_target=1, generation_limit=1000, backend="numpy", device=None, compile_options=None, is_save=False, save_dir=None, is_detailed=True, show_problem_details=False, pop_batch_size=None)` with `setup`, `step`, `auto_run`, `show`.
+`Pipeline.step` is the single compile site: one evoxc graph per shape signature `(P, max_nodes, max_conns, max_in_degree, key_span)` covering ask → transform → evaluate → tell; `auto_run` caches the executable per shape, rebuilds when `overflow` occurs, and loops on the host for logging / checkpointing / early stop.
+Fitness is maximized; NaN or infinite fitness is mapped to `-inf` before selection so broken topologies cannot win.
+There is no `problem.jitable` flag any more: whether a graph compiles is the backend's business and `evoxc.BackendError` propagates.
 
 ## Constraints
 - `import tensorneat` must not import `jax`, `torch`, `brax`, `gymnax`, `mujoco` (release-gate test); optional backends are pulled in only by `evoxc.build(backend=...)`.
-- evoxc idioms are mandatory: `@evoxc.defn` graph entry points, plain helpers otherwise, `evoxc.numpy as enp` for tensor creation, `evoxc.random` for keys (no `numpy.random` inside kernels), `evoxc.constant` only for genuinely static data.
-- No eager fallback: if a backend cannot compile a kernel, the error propagates (`evoxc.BackendError`); we never quietly compute on host.
-- NaN padding semantics of the pre-rewrite library are preserved (`test/parity/` depends on them).
-- Errors: user/config validation raises `common.errors.TensorNEATError`; tensor/backend errors are never caught and re-wrapped.
+- evoxc idioms are mandatory: `@evoxc.defn` graph entry points, plain helpers otherwise, `evoxc.numpy as enp` for tensor creation (float literals become f64 constants otherwise), `evoxc.random` for keys, `evoxc.constant` only for genuinely static data, non-negative axes in `concatenate`/`split`.
+- No eager fallback: if a backend cannot compile a kernel the error propagates; we never quietly compute on the host.
+- NaN padding semantics of the pre-rewrite library are preserved (`test/parity/` depends on them); `select` chains stand in for `lax.switch`.
+- Errors: user/config validation raises `common.errors.TensorNEATError` (and its subclasses); tensor/backend errors are never caught and re-wrapped.
 - Files ≤ ~1000 lines; shared math lives in `common/`, never duplicated per genome/algorithm.
 
 ## Routing Table
 | Path | Responsibility |
 |---|---|
-| `./common` | Backend primitives: `State`, errors, RNG/tensor helpers, **tensorization (execution schedule)**, `ACT`/`AGG` registries, sympy codegen. |
-| `./genome` | Genome classes, gene types, genetic operators, forward/grad kernels in schedule form. |
-| `./algorithm` | `NEAT` (ask/tell/speciation), `HyperNEAT` and substrates — batched, control flow at kernel top level only. |
-| `./problem` | Task layer: function fitting (`XOR`, `XOR3d`, `CustomFuncFit`) and an evoxc-native `CartPole` rollout. |
+| `./common` | Backend primitives: `State`, errors, RNG/tensor helpers, **tensorization (execution schedule)**, `ACT`/`AGG` registries, host graph decoding, sympy codegen. |
+| `./genome` | Genome classes, gene types, genetic operators, forward/grad kernels over the schedule. |
+| `./algorithm` | `NEAT` (ask/tell/speciation), `HyperNEAT` and substrates — batched, fixed-length scans, no vmap-over-control-flow. |
+| `./problem` | Task layer: `FuncFit`/`XOR`/`XOR3d`/`CustomFuncFit` and the evoxc-native `CartPole` rollout. |
 | `./pipeline.py` | Host-side compile site, generation loop, logging/checkpointing, `show`. |
 | `./__init__.py` | Re-exports `Pipeline` and the four subpackages. |
