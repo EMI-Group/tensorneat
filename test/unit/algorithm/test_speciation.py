@@ -116,9 +116,8 @@ THRESHOLD = 2.0
 FAR = 9.0
 #: The four split payload entries ``speciate`` reads off ``state``.
 SPLIT_POP_KEYS = ("pop_node_keys", "pop_node_attrs", "pop_conn_keys", "pop_conn_attrs")
-#: Host-side population payload: the same four split arrays as ``GenomeTensors``,
-#: as a namedtuple so ``algorithm_state(pop=...)`` registers the split entries and
-#: the runner recurses into the arrays leaf by leaf.
+#: Host-side population payload: the four split arrays as a namedtuple, so
+#: ``algorithm_state(pop=...)`` registers the split entries and the runner recurses.
 PayloadTensors = namedtuple(
     "PayloadTensors", ("node_keys", "node_attrs", "conn_keys", "conn_attrs")
 )
@@ -186,8 +185,8 @@ def distance_table(rows):
             makes "the first unassigned genome becomes the new centre" observable.
 
     Returns:
-        ``(P, P) float32``.  Distinct off-diagonal values are the caller's
-        responsibility: a tie would make the ``argmin`` winner index-dependent.
+        ``(P, P) float32``; ties are the caller's responsibility (they would make the
+        ``argmin`` winner index-dependent).
     """
     table = np.full((POP_SIZE, POP_SIZE), FAR, dtype=np.float32)
     np.fill_diagonal(table, 0.0)
@@ -224,13 +223,12 @@ def assign_by_hand(
 
     Notes:
         Phase 1 reserves the nearest *unassigned* genome for every live slot, in
-        slot order and without a threshold; a dead slot claims nothing.  Phase 2
-        applies ``d < compatibility_threshold and (unassigned or d < o2c)``; a dead
-        slot with anything still unassigned first materialises a species (its key is
-        the counter, which then advances by one, and its centre becomes the first
-        unassigned genome) and the same threshold rule then runs against that new
-        centre.  The leftover rule finally gives the remainder the last live key,
-        and ``member_count`` is a compare-sum with ``NaN`` for dead slots.
+        slot order and without a threshold.  Phase 2 applies
+        ``d < compatibility_threshold and (unassigned or d < o2c)``; a dead slot with
+        anything unassigned first materialises a species (key = the counter, which
+        then advances; centre = the first unassigned genome) and the same rule runs
+        against that new centre.  The leftover rule then gives the remainder the
+        last live key, and ``member_count`` is a compare-sum, ``NaN`` for dead slots.
     """
     table = np.asarray(distance_table, dtype=np.float64)
     keys = np.array(species_keys, dtype=np.float64)
@@ -342,10 +340,9 @@ def centre_fields(payloads, identities):
 
     Args:
         payloads: The ``support.payloads`` module fixture (``I_INF``).
-        identities: ``(S,)`` sequence of table indices.  A **live** slot's row is
-            overwritten by the elected genome during scan 1, so only a *dead*
-            slot's row survives into the output — and there the value is exactly the
-            "stale integer no kernel may read" the dead-slot test asserts on.
+        identities: ``(S,)`` table indices.  Scan 1 overwrites a **live** slot's row
+            with the elected genome, so only a *dead* slot's row survives — and there
+            the value is exactly the stale integer the dead-slot test asserts on.
 
     Returns:
         dict: the four ``SpeciesState`` centre fields
@@ -421,10 +418,9 @@ def bookkeeping(species_state, payloads, *, keys, identities, next_species_key=2
 
 
 def permuted(population, order):
-    """Return the payload with its population axis permuted by ``order``.
+    """Permute the population axis: ``order[i]`` is the old row now sitting at ``i``.
 
-    ``order[i]`` is the *old* row that ends up at new row ``i``, so a genome's
-    identity key (written into its own payload row) travels with it.
+    A genome's identity key lives in its own payload row, so it travels with it.
     """
     return PayloadTensors(*(np.asarray(array)[order] for array in population))
 
@@ -474,12 +470,9 @@ def test_centre_genes_keep_the_split_payload_contract(
     returned centre array — ``(S, N) int32``, ``(S, N, NA) float32``,
     ``(S, E, CK) int32``, ``(S, E, CA) float32`` — and the shapes the fake
     ``distance_fn`` actually received, which must be the *population-shaped*
-    broadcast ``(P, ...)`` of one centre row (``speciate`` slices and broadcasts;
-    the genome never does).
-
-    This pins ``src/tensorneat/CONTEXT.md`` reconciliation #2: a centre is the split
-    ``GenomeTensors`` payload, never a packed integer gene row, and a packed form
-    would change at least one of the ranks asserted here.
+    broadcast ``(P, ...)`` of one centre row.  This pins
+    ``src/tensorneat/CONTEXT.md`` reconciliation #2: a centre is the split
+    ``GenomeTensors`` payload, never a packed integer gene row.
     """
     identities = [0, 2, 5, 6]
     state = algorithm_state(
@@ -549,13 +542,9 @@ def test_every_genome_is_assigned_to_exactly_one_live_species(
     Oracle: ``np.isnan(idx2species).sum() == 0``, plus "every assigned value is in
     ``species_keys[~isnan]``" (a set test, not a range test — the assignment holds
     *keys*, not slot indices), plus the per-key counts equal ``member_count`` and
-    sum to ``pop_size``, plus :func:`assign_by_hand` field by field.  A scan that
-    skips one iteration leaves ``NaN`` behind; a scan that writes the slot index
-    instead of the key leaves a value outside the live key set.
-
-    The table produces two claimed genomes, two fresh species (one per dead slot)
-    and two leftovers, so the post-pass, both scans and the compare-sum are all
-    exercised by the same assertion.
+    sum to ``pop_size``, plus :func:`assign_by_hand` field by field.  The table
+    produces two claimed genomes, two fresh species (one per dead slot) and two
+    leftovers, so both scans and the post-pass are exercised at once.
     """
     table = distance_table({0: {1: 0.5}, 2: {3: 1.0}})
     keys = [0.0, 1.0, np.nan, np.nan]
@@ -980,11 +969,8 @@ def test_leftover_genomes_adopt_the_last_species_key_when_the_cap_is_hit(
     Oracle: a population with three clusters but only ``species_size = 2`` live
     slots, so the second scan runs out of dead slots; the uncapped group must carry
     exactly ``species_keys[last live slot]`` and ``member_count`` therefore exceeds
-    the number of genomes near that centre.  The post-pass exists precisely so the
-    "cap reached" path cannot leak the in-progress ``NaN`` sentinel into selection.
-
-    The assertion is on the *key value*, not on the slot index, and it is
-    cross-checked against :func:`assign_by_hand`.
+    the number of genomes near that centre.  The assertion is on the *key value*,
+    not the slot index, and it is cross-checked against :func:`assign_by_hand`.
     """
     rows = {0: {1: 0.5}, 4: {5: 0.5}}
     table = distance_table(rows)
