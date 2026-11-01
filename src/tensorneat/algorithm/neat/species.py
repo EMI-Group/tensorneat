@@ -22,20 +22,29 @@ Design constraints that shape every function below:
   ``evoxc.scatter`` is replacement-only, prefix sums come from a triangular
   ``dot`` (``evoxc.cumsum`` exists but does not export on compiler backends),
   and every masked reduction first materialises the mask with
-  ``evoxc.select``.
-* **Gene payloads are integers with a genome-owned padding encoding.**
-  A dead species slot is recognised by ``isnan(species_keys)`` only; the centre
-  gene rows of a dead slot may hold stale integers because they are never read
-  (an int32 tensor cannot carry NaN), and no code here inspects gene padding
-  directly -- validity always goes through the genome helpers.
+  ``evoxc.select``. Indexing is *axis replacing* (numpy ``take``), never
+  ``take_along_axis``, so every per-row gather goes through the flattened
+  ``common.tools.flat_gather``.
+* **Gene payloads are split and integer-keyed.**
+  A dead species slot is recognised by ``isnan(species_keys)`` only; its rows
+  keep stale integers (int32 cannot carry NaN) and are never read.  The centre
+  genomes are the four split payload arrays of
+  :class:`~tensorneat.genome.utils.GenomeTensors`, so an absent gene row is
+  spelled with the sentinel of *its own* array and no bitcast is needed.
 
 Sizes: ``S = species_size``, ``P = pop_size``, ``N = max_nodes``,
-``C = max_conns``, ``NL = node_gene.length``, ``CL = conn_gene.length``.
+``E = max_conns``, ``NA = node_gene.attr_width``, ``CK = conn_gene.key_width``,
+``CA = conn_gene.attr_width``.
+
+The tensor kernels live in the private :mod:`._kernels` module (graph primitives,
+spawn allocation, block flattening, parent pairing, the two speciation scans);
+this module owns :class:`SpeciesState` and the documented
+:class:`SpeciesController` surface driving them.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from typing import Any, Callable
 
 import evoxc
@@ -43,7 +52,28 @@ import evoxc.numpy as enp
 
 from tensorneat.common import State, StatefulBaseClass
 from tensorneat.common.errors import TensorNEATError
-from tensorneat.common.tools import argmin_with_mask, fetch_first, rank_elements
+from tensorneat.common.tools import rank_elements
+
+from . import _kernels
+from ._validation import (
+    non_negative_int,
+    positive_float,
+    positive_int,
+    unit_interval,
+)
+from ._kernels import (
+    POP_KEY,
+    SPLIT_POP_KEYS,
+    const as _const,
+    nan as _nan,
+    neg_inf as _neg_inf,
+    scalar_f32 as _scalar_f32,
+)
+
+#: Allocation modes accepted by ``species_number_calculate_by``.
+SPAWN_MODES = ("rank", "fitness")
+
+
 
 
 @dataclass(frozen=True)
@@ -56,6 +86,10 @@ class SpeciesState:
     ones that conceptually hold integers, so that NaN can encode a dead slot and
     so that ``generation`` (itself a 0-d float32) can be written into
     ``last_improved`` without a dtype change inside a scan carry.
+
+    The centre genes are the four split payload arrays of
+    :class:`~tensorneat.genome.utils.GenomeTensors` -- integers and floats never
+    share an array, because ``evoxc`` has no bitcast.
 
     Attributes:
         species_keys (Tensor): ``(S,)`` float32, the unique primary key of each
@@ -71,11 +105,15 @@ class SpeciesState:
         idx2species (Tensor): ``(P,)`` float32, the species key of each
             individual.  ``NaN`` means "not assigned yet", which only happens
             *inside* :meth:`SpeciesController.speciate`.
-        center_nodes (Tensor): ``(S, N, NL)`` int32, the centre genome's node
-            gene rows per species slot.  Dead slots keep stale integers that no
-            kernel reads.
-        center_conns (Tensor): ``(S, C, CL)`` int32, the centre genome's
-            connection gene rows per species slot, same dead-slot convention.
+        center_node_keys (Tensor): ``(S, N)`` int32, the key column of the centre
+            genome's node genes per species slot (``I_INF`` padded).  Dead slots
+            keep stale integers that no kernel reads.
+        center_node_attrs (Tensor): ``(S, N, NA)`` float32, the node attribute
+            columns of the same centre genomes (NaN padded).
+        center_conn_keys (Tensor): ``(S, E, CK)`` int32, the key columns of the
+            centre genome's connection genes.
+        center_conn_attrs (Tensor): ``(S, E, CA)`` float32, the connection
+            attribute columns of the same centre genomes.
         next_species_key (Tensor): 0-d float32, the key handed to the next
             species created by :meth:`SpeciesController.speciate`; ``0`` is
             reserved for the initial species, so this starts at ``1``.
@@ -86,8 +124,10 @@ class SpeciesState:
     last_improved: Any
     member_count: Any
     idx2species: Any
-    center_nodes: Any
-    center_conns: Any
+    center_node_keys: Any
+    center_node_attrs: Any
+    center_conn_keys: Any
+    center_conn_attrs: Any
     next_species_key: Any
 
 
@@ -148,11 +188,41 @@ class SpeciesController(StatefulBaseClass):
         species_fitness_func: Callable = evoxc.max,
         species_number_calculate_by: str = "rank",
     ):
-        raise NotImplementedError
+        self.pop_size = positive_int(pop_size, "pop_size")
+        self.species_size = positive_int(species_size, "species_size")
+        self.max_stagnation = non_negative_int(max_stagnation, "max_stagnation")
+        self.species_elitism = non_negative_int(species_elitism, "species_elitism")
+        self.spawn_number_change_rate = unit_interval(
+            spawn_number_change_rate, "spawn_number_change_rate"
+        )
+        self.genome_elitism = non_negative_int(genome_elitism, "genome_elitism")
+        self.survival_threshold = unit_interval(
+            survival_threshold, "survival_threshold", allow_zero=False
+        )
+        self.min_species_size = positive_int(min_species_size, "min_species_size")
+        self.compatibility_threshold = positive_float(
+            compatibility_threshold, "compatibility_threshold"
+        )
+        if not callable(species_fitness_func):
+            raise TensorNEATError(
+                f"species_fitness_func must be callable, got {species_fitness_func!r}"
+            )
+        self.species_fitness_func = species_fitness_func
+        if species_number_calculate_by not in SPAWN_MODES:
+            raise TensorNEATError(
+                "species_number_calculate_by must be one of "
+                f"{SPAWN_MODES}, got {species_number_calculate_by!r}"
+            )
+        self.species_number_calculate_by = species_number_calculate_by
+        if self.species_size * self.min_species_size > self.pop_size:
+            raise TensorNEATError(
+                "species_size * min_species_size must not exceed pop_size, got "
+                f"{self.species_size} * {self.min_species_size} > {self.pop_size}"
+            )
 
     # ------------------------------------------------------------------ setup
 
-    def setup(self, state: State, first_nodes: Any, first_conns: Any) -> State:
+    def setup(self, state: State, first: Any) -> State:
         """Register ``state.species`` as a :class:`SpeciesState`.
 
         Slot ``0`` is the single live species of generation ``0``: its key is
@@ -162,24 +232,92 @@ class SpeciesController(StatefulBaseClass):
         counts as an improvement.
 
         Args:
-            state (State): Shared state, already carrying ``pop_nodes``,
-                ``pop_conns`` and ``generation`` from ``NEAT.setup``.
-            first_nodes (Tensor): ``(N, NL)`` int32, node gene rows of the
-                individual used as the initial centre (population slot ``0``).
-            first_conns (Tensor): ``(C, CL)`` int32, connection gene rows of the
-                same individual.
+            state (State): Shared state, already carrying the population payload
+                and ``generation`` from ``NEAT.setup``.
+            first (GenomeTensors): The four split payload arrays of **one**
+                individual -- ``node_keys (N,)``, ``node_attrs (N, NA)``,
+                ``conn_keys (E, CK)``, ``conn_attrs (E, CA)`` -- i.e. the
+                individual used as the initial centre (population slot ``0``),
+                sliced out of the initialised batch by the caller.
 
         Returns:
             State: ``state.register(species=SpeciesState(...))``.
 
+        Raises:
+            TensorNEATError: If ``first`` does not carry the four payload fields
+                at their documented ranks (a population axis left in place would
+                silently build an ``(S, P, ...)`` centre table).
+
         Note:
             Dead slots are created by writing ``NaN`` into ``species_keys``,
-            ``best_fitness``, ``last_improved`` and ``member_count``.  The centre
-            tensors cannot hold NaN (int32 payload), so they are initialised to
-            zeros and every reader must gate them behind the
-            ``isnan(species_keys)`` mask.
+            ``best_fitness``, ``last_improved`` and ``member_count``.  The
+            integer centre arrays cannot hold NaN, so their dead rows are
+            zero-filled and every reader gates them behind the
+            ``isnan(species_keys)`` mask; the float centre arrays are NaN-filled.
         """
-        raise NotImplementedError
+        try:
+            node_keys = first.node_keys
+            node_attrs = first.node_attrs
+            conn_keys = first.conn_keys
+            conn_attrs = first.conn_attrs
+        except AttributeError as error:
+            raise TensorNEATError(
+                "setup expects the four split payload arrays of one individual "
+                "(node_keys, node_attrs, conn_keys, conn_attrs), got "
+                f"{type(first).__name__} without them"
+            ) from error
+        for name, tensor, rank in (
+            ("first.node_keys", node_keys, 1),
+            ("first.node_attrs", node_attrs, 2),
+            ("first.conn_keys", conn_keys, 2),
+            ("first.conn_attrs", conn_attrs, 2),
+        ):
+            if len(tensor.shape) != rank:
+                raise TensorNEATError(
+                    f"{name} must be rank {rank} (one individual, no population "
+                    f"axis), got shape {tuple(tensor.shape)}"
+                )
+
+        species_size = self.species_size
+        dead = enp.full((species_size,), float("nan"), dtype=evoxc.float32)
+        return state.register(
+            species=SpeciesState(
+                species_keys=evoxc.scatter(dead, 0, _const(0.0)),
+                best_fitness=evoxc.scatter(dead, 0, _neg_inf()),
+                last_improved=evoxc.scatter(dead, 0, _const(0.0)),
+                member_count=evoxc.scatter(dead, 0, _const(float(self.pop_size))),
+                idx2species=enp.zeros((self.pop_size,), dtype=evoxc.float32),
+                center_node_keys=evoxc.scatter(
+                    enp.zeros((species_size,) + tuple(node_keys.shape), dtype=evoxc.int32),
+                    0,
+                    node_keys,
+                ),
+                center_node_attrs=evoxc.scatter(
+                    enp.full(
+                        (species_size,) + tuple(node_attrs.shape),
+                        float("nan"),
+                        dtype=evoxc.float32,
+                    ),
+                    0,
+                    node_attrs,
+                ),
+                center_conn_keys=evoxc.scatter(
+                    enp.zeros((species_size,) + tuple(conn_keys.shape), dtype=evoxc.int32),
+                    0,
+                    conn_keys,
+                ),
+                center_conn_attrs=evoxc.scatter(
+                    enp.full(
+                        (species_size,) + tuple(conn_attrs.shape),
+                        float("nan"),
+                        dtype=evoxc.float32,
+                    ),
+                    0,
+                    conn_attrs,
+                ),
+                next_species_key=_const(1.0),
+            )
+        )
 
     # ------------------------------------------------------- per generation
 
@@ -215,10 +353,13 @@ class SpeciesController(StatefulBaseClass):
            ranking, uniform parent ranks, elite pinning and the block flattening
            that maps population slot ``p`` to ``(loc(p), idx_in_block(p))``.
 
+        ``idx2species`` and ``next_species_key`` are deliberately *not* gathered:
+        the first is population-indexed and the second is a scalar, so neither
+        has a species slot to sort.
+
         Args:
-            state (State): Current state, carrying ``species``, ``generation``,
-                ``pop_nodes``/``pop_conns`` (needed for member counts only) and
-                ``randkey``.
+            state (State): Current state, carrying ``species``, ``generation``
+                and ``randkey``.
             fitness (Tensor): ``(P,)`` float32, already sanitised by
                 ``NEAT.tell`` (NaN and infinities mapped to ``-inf``), maximised.
 
@@ -242,22 +383,50 @@ class SpeciesController(StatefulBaseClass):
             the two-splits-three-subkeys budget of the algorithm contract, in the
             order parent selection, crossover, mutation.
         """
-        raise NotImplementedError
+        species_state = state.species
+        species_fitness = self._species_fitness(species_state, fitness)
+        species_state, species_fitness = self._stagnation(
+            species_state, species_fitness, state.generation
+        )
+        order = self._sort_desc_legacy(species_fitness)
+        species_state = self._gather_species(species_state, order)
+
+        if self.species_number_calculate_by == "rank":  # static Python branch
+            spawn_number = self._cal_spawn_numbers_by_rank(species_state)
+        else:
+            spawn_number = self._cal_spawn_numbers_by_fitness(species_state)
+
+        selection_key, next_randkey = evoxc.random.split(state.randkey)
+        winner, loser, elite_mask = self._pair_parents(
+            species_state, selection_key, spawn_number, fitness
+        )
+        return (
+            state.update(species=species_state, randkey=next_randkey),
+            winner,
+            loser,
+            elite_mask,
+        )
 
     # ------------------------------------------------------------ speciate
 
-    def speciate(self, state: State, distance_fn: Callable) -> State:
+    def speciate(self, state: State, distance_fn: Callable, pop: Any = None) -> State:
         """Reassign the new population to species (two fixed-length scans).
 
         Args:
-            state (State): State carrying the *new* ``pop_nodes``/``pop_conns``,
-                the sorted/killed ``species`` from :meth:`update_species` and
+            state (State): State carrying the *new* population payload, the
+                sorted/killed ``species`` from :meth:`update_species` and
                 ``generation``.
             distance_fn (Callable): One-to-population compatibility distance with
                 the genome-owned signature
-                ``distance_fn(state, center_nodes_i, center_conns_i, pop_nodes,
-                pop_conns) -> (P,)``.  Slicing the centre out of the ``(S, ...)``
-                fields is this method's job, not the genome's.
+                ``distance_fn(state, center: GenomeTensors, pop: GenomeTensors)
+                -> (P,)``, both payloads population-shaped.  Slicing the centre
+                out of the ``(S, ...)`` fields and broadcasting it to ``(P, ...)``
+                is this method's job, not the genome's;
+                ``genome.execute_distance`` plugs straight in.
+            pop (Any, optional): The current population payload.  Defaults to the
+                payload read from ``state`` -- the ``POP_KEY`` entry, or the four
+                split ``SPLIT_POP_KEYS`` arrays; an explicit argument wins so a
+                caller that already holds the payload need not register it.
 
         Returns:
             State: ``state.update(species=...)`` with a fully rewritten
@@ -265,23 +434,26 @@ class SpeciesController(StatefulBaseClass):
             re-elected centres, possibly new species slots, recomputed
             ``member_count`` and the advanced ``next_species_key``.
 
+        Raises:
+            TensorNEATError: If neither the explicit ``pop`` argument nor a
+                documented ``state`` entry supplies the population payload.
+
         Scan 1 -- centre reservation:
             For each slot ``i`` in ``enp.arange(S)``:
 
-            * ``d = distance_fn(state, center_nodes[i], center_conns[i],
-              pop_nodes, pop_conns)``, shape ``(P,)``;
+            * ``d = distance_fn(state, centre_i, pop)``, shape ``(P,)``;
             * ``closest = argmin(select(isnan(idx2species), d, +inf))`` -- the
-              nearest genome that no *earlier* slot has claimed yet;
+              nearest genome that no *earlier* slot has claimed yet
+              (``argmin_with_mask``, so "nothing left to claim" is a mask, never
+              an out-of-range index: it is folded into ``inert`` below);
             * write ``idx2species[closest] = species_keys[i]``,
-              ``center_nodes[i] = pop_nodes[closest]``,
-              ``center_conns[i] = pop_conns[closest]`` and
-              ``o2c[closest] = 0``.
+              ``center_*[i] = pop_*[closest]`` and ``o2c[closest] = 0``.
 
             A dead slot performs no write at all: the assignment ``closest`` is
-            computed, then every ``scatter`` is gated by a single
-            ``isnan(species_keys[i])`` mask.  This is precisely the legacy
-            early-exit condition "stop at the first dead slot", expressed on a
-            fixed trip count.
+            computed, then every ``scatter`` is gated by a single ``live and
+            any-pending`` mask.  This is precisely the legacy early-exit
+            condition "stop at the first dead slot", expressed on a fixed trip
+            count.
 
         Scan 2 -- member assignment:
             For each slot ``i`` in ``enp.arange(S)``:
@@ -293,22 +465,61 @@ class SpeciesController(StatefulBaseClass):
               mask;
             * if the slot is dead, materialise a new species: its key is
               ``next_species_key``, its first member is the first unassigned
-              genome (``fetch_first``, ``-1`` sentinel when there is none), that
-              genome becomes the new centre with ``o2c = 0``, and the very same
-              threshold assignment then runs against the new centre;
+              genome (``fetch_first``, whose ``I_INF`` "no candidate" sentinel is
+              clamped to row ``0`` because the gather happens unconditionally),
+              that genome becomes the new centre with ``o2c = 0``, and the very
+              same threshold assignment then runs against the new centre;
             * an iteration in which no genome is unassigned performs no write
               (again: mask first, ``scatter`` once), which reproduces the legacy
               "all assigned -> stop" condition without a data-dependent trip
               count.
 
         Post-pass (outside both scans):
-            leftover genomes with ``isnan(idx2species)`` adopt the last species
-            key (reachable only when the species cap was hit); slots created by
-            scan 2 get ``best_fitness = -inf`` and ``last_improved =
+            leftover genomes with ``isnan(idx2species)`` adopt the last *live*
+            species key (reachable only when the species cap was hit); slots
+            created by scan 2 get ``best_fitness = -inf`` and ``last_improved =
             generation``; ``member_count`` is recomputed as one masked compare-sum
             over the ``(S, P)`` membership matrix rather than a per-slot loop.
+
+        Note:
+            The created-slot mask is the scans' own ``ys`` output (each step
+            reports whether it materialised a species), which is exactly
+            "``best_fitness`` was NaN before this call and the key is live now";
+            it is reused instead of re-deriving the same mask with ``isnan`` on
+            two fields.
         """
-        raise NotImplementedError
+        population = self._population(state, pop)
+        values = _kernels.speciate(
+            state,
+            state.species,
+            distance_fn,
+            population,
+            self.pop_size,
+            self.species_size,
+            self.compatibility_threshold,
+        )
+        return state.update(species=SpeciesState(*values))
+
+    @staticmethod
+    def _population(state: State, pop: Any = None) -> Any:
+        """Read the current population payload handed to ``distance_fn``.
+
+        An explicit ``pop`` wins; otherwise the payload is read from ``state``
+        (the ``POP_KEY`` entry, or the four ``SPLIT_POP_KEYS`` arrays).
+
+        Args:
+            state (State): Shared state.
+            pop (Any, optional): Explicit payload; wins when given.
+
+        Returns:
+            Any: The four split payload arrays of the current population.
+
+        Raises:
+            TensorNEATError: If no documented entry supplies the payload.  There
+                is no eager or packed fallback: a missing payload is a
+                configuration error, never a silently empty population.
+        """
+        return _kernels.read_population(state, pop)
 
     # ---------------------------------------------------- fitness/stagnation
 
@@ -332,7 +543,9 @@ class SpeciesController(StatefulBaseClass):
             ``-inf`` *before* the reduction is what keeps a dead slot at ``-inf``
             instead of letting NaN poison the reduction.
         """
-        raise NotImplementedError
+        members = self._membership(species_state)
+        masked = evoxc.select(members, enp.expand_dims(fitness, 0), _neg_inf())
+        return self.species_fitness_func(masked, axes=1)
 
     def _stagnation(
         self, species_state: SpeciesState, species_fitness: Any, generation: Any
@@ -369,7 +582,42 @@ class SpeciesController(StatefulBaseClass):
             ``(S,)``-shaped computation of ``select`` calls -- no control flow,
             no scan, nothing to vectorize.
         """
-        raise NotImplementedError
+        generation_value = _scalar_f32(generation)
+        improved = evoxc.greater(species_fitness, species_state.best_fitness)
+        best_fitness = evoxc.select(
+            improved, species_fitness, species_state.best_fitness
+        )
+        last_improved = evoxc.select(
+            improved, generation_value, species_state.last_improved
+        )
+        # ``rank_elements`` ranks the last axis of a 2-D table, so the species
+        # vector travels through a ``(1, S)`` window and back.
+        ranks = evoxc.reshape(
+            rank_elements(enp.expand_dims(species_fitness, 0)), (self.species_size,)
+        )
+        exempt = evoxc.less(ranks, self.species_elitism)
+        stale = evoxc.greater(
+            evoxc.subtract(generation_value, last_improved),
+            float(self.max_stagnation),
+        )
+        killed = evoxc.logical_and(
+            evoxc.logical_and(evoxc.logical_not(improved), stale),
+            evoxc.logical_not(exempt),
+        )
+        return (
+            dataclass_replace(
+                species_state,
+                species_keys=evoxc.select(
+                    killed, _nan(), species_state.species_keys
+                ),
+                best_fitness=evoxc.select(killed, _nan(), best_fitness),
+                last_improved=evoxc.select(killed, _nan(), last_improved),
+                member_count=evoxc.select(
+                    killed, _nan(), species_state.member_count
+                ),
+            ),
+            evoxc.select(killed, _neg_inf(), species_fitness),
+        )
 
     # ---------------------------------------------------- spawn allocation
 
@@ -388,7 +636,8 @@ class SpeciesController(StatefulBaseClass):
         ``0`` on dead slots, cast to int32, and finally corrected so the total is
         exactly ``pop_size``:
 
-        ``spawn = scatter(spawn, 0, spawn[0] + (pop_size - sum(spawn)))``
+        ``spawn = scatter(spawn, h, spawn[h] + (pop_size - sum(spawn)))``
+        with ``h`` the first *live* slot (slot ``0`` after the sort).
 
         Args:
             species_state (SpeciesState): Species state *after* the descending
@@ -399,9 +648,17 @@ class SpeciesController(StatefulBaseClass):
             at ``0``.
 
         Note:
-            The residual is added to slot ``0`` by convention (it is the fittest
-            species, and ``species_size * min_species_size <= pop_size`` is
-            validated upstream so the corrected block stays positive).
+            The residual is added to the first live slot, which after the
+            descending sort is slot ``0`` (the fittest species); gating on the
+            liveness mask keeps a dead slot at ``0`` even for a hand-built,
+            unsorted table.  ``species_size * min_species_size <= pop_size`` is
+            validated upstream, so the corrected block stays positive.
+
+        Note:
+            **Defect fix (all-dead / empty table).**  The legacy denominator
+            divided by zero when every slot was dead; here it is floored at
+            ``1.0``, so an empty species list produces a finite (all ``-inf``,
+            i.e. all-zero) target instead of NaN.
 
         Note:
             **Defect fix (NaN -> int32 cast).**  The legacy implementation relied
@@ -410,7 +667,14 @@ class SpeciesController(StatefulBaseClass):
             value is NaN) are explicitly written to ``0.0`` *before* the cast, so
             the result does not depend on the cast's NaN semantics.
         """
-        raise NotImplementedError
+        return _kernels.spawn_numbers_by_rank(
+            species_state.species_keys,
+            species_state.member_count,
+            self.pop_size,
+            self.species_size,
+            self.min_species_size,
+            self.spawn_number_change_rate,
+        )
 
     def _cal_spawn_numbers_by_fitness(self, species_state: SpeciesState) -> Any:
         """Fitness-proportional spawn allocation (``"fitness"`` mode).
@@ -433,11 +697,19 @@ class SpeciesController(StatefulBaseClass):
             taken over the *live* slots only: the NaN ``best_fitness`` of dead
             slots is masked out with ``select`` before the reduction, so the
             normalization constant is finite and the dead slots stay at spawn
-            ``0`` instead of turning every rate into NaN.
+            ``0`` instead of turning every rate into NaN.  A freshly created
+            species starts at ``best_fitness = -inf``; the ``nan_to_num`` pass
+            turns the resulting non-finite weight into ``0.0``, so such a slot is
+            carried by the ``min_species_size`` floor alone.
         """
-        raise NotImplementedError
-
-    # --------------------------------------------------------- parent pairing
+        return _kernels.spawn_numbers_by_fitness(
+            species_state.species_keys,
+            species_state.best_fitness,
+            species_state.member_count,
+            self.pop_size,
+            self.min_species_size,
+            self.spawn_number_change_rate,
+        )
 
     def _pair_parents(
         self,
@@ -451,17 +723,21 @@ class SpeciesController(StatefulBaseClass):
         Per species slot, members are ranked by fitness descending
         (``_sort_desc_legacy`` over ``select(membership, fitness, -inf)``,
         applied to the population index vector), the survivor count is
-        ``floor(survival_threshold * member_count)`` and the first
-        ``max(survive_size, 1)`` ranks are the candidate parents.  The tail of the
-        ranking holds non-members (all ``-inf``); it is unreachable because the
-        candidate count never exceeds the member count.
+        ``clamp(floor(survival_threshold * member_count), 1,
+        min(member_count, pop_size))`` and the first ``survive_size`` ranks are
+        the candidate parents.  The tail of the ranking holds non-members (all
+        ``-inf``); it is unreachable because the candidate count never exceeds
+        the member count (and the extra ``pop_size`` cap keeps a stale count from
+        indexing past the ``(S, P)`` ranking width).
 
         Args:
             species_state (SpeciesState): Sorted species state.
             selection_key (Any): One rank-0 ``evoxc.random`` key -- the *only*
                 random source of parent selection for this generation.
-            spawn_number (Tensor): ``(S,)`` int32 from one of the ``_cal_spawn_*``
-                helpers, summing to ``pop_size``.
+            spawn_number (Tensor): ``(S,)`` int32 from one of the
+                :meth:`_cal_spawn_numbers_by_rank` /
+                :meth:`_cal_spawn_numbers_by_fitness` helpers, summing to
+                ``pop_size``.
             fitness (Tensor): ``(P,)`` float32, sanitised and maximised.
 
         Returns:
@@ -470,24 +746,29 @@ class SpeciesController(StatefulBaseClass):
             elite flag.
 
         Algorithm:
-            1. ``slots = evoxc.random.randint(selection_key, (S, 2, P), low=0,
-               high=enp.expand_dims(max(survive_size, 1), 1))`` -- one draw for
-               both parents, shaped so ``high`` broadcasts over the species axis
-               and the parent axis.
-            2. ``parent = evoxc.gather(sorted_members, slots, axis=1)`` yields
-               ``(S, 2, P)`` population indices; the father/mother slices come out
-               of a static ``evoxc.slice`` plus ``enp.squeeze``.
-            3. Elite pinning: for ``p_idx < genome_elitism`` both parents are
-               replaced by ``sorted_members[:, 0]`` (the species' best member), so
-               the crossover of an elite slot is the identity.
-            4. Block flattening: ``loc`` and ``idx_in_block`` from
+            1. ``slots = evoxc.random.randint(selection_key, (S, 2, P), 0,
+               survive[:, None, None])`` -- one draw for both parents: ``high``
+               broadcasts over the species axis, the parent axis and the
+               population axis, and is ``>= 1`` everywhere.
+            2. ``parent = flat_gather(ranking, slots)`` yields ``(S, 2, P)``
+               population indices.  ``evoxc.gather`` replaces its axis instead
+               of indexing per row, so the per-row draw *must* go through the
+               flattened ``common.tools.flat_gather``; the father/mother slices
+               then come out of one 0-d ``evoxc.gather`` each.
+            3. Winner/loser: the two drawn parents are compared through
+               ``gather(fitness, ...)``; ties go to the father (``>=``), matching
+               the legacy comparison.  The decision is taken on the *species
+               space* draws, before elite pinning, so it is unaffected by which
+               population slot ends up owning the pair.
+            4. Elite pinning: for ``idx_in_block < genome_elitism`` both parents
+               are replaced by the owning species' best member
+               (``ranking[:, 0]``), so the crossover of an elite slot is the
+               identity.
+            5. Block flattening: ``loc`` and ``idx_in_block`` from
                :meth:`_block_layout` give one gather index
                ``flat = loc * pop_size + idx_in_block`` into the row-major
                ``(S, P)`` parent arrays; a single ``gather`` per array maps the
                per-species draws onto population slots.
-            5. Winner/loser: ``first``/``second`` are compared through
-               ``gather(fitness, ...)``; ties go to ``first``
-               (``>=``), matching the legacy comparison.
 
         Note:
             **Defect fix (zero-survivor division).**  The legacy code built a
@@ -498,7 +779,18 @@ class SpeciesController(StatefulBaseClass):
             species simply draws rank ``0`` twice -- two identical parents, and
             self-crossover is the identity.
         """
-        raise NotImplementedError
+        return _kernels.pair_parents(
+            species_state.species_keys,
+            species_state.idx2species,
+            species_state.member_count,
+            selection_key,
+            spawn_number,
+            fitness,
+            self.pop_size,
+            self.species_size,
+            self.survival_threshold,
+            self.genome_elitism,
+        )
 
     # ------------------------------------------------------ block flattening
 
@@ -509,13 +801,14 @@ class SpeciesController(StatefulBaseClass):
         (``E[i] = sum_{j < i} spawn[j]``) and ``K = sum(spawn) == pop_size``,
         population slot ``p`` belongs to
 
-        ``loc(p)      = #{i : spawn[i] > 0 and E[i] <= p} - 1``
+        ``loc(p)      = the last i with spawn[i] > 0 and E[i] <= p``
         ``idx_in_block(p) = p - E[loc(p)]``
 
         Both are computed without a host loop: the ``(S, P)`` mask
-        ``spawn[i] > 0 and E[i] <= p`` is summed over the species axis by a
-        triangular ``dot``-based prefix sum, and ``E[loc(p)]`` is one
-        ``gather``.
+        ``spawn[i] > 0 and E[i] <= p`` is a broadcast comparison of the sparse
+        block starts against the slot vector, ``loc`` is the index of the last
+        ``True`` in each column (``argmax`` over the mask reversed along the
+        species axis), and ``E[loc(p)]`` is one ``gather``.
 
         Args:
             spawn_number (Tensor): ``(S,)`` int32, summing to ``pop_size``;
@@ -525,13 +818,74 @@ class SpeciesController(StatefulBaseClass):
             tuple: ``(loc, idx_in_block)``, both ``(P,)`` int32.
 
         Note:
-            Counting only blocks with ``spawn > 0`` is what makes a zero-spawn
-            (dead or empty) species consume no population slot -- the same
-            behaviour the legacy ``argmax(p_idx < cumsum(spawn))`` produced, but
-            with the division-by-zero-style edge cases removed and with the
-            offset available explicitly instead of as a conditional subtraction.
+            Requiring ``spawn > 0`` is what makes a zero-spawn (dead or empty)
+            species consume no population slot -- the same behaviour the legacy
+            ``argmax(p_idx < cumsum(spawn))`` produced.
+            The block index has to be the *last* qualifying block, not the
+            *number* of qualifying blocks: after the species sort only dead
+            slots are guaranteed to trail, so a live species can legitimately
+            receive ``spawn == 0`` in the middle of the table and a count would
+            point at the wrong block.  ``argmax`` returns the first maximum, so
+            the mask is reversed first and the index mapped back with
+            ``S - 1 - argmax``.
+            Because ``sum(spawn) == pop_size`` and ``pop_size >= 1``, at least one
+            block starts at or before every slot, so ``loc`` stays in
+            ``[0, S - 1]``.
         """
-        raise NotImplementedError
+        return _kernels.block_layout(spawn_number, self.pop_size, self.species_size)
+
+    # ----------------------------------------------------------- membership
+
+    def _membership(self, species_state: SpeciesState) -> Any:
+        """``(S, P)`` membership mask ``member[i, p] = idx2species[p] == key[i]``.
+
+        One primitive, reused by species fitness, member counts and parent
+        ranking.  ``NaN`` never compares equal, so a dead slot and an unassigned
+        genome both match nothing.
+
+        Args:
+            species_state (SpeciesState): Current bookkeeping.
+
+        Returns:
+            Tensor: ``(S, P)`` bool.
+        """
+        return _kernels.membership(species_state.species_keys, species_state.idx2species)
+
+    @staticmethod
+    def _gather_species(species_state: SpeciesState, order: Any) -> SpeciesState:
+        """Re-apply the species sort to every ``(S, ...)`` field.
+
+        ``idx2species`` is population-indexed and ``next_species_key`` is a
+        scalar, so neither is gathered.
+
+        Args:
+            species_state (SpeciesState): State to sort.
+            order (Tensor): ``(S,)`` int64 permutation from
+                :meth:`_sort_desc_legacy`.
+
+        Returns:
+            SpeciesState: A new table whose slot ``i`` is the old slot
+            ``order[i]``.
+        """
+        return dataclass_replace(
+            species_state,
+            species_keys=evoxc.gather(species_state.species_keys, order, axis=0),
+            best_fitness=evoxc.gather(species_state.best_fitness, order, axis=0),
+            last_improved=evoxc.gather(species_state.last_improved, order, axis=0),
+            member_count=evoxc.gather(species_state.member_count, order, axis=0),
+            center_node_keys=evoxc.gather(
+                species_state.center_node_keys, order, axis=0
+            ),
+            center_node_attrs=evoxc.gather(
+                species_state.center_node_attrs, order, axis=0
+            ),
+            center_conn_keys=evoxc.gather(
+                species_state.center_conn_keys, order, axis=0
+            ),
+            center_conn_attrs=evoxc.gather(
+                species_state.center_conn_attrs, order, axis=0
+            ),
+        )
 
     # ------------------------------------------------------------ utilities
 
@@ -555,7 +909,7 @@ class SpeciesController(StatefulBaseClass):
         Returns:
             Tensor: int64 indices with ``x``'s shape.
         """
-        raise NotImplementedError
+        return _kernels.sort_desc_legacy(x, axis)
 
     @staticmethod
     def _prefix_sum_exclusive(values: Any) -> Any:
@@ -571,4 +925,5 @@ class SpeciesController(StatefulBaseClass):
         Returns:
             Tensor: ``(S,)`` float32 with ``out[i] = sum_{j < i} values[j]``.
         """
-        raise NotImplementedError
+        return _kernels.prefix_sum_exclusive(values)
+
