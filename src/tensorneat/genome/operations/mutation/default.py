@@ -15,6 +15,7 @@ import evoxc.numpy as enp
 
 from ....common import I_INF, State, TensorNEATError
 from ...utils import (
+    GenomeTensors,
     add_conn,
     add_node,
     delete_conn_by_pos,

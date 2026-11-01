@@ -32,9 +32,20 @@ import evoxc.numpy as enp  # noqa: F401 - tensor creation for the implementation
 import numpy as np  # noqa: F401 - host-only helpers
 import sympy as sp  # noqa: F401 - host-only code generation
 
-from ..common import I_INF, State, StatefulBaseClass, TensorNEATError
-from ..common.functions import apply_aggregation
-from ..common.tensorization import Transformed, build_schedule
+from ..common import (
+    I_INF,
+    State,
+    StatefulBaseClass,
+    TensorNEATError,
+    Transformed,
+    apply_activation,
+    apply_aggregation,
+    derive_schedule,
+    find_useful_nodes,
+    to_numpy,
+    topological_sort,
+)
+from ..common.functions import ACT, AGG
 from .gene import BaseConn, BaseNode
 from .operations import BaseCrossover, BaseDistance, BaseMutation
 from .utils import GenomeTensors, check_cycles as _check_cycles, re_cound_idx, valid_count

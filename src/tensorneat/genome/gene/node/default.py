@@ -19,7 +19,6 @@ from ....common.functions import (
     AGG,
     apply_activation,
     apply_aggregation,
-    get_func_name,
 )
 from ..base import GeneAttr
 from .base import BaseNode

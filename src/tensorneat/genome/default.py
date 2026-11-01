@@ -21,7 +21,7 @@ from ..common import (
     State,
     TensorNEATError,
     find_useful_nodes,
-    topological_sort_python,
+    topological_sort,
 )
 from ..common.functions import ACT, AGG
 from ..common.tensorization import Transformed
