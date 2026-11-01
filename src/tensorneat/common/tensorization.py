@@ -55,10 +55,13 @@ from .errors import ConfigError
 from .tools import (
     I_INF,
     KEY_MAX,
+    _positive_static,
+    _scalar_constant,
     flat_gather,
     flat_scatter,
     masked_flat_gather,
     masked_flat_scatter,
+    to_numpy,
 )
 
 
@@ -136,14 +139,9 @@ class Transformed(NamedTuple):
 
 
 # ============================================================ trace-time helpers
-def _positive_int(value: Any, name: str) -> int:
-    """Return ``value`` as a positive Python ``int`` (a static, validated at trace time)."""
-    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
-        raise ConfigError(f"{name} must be an int, got {type(value).__name__}")
-    value = int(value)
-    if value <= 0:
-        raise ConfigError(f"{name} must be positive, got {value}")
-    return value
+# Every static count here is validated by ``tools._positive_static`` (imported
+# above), and every rank-0 constant is built by ``tools._scalar_constant``:
+# one owner per rule, so no helper below duplicates them.
 
 
 def _check_shape(tensor: Any, expected: tuple, name: str) -> None:
@@ -151,11 +149,6 @@ def _check_shape(tensor: Any, expected: tuple, name: str) -> None:
     shape = tuple(int(size) for size in tensor.shape)
     if shape != tuple(expected):
         raise ConfigError(f"{name} must have shape {tuple(expected)}, got {shape}")
-
-
-def _scalar_int(value: int) -> Any:
-    """A rank-0 ``int32`` tensor — the dtype-safe operand for in-graph arithmetic."""
-    return evoxc.cast(value, evoxc.int32)
 
 
 def _iinf_like(tensor: Any) -> Any:
@@ -315,11 +308,11 @@ def derive_schedule(
         owns the payload (the Pipeline, or a test) is where such a payload is
         refused — this kernel reports, it never guesses.
     """
-    pop_size = _positive_int(pop_size, "pop_size")
-    max_nodes = _positive_int(max_nodes, "max_nodes")
-    max_conns = _positive_int(max_conns, "max_conns")
-    max_in_degree = _positive_int(max_in_degree, "max_in_degree")
-    key_span = _positive_int(key_span, "key_span")
+    pop_size = _positive_static(pop_size, "pop_size")
+    max_nodes = _positive_static(max_nodes, "max_nodes")
+    max_conns = _positive_static(max_conns, "max_conns")
+    max_in_degree = _positive_static(max_in_degree, "max_in_degree")
+    key_span = _positive_static(key_span, "key_span")
     _check_shape(node_keys, (pop_size, max_nodes), "node_keys")
     _check_shape(conn_in, (pop_size, max_conns), "conn_in")
     _check_shape(conn_out, (pop_size, max_conns), "conn_out")
@@ -364,7 +357,7 @@ def derive_schedule(
     slots = _node_slots(pop_size, max_nodes)
     has_level = enp.not_equal(node_level, _iinf_like(node_level))
     ordered = evoxc.add(
-        evoxc.multiply(evoxc.select(has_level, node_level, enp.zeros(tuple(node_level.shape), dtype=evoxc.int32)), _scalar_int(max_nodes)),
+        evoxc.multiply(evoxc.select(has_level, node_level, enp.zeros(tuple(node_level.shape), dtype=evoxc.int32)), _scalar_constant(max_nodes, evoxc.int32)),
         slots,
     )
     topo_key = evoxc.select(has_level, ordered, _iinf_like(ordered))
@@ -417,7 +410,7 @@ def key_slot_table(node_keys, key_span):
         key spelling a key at or above ``2**24`` (``tools.KEY_MAX``) is also
         treated as absent, because it is no longer integer-exact in ``float32``.
     """
-    key_span = _positive_int(key_span, "key_span")
+    key_span = _positive_static(key_span, "key_span")
     pop_size, max_nodes = node_keys.shape
     indices, in_range = _key_indices(node_keys, key_span)
     table = _iinf_like(enp.zeros((pop_size, key_span + 1), dtype=evoxc.int32))
@@ -451,7 +444,7 @@ def slot_lookup(table, keys, key_span):
         the gather's own mask, so the sanitized ``0`` never leaks into the
         result (``0`` is a real node slot).
     """
-    key_span = _positive_int(key_span, "key_span")
+    key_span = _positive_static(key_span, "key_span")
     width = int(table.shape[1])
     if width != key_span + 1:
         raise ConfigError(
@@ -490,7 +483,7 @@ def edge_group_rank(dst, edge_valid, max_conns):
         ``stable=True`` keeps connection-row order inside a ``dst`` group,
         which is what makes the retained window deterministic.
     """
-    max_conns = _positive_int(max_conns, "max_conns")
+    max_conns = _positive_static(max_conns, "max_conns")
     pop_size, width = dst.shape
     pop_size, width = int(pop_size), int(width)
     if width != max_conns:
@@ -499,7 +492,7 @@ def edge_group_rank(dst, edge_valid, max_conns):
     zero = enp.zeros((pop_size, max_conns), dtype=evoxc.int32)
     safe_dst = evoxc.select(edge_valid, dst, zero)
     composite = evoxc.add(
-        evoxc.multiply(evoxc.cast(safe_dst, evoxc.int64), evoxc.cast(max_conns, evoxc.int64)),
+        evoxc.multiply(evoxc.cast(safe_dst, evoxc.int64), _scalar_constant(max_conns, evoxc.int64)),
         evoxc.cast(columns, evoxc.int64),
     )
     order = evoxc.argsort(
@@ -538,7 +531,7 @@ def cum_in_degree(dst, edge_valid, max_nodes):
         (ties) so an edge is counted as "``<= i``"; invalid edges are keyed
         with ``I_INF`` and therefore sort after every node entry.
     """
-    max_nodes = _positive_int(max_nodes, "max_nodes")
+    max_nodes = _positive_static(max_nodes, "max_nodes")
     pop_size, max_conns = dst.shape
     pop_size, max_conns = int(pop_size), int(max_conns)
     zero = enp.zeros((pop_size, max_conns), dtype=evoxc.int32)
@@ -547,13 +540,13 @@ def cum_in_degree(dst, edge_valid, max_nodes):
         edge_valid,
         evoxc.multiply(
             evoxc.cast(evoxc.select(edge_valid, dst, zero), evoxc.int64),
-            evoxc.cast(2, evoxc.int64),
+            _scalar_constant(2, evoxc.int64),
         ),
         enp.full((pop_size, max_conns), I_INF, dtype=evoxc.int64),
     )
     node_key = evoxc.add(
-        evoxc.multiply(evoxc.cast(slots, evoxc.int64), evoxc.cast(2, evoxc.int64)),
-        evoxc.cast(1, evoxc.int64),
+        evoxc.multiply(evoxc.cast(slots, evoxc.int64), _scalar_constant(2, evoxc.int64)),
+        _scalar_constant(1, evoxc.int64),
     )
     order = evoxc.argsort(
         evoxc.concatenate([edge_key, node_key], axis=1), axis=-1, stable=True
@@ -604,8 +597,8 @@ def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
         exception (the host decides to rebuild or to raise
         :class:`~tensorneat.common.errors.ShapeBoundError`).
     """
-    max_nodes = _positive_int(max_nodes, "max_nodes")
-    max_in_degree = _positive_int(max_in_degree, "max_in_degree")
+    max_nodes = _positive_static(max_nodes, "max_nodes")
+    max_in_degree = _positive_static(max_in_degree, "max_in_degree")
     pop_size, max_conns = dst.shape
     pop_size, max_conns = int(pop_size), int(max_conns)
     zero = enp.zeros((pop_size, max_conns), dtype=evoxc.int32)
@@ -627,36 +620,19 @@ def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
     )
     keep = enp.logical_and(edge_valid, in_window)
     target = evoxc.add(
-        evoxc.multiply(safe_dst, _scalar_int(max_in_degree)),
+        evoxc.multiply(safe_dst, _scalar_constant(max_in_degree, evoxc.int32)),
         evoxc.select(keep, kept_column, zero),
     )
-    width = max_nodes * max_in_degree
-    buffer_shape = (pop_size, width + 1)
-    in_conn = evoxc.reshape(
-        evoxc.slice(
-            masked_flat_scatter(
-                _iinf_like(enp.zeros(buffer_shape, dtype=evoxc.int32)),
-                target,
-                _node_slots(pop_size, max_conns),
-                keep,
-            ),
-            (0, 0),
-            (pop_size, width),
-        ),
-        (pop_size, max_nodes, max_in_degree),
+    in_conn = _window_table(
+        target, _node_slots(pop_size, max_conns), keep, pop_size, max_nodes, max_in_degree
     )
-    in_src = evoxc.reshape(
-        evoxc.slice(
-            masked_flat_scatter(
-                _iinf_like(enp.zeros(buffer_shape, dtype=evoxc.int32)),
-                target,
-                evoxc.select(edge_valid, src, _iinf_like(src)),
-                keep,
-            ),
-            (0, 0),
-            (pop_size, width),
-        ),
-        (pop_size, max_nodes, max_in_degree),
+    in_src = _window_table(
+        target,
+        evoxc.select(edge_valid, src, _iinf_like(src)),
+        keep,
+        pop_size,
+        max_nodes,
+        max_in_degree,
     )
     edge_overflow = evoxc.cast(
         evoxc.reduce_sum(
@@ -669,6 +645,43 @@ def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
         evoxc.int32,
     )
     return in_conn, in_src, edge_overflow
+
+
+def _window_table(target, updates, keep, pop_size, max_nodes, max_in_degree):
+    """Scatter one connection-row payload into the padded ``(P, N, K)`` window table.
+
+    The one shared body of :func:`incoming_table`'s two scatter passes (the
+    ``in_conn`` column and the ``in_src`` column): build a ``(P, N*K + 1)``
+    ``I_INF`` buffer, route every kept row to its ``dst * K + col`` cell with
+    :func:`~tensorneat.common.tools.masked_flat_scatter` (dropped rows land in
+    the trailing dump cell), slice the dump column off and reshape to the
+    window. Same traced ops, same cost as writing it out twice.
+
+    Args:
+        target: ``(P, C)`` ``int32`` flat window cell ``dst * K + col`` of every
+            connection row; the ``keep == False`` rows may hold anything.
+        updates: ``(P, C)`` ``int32`` value written to that cell — the row index
+            (``in_conn``) or the source slot (``in_src``); ``I_INF`` where the
+            row is invalid.
+        keep: ``(P, C)`` ``bool``; ``False`` routes the write to the dump cell.
+        pop_size (int): ``P``; trace-time static.
+        max_nodes (int): ``N``; trace-time static.
+        max_in_degree (int): ``K``; trace-time static.
+
+    Returns:
+        ``(P, N, K)`` ``int32`` window table, ``I_INF`` where no row landed.
+    """
+    width = max_nodes * max_in_degree
+    buffer = masked_flat_scatter(
+        _iinf_like(enp.zeros((pop_size, width + 1), dtype=evoxc.int32)),
+        target,
+        updates,
+        keep,
+    )
+    return evoxc.reshape(
+        evoxc.slice(buffer, (0, 0), (pop_size, width)),
+        (pop_size, max_nodes, max_in_degree),
+    )
 
 
 def node_levels(in_conn, in_src, input_slot, max_nodes):
@@ -727,7 +740,7 @@ def node_levels(in_conn, in_src, input_slot, max_nodes):
         (``changed == False``); only a population that carries a reachable
         cycle pays the full ``2N``.
     """
-    max_nodes = _positive_int(max_nodes, "max_nodes")
+    max_nodes = _positive_static(max_nodes, "max_nodes")
     pop_size, nodes, width = in_conn.shape
     pop_size, nodes, width = int(pop_size), int(nodes), int(width)
     if nodes != max_nodes:
@@ -743,7 +756,7 @@ def node_levels(in_conn, in_src, input_slot, max_nodes):
     pinned = _pinned_mask(input_slot, _node_slots(pop_size, nodes))
     zero_level = enp.zeros((pop_size, nodes), dtype=evoxc.int32)
     minus_one = enp.full((pop_size, nodes), -1, dtype=evoxc.int32)
-    one = _scalar_int(1)
+    one = _scalar_constant(1, evoxc.int32)
     limit = 2 * max_nodes
 
     def relax(values):
@@ -928,13 +941,13 @@ def validate_schedule(transformed):
 
 
 def _host_array(value, name):
-    """Bring one schedule field to host memory as a numpy array."""
-    if isinstance(value, np.ndarray):
-        return value
-    as_numpy = getattr(value, "numpy", None)
-    if callable(as_numpy):
-        return np.asarray(as_numpy())
-    array = np.asarray(value)
+    """Bring one schedule field to host memory as a numpy array.
+
+    The conversion itself is :func:`~tensorneat.common.tools.to_numpy` (the one
+    host-side accessor of this package); this wrapper only adds the
+    validation-specific refusal of a non-array leaf.
+    """
+    array = np.asarray(to_numpy(value))
     if array.dtype == object:
         raise ConfigError(f"validate_schedule: {name} is not a host array")
     return array

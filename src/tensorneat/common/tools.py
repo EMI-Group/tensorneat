@@ -66,21 +66,32 @@ KEY_MAX: int = 1 << 24
 # --------------------------------------------------------------------------- #
 
 
-def _positive_static(name, value):
-    """Return ``value`` if it is a positive Python ``int``.
+def _positive_static(value, name):
+    """Return ``value`` as a positive Python ``int``.
+
+    The single validator for every trace-time static count in this package
+    (population, node/connection bounds, in-degree window, key span, row
+    lengths): a static is baked into the trace, so it is checked on the host,
+    once, before any graph is built.
 
     Args:
+        value: Static value to validate; an ``int`` or a NumPy integer scalar
+            (``numpy.shape`` entries and ``array.shape`` members are the usual
+            source). ``bool`` is refused — it is not a count.
         name (str): Argument name used in the error message.
-        value: Static value to validate.
 
     Returns:
-        int: ``value`` unchanged.
+        int: ``value`` as a Python ``int`` (a NumPy integer is normalised, so
+        the trace never sees a NumPy scalar).
 
     Raises:
-        tensorneat.common.errors.ConfigError: If ``value`` is not an ``int``
-            (``bool`` excluded), or is not positive.
+        tensorneat.common.errors.ConfigError: If ``value`` is not an
+            ``int``/``numpy.integer`` (``bool`` excluded), or is not positive.
     """
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise ConfigError(f"{name} must be a positive int, got {value!r}")
+    value = int(value)
+    if value <= 0:
         raise ConfigError(f"{name} must be a positive int, got {value!r}")
     return value
 
@@ -224,8 +235,8 @@ def batch_offsets(pop_size, row_len):
         ``(P, 1)`` table against a ``(P, K)`` block is left to the caller's
         index arithmetic (``evoxc`` broadcasting rules do the rest).
     """
-    _positive_static("pop_size", pop_size)
-    _positive_static("row_len", row_len)
+    _positive_static(pop_size, "pop_size")
+    _positive_static(row_len, "row_len")
     if pop_size * row_len >= I_INF:
         raise ConfigError(
             "pop_size * row_len must stay below I_INF for a flat int32 index, "

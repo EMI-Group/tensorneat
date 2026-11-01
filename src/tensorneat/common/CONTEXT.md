@@ -66,46 +66,117 @@ Cost: `O(P * (S + C log C + N*K*D))` with `D` = max depth, i.e. edge-proportiona
 `transform` runs once per generation, so its cost is amortized over the whole generation.
 
 ## Measured cost
-`derive_schedule` on the numpy reference backend, `N=50 C=200 K=8 S=64`, one build per shape then 15 timed runs (median / min, ms), single-threaded CPU (`x86_64`, Linux, CPython 3.14, numpy 2.5.4, evoxc 0.1.0 from `/root/evoxc`):
+Depth-qualified, on the numpy reference backend, shape signature `N=50 C=200 K=8 S=64`, 46 present node rows (4 padded), 2 inputs, 2 outputs; every figure is the **median of 3 campaigns × 15 timed `evoxc.run` calls** with the build cached (one `evoxc.build` per shape, timed once and reported separately), single-threaded (1 BLAS/OpenMP thread), INTEL Xeon Platinum 8568Y+, Linux 6.8 x86_64/glibc 2.39, CPython 3.14.8, numpy 2.5.4, evoxc 0.1.0 from `/root/evoxc`, ms:
 
-| population | P=100 | P=500 | P=1000 |
-|---|---|---|---|
-| random, cyclic (worst case: the `2N` relaxation cap is hit) | 79.8 / 77.5 | 286.7 / 279.4 | 535.4 / 525.7 |
-| feedforward, acyclic (leaves the loop after `depth` iterations) | 21.0 / 20.7 | 75.6 / 74.8 | 140.0 / 138.2 |
+| topology | live edges | depth | P=100 run (of which `node_levels`) | P=500 | P=1000 |
+|---|---|---|---|---|---|
+| feed-forward DAG, depth 5 (payload filled to `C`) | 200 | 5 | 9.0 (4.8) | 40.7 (17.0) | 74.2 (32.7) |
+| feed-forward DAG, depth 18 (adjacent levels only → short fill) | 111 | 18 | 18.5 (14.8) | 60.8 (52.6) | 117.4 (98.3) |
+| feed-forward DAG, depth 18, payload filled to `C` (forward jumps) | 200 | 18 | 18.5 (15.1) | 63.8 (51.7) | 124.0 (98.2) |
+| random, cyclic (worst case: the relaxation hits the `2N` cap) | 200 | — | 79.5 (75.1) | 280.4 (268.6) | 547.9 (507.7) |
 
-The cyclic row is the worst case; a real generation's population is mostly acyclic, and the schedule is one shared traversal per population, not per network.
-`incoming_table` and `node_levels` embed `(P, N*K+1)` int32 buffers as graph constants, so a build at `P=1000` crosses evoxc's 1 MiB large-constant threshold (1.6 MB, warned and ignored) — a build-time cost, not a per-run one.
-Reproduction (the synthetic `tensorneat` package is needed only while `src/tensorneat/__init__.py` still imports the pre-merge `genome`/`pipeline` files):
+One-off `build` (cached per shape by the Pipeline, so not paid per generation): P=100 86–103 ms, P=500 270–330 ms, P=1000 595–630 ms.
+
+Interpretation — the numbers behave like the `O(P · (C log C + N·K·D))` formula:
+
+- **Linear in P.** Depth-5 run: 9.0 → 40.7 → 74.2 ms for P = 100 → 500 → 1000 (×4.6 then ×1.8), i.e. ≈ `1.7 ms + 0.073 ms` per member at depth 5; per-member cost falls from 0.090 to 0.074 ms only because the fixed per-run prologue/epilogue is amortised. `node_levels` alone is 4.8 → 17.0 → 32.7 ms (×3.5, ×1.9): linear.
+- **Linear in depth, and depth is the dominant factor.** With the shapes *and* the live-edge count held fixed (row 1 vs row 3), P=1000 goes 74.2 → 124.0 ms while `node_levels` alone goes 32.7 → 98.2 ms (×3.00) — the relaxation's trip count is `D + 1` = 6 → 19 iterations (×3.17), i.e. ≈ 5.2–5.5 ms per iteration at P=1000 over the `(P, N, K)` window with its two relaxations. The remainder (total − `node_levels`, ≈19–42 ms at P=1000) is depth-independent: the two stable `argsort`s (`edge_group_rank`, `cum_in_degree`, `O(C log C)`) plus the `(P, N·K)` window zero-fill/scatter, i.e. the `C log C` and `N·K` terms. It is data- and layout-sensitive — numpy's stable sort is much faster on run-rich and `I_INF`-padded columns, so the 111-edge payload leaves a 19 ms remainder where the 200-edge depth-5 population leaves 41 ms — hence a range, not a constant.
+- **Cyclic worst case.** 100 relaxation iterations instead of 6: `node_levels` is ×15.5 the depth-5 figure (trip-count ratio 16.7) and 93–96 % of the whole run. A population without a reachable cycle never pays this — in a real run most members are acyclic and the schedule is one shared traversal per population, not per network.
+- **Lever, not implemented.** `node_levels` carries *two* max-plus relaxations in one loop body: `level` (the answer) and `reach` (only there to tell a live cycle from a long acyclic path). Skipping `reach` for a caller that can guarantee acyclicity would roughly halve the trip cost — the dominant term — but it needs a static "acyclic" flag in the Pipeline's shape signature (and therefore in the executable cache key). Not wired up.
+- `incoming_table` (through `_window_table`) and `node_levels` embed `(P, N·K+1)`/`(P, N·K)` int32 buffers as graph constants: at P=1000 that is 9 constants above evoxc's 1 MiB threshold, ≈14.4 MB total (warned and ignored). P ≤ 500 stays below the threshold (800 KB). A build-time cost, not a per-run one.
+Reproduction (build **once**, then time `evoxc.run` only — `run_defn` per iteration would time the build; the synthetic `tensorneat` package is needed only while `src/tensorneat/__init__.py` still imports the stale sibling modules):
 
 ```
 PYTHONPATH=src:test .venv/bin/python - <<'PY'
-import sys, types, time, statistics, warnings
-sys.path.insert(0, "src")
+import os, statistics, sys, time, types, warnings
+for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+    os.environ.setdefault(var, "1")
 pkg = types.ModuleType("tensorneat"); pkg.__path__ = ["src/tensorneat"]; sys.modules["tensorneat"] = pkg
 import numpy as np, evoxc
 from tensorneat.common import tensorization, tools
 from support.runner import build_defn, tensor
+
 N, C, K, S = 50, 200, 8, 64
-for P in (100, 500, 1000):
-    rng = np.random.default_rng(1000 + P)
-    nk = np.full((P, N), tools.I_INF, np.int32); nk[:, :N - 4] = np.arange(N - 4, dtype=np.int32)
-    ci = np.full((P, C), tools.I_INF, np.int32); co = np.full((P, C), tools.I_INF, np.int32)
-    for p in range(P):
-        present = nk[p][nk[p] != tools.I_INF]
-        ci[p] = rng.choice(present, size=C); co[p] = rng.choice(present, size=C)
-    args = (nk, ci, co, np.arange(2, dtype=np.int32),
-            np.arange(N - 6, N - 4, dtype=np.int32), P, N, C, K, S)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        exe = build_defn(tensorization.derive_schedule, *args)
-    run_args = tuple(tensor(a) if isinstance(a, np.ndarray) else a for a in args)
+INPUTS, OUTPUTS, PRESENT = [0, 1], [N - 6, N - 5], list(range(N - 4))
+
+def layered_dag(depth, rng, dense=False):
+    hidden = [k for k in PRESENT if k not in INPUTS and k not in OUTPUTS]
+    level = {k: 0 for k in INPUTS} | {k: depth for k in OUTPUTS}
+    level |= {k: 1 + i % (depth - 1) for i, k in enumerate(hidden)}
+    by_level = {}
+    for k, lvl in level.items():
+        by_level.setdefault(lvl, []).append(k)
+    edges = set()
+    for k in sorted(level, key=lambda key: level[key]):      # 2 preds on the previous level
+        if level[k]:
+            preds = by_level[level[k] - 1]
+            for _ in range(2):
+                edges.add((int(preds[rng.integers(len(preds))]), k))
+    in_deg = {}
+    for _u, v in edges:
+        in_deg[v] = in_deg.get(v, 0) + 1
+    if dense:                                                # any forward jump: all C rows live
+        cand = [(u, v) for u in PRESENT for v in PRESENT
+                if level[u] < level[v] and (u, v) not in edges]
+        cand.sort(key=lambda uv: level[uv[1]] - level[uv[0]]); rng.shuffle(cand)
+        cand.sort(key=lambda uv: level[uv[1]] - level[uv[0]])
+    else:                                                    # adjacent levels only
+        cand = [(u, v) for lvl in range(depth) for u in by_level.get(lvl, [])
+                for v in by_level.get(lvl + 1, []) if (u, v) not in edges]
+        rng.shuffle(cand)
+    for u, v in cand:                                        # fill up to C edges, in-degree <= K
+        if len(edges) >= C:
+            break
+        if in_deg.get(v, 0) < K:
+            edges.add((u, v)); in_deg[v] = in_deg.get(v, 0) + 1
+    return sorted(edges)
+
+def cyclic(rng):
+    edges = set()
+    while len(edges) < C:
+        edges.add((int(PRESENT[rng.integers(len(PRESENT))]), int(PRESENT[rng.integers(len(PRESENT))])))
+    return sorted(edges)
+
+def payload(pop_size, edges, rng):
+    nk = np.full((pop_size, N), tools.I_INF, np.int32); nk[:, :N - 4] = np.arange(N - 4)
+    ci = np.full((pop_size, C), tools.I_INF, np.int32); co = np.full((pop_size, C), tools.I_INF, np.int32)
+    for p in range(pop_size):
+        rows = list(edges); rng.shuffle(rows)                 # mutation order, not sorted
+        ci[p, :len(rows)] = [u for u, _ in rows]; co[p, :len(rows)] = [v for _, v in rows]
+    return (nk, ci, co, np.asarray(INPUTS, np.int32), np.asarray(OUTPUTS, np.int32),
+            pop_size, N, C, K, S)
+
+def timed(exe, run_args, repeat=15):
     evoxc.run(exe, *run_args)
-    ts = []
-    for _ in range(15):
-        t0 = time.perf_counter(); evoxc.run(exe, *run_args); ts.append((time.perf_counter() - t0) * 1000)
-    print(P, round(statistics.median(ts), 1), "ms")
+    out = []
+    for _ in range(repeat):
+        t0 = time.perf_counter(); evoxc.run(exe, *run_args); out.append(time.perf_counter() - t0)
+    return statistics.median(out) * 1e3
+
+for label, depth, dense in (("dag_d5", 5, False), ("dag_d18", 18, False),
+                            ("dag_d18d", 18, True), ("cyclic", 0, False)):
+    for pop_size in (100, 500, 1000):
+        rng = np.random.default_rng(2024 + pop_size + depth)
+        edges = cyclic(rng) if depth == 0 else layered_dag(depth, rng, dense)
+        args = payload(pop_size, edges, rng)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            exe = build_defn(tensorization.derive_schedule, *args)
+        run_args = tuple(tensor(a) if isinstance(a, np.ndarray) else a for a in args)
+        total = timed(exe, run_args)          # time the schedule before building anything else
+        out = evoxc.run(exe, *run_args)       # its own inputs feed the node_levels measurement
+        lvl = (np.asarray(out.in_conn.numpy()), np.asarray(out.in_src.numpy()),
+               np.asarray(out.input_slot.numpy()), N)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            lvl_exe = build_defn(tensorization.node_levels, *lvl)
+        lvl = tuple(tensor(a) if isinstance(a, np.ndarray) else a for a in lvl)
+        print(f"{label:8s} P={pop_size:5d} edges={len(edges):3d} "
+              f"run={total:7.2f}ms node_levels={timed(lvl_exe, lvl):7.2f}ms")
 PY
 ```
+
+Keeping the measurement order fixed matters: building the `node_levels` executable between the two timings changes the heap layout and the same payload then measures ~25 % faster (the depth-5 cells above would read 8.8 / 29.9 / 58.1 ms). Time the full schedule first.
 
 ## Forward-side contract (consumed by `genome`)
 Per level `l = 0 .. reduce_max(node_level)`:
@@ -129,7 +200,7 @@ Kernels must never index outside `[0, size)` — evoxc's numpy backend **raises*
 Sentinels `I_INF`, `KEY_MAX`; `batch_offsets(p, r)`, `flat_gather(x, idx)`, `masked_flat_gather(x, idx, mask=None, fill=nan)`, `flat_scatter(x, idx, upd)`, `masked_flat_scatter(x, idx, upd, mask)` (dump-slot routing); `fetch_first`, `fetch_random`, `rank_elements`, `argmin_with_mask`; mutation kernels `mutate_float`, `mutate_int(key, val, options, replace_rate)` (no `random.choice` in evoxc: `gather(options, randint)`); `to_numpy(tensor)` — the host-side array accessor every logging/checkpoint path uses, re-exported by `common.__init__`; `hash_rows` — **host-only** row hash for `genome.hash()` (numpy `view(np.uint32)`), never called inside a graph.
 
 ### `tensorization.py`
-`Transformed` `NamedTuple`; `derive_schedule` (`@evoxc.defn`); the internal steps as plain helper functions (`key_slot_table`, `slot_lookup`, `edge_group_rank`, `cum_in_degree`, `incoming_table`, `node_levels`) so they are individually testable; `validate_schedule(transformed)` host-side invariant checker used by tests.
+`Transformed` `NamedTuple`; `derive_schedule` (`@evoxc.defn`); the internal steps as plain helper functions (`key_slot_table`, `slot_lookup`, `edge_group_rank`, `cum_in_degree`, `incoming_table`, `node_levels`) so they are individually testable, plus the two private bodies `_window_table` (the single copy of `incoming_table`'s masked-scatter → slice → reshape pass, used for `in_conn` and `in_src`) and `_host_array` (which converts through `tools.to_numpy`); `validate_schedule(transformed)` host-side invariant checker used by tests.
 
 ### `functions/`
 Exports exactly `ACT`, `AGG`, `FunctionManager`, `apply_activation(z, act_ids, act_fns=ACT_FUNCS)`, `apply_aggregation(values, mask, agg_ids, agg_fns=AGG_FUNCS)`: `ACT`/`AGG` are `FunctionManager`s over 12 activations and 6 aggregations in a fixed, parity-critical order; activations are elementwise `(z) -> z'`, aggregations reduce the last axis of a `(P, N, K)` contribution tensor with neutral padding and are `NaN`-aware through the `mask`. `ACT.name_of(func)`/`AGG.name_of(func)` are the reverse registry lookups. See `functions/CONTEXT.md`.
@@ -156,6 +227,7 @@ It is deliberately not re-exported by `common.__init__` (its only consumer is `G
 ## Constraints
 - No `jax`/`torch`/`numpy.random` in graph code; randomness is `evoxc.random` stateless keys (`key(seed)`, `split`, `randint(key, shape, low, high)`, `uniform`, `normal`, `permutation`).
 - Files ≤ ~1000 lines; shared math lives here, never duplicated in `genome`/`algorithm`.
+- Inside this node one rule has one owner: `tools` owns the positive-static validator (`_positive_static`, used by `batch_offsets` and by every static in `tensorization`), the rank-0 scalar-constant builder (`_scalar_constant`) and the host-side array accessor (`to_numpy`, which `tensorization._host_array` converts through); those three are imported, never re-written. `host_graph` keeps its own `_I_INF` literal on purpose — `tools` pulls in `evoxc` and that module is deliberately backend-free.
 - Nothing in this node imports from `genome`, `algorithm`, `problem`, `pipeline`, `benchmarks`, or `test`.
 - Every public function carries a napoleon docstring stating shapes, dtypes, sentinels, and the invariances it relies on.
 - Errors: validation raises `errors.TensorNEATError` subclasses on the host, at configuration/build time, before a graph is traced; in-graph overflow is reported as data (`edge_overflow`), never silenced.
