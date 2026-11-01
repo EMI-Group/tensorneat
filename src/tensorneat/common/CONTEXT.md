@@ -190,8 +190,11 @@ Kernels must never index outside `[0, size)` — evoxc's numpy backend **raises*
 
 ## API Surface
 ### `state.py`
-`State(**kwargs)` — immutable host container over a dict; `register/update/remove` return new `State`s (raise on duplicate/missing keys); `__getattr__` raises `KeyError` for a missing key; `save(file_name)`/`load(file_name)` pickle it; `tree_flatten`/`tree_unflatten` + `evoxc.register_pytree_node` registration so it can cross a graph boundary.
-`StatefulBaseClass` in `stateful_class.py` — `setup(state) -> State`, `show_config(registered_objects=None) -> dict` for pipeline logging (host-only).
+`State(**kwargs)` — immutable host container over one `__dict__` entry (`state_dict`); `register(**kwargs)` raises `ConfigError` on a duplicate key, `update(**kwargs)` on a missing key, `remove(*keys)` on a missing key, and all three return a **new** `State` (the original is untouched); `save(file_name)`/`load(file_name)` pickle it; `tree_flatten`/`tree_unflatten` + `evoxc.register_pytree_node` registration so it can cross a graph boundary (children = values, aux = names, insertion order).
+`State` has no `__iter__`, `__len__`, `keys()`, `items()` or `values()`: membership is `"k" in state` (`__contains__`) and the key list is `state.registered_keys()` (a `dict_keys` view).
+`State.__getattr__` raises **`KeyError`**, not `AttributeError`, for an unknown entry — so `getattr(state, "x", default)` and `hasattr(state, "x")` propagate `KeyError` instead of falling back; use `"x" in state` to test for an optional entry.
+`State.__setattr__` always raises `AttributeError`, so every change goes through the three mutators; `__getattr__` deliberately returns the stored value unchanged, so a tensor entry is whatever the graph returned (an `evoxc.Tensor`), never auto-converted.
+`StatefulBaseClass` in `stateful_class.py` — `setup(self, state=None) -> State` (the default is `None`, the fresh `State()` is built in the body, so nothing runs at class-definition time), `show_config(self, registered_objects=None) -> dict` for pipeline logging (host-only; reads `self.__dict__` by name, recurses into `StatefulBaseClass` attributes once, renders every other value with `str()`, and JSON-serializes as nested `str -> str|dict`).
 
 ### `errors.py`
 `TensorNEATError(Exception)` root; subclasses `ConfigError`, `ShapeBoundError` (a static schedule bound was exceeded: `max_in_degree`, `key_span`, `max_conns`), `GraphError` (cycle where feedforward is required, missing input/output node), `BackendMismatchError`. Backend/shape errors from evoxc are **never** re-wrapped; only validation raises these.
