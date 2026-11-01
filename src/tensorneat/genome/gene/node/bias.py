@@ -7,7 +7,7 @@ it must not import ``jax``/``torch`` and must not duplicate the aggregation or
 activation machinery of :class:`.default.DefaultNode`.
 """
 
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 import evoxc
 import sympy as sp
@@ -173,22 +173,23 @@ class BiasNode(DefaultNode):
     def combine(
         self,
         state: State,
-        attrs: evoxc.SymbolicTensor,
+        attrs: Any,
         aggregated: evoxc.SymbolicTensor,
     ) -> evoxc.SymbolicTensor:
         """Compute the pre-activation value ``bias + aggregated``.
 
         Args:
             state: Host configuration container.
-            attrs: Node attributes, ``(P, N, 3)`` float32; reads the ``bias`` column
-                by its ``attr_specs`` position.
+            attrs: Node attributes, ``(P, N, 3)`` float32, or the
+                :class:`~.base.NodeOperands` bundle of the same rows; the ``bias`` column
+                is read by its ``attr_specs`` position.
             aggregated: ``(P, N)`` float32 output of
                 :meth:`~.base.BaseNode.aggregate`.
 
         Returns:
             ``(P, N)`` float32 pre-activation values.
         """
-        return evoxc.add(self.attr_column(attrs, "bias"), aggregated)
+        return evoxc.add(self.column_of(attrs, "bias"), aggregated)
 
     # ------------------------------------------------------------------ #
     # host-only presentation

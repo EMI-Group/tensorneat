@@ -21,7 +21,8 @@ Padding sentinels never mix: `I_INF` (`int32` max) for "no index", float NaN for
 `BaseGenome` holds host-side configuration (`num_inputs`, `num_outputs`, `max_nodes`, `max_conns`, `max_in_degree`, `max_depth`, `key_span`, transforms, `init_hidden_layers`) and the gene/operator objects; nothing on the compute path reads `State`.
 `key_span` (`S`, default `max(max_nodes, num_inputs + num_outputs) + max_conns`) bounds every node key: keys must lie in `[0, S)`, a caller allocating larger keys must raise it, and `S` is part of the Pipeline's shape signature.
 `node_exists`, `conn_exists`, `max_node_key`, `max_conn_marker` are the thin in-graph helpers `algorithm/` calls; `execute_mutation`/`execute_crossover`/`execute_distance`/`transform` accept both the `GenomeTensors` payload and the positional four-array spelling.
-The shared window step is `_hit_conn_attrs` + `_node_step` + `_output_values`, and `_gather_slots` is the flat-index gather both use (one-dimensional indices, because evoxc's scatter VJP requires equal ranks).
+The shared window step is `_hit_conn_attrs` + `_node_step` + `_output_values`, and `_gather_slots` is the flat-index gather both use (`evoxc.gather` has `np.take` semantics, so the index must be batch-wide and one-dimensional).
+`_hit_conn_attrs` returns a `_StepStatics` bundle — gathered+NaN-cleaned conn attributes (`ConnOperands`), the flat value-window index, the present-slot mask, the output-row mask, and the `NodeOperands` built on the first step — because node and conn attributes are constant during a forward pass, so every loop-invariant operand is derived once and a level pays only the value-dependent ops.
 - `initialize(state, key, pop_size) -> GenomeTensors` — `key` is a rank-0 `evoxc.random` key and randomness is drawn once per tensor with the batched output shape, so individual `i` gets an independent stream from one call.
 - `transform(state, node_keys, conn_keys) -> Transformed` — schedule derivation, delegated to `../common/tensorization.py`; pure tensor ops, no host round-trip.
 - `forward(state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, inputs) -> (P, num_outputs)` — trace-time kernel.
@@ -54,7 +55,18 @@ Per level:
 5. `update = (node_level == l) & node_exists & (valid_count > 0)`; `values = select(update, z, values)`. A node with no live incoming edge keeps NaN, and its descendants lose their only live source and stay NaN — this reproduces the legacy NaN poisoning exactly.
 Read out `gather(values, output_idx, axis=1) -> (P, num_outputs)`, then `output_transform`.
 Cost is `O(depth × max_nodes × K)` with only elementwise/reduce/gather ops: work scales with real depth and real in-degree, never `max_nodes²`.
-Measured budget (numpy backend, `P=1000`, `max_nodes=50`, `K=2`, ~20 ops per level): ≈1.8 ms per unrolled level, i.e. ≈14 ms for a depth-8 forward against the 157 ms legacy generation — so **op count per level**, not element count, is what the implementation must keep thin.
+**Op count per level, not element count, is the budget** — the numpy backend pays ≈80 µs per traced op at `P=1000`, `max_nodes=50`, `K=2` regardless of the element count, so every op removed from the unrolled step is worth ≈0.08 ms per level.
+Measured on the numpy backend (build excluded, `evoxc.run` median of 7, single-threaded; `max_nodes=50`, `max_conns=100`, `K=2`, depth 8, depth 1 = the per-pass overhead):
+
+| shape | depth 1 | depth 8 | per level |
+|---|---|---|---|
+| `P=100` | 1.03 ms | 4.20 ms | 0.53 ms |
+| `P=500` | 2.42 ms | 13.24 ms | 1.66 ms |
+| `P=1000` | 3.78 ms | 24.75 ms | 3.09 ms |
+
+Build (trace + lower + compile) costs 50–180 ms per shape signature, once per shape.
+The step now emits **35 traced ops per level** (was 44): the in-scope share is 13 — flatten+gather+reshape of the value window (3), `isnan`+`logical_and` liveness (2), conn-gene `isnan`/`select`/`multiply` (3), node `combine` (2), and `logical_and`+`reduce_max`+`select` for the update (3) — leaving ≈22 ops per level in `../common/functions/` and `default.py`'s level mask, which is why the ≈14 ms target is out of this node's reach.
+Remaining hot spots, all outside this node: `apply_activation`'s per-option `equal`+`select` cascade and its `cast` of ids (≈7 ops, `common/functions/act.py`), `apply_aggregation`'s per-option `equal`+`select` plus its `has_valid` guard and ids cast (≈8 ops, `common/functions/agg.py`), and `default.py`'s per-level `node_level == l` mask (3 ops).
 
 ## Forward algebra (recurrent)
 Same window machinery, no levels: unroll `activate_time` ticks in Python.

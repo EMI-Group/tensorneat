@@ -3,14 +3,16 @@
 Every kernel here is batch-first (population on axis 0) and elementwise over the
 node axis: no per-node Python loop, no ``vmap``/``scan``/``cond``, and no branching
 on traced values -- ``select`` chains only.
-This file owns the forward contract, the option-independent aggregation and the
-host-side repr/dict scaffolding; the attr tables and the concrete combine algebra
-belong to the families.
+This file owns the forward contract, the option-independent aggregation, the
+loop-invariant column bundle (:class:`NodeOperands`) and the host-side repr/dict
+scaffolding; the attr tables and the concrete combine algebra belong to the
+families.
 """
 
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, NamedTuple, Sequence
 
 import evoxc
+import evoxc.numpy as enp
 
 from ....common import ACT, AGG, State
 from ....common.errors import ConfigError
@@ -20,7 +22,33 @@ from ....common.functions import (
     apply_aggregation,
 )
 from ....common.functions.act import ACT_IDENTITY
-from ..base import BaseGene
+from ..base import BaseGene, column
+
+
+class NodeOperands(NamedTuple):
+    """Loop-invariant view of one ``(P, N, NA)`` node-attribute batch.
+
+    ``_node_step`` calls the gene once per unrolled level/tick with the *same* attribute
+    tensor, so every per-column read (a ``slice`` plus the ``reshape`` that makes it
+    differentiable, i.e. two traced ops each) and the option-index casts would otherwise
+    be re-emitted on every level. This bundle is built once per forward pass and then
+    read by :meth:`BaseNode.forward` / :meth:`BaseNode.aggregate` /
+    ``combine`` of the families, which turn ``~11`` per-level ops into zero.
+
+    Attributes:
+        columns: One ``(P, N) float32`` tensor per ``attr_specs`` column, in table order
+            (so ``columns[i]`` is the column ``attr_index(attr_specs[i].name)`` names).
+        aggregation_ids: ``(P, N) int32`` option ids of the ``aggregation`` column.
+        activation_ids: ``(P, N) int32`` option ids of the ``activation`` column with
+            :data:`~tensorneat.common.functions.act.ACT_IDENTITY` written on the output
+            rows, which is what lets :meth:`BaseNode.forward` skip its
+            ``select(is_output_node, z, activated)``: an id of ``-1`` matches no option,
+            so the dispatch cascade returns ``z`` itself there.
+    """
+
+    columns: tuple
+    aggregation_ids: Any
+    activation_ids: Any
 
 
 class BaseNode(BaseGene):
@@ -101,10 +129,19 @@ class BaseNode(BaseGene):
         The caller feeds one depth level at a time: ``messages`` is the already
         gathered and NaN-sanitized incoming window of the nodes of that level.
 
+        ``attrs`` may be the raw ``(P, N, NA)`` attribute tensor or the
+        :class:`NodeOperands` bundle of :meth:`prepare`. The bundle is what the forward
+        pass uses: it carries the per-column reads and the option ids of the whole
+        unrolled pass, so this kernel emits no attribute read per level. Output rows are
+        left unactivated by writing :data:`~tensorneat.common.functions.act.ACT_IDENTITY`
+        into their activation id inside the bundle (an id of ``-1`` matches no option, so
+        the dispatcher returns ``z`` unchanged), which is why no
+        ``select(is_output_node, z, activated)`` is emitted here.
+
         Args:
             state: Host configuration container (read-only during a trace).
-            attrs: Node attributes, ``(P, N, NA)`` float32, one row per node slot;
-                the ``activation`` column holds the per-row option index.
+            attrs: Node attributes, ``(P, N, NA)`` float32, one row per node slot, or the
+                :class:`NodeOperands` of :meth:`prepare` for those attributes.
             messages: One scalar message per incoming edge slot, ``(P, N, K)``
                 float32, already NaN-sanitized (NaN source -> 0).
             is_output_node: ``(P, N)`` bool, True for the rows read out as network
@@ -118,13 +155,76 @@ class BaseNode(BaseGene):
 
         Raises:
             tensorneat.common.errors.ConfigError: If the attr table declares no
-                ``activation`` column (families always declare one).
+                ``activation`` or ``aggregation`` column (families always declare both).
         """
+        if not isinstance(attrs, NodeOperands):
+            attrs = self.prepare(attrs, is_output_node)
         aggregated = self.aggregate(state, attrs, messages, valid_mask)
         z = self.combine(state, attrs, aggregated)
-        act_ids = self.attr_column(attrs, "activation")
-        activated = apply_activation(z, act_ids, self.activation_options)
-        return evoxc.select(is_output_node, z, activated)
+        return apply_activation(z, attrs.activation_ids, self.activation_options)
+
+    def prepare(
+        self,
+        attrs: evoxc.SymbolicTensor,
+        is_output_node: evoxc.SymbolicTensor,
+    ) -> NodeOperands:
+        """Read every attribute column and resolve the option ids once per forward pass.
+
+        Loop-invariant work hoisted out of the unrolled level/tick loop: the columns of
+        ``node_attrs`` do not change while a forward pass runs, so the per-column
+        ``slice`` + ``reshape`` reads and the option-id casts belong here, not in
+        :meth:`forward`.
+
+        ``state`` is deliberately not an argument: the reads are pure column arithmetic
+        (like :meth:`..base.BaseGene.attr_column`), and the one production caller lives in
+        ``BaseGenome._node_step``, which has the state but does not need to pass it.
+
+        Args:
+            attrs: Node attributes, ``(P, N, NA)`` float32, one row per node slot.
+            is_output_node: ``(P, N)`` bool, True on the rows read out as network outputs;
+                their activation id is forced to
+                :data:`~tensorneat.common.functions.act.ACT_IDENTITY` so the activation
+                dispatch leaves them untouched.
+
+        Returns:
+            The :class:`NodeOperands` of ``attrs``.
+
+        Raises:
+            tensorneat.common.errors.ConfigError: If the attribute width of ``attrs`` does
+                not match the declared table, or the table declares no ``aggregation`` /
+                ``activation`` column (families always declare both).
+        """
+        width = int(attrs.shape[-1])
+        if width != self.attr_width:
+            raise ConfigError(
+                f"{type(self).__name__} reads {self.attr_width} attribute column(s) but the "
+                f"payload carries {width}"
+            )
+        columns = tuple(column(attrs, index) for index in range(width))
+        aggregation_ids = evoxc.cast(columns[self.attr_index("aggregation")], evoxc.int32)
+        activation_ids = evoxc.select(
+            is_output_node,
+            enp.full((), ACT_IDENTITY, dtype=evoxc.int32),
+            evoxc.cast(columns[self.attr_index("activation")], evoxc.int32),
+        )
+        return NodeOperands(columns, aggregation_ids, activation_ids)
+
+    def column_of(
+        self, attrs: Any, name: str
+    ) -> evoxc.SymbolicTensor:
+        """Read one named attribute column of a raw batch or of a prepared bundle.
+
+        Args:
+            attrs: ``(P, N, NA)`` float32 attribute rows, or the :class:`NodeOperands`
+                bundle of :meth:`prepare`.
+            name: Spec name of the column, resolved through ``attr_specs``.
+
+        Returns:
+            ``(P, N)`` float32 column values.
+        """
+        if isinstance(attrs, NodeOperands):
+            return attrs.columns[self.attr_index(name)]
+        return self.attr_column(attrs, name)
 
     def aggregate(
         self,
@@ -147,8 +247,9 @@ class BaseNode(BaseGene):
 
         Args:
             state: Host configuration container.
-            attrs: Node attributes, ``(P, N, NA)`` float32; the ``aggregation`` index
-                column selects the branch per node row.
+            attrs: Node attributes, ``(P, N, NA)`` float32, or the :class:`NodeOperands`
+                bundle of :meth:`prepare`; the ``aggregation`` index column selects the
+                branch per node row.
             messages: ``(P, N, K)`` float32, already NaN-sanitized.
             valid_mask: ``(P, N, K)`` bool, True for live slots.
 
@@ -159,10 +260,15 @@ class BaseNode(BaseGene):
             tensorneat.common.errors.ConfigError: If the attr table declares no
                 ``aggregation`` column (families always declare one).
         """
+        aggregation_ids = (
+            attrs.aggregation_ids
+            if isinstance(attrs, NodeOperands)
+            else evoxc.cast(self.attr_column(attrs, "aggregation"), evoxc.int32)
+        )
         return apply_aggregation(
             messages,
             valid_mask,
-            self.attr_column(attrs, "aggregation"),
+            aggregation_ids,
             self.aggregation_options,
         )
 
@@ -179,7 +285,9 @@ class BaseNode(BaseGene):
 
         Args:
             state: Host configuration container.
-            attrs: Node attributes, ``(P, N, NA)`` float32.
+            attrs: Node attributes, ``(P, N, NA)`` float32, or the :class:`NodeOperands`
+                bundle of :meth:`prepare`; a family reads its columns with
+                :meth:`column_of`, which accepts either spelling.
             aggregated: ``(P, N)`` float32 output of :meth:`aggregate`.
 
         Returns:

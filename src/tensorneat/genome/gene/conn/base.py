@@ -3,19 +3,38 @@
 Every kernel is batch-first (population on axis 0) and purely elementwise in the
 edge slot, so the per-level forward stays a single vectorized op and messages never
 couple across edges.
-This file owns the key-column contract, the split-payload assembly, the forward
-signature and the historical-marker hook; concrete weight machinery belongs to the
-families and must never be duplicated here.
+This file owns the key-column contract, the split-payload assembly, the
+loop-invariant attribute bundle (:class:`ConnOperands`), the forward signature and the
+historical-marker hook; concrete weight machinery belongs to the families and must
+never be duplicated here.
 """
 
-from typing import Any
+from typing import Any, NamedTuple
 
 import evoxc
 import evoxc.numpy as enp
 
 from ....common import State
 from ....common.errors import ConfigError
-from ..base import BaseGene
+from ..base import BaseGene, column
+
+
+class ConnOperands(NamedTuple):
+    """Loop-invariant view of one ``(..., CA)`` connection-attribute batch.
+
+    The incoming-edge attributes are gathered once per forward pass and then fed to the
+    family once per unrolled level/tick, so the per-column read (``slice`` + ``reshape``,
+    two traced ops) and the NaN cleaning of every column (``isnan`` + ``select``, two more)
+    would otherwise repeat on every level. This bundle carries the cleaned columns of the
+    whole pass.
+
+    Attributes:
+        columns: One tensor per ``attr_specs`` column, in table order, with the NaN of the
+            padding rows cleaned to ``0`` (the default "absent row" policy of
+            :meth:`BaseConn.prepare`).
+    """
+
+    columns: tuple
 
 
 class BaseConn(BaseGene):
@@ -133,10 +152,63 @@ class BaseConn(BaseGene):
             count *= int(size)
         return evoxc.reshape(enp.arange(count, dtype=evoxc.int32), shape)
 
+    def prepare(self, attrs: evoxc.SymbolicTensor) -> ConnOperands:
+        """Clean every attribute column of one batch once per forward pass.
+
+        Loop-invariant work hoisted out of the unrolled level/tick loop: the gathered
+        edge attributes do not change while a forward pass runs, so the per-column reads
+        and the NaN cleaning belong here, not in the family's ``forward``.
+
+        The default policy is "a NaN attribute means an absent (padding) row, so it reads
+        as ``0``", which is what the pre-rewrite library did in every family; a family
+        that needs another treatment overrides this method instead of re-deriving it per
+        level. ``state`` is deliberately not an argument: the cleaning is pure column
+        arithmetic (like :meth:`..base.BaseGene.attr_column`), and the one production
+        caller lives in ``BaseGenome._hit_conn_attrs``, which has no state to pass.
+
+        Args:
+            attrs: Per-slot connection attributes, ``(..., CA)`` float32, rows of absent
+                connections NaN.
+
+        Returns:
+            The :class:`ConnOperands` of ``attrs``.
+
+        Raises:
+            tensorneat.common.errors.ConfigError: If the attribute width of ``attrs`` does
+                not match the declared table.
+        """
+        width = int(attrs.shape[-1])
+        if width != self.attr_width:
+            raise ConfigError(
+                f"{type(self).__name__} reads {self.attr_width} attribute column(s) but "
+                f"the payload carries {width}"
+            )
+        return ConnOperands(
+            tuple(
+                evoxc.select(evoxc.isnan(column(attrs, index)), 0.0, column(attrs, index))
+                for index in range(width)
+            )
+        )
+
+    def column_of(self, attrs: Any, name: str) -> evoxc.SymbolicTensor:
+        """Read one named attribute column of a raw batch or of a prepared bundle.
+
+        Args:
+            attrs: ``(..., CA)`` float32 attribute rows, or the :class:`ConnOperands`
+                bundle of :meth:`prepare`.
+            name: Spec name of the column, resolved through ``attr_specs``.
+
+        Returns:
+            ``(...,)`` float32 column values.
+        """
+        if isinstance(attrs, ConnOperands):
+            return attrs.columns[self.attr_index(name)]
+        return self.attr_column(attrs, name)
+
     def forward(
         self,
         state: State,
-        attrs: evoxc.SymbolicTensor,
+        attrs: Any,
         source_values: evoxc.SymbolicTensor,
     ) -> evoxc.SymbolicTensor:
         """Turn each edge's attributes and source value into a scalar message.
@@ -145,7 +217,9 @@ class BaseConn(BaseGene):
             state: Host configuration container (read-only during a trace).
             attrs: Per-slot connection attributes, ``(P, N, K, CA)`` float32, gathered
                 once per generation with the incoming-edge table; rows of absent
-                connections are NaN.
+                connections are NaN. The :class:`ConnOperands` bundle of :meth:`prepare`
+                for those rows is accepted too and is what the forward pass passes, so a
+                family reads its columns with :meth:`column_of` and skips the re-cleaning.
             source_values: Values of the source node of each slot, ``(P, N, K)``
                 float32; NaN where the source has not been computed (unreachable or
                 absent node).

@@ -7,6 +7,8 @@ This file declares the weight table and the NaN-safe message; it must not import
 :class:`.base.BaseConn`.
 """
 
+from typing import Any
+
 import evoxc
 import evoxc.numpy as enp
 import sympy as sp
@@ -14,7 +16,7 @@ import sympy as sp
 from ....common import State
 from ....common.errors import ConfigError
 from ..base import GeneAttr
-from .base import BaseConn
+from .base import BaseConn, ConnOperands
 
 
 class DefaultConn(BaseConn):
@@ -146,7 +148,7 @@ class DefaultConn(BaseConn):
     def forward(
         self,
         state: State,
-        attrs: evoxc.SymbolicTensor,
+        attrs: Any,
         source_values: evoxc.SymbolicTensor,
     ) -> evoxc.SymbolicTensor:
         """Compute the NaN-safe edge message ``sanitized(source) * sanitized(weight)``.
@@ -159,18 +161,19 @@ class DefaultConn(BaseConn):
         Args:
             state: Host configuration container.
             attrs: Per-slot connection attributes, ``(P, N, K, 1)`` float32, gathered
-                with the incoming-edge table.
+                with the incoming-edge table, or the
+                :class:`~.base.ConnOperands` bundle of those rows, whose ``weight``
+                column is already NaN-cleaned (only the source is sanitised here then).
             source_values: Source node values, ``(P, N, K)`` float32.
 
         Returns:
             ``(P, N, K)`` float32 messages, ``select(isnan(source), 0, source) *
             select(isnan(weight), 0, weight)`` per slot.
         """
-        weight = self.attr_column(attrs, "weight")
+        prepared = attrs if isinstance(attrs, ConnOperands) else self.prepare(attrs)
         zero = enp.zeros((), dtype=evoxc.float32)
         safe_source = evoxc.select(evoxc.isnan(source_values), zero, source_values)
-        safe_weight = evoxc.select(evoxc.isnan(weight), zero, weight)
-        return evoxc.multiply(safe_source, safe_weight)
+        return evoxc.multiply(safe_source, prepared.columns[self.attr_index("weight")])
 
     def sympy_func(
         self, state: State, conn_dict: dict, inputs: sp.Expr

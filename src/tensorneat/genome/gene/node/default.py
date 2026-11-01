@@ -8,7 +8,7 @@ This file declares the attribute table and the family hooks; it must not import
 duplicate the table machinery of :class:`..base.BaseGene`.
 """
 
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 import evoxc
 import sympy as sp
@@ -305,23 +305,24 @@ class DefaultNode(BaseNode):
     def combine(
         self,
         state: State,
-        attrs: evoxc.SymbolicTensor,
+        attrs: Any,
         aggregated: evoxc.SymbolicTensor,
     ) -> evoxc.SymbolicTensor:
         """Compute the pre-activation value ``bias + response * aggregated``.
 
         Args:
             state: Host configuration container.
-            attrs: Node attributes, ``(P, N, 4)`` float32; reads the ``bias`` and
-                ``response`` columns by their ``attr_specs`` position.
+            attrs: Node attributes, ``(P, N, 4)`` float32, or the
+                :class:`~.base.NodeOperands` bundle of the same rows; the ``bias`` and
+                ``response`` columns are read by their ``attr_specs`` position.
             aggregated: ``(P, N)`` float32 output of
                 :meth:`~.base.BaseNode.aggregate`.
 
         Returns:
             ``(P, N)`` float32 pre-activation values.
         """
-        bias = self.attr_column(attrs, "bias")
-        response = self.attr_column(attrs, "response")
+        bias = self.column_of(attrs, "bias")
+        response = self.column_of(attrs, "response")
         return evoxc.add(bias, evoxc.multiply(response, aggregated))
 
     # ------------------------------------------------------------------ #
