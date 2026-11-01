@@ -196,10 +196,12 @@ class DefaultGenome(BaseGenome):
         for level in range(1, self.max_depth + 1):
             # One level per unrolled step: the "has a live incoming slot" term is ANDed in by
             # ``_node_step`` itself, so the mask here stays a cheap int comparison.
-            level_mask = evoxc.equal(
+            # ``node_exists`` is not ANDed in: the schedule sets ``node_level`` to ``I_INF`` on
+            # every absent (or unreachable) row, so ``node_level == level`` is already False
+            # there and the extra ``logical_and`` cost one op per level for nothing.
+            update_mask = evoxc.equal(
                 transformed.node_level, enp.full((), level, dtype=evoxc.int32)
             )
-            update_mask = evoxc.logical_and(level_mask, transformed.node_exists)
             values = self._node_step(
                 state,
                 transformed,

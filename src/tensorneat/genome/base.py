@@ -140,31 +140,33 @@ def _column_index(
         ``(P, N, K, CA) int32`` index into the flattened ``(P, E * CA)`` attribute table,
         i.e. ``row * CA + column``.
     """
-    pop_size, max_nodes, window = (int(size) for size in rows.shape)
-    scaled = evoxc.multiply(
-        evoxc.reshape(rows, (pop_size, max_nodes, window, 1)), _i32(attr_width)
+    scaled = evoxc.reshape(
+        evoxc.multiply(rows, _i32(attr_width)), (*rows.shape, 1)
     )
-    return evoxc.add(
-        scaled,
-        enp.reshape(enp.arange(0, attr_width, dtype=evoxc.int32), (1, 1, 1, attr_width)),
+    column = evoxc.constant(
+        evoxc.from_numpy(
+            np.ascontiguousarray(
+                np.arange(attr_width, dtype=np.int32).reshape(1, 1, 1, attr_width)
+            )
+        )
     )
+    return evoxc.add(scaled, column)
 
 
-def _column_mask(
-    present: evoxc.SymbolicTensor, attr_width: int
-) -> evoxc.SymbolicTensor:
-    """Broadcast a ``(P, N, K)`` slot mask over the attribute columns of a connection row.
+def _column_mask(present: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
+    """Widen a ``(P, N, K)`` slot mask to the attribute columns of a connection row.
+
+    The trailing ``1`` axis is left for the consumers to broadcast: ``logical_and`` against the
+    ``(P, N, K, CA)`` index and ``select`` against the gathered ``(P, N, K, CA)`` window both
+    broadcast it, so no explicit ``broadcast_to`` op is needed.
+
     Args:
         present: ``(P, N, K) bool`` liveness of each window slot.
-        attr_width: ``CA``, the number of attribute columns of one connection row.
+
     Returns:
-        ``(P, N, K, CA) bool`` mask, True where the whole attribute row is real.
+        ``(P, N, K, 1) bool`` mask, broadcasting over the attribute columns.
     """
-    pop_size, max_nodes, window = (int(size) for size in present.shape)
-    return enp.broadcast_to(
-        evoxc.reshape(present, (pop_size, max_nodes, window, 1)),
-        (pop_size, max_nodes, window, attr_width),
-    )
+    return evoxc.reshape(present, (*present.shape[:3], 1))
 
 
 def _gather_prepared(
@@ -181,7 +183,9 @@ def _gather_prepared(
     Args:
         x: ``(P, R)`` source table (node values, or a reshaped attribute payload).
         flat_index: ``(P * prod(block),)`` flat index from :func:`_slot_index`.
-        present: ``(P, *block) bool`` liveness mask from :func:`_slot_index`.
+        present: ``(P, *block) bool`` liveness mask from :func:`_slot_index` (a broadcastable
+            ``(P, *block[:-1], 1)`` mask is accepted too, so an attribute gather needs no
+            explicit widening op).
         block: The window shape the result is reshaped to.
         fill: Value written where the slot is absent, or ``None`` to leave the gathered value
             in place — a value gather does not need the fill, because the slots it would
@@ -191,12 +195,13 @@ def _gather_prepared(
         ``(P, *block)`` tensor with ``x``'s dtype.
     """
     pop_size, row_len = (int(size) for size in x.shape)
-    len_flat = round(int(flat_index.shape[0]) / pop_size)
     values = evoxc.gather(evoxc.reshape(x, (pop_size * row_len,)), flat_index, axis=0)
+    values = evoxc.reshape(values, (pop_size, *block))
     if fill is not None:
-        present = evoxc.reshape(present, (pop_size * len_flat,))
+        # After the reshape, so the trailing-``1`` mask of ``_column_mask`` broadcasts without
+        # an explicit widening op.
         values = evoxc.select(present, values, enp.full((), float(fill), dtype=x.dtype))
-    return evoxc.reshape(values, (pop_size, *block))
+    return values
 def _iinf(dtype: Any = evoxc.int32) -> evoxc.SymbolicTensor:
     """Rank-0 ``I_INF`` — the padding sentinel of every key array, left to broadcast.
 
@@ -943,9 +948,9 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         shape = tuple(attrs.shape)
         if not shape[-1]:  # a family without evolvable attributes
             return attrs
-        rows = enp.broadcast_to(
-            evoxc.reshape(self.node_exists(keys), (*shape[:-1], 1)), shape
-        )
+        # ``select`` broadcasts the trailing-``1`` mask over the attribute columns, so the
+        # widening ``broadcast_to`` op costs nothing here.
+        rows = evoxc.reshape(self.node_exists(keys), (*shape[:-1], 1))
         return evoxc.select(rows, attrs, enp.zeros((), dtype=evoxc.float32))
 
     # ---------------------------------------------------------------- shared kernel
@@ -1008,7 +1013,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
             hit = self._gather_slots(
                 evoxc.reshape(conn_attrs, (pop_size, conn_rows * attr_width)),
                 _column_index(transformed.in_conn, attr_width),
-                _column_mask(transformed.in_valid, attr_width),
+                _column_mask(transformed.in_valid),
                 float("nan"),
             )
         else:  # a family without evolvable attributes: nothing to gather
@@ -1084,9 +1089,10 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         xv = _gather_prepared(
             values, hit_conn_attrs.flat_index, hit_conn_attrs.present, block, None
         )
-        live = evoxc.logical_and(
-            hit_conn_attrs.present, evoxc.logical_not(evoxc.isnan(xv))
-        )
+        # ``xv == xv`` is False exactly on NaN, i.e. it *is* ``~isnan(xv)`` — one comparison
+        # instead of ``isnan`` plus ``logical_not``. The static ``present`` term still has to
+        # be ANDed in because a dead slot is redirected to a real (finite) row by the gather.
+        live = evoxc.logical_and(hit_conn_attrs.present, evoxc.equal(xv, xv))
         messages = self.conn_gene.forward(state, hit_conn_attrs.conn, xv)
         z = self.node_gene.forward(
             state,
@@ -1123,9 +1129,10 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         Returns:
             ``(P, N) bool``, True on the last ``num_outputs`` rows.
         """
-        rows = enp.arange(0, max_nodes, dtype=evoxc.int32)
-        flag = evoxc.greater_equal(rows, _i32(max_nodes - self.num_outputs))
-        return enp.broadcast_to(evoxc.reshape(flag, (1, max_nodes)), (pop_size, max_nodes))
+        flag = np.zeros(max_nodes, dtype=bool)
+        flag[max_nodes - self.num_outputs :] = True
+        row = evoxc.constant(evoxc.from_numpy(np.ascontiguousarray(flag)))
+        return enp.broadcast_to(evoxc.reshape(row, (1, max_nodes)), (pop_size, max_nodes))
 
     def _output_values(
         self, values: evoxc.SymbolicTensor, output_transform: Callable | None
