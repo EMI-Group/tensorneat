@@ -8,9 +8,11 @@ This file declares the weight table and the NaN-safe message; it must not import
 """
 
 import evoxc
+import evoxc.numpy as enp
 import sympy as sp
 
 from ....common import State
+from ....common.errors import ConfigError
 from ..base import GeneAttr
 from .base import BaseConn
 
@@ -28,6 +30,7 @@ class DefaultConn(BaseConn):
     disturb existing behaviour).
     """
 
+    #: Default weight table; :meth:`__init__` rebuilds it from its knobs per instance.
     attr_specs: tuple[GeneAttr, ...] = (
         GeneAttr(
             name="weight",
@@ -54,6 +57,11 @@ class DefaultConn(BaseConn):
     ):
         """Configure the weight attribute column (host-side, called once).
 
+        The knobs are stored as attributes and the instance's ``attr_specs`` is
+        rebuilt from them, so :meth:`~.base.BaseConn.attr_column`,
+        ``new_random_attrs``, ``mutate`` and ``distance`` all follow the configured
+        distribution and bounds without knowing about this constructor.
+
         Args:
             weight_init_mean: Mean of the initial weight draw.
             weight_init_std: Standard deviation of the initial weight draw, which is
@@ -70,14 +78,70 @@ class DefaultConn(BaseConn):
                 unclipped.
 
         Raises:
-            NotImplementedError: Skeleton stub; the implementation stores the knobs
-                and rebuilds ``attr_specs`` from them in the implementation wave.
-            TensorNEATError: (implementation wave) if ``lower_bound`` is not below
-                ``upper_bound``.
+            tensorneat.common.errors.ConfigError: If both bounds are given and
+                ``weight_lower_bound >= weight_upper_bound``, which would make the
+                bound interval empty.
         """
-        raise NotImplementedError(
-            "store the weight init/mutate knobs and rebuild attr_specs from them"
+        self.weight_init_mean = float(weight_init_mean)
+        self.weight_init_std = float(weight_init_std)
+        self.weight_mutate_power = float(weight_mutate_power)
+        self.weight_mutate_rate = float(weight_mutate_rate)
+        self.weight_replace_rate = float(weight_replace_rate)
+        self.weight_lower_bound = weight_lower_bound
+        self.weight_upper_bound = weight_upper_bound
+        if (
+            weight_lower_bound is not None
+            and weight_upper_bound is not None
+            and float(weight_lower_bound) >= float(weight_upper_bound)
+        ):
+            raise ConfigError(
+                f"{type(self).__name__}: weight_lower_bound {weight_lower_bound} must "
+                f"be below weight_upper_bound {weight_upper_bound}"
+            )
+        self.attr_specs = (
+            GeneAttr(
+                name="weight",
+                kind="float",
+                init_mean=self.weight_init_mean,
+                init_std=self.weight_init_std,
+                mutate_power=self.weight_mutate_power,
+                mutate_rate=self.weight_mutate_rate,
+                replace_rate=self.weight_replace_rate,
+                lower_bound=weight_lower_bound,
+                upper_bound=weight_upper_bound,
+            ),
         )
+
+    def new_identity_attrs(self, state: State) -> evoxc.SymbolicTensor:
+        """Attribute row of a connection that reproduces its source signal.
+
+        Used by the add-node split of ``genome/operations/mutation``, which replaces a
+        connection ``a -> b`` by ``a -> new -> b``: the new edge must carry
+        ``weight = 1.0`` so the split preserves the signal. The row is the fixed
+        legacy value ``1.0`` and is deliberately **not** clipped into the weight
+        bounds, so a split never silently rescales the network (legacy parity).
+
+        Args:
+            state: Host configuration container.
+
+        Returns:
+            ``(1,)`` float32 row holding ``weight = 1.0``.
+        """
+        return self._attr_row([1.0])
+
+    def new_zero_attrs(self, state: State) -> evoxc.SymbolicTensor:
+        """Attribute row of a brand-new connection: ``weight = 0.0``.
+
+        Used by add-connection mutation, so a newly created edge is inert until
+        mutation gives it a weight.
+
+        Args:
+            state: Host configuration container.
+
+        Returns:
+            ``(1,)`` float32 row holding ``weight = 0.0``.
+        """
+        return self._attr_row([0.0])
 
     def forward(
         self,
@@ -101,74 +165,29 @@ class DefaultConn(BaseConn):
         Returns:
             ``(P, N, K)`` float32 messages, ``select(isnan(source), 0, source) *
             select(isnan(weight), 0, weight)`` per slot.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
         """
-        raise NotImplementedError(
-            "select(isnan(source), 0, source) * select(isnan(weight), 0, weight) -> (P, N, K)"
-        )
-
-    def repr(
-        self,
-        state: State,
-        key_row: evoxc.SymbolicTensor,
-        attr_row: evoxc.SymbolicTensor,
-        precision: int = 2,
-    ) -> str:
-        """Render one connection gene as ``in / out / weight``.
-
-        Args:
-            state: Host configuration container.
-            key_row: ``(key_width,)`` int32 key columns of a single gene.
-            attr_row: ``(1,)`` float32 attribute columns of the same gene.
-            precision: Decimal places for the weight.
-
-        Returns:
-            A single-line description, e.g. ``DefaultConn(in: 1, out: 4, weight: 0.50)``.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
-        """
-        raise NotImplementedError("format the in/out keys and the rounded weight")
-
-    def to_dict(
-        self,
-        state: State,
-        key_row: evoxc.SymbolicTensor,
-        attr_row: evoxc.SymbolicTensor,
-    ) -> dict:
-        """Convert one connection gene to the dict used by host code generation.
-
-        Args:
-            state: Host configuration container.
-            key_row: ``(key_width,)`` int32 key columns of a single gene.
-            attr_row: ``(1,)`` float32 attribute columns of the same gene.
-
-        Returns:
-            ``{"in": int, "out": int, "weight": float}``.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
-        """
-        raise NotImplementedError("map the in/out keys and the weight column to a dict")
+        weight = self.attr_column(attrs, "weight")
+        zero = enp.zeros((), dtype=evoxc.float32)
+        safe_source = evoxc.select(evoxc.isnan(source_values), zero, source_values)
+        safe_weight = evoxc.select(evoxc.isnan(weight), zero, weight)
+        return evoxc.multiply(safe_source, safe_weight)
 
     def sympy_func(
         self, state: State, conn_dict: dict, inputs: sp.Expr
     ) -> tuple[sp.Expr, dict]:
         """Build the sympy expression ``inputs * weight`` of one connection.
 
+        The weight symbol is named ``c_{in}_{out}_w`` from the connection's endpoint
+        keys, so the generated formula stays readable and every edge of a decoded
+        network gets its own symbol.
+
         Args:
             state: Host configuration container.
-            conn_dict: Output of :meth:`to_dict` for this connection.
+            conn_dict: Output of ``to_dict`` for this connection.
             inputs: sympy expression of the source node value.
 
         Returns:
             ``(inputs * weight, {weight_symbol: conn_dict["weight"]})``.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
         """
-        raise NotImplementedError(
-            "sympy: inputs * weight_symbol plus {weight_symbol: conn_dict['weight']}"
-        )
+        weight = sp.symbols(f"c_{conn_dict['in']}_{conn_dict['out']}_w")
+        return inputs * weight, {weight: conn_dict["weight"]}
