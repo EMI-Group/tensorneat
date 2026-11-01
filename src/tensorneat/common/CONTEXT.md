@@ -87,6 +87,9 @@ Sentinels `I_INF`, `KEY_MAX`; `batch_offsets(p, r)`, `flat_gather(x, idx)`, `mas
 ### `functions/`
 Exports exactly `ACT`, `AGG`, `FunctionManager`, `apply_activation(z, act_ids)`, `apply_aggregation(z, mask, agg_ids)`: `ACT`/`AGG` are `FunctionManager`s over 12 activations and 6 aggregations in a fixed, parity-critical order; activations are elementwise `(z) -> z'`, aggregations reduce the last axis of a `(P, N, K)` contribution tensor with neutral padding. See `functions/CONTEXT.md`.
 
+### `host_graph.py`
+Host-only, pure Python (stdlib + `errors.GraphError`), never traced: `decode_graph(nodes, conns, node_attrs=1, conn_attrs=2)` → `(dict[int, tuple[float, ...]], set[tuple[int, int]])`; `topological_sort(nodes, conns)` → `(topo_order, topo_layers)` (Kahn, layers ascending, `GraphError` on a cycle); `find_useful_nodes(nodes, conns, output_idx)` → `set[int]`; `check_cycles(nodes, conns, from_idx, to_idx)` → `bool`; `node_depth(nodes, conns, input_idx)` → `dict[int, int]`, which must equal `Transformed.level` for a well-formed feedforward genome.
+
 ### `sympy_tools.py`
 Host-only (`sympy`, `numpy`, regex): `analysis_nodes_exprs`, `round_expr`, `replace_variable_names`, `to_latex_code`, `to_python_code` — the 8-tuple contract of `Genome.sympy_func` is unchanged from the pre-rewrite library.
 
@@ -108,7 +111,9 @@ Host-only (`sympy`, `numpy`, regex): `analysis_nodes_exprs`, `round_expr`, `repl
 - Errors: validation raises `errors.TensorNEATError` subclasses on the host, at configuration/build time, before a graph is traced; in-graph overflow is reported as data (`edge_overflow`), never silenced.
 
 ## Known Gaps / Open Decisions
-- The pre-rewrite helper names are gone and must not be re-introduced by consumers: `attach_with_inf` → `masked_flat_gather`; `hash_array` → `hash_rows` (host-only); `graph.topological_sort*`, `find_useful_nodes`, `check_cycles` have **no in-graph replacement** — execution order is `level`/`topo_key`, and host-side graph walks (visualisation, `network_dict`, sympy codegen) build their own adjacency from the payload with plain Python.
+- The pre-rewrite helper names are gone and must not be re-introduced by consumers: `attach_with_inf` → `masked_flat_gather`; `hash_array` → `hash_rows` (host-only).
+- Host-side graph walks (visualisation, `network_dict`, sympy codegen) use `host_graph.py`, which owns the graph algorithms for interpretability and export.
+- Only the **in-graph** helpers (`topological_sort` over an `(N, N)` adjacency matrix, `check_cycles`) have no replacement, because execution order comes from `level`/`topo_key`.
 - **No bitcast op in evoxc** (v1): gene payloads stay float32; `genome.hash()` is host-only bit-hashing; in-graph gene identity (crossover matching) must compare key columns with `equal` instead of hashing whole rows. Revisit if evoxc grows `bitcast`/`reinterpret`.
 - **`cumsum` is a StableHLO export deferral** in evoxc (works on the numpy interpreter only), which is why the schedule avoids it (see the `cc` trick in the derivation recipe). `argsort`/`sort`/`scatter`/`gather` have no such caveat.
 - No scatter-with-reduce ⇒ per-node aggregation uses the padded `(P, N, K)` table; `K` is a static bound, so in-degree growth forces a rebuild (reported via `edge_overflow`).
