@@ -147,6 +147,7 @@ Tests live in the sibling `test/` tree (read-only from here): `test/unit/algorit
 `test/parity/algorithm/neat/` compares against `benchmarks/legacy_jax` on fixed gene payloads — identical selection/speciation outcomes for the deterministic steps, and only the divergences listed above allowed elsewhere.
 `test/integration/` evolves XOR to its fitness target with a fixed seed and asserts run-to-run determinism for a `(seed, config, shape)` triple.
 Every kernel here must be a pure function of `(state, key)`: no dict-order dependence, no host RNG, no float→int conversion without an explicit mask.
+The speciation distance table is verified by bit-identity of a whole run: `fitness_history` element-for-element plus sha256 of `node_keys`, `node_attrs`, `conn_keys`, `conn_attrs`, `species_keys`, `best_fitness`, `last_improved`, `member_count`, `idx2species`, the four centre arrays and `next_species_key`, compared against the pre-change tree at pop 100 and pop 8 (hoisted path) and pop 500 (non-hoisted path).
 
 ## Routing Table
 | Path | Responsibility |
