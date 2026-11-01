@@ -16,12 +16,22 @@ no Python loop over individuals, no ``vmap``, no ``scan``/``while_loop``/``cond`
 
 Nothing here is differentiable (the operators never enter the ``grad`` graph); the sort
 and the ``int32`` index arithmetic are integer ops only.
+
+:func:`key_rows` sits beside the merge because it is the same contract's front door: the
+alignment is written against ``(P, M, K)`` key columns, so a caller with a two-dimensional
+node-key table normalises it with that one helper instead of re-deriving the rank rule.
 """
 
 import evoxc
 import evoxc.numpy as enp
 
-from ...common import I_INF, flat_gather, masked_flat_gather, masked_flat_scatter
+from ...common import (
+    I_INF,
+    ConfigError,
+    flat_gather,
+    masked_flat_gather,
+    masked_flat_scatter,
+)
 from ..gene.base import hash_int32
 
 #: Tag values of the sorted-merge key: the low two bits of ``hash * 4 + tag``.
@@ -69,6 +79,40 @@ def _scalar(value: int, dtype) -> evoxc.SymbolicTensor:
         Rank-0 tensor inside the active trace.
     """
     return enp.full((), value, dtype=dtype)
+
+
+def key_rows(keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
+    """Normalise a gene key table to the ``(P, M, K)`` key-column block.
+
+    This is the key-table rank normaliser shared by crossover and compatibility distance:
+    the alignment is written against three-dimensional key columns, while the payload keeps
+    a node key in a single ``int32`` column, so ``node_keys`` is ``(P, N)`` while
+    ``conn_keys`` is already ``(P, E, CK)``.  The implicit key axis is added here rather
+    than special-cased inside the kernels.
+
+    Args:
+        keys (evoxc.SymbolicTensor): ``(P, M)`` or ``(P, M, K)`` ``int32`` key table,
+            ``I_INF`` padded.
+
+    Returns:
+        evoxc.SymbolicTensor: ``(P, M, K)`` view of ``keys`` — the very same tensor when it
+        already carries a key axis, otherwise a ``(P, M, 1)`` view of the single key column.
+
+    Raises:
+        ConfigError: If the table is neither 2-D nor 3-D (both ranks are static at trace
+            time, so this is a host-side validation of a build-time property).  It is a
+            :class:`~tensorneat.common.errors.TensorNEATError` subclass.
+    """
+    rank = len(keys.shape)
+    if rank == 3:
+        return keys
+    if rank != 2:
+        raise ConfigError(
+            "gene key tables must be (P, M) or (P, M, K), "
+            f"got shape {tuple(keys.shape)}"
+        )
+    pop_size, count = keys.shape
+    return evoxc.reshape(keys, (pop_size, count, 1))
 
 
 def find_homologous(
@@ -169,4 +213,4 @@ def find_homologous(
     return evoxc.slice(scattered, (0, 0), (pop_size, count))
 
 
-__all__ = ["find_homologous"]
+__all__ = ["find_homologous", "key_rows"]

@@ -16,7 +16,7 @@ import evoxc.numpy as enp
 
 from ....common import I_INF, ConfigError, State, masked_flat_gather
 from ...utils import valid_count
-from ..alignment import find_homologous
+from ..alignment import find_homologous, key_rows
 from .base import BaseDistance
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -40,29 +40,6 @@ def _scalar(value, dtype) -> evoxc.SymbolicTensor:
         computation of :meth:`DefaultDistance.gene_distance`.
     """
     return enp.full((), value, dtype=dtype)
-
-
-def _key_rows(keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
-    """Spell a key array as an explicit ``(P, M, K)`` key-column block.
-
-    Args:
-        keys: ``(P, M)`` node keys (one key column) or ``(P, M, K)`` key columns.
-
-    Returns:
-        ``(P, M, K)`` key columns; a rank-2 node key array becomes ``K = 1``.
-
-    Raises:
-        ConfigError: If ``keys`` is neither 2-D nor 3-D.
-    """
-    rank = len(keys.shape)
-    if rank == 3:
-        return keys
-    if rank != 2:
-        raise ConfigError(
-            f"gene keys must be (P, M) or (P, M, K), got shape {tuple(keys.shape)}"
-        )
-    pop_size, count = keys.shape
-    return evoxc.reshape(keys, (pop_size, count, 1))
 
 
 def _weight(value: float, name: str) -> float:
@@ -223,8 +200,8 @@ class DefaultDistance(BaseDistance):
             zeroed on the non-homologous slots **before** the ``reduce_sum`` — a ``NaN * 0``
             product would otherwise poison the whole sum.
         """
-        key_rows1 = _key_rows(keys1)
-        key_rows2 = _key_rows(keys2)
+        key_rows1 = key_rows(keys1)
+        key_rows2 = key_rows(keys2)
         pop_size, count = key_rows1.shape[0], key_rows1.shape[1]
         attr_width = attrs1.shape[-1]
 

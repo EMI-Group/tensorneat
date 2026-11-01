@@ -9,51 +9,21 @@ Alignment is by exact key-column match, resolved with one sort per array — nev
 This module owns only the generic driver: validate that the two parents are shaped alike,
 split the single key into one key per gene family, and hand each family to
 :meth:`BaseCrossover.find_homologous` / :meth:`BaseCrossover.crossover_gene_attrs` — the
-alignment primitive lives in :mod:`..alignment` and the gene hook in
+alignment primitive lives in :mod:`..alignment` (together with the rank normaliser
+:func:`~tensorneat.genome.operations.alignment.key_rows`) and the gene hook in
 :class:`~tensorneat.genome.gene.base.BaseGene`.
 """
 
 from typing import TYPE_CHECKING
 
 import evoxc
-import evoxc.numpy as enp
 
 from ....common import ConfigError, State, StatefulBaseClass
 from ...utils import GenomeTensors
+from ..alignment import key_rows
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps genome -> operations acyclic
     from ...base import BaseGenome
-
-
-def _key_rows(keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
-    """View one gene family's key table as ``(P, M, K)`` rows for the alignment kernel.
-
-    The payload keeps a node key in a single ``int32`` column, so ``node_keys`` is
-    ``(P, N)`` while ``conn_keys`` is already ``(P, E, CK)``; the alignment is written
-    against the three-dimensional form, so the implicit key axis is added here rather than
-    special-cased inside it.
-
-    Args:
-        keys (evoxc.SymbolicTensor): ``(P, M)`` or ``(P, M, K)`` ``int32`` key table,
-            ``I_INF`` padded.
-
-    Returns:
-        evoxc.SymbolicTensor: ``(P, M, K)`` view of ``keys`` — the very same tensor when it
-        already carries a key axis.
-
-    Raises:
-        ConfigError: If the table is neither 2-D nor 3-D (both ranks are static at trace
-            time, so this is a host-side validation of a build-time property).
-    """
-    rank = len(keys.shape)
-    if rank == 3:
-        return keys
-    if rank != 2:
-        raise ConfigError(
-            "gene key tables must be (P, M) or (P, M, K), "
-            f"got shape {tuple(keys.shape)}"
-        )
-    return enp.reshape(keys, (*keys.shape, 1))
 
 
 class BaseCrossover(StatefulBaseClass):
@@ -125,7 +95,8 @@ class BaseCrossover(StatefulBaseClass):
             subclass — :meth:`find_homologous` (alignment) and :meth:`crossover_gene_attrs`
             (attribute recombination) — so this driver stays family-agnostic.  A node key
             table is two-dimensional (one key column); a ``(P, N, 1)`` view that spells the
-            key axis out is accepted as well and returned verbatim.
+            key axis out is accepted as well and returned verbatim, which is what the shared
+            :func:`~tensorneat.genome.operations.alignment.key_rows` normaliser allows.
         """
         payload1 = (node_keys1, node_attrs1, conn_keys1, conn_attrs1)
         payload2 = (node_keys2, node_attrs2, conn_keys2, conn_attrs2)
@@ -143,7 +114,7 @@ class BaseCrossover(StatefulBaseClass):
             genome.node_gene,
             node_key,
             node_attrs1,
-            self.find_homologous(_key_rows(node_keys1), _key_rows(node_keys2)),
+            self.find_homologous(key_rows(node_keys1), key_rows(node_keys2)),
             node_attrs2,
         )
         conn_attrs = self.crossover_gene_attrs(
@@ -151,7 +122,7 @@ class BaseCrossover(StatefulBaseClass):
             genome.conn_gene,
             conn_key,
             conn_attrs1,
-            self.find_homologous(_key_rows(conn_keys1), _key_rows(conn_keys2)),
+            self.find_homologous(key_rows(conn_keys1), key_rows(conn_keys2)),
             conn_attrs2,
         )
         return GenomeTensors(node_keys1, node_attrs, conn_keys1, conn_attrs)
