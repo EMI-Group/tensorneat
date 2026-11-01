@@ -54,7 +54,7 @@ It writes JSON to `--out` even on failure (`status="error"`, traceback in `error
 ## Constraints
 - Never import the implementation under test at module scope here; the worker controls `sys.path` before the adapter import.
 - `protocol.py` holds the only copy of the schema, the verdict rules and the tolerance constants — the CLI and reporter must not re-implement them.
-- Files <= ~1000 lines; `reporter.py` is presentation only (no measurement logic).
+- Files <= ~1000 lines; `reporter.py` is presentation only (no measurement logic) and is the one long file here by design (~900 lines of null-safe table rendering): if it grows, split it per report section instead of moving measurement code into it.
 ## Routing Table
 | Path | Purpose |
 |---|---|
