@@ -120,9 +120,10 @@ class RecurrentGenome(BaseGenome):
         2. ``for _ in range(self.activate_time)`` (a Python loop, unrolled at trace time):
            re-inject the raw ``inputs`` into the input rows, then
            ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs, values,
-           update_mask=transformed.node_exists & (valid_count > 0))``, which reads the
-           *previous* tick's values for every node (Jacobi/synchronous, no in-place ordering
-           dependency).  ``input_transform`` is deliberately **not** applied — legacy parity:
+           update_mask=transformed.node_exists & (valid_count > 0))`` (``valid_count =
+           reduce_sum(transformed.in_valid, axis=-1)``, the per-row live-slot count), which
+           reads the *previous* tick's values for every node (Jacobi/synchronous, no in-place
+           ordering dependency).  ``input_transform`` is deliberately **not** applied — legacy parity:
            the pre-rewrite class fed raw inputs on every tick, which is also what HyperNEAT
            relies on when it uses this genome as a CPPN.
         3. ``return self._output_values(values, self.output_transform)`` — rows

@@ -132,10 +132,11 @@ class DefaultGenome(BaseGenome):
            time): ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs,
            values, update_mask=(transformed.node_level == level) & transformed.node_exists &
            (valid_count > 0))``, with ``valid_count = reduce_sum(transformed.in_valid,
-           axis=-1)`` the static "this row has at least one incoming connection" gate.  The
-           dynamic "at least one *live* slot" term is ANDed in inside ``_node_step``, so a node
-           whose sources are all NaN keeps NaN and its descendants lose their only live source:
-           the legacy NaN poisoning, reproduced exactly.
+           axis=-1)`` the static "this row has at least one incoming connection" gate (a
+           per-row live-slot count, not ``..utils.valid_count``, which counts existing rows).
+           The dynamic "at least one *live* slot" term is ANDed in inside ``_node_step``, so a
+           node whose sources are all NaN keeps NaN and its descendants lose their only live
+           source: the legacy NaN poisoning, reproduced exactly.
         4. ``return self._output_values(values, self.output_transform)`` — rows
            ``max_nodes-num_outputs..max_nodes-1``, then ``output_transform``.
 
