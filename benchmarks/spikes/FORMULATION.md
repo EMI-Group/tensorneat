@@ -36,14 +36,14 @@ The expectation for this row was ≈ 6 ms at P=1000 / `max_nodes`=50 / ~150 conn
 
 Formulation: one Python-unrolled level step per depth level; each step gathers a `(P, max_nodes, K)` window of source values from a prebuilt index table, multiplies by the level's weights, reduces over the window, and applies `tanh(bias + sum)` — work per forward ≈ depth × P × `max_nodes` × K.
 Conditions: P=1000, `max_nodes`=50, 150 connections, K = 4 (auto = `ceil(max_conns / real_nodes)`), numpy 2.5.4 interpreter on the same 20-core box, one gather + one window reduce + one activation per level.
-Measured at depth 8: **7.64 ms per forward for the whole population (min 7.29 / max 8.25 ms), 7.64 µs per individual**, 1.60 M padded element-ops.
+Measured at depth 8: **7.64 ms per forward for the whole population (min 7.29 / max 8.25 ms), 7.64 µs per individual**, 1.60 M padded element-ops, from `python benchmarks/spikes/forward_micro.py --mode unrolled` with the defaults below.
 The expectation for this row was ≈ 14 ms at depth 8 / P=1000 / `max_nodes`=50 / K≈2; the measured 7.64 ms is ≈ 1.8× faster while doing twice the window work (K=4), and 7.64 ms is what the record uses.
 
 ## Depth-unrolled prototype, edge-segment form (`--mode unrolled`)
 
 Formulation: the same unrolled level loop, but each step gathers exactly the level's *real* edges (no window padding) and reduces them by destination with one `np.add.reduceat` segment sum — work per forward ≈ P × real_edges = 0.15 M element-ops, i.e. proportional to the connections that exist.
 Conditions: P=1000, `max_nodes`=50, 150 connections, numpy 2.5.4 interpreter on the same box; the per-level segment tables are the stable-sorted edge lists plus their segment starts.
-Measured at depth 8: **0.68 ms per forward for the whole population (min 0.66 / max 0.75 ms), 0.68 µs per individual.**
+Measured at depth 8: **0.68 ms per forward for the whole population (min 0.66 / max 0.75 ms), 0.68 µs per individual**, from the same `--mode unrolled` run (both forms are measured side by side on the same tables).
 Both prototypes compute the same function on the same graph: their outputs agree to 1.5e-7 absolute (float32 summation order is the only difference), and the script aborts if they ever diverge by more than 1e-5.
 
 ## Depth sweep (P=1000, max_nodes=50, 150 connections, 20-core box, numpy 2.5.4)
