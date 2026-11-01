@@ -29,6 +29,11 @@ Nothing here imports `jax`, `torch`, `brax`, `gymnax` or `mujoco`; the simulator
 - Host-only introspection (`network_dict`, `repr`, `sympy_func`, `visualize`) never feeds back into a graph, and needs a one-individual (`P == 1`) payload.
 - No argparse, no helper packages, no unused imports; a script stays ≲ 110 lines and is a single readable top-level run.
 
+## Test Strategy
+- Each script is run by hand on the numpy backend with its demo budget; a healthy run prints a per-generation log, ends with `pipeline.show(state, best)` and exits 0.
+- `interpret_visualize/*.py` need only sympy and matplotlib, finish in ~2 s, and write `network.svg` next to themselves (a generated artifact, not tracked).
+- No pytest target lives here: `test/` owns the automated suites, so these scripts are smoke demos rather than assertions.
+
 ## Routing Table
 | Path | Purpose |
 |---|---|
