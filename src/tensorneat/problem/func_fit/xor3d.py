@@ -30,7 +30,7 @@ class XOR3d(FuncFit):
         Raises:
             TensorNEATError: If ``error_method`` is not supported.
         """
-        raise NotImplementedError
+        super().__init__(error_method=error_method)
 
     @property
     def inputs(self) -> np.ndarray:
@@ -39,7 +39,19 @@ class XOR3d(FuncFit):
         Returns:
             Float32 array of all three-bit patterns in counting order.
         """
-        raise NotImplementedError
+        return np.array(
+            [
+                [0, 0, 0],
+                [0, 0, 1],
+                [0, 1, 0],
+                [0, 1, 1],
+                [1, 0, 0],
+                [1, 0, 1],
+                [1, 1, 0],
+                [1, 1, 1],
+            ],
+            dtype=np.float32,
+        )
 
     @property
     def targets(self) -> np.ndarray:
@@ -48,7 +60,10 @@ class XOR3d(FuncFit):
         Returns:
             Float32 array ``[[0], [1], [1], [0], [1], [0], [0], [1]]``.
         """
-        raise NotImplementedError
+        return np.array(
+            [[0], [1], [1], [0], [1], [0], [0], [1]],
+            dtype=np.float32,
+        )
 
     @property
     def input_shape(self) -> tuple[int, ...]:
@@ -57,7 +72,7 @@ class XOR3d(FuncFit):
         Returns:
             ``(3,)``, ``S`` is not part of this shape.
         """
-        raise NotImplementedError
+        return (3,)
 
     @property
     def output_shape(self) -> tuple[int, ...]:
@@ -66,4 +81,4 @@ class XOR3d(FuncFit):
         Returns:
             ``(1,)``, ``S`` is not part of this shape.
         """
-        raise NotImplementedError
+        return (1,)

@@ -28,7 +28,7 @@ class XOR(FuncFit):
         Raises:
             TensorNEATError: If ``error_method`` is not supported.
         """
-        raise NotImplementedError
+        super().__init__(error_method=error_method)
 
     @property
     def inputs(self) -> np.ndarray:
@@ -37,7 +37,10 @@ class XOR(FuncFit):
         Returns:
             Float32 array ``[[0, 0], [0, 1], [1, 0], [1, 1]]``.
         """
-        raise NotImplementedError
+        return np.array(
+            [[0, 0], [0, 1], [1, 0], [1, 1]],
+            dtype=np.float32,
+        )
 
     @property
     def targets(self) -> np.ndarray:
@@ -46,7 +49,10 @@ class XOR(FuncFit):
         Returns:
             Float32 array ``[[0], [1], [1], [0]]``.
         """
-        raise NotImplementedError
+        return np.array(
+            [[0], [1], [1], [0]],
+            dtype=np.float32,
+        )
 
     @property
     def input_shape(self) -> tuple[int, ...]:
@@ -55,7 +61,7 @@ class XOR(FuncFit):
         Returns:
             ``(2,)``, ``S`` is not part of this shape.
         """
-        raise NotImplementedError
+        return (2,)
 
     @property
     def output_shape(self) -> tuple[int, ...]:
@@ -64,4 +70,4 @@ class XOR(FuncFit):
         Returns:
             ``(1,)``, ``S`` is not part of this shape.
         """
-        raise NotImplementedError
+        return (1,)
