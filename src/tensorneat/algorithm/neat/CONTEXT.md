@@ -101,18 +101,22 @@ Keys are rank-0 scalars, so a batched kernel takes one key and draws its own pop
 `pipeline`: creates `randkey` with `evoxc.random.key(seed)`, calls `setup` on the host, drives `ask → transform → forward/evaluate → tell`, and calls `show_details` on host-readable values.
 
 ## Measured Cost (numpy backend, real `DefaultGenome(max_nodes=50, max_conns=100)`, XOR, `species_size=20`, this repo)
-Whole `Pipeline.step` (one graph, build cached by the pipeline): 313 ms/generation at `P=100`, 1024 ms at `P=500`, 2157 ms at `P=1000`; the first step additionally pays a 4.3 / 5.5 / 7.3 s graph build.
-Phase split at `P=100` / `P=500`: evaluation (`transform` + `forward` + `evaluate`) 48 / 232 ms, `tell` 289 / 1002 ms — `tell` is 71 % / 81 % of the generation.
-Inside `tell` at `P=100` / `P=500`: `speciate` 223 / 614 ms, crossover + mutation + elite select 33 / 89 ms, `update_species` (species fitness, stagnation, sort, spawn, pairing) 1.2 / 1.6 ms.
-`execute_distance` for one broadcast centre against the whole population: 5.7 / 17.1 ms, so `speciate`'s ~`2 × species_size` passes account for its whole cost — the distance kernel is genome-owned, and the pass count is this node's.
+Whole `Pipeline.step` (one graph, build cached by the pipeline), median of 9 steady-state steps after 3 warmups, CPU time: 245 ms/generation at `P=100`, ~810 ms at `P=500`, ~2030 ms at `P=1000` (before the distance-table hoist: 274 / 811 / ~2000 ms — only `P=100` moved); the first step additionally pays a ~4.5 / 5.5 / 7.3 s graph build.
+Phase split measured as separate executables (so the sum over-counts a single generation): `evaluate` (`transform` + `forward` + `evaluate`) 33 / 130 / 269 ms, `update_species` (species fitness, stagnation, sort, spawn, pairing) 1.4 / 1.7 / 2.3 ms, crossover + mutation + elite select 30 / 77 / 152 ms, `speciate` 168 / 555 / 1038 ms at `P=100` / `500` / `1000`.
+`tell` is therefore ~84–88 % `speciate` at every size, and `speciate` is ~80 % of the generation.
+One `execute_distance` pass (one broadcast centre against the whole population) costs ~3 ms of interpreter dispatch plus ~30 µs per pair, i.e. 5.7 ms at `P=100` and 40 ms at `P=1000`.
+`speciate` after the hoist (`P=100`): phase 1 is one 2000-pair batched call (~58 ms) and phase 2 the dozen-plus broadcast calls (~110 ms), so phase 2 is now the remaining hot spot at ~46 % of the generation.
+The distance kernel is genome-owned: the per-pair cost is the batch-wide key alignment (`find_homologous` sorts `2·M` key rows for every pair), which this node cannot change.
 `NEAT.setup` (init kernel build + run): 40 / 38 / 47 ms at `P=100` / `500` / `1000`.
-The legacy JAX baseline is 51 / 109 / 157 ms per generation, so the cycle is 6–14× over budget at the configuration above in this node.
+The legacy JAX baseline is 51 / 109 / 157 ms per generation, so the cycle is 5–13× over budget at the configuration above in this node.
 
 ## Known Issues
 `next_species_key` must stay strictly greater than every live key; `setup` seeds it at `1.0` (slot 0 uses `0.0`) and each created species increments it, so the invariant holds as long as the counter is never rebound by hand — a colliding counter silently merges two species' `member_count`.
 `test/unit/algorithm/test_spawn.py` encodes the brief's `loc(p) = #{i : spawn[i] > 0 and E[i] <= p} - 1`; that count is wrong for a live zero-spawn species in the middle of the table, so the oracle needs the "last qualifying block" form to agree with `block_layout` (cross-node item, `test/` is not writable from here).
 `test/unit/algorithm/**` bodies are hard-coded `pytest.skip`, so the suite verifies nothing even against a working tree; this node is currently verified by driving `Pipeline` end-to-end on the numpy backend with the real `DefaultGenome`/`XOR` (pop 8/100/500/1000, `rank` and `fitness` spawn modes, `max_stagnation` kills, `OriginConn`'s `historical_marker` branch, `pop_batch_size` chunking, `RecurrentGenome`, XOR3d) plus bit-identical repeat runs.
-`speciate` calls `distance_fn` once per species slot in each of its two scans (`2 × species_size` whole-population passes per generation) and pays that even for dead slots and for iterations whose masks turn every write into a no-op; at `species_size=20` this is ~77 % of `tell`.
+`speciate`'s phase 2 still calls `distance_fn` once per species slot, dead slots included; hoisting it is impossible without changing results because a *created* species takes the first unassigned genome as its centre, and that genome's distance row depends on the assignments of every earlier iteration (see `## Speciation Distance Table`).
+`speciate`'s pair count is `2 · species_size · pop_size` and cannot be reduced without changing the algebra: each phase needs its own `(species_size, pop_size)` matrix of genuinely different centres.
+The gain from batching is size-dependent — the same 2000-row table is ~28 % cheaper than 20 broadcast calls at `P=100` but ~10 % more expensive at `P=1000` (the interpreter is row-bound and allocation-bound there), hence the `TABLE_ROWS` gate.
 `_new_gene_keys` is per-individual by contract (see `## Gene Keys & Padding`), so the genome must not assume keys are globally unique across the population.
 
 ## Constraints
