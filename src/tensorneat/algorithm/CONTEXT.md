@@ -99,7 +99,7 @@ Per-phase build: whole cycle 846–910 ms, evaluation 439–450 ms, `tell` 410�
 The algorithm layer alone therefore sits ~2.3× / 3.1× / 3.2× under the legacy budget, leaving the genome and problem their own share; these are **not** end-to-end numbers — the real `DefaultGenome` and the XOR/XOR3d contract are still pending (see `## Known Issues`).
 
 ## Known Issues
-`import tensorneat` is broken by the still-skeletal sibling nodes, not by this subtree: `genome/base.py` imports `build_schedule` (renamed `derive_schedule` in `common/tensorization.py`) and `genome/gene/node/bias.py` imports the removed `get_func_name`.
+`import tensorneat` is broken by a sibling file, not by this subtree: `src/tensorneat/pipeline.py` is still the pre-rewrite JAX implementation (`import jax, jax.numpy as jnp` at line 5, `assert problem.jitable` at line 33, `jax.vmap`/`jax.random.PRNGKey` throughout), so the release gate fails and no example can be driven through `Pipeline` yet; every import inside this subtree (`derive_schedule` via `..common`, `ACT.name_of`, `genome.operations.*`) resolves.
 `test/unit/algorithm/**` is a spec written ahead of the implementation — its bodies are hard-coded `pytest.skip`, so it currently verifies nothing even against a working tree; `test/parity/algorithm` and `test/integration` cannot run until `genome` and `problem` land.
 `test/unit/algorithm/test_spawn.py` encodes `loc(p) = #{i : spawn[i] > 0 and E[i] <= p} - 1`; that count disagrees with `block_layout` for a live zero-spawn species in the middle of a table, so the oracle needs the "last qualifying block" form (cross-node item, `test/` is not writable from here).
 `next_species_key` must stay strictly greater than every live key (`setup` seeds it at `1.0`, slot 0 uses `0.0`); a colliding counter silently merges two species' `member_count`.
@@ -111,6 +111,12 @@ Data-dependent `while_loop` trip counts work on numpy and iree/llvm-cpu but not 
 `cumsum` does not export on compiler backends, hence prefix sums are triangular matmuls.
 `evoxc.constant` warns above 1 MiB, which bounds how large a substrate coordinate table may be before it must become an explicit pipeline input.
 `evoxc` has no `io_callback`/print op, so all logging stays in `show_details` on the host side.
+
+## Package Exports (verified against the code)
+`algorithm/__init__.py` exports exactly `BaseAlgorithm`, `NEAT`, `HyperNEAT`; **`HyperNEATFeedForward` is NOT re-exported there** — import it from `tensorneat.algorithm.hyperneat`.
+`algorithm/hyperneat/__init__.py` exports `HyperNEAT`, `HyperNEATFeedForward`, `HyperNEATNode`, `HyperNEATConn`, `SubstrateSchedule`, `BaseSubstrate`, `DefaultSubstrate`, `FullSubstrate`, `MLPSubstrate`.
+`algorithm/hyperneat/substrate/__init__.py` exports the four substrate classes plus `as_coor_array`, `cartesian_product`, `check_same_coordinate_dim`, `layer_coors`, `node_key_blocks`; the two `analysis_substrate` builders stay in `substrate/full.py` and `substrate/mlp.py`.
+`algorithm/neat/__init__.py` exports `NEAT`, `SpeciesController`, `SpeciesState`.
 
 ## Constraints
 No `jax` / `torch` / `numpy.random` import anywhere in this subtree; `import tensorneat` must stay free of them (release gate).
