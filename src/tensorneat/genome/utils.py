@@ -230,6 +230,41 @@ def delete_conn_by_pos(
     )
 
 
+def delete_conns_by_key(
+    conn_keys: evoxc.SymbolicTensor,
+    conn_attrs: evoxc.SymbolicTensor,
+    keys: evoxc.SymbolicTensor,
+) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+    """Clear every connection touching one node key, for any number of rows per individual.
+
+    This is the companion of :func:`delete_conn_by_pos` for node deletion, where the number
+    of connections touching the deleted node is data-dependent: it is one elementwise
+    ``select`` over a key-match mask combined with a row-validity mask, computed on the whole
+    ``(P, E, ...)`` table at once — never a loop and never a per-connection delete.  A genome
+    with no connection touching ``keys`` is returned unchanged.
+
+    Args:
+        conn_keys: ``(P, E, CK) int32`` connection key rows; columns 0/1 are the source and
+            destination node keys, ``I_INF`` marks an absent row.
+        conn_attrs: ``(P, E, CA) float32`` connection attribute rows, NaN for an absent row.
+        keys: ``(P,) int32`` node key to detach per individual, ``I_INF`` for an individual
+            with nothing to delete.
+
+    Returns:
+        ``(conn_keys, conn_attrs)`` with every row whose source or destination key equals
+        ``keys`` cleared: all ``CK`` key columns set to ``I_INF``, all ``CA`` attribute
+        columns set to NaN; all other rows, including absent ones, are untouched.
+
+    Raises:
+        NotImplementedError: Skeleton stub; the key-match mask and the two sentinel selects
+            are pending.
+    """
+    raise NotImplementedError(
+        "mask = (conn_keys[:, :, 0] == keys[:, None]) | (conn_keys[:, :, 1] == keys[:, None]) "
+        "and row-validity, then two selects to I_INF keys / NaN attrs -> same pair"
+    )
+
+
 def check_cycles(
     node_keys: evoxc.SymbolicTensor,
     conn_keys: evoxc.SymbolicTensor,

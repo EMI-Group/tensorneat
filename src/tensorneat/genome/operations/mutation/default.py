@@ -18,6 +18,7 @@ from ...utils import (
     add_conn,
     add_node,
     delete_conn_by_pos,
+    delete_conns_by_key,
     delete_node_by_pos,
     fetch_random_index,
     first_free_row,
@@ -166,7 +167,7 @@ class DefaultMutation(BaseMutation):
         Input rows (``0..num_inputs-1``) and output rows (``N-num_outputs..N-1``) are never
         candidates, so :meth:`choose_node_key` is called with both ``allow_*_keys=False``;
         the node row is cleared with ``delete_node_by_pos`` and every connection touching the
-        deleted key is cleared with ``delete_conn_by_pos``.
+        deleted key is cleared with ``delete_conns_by_key``.
 
         No-op when the ``node_delete`` gate is off or when no hidden node exists
         (:meth:`choose_node_key` returns ``I_INF``).
