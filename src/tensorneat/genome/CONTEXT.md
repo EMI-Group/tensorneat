@@ -108,5 +108,5 @@ Gradients are cleaned with `select(isnan(g), 0, g)` and by masking absent rows, 
 | `./recurrent.py` | `RecurrentGenome`: tick-unrolled Jacobi forward. |
 | `./utils.py` | Batched genome-array editing helpers (`add_node`, `add_conn`, `delete_*`, `first_free_row`, `fetch_random_index`) and host-only display helpers. |
 
-Out of node but required: `../common/tensorization.py` (`build_schedule` → `Transformed`), `../common/functions/` (`ACT`/`AGG`, `apply_activation`, `apply_aggregation` with `-1` = identity), `../common/tools.py` (`I_INF`), `../common/state.py` (`State`), `../common/errors.py` (`TensorNEATError`).
+Out of node but required: `../common/tensorization.py` (`derive_schedule(node_keys, conn_in, conn_out, input_keys, output_keys, pop_size, max_nodes, max_conns, max_in_degree, key_span)` → `Transformed`), `../common/functions/` (`ACT`/`AGG`, `apply_activation`, `apply_aggregation` with `-1` = identity), `../common/tools.py` (`I_INF`), `../common/state.py` (`State`), `../common/errors.py` (`TensorNEATError`).
 Consumers: `../algorithm/neat/` (`ask`/`transform`/`forward`/`tell`), `../algorithm/hyperneat/` (`RecurrentGenome` as CPPN), `../pipeline.py` (compile site, per-shape executable cache).
