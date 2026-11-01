@@ -67,7 +67,9 @@ def scaled_sigmoid(z):
     Equality with the pre-rewrite library is exact (same expression order:
     ``1 / (1 + exp(-z))`` then ``* SCALE``).
     """
-    raise NotImplementedError("act.scaled_sigmoid: evoxc kernel, implemented in the implementation phase")
+    return evoxc.multiply(
+        evoxc.divide(1.0, evoxc.add(1.0, evoxc.exp(evoxc.negate(z)))), SCALE
+    )
 
 
 def sigmoid(z):
@@ -83,7 +85,7 @@ def sigmoid(z):
     ``(...,) float32``
         Values in ``(0, 1)``; ``NaN`` propagates, ``+-inf`` saturates to ``1``/``0``.
     """
-    raise NotImplementedError("act.sigmoid: evoxc kernel, implemented in the implementation phase")
+    return evoxc.divide(1.0, evoxc.add(1.0, evoxc.exp(evoxc.negate(z))))
 
 
 def scaled_tanh(z):
@@ -99,7 +101,7 @@ def scaled_tanh(z):
     ``(...,) float32``
         Values in ``[-SCALE, SCALE]``; ``NaN`` propagates.
     """
-    raise NotImplementedError("act.scaled_tanh: evoxc kernel, implemented in the implementation phase")
+    return evoxc.multiply(evoxc.tanh(z), SCALE)
 
 
 def tanh(z):
@@ -115,7 +117,7 @@ def tanh(z):
     ``(...,) float32``
         Values in ``[-1, 1]``; ``NaN`` propagates.
     """
-    raise NotImplementedError("act.tanh: evoxc kernel, implemented in the implementation phase")
+    return evoxc.tanh(z)
 
 
 def sin(z):
@@ -131,7 +133,7 @@ def sin(z):
     ``(...,) float32``
         Values in ``[-1, 1]``; ``NaN`` propagates.
     """
-    raise NotImplementedError("act.sin: evoxc kernel, implemented in the implementation phase")
+    return evoxc.sin(z)
 
 
 def relu(z):
@@ -152,7 +154,7 @@ def relu(z):
     ``maximum(z, 0)`` is used (not a ``select``) so that ``z == 0`` keeps ``0``
     and ``NaN`` stays ``NaN``, exactly as the pre-rewrite ``jnp.maximum``.
     """
-    raise NotImplementedError("act.relu: evoxc kernel, implemented in the implementation phase")
+    return evoxc.maximum(z, 0.0)
 
 
 def lelu(z):
@@ -173,7 +175,7 @@ def lelu(z):
     Implemented with ``evoxc.select(z > 0, z, LELU_SLACK * z)``; at ``z == 0``
     both branches are ``0``, so the strict comparison is immaterial.
     """
-    raise NotImplementedError("act.lelu: evoxc kernel, implemented in the implementation phase")
+    return evoxc.select(evoxc.greater(z, 0.0), z, evoxc.multiply(z, LELU_SLACK))
 
 
 def identity(z):
@@ -194,7 +196,7 @@ def identity(z):
     Also the branch selected by the :data:`ACT_IDENTITY` (``-1``) gene sentinel
     inside :func:`apply_activation`.
     """
-    raise NotImplementedError("act.identity: evoxc kernel, implemented in the implementation phase")
+    return z
 
 
 def inv(z):
@@ -217,7 +219,12 @@ def inv(z):
     ``where(z > 0, maximum(z, 1e-7), minimum(z, -1e-7))``; at ``z == 0`` the
     second branch is taken, giving ``1 / -1e-7``.
     """
-    raise NotImplementedError("act.inv: evoxc kernel, implemented in the implementation phase")
+    clamped = evoxc.select(
+        evoxc.greater(z, 0.0),
+        evoxc.maximum(z, INV_EPS),
+        evoxc.minimum(z, -INV_EPS),
+    )
+    return evoxc.divide(1.0, clamped)
 
 
 def log(z):
@@ -233,7 +240,7 @@ def log(z):
     ``(...,) float32``
         ``log(z)`` floored at ``log(1e-7)`` for ``z <= 1e-7``; ``NaN`` propagates.
     """
-    raise NotImplementedError("act.log: evoxc kernel, implemented in the implementation phase")
+    return evoxc.log(evoxc.maximum(z, LOG_EPS))
 
 
 def exp(z):
@@ -256,7 +263,7 @@ def exp(z):
     argument to ``[-10, 10]`` for interpretability. See ``CONTEXT.md``
     (Known Divergences).
     """
-    raise NotImplementedError("act.exp: evoxc kernel, implemented in the implementation phase")
+    return evoxc.exp(z)
 
 
 def abs(z):
@@ -272,7 +279,7 @@ def abs(z):
     ``(...,) float32``
         ``|z|``; ``NaN`` propagates.
     """
-    raise NotImplementedError("act.abs: evoxc kernel, implemented in the implementation phase")
+    return evoxc.abs(z)
 
 
 ACT_FUNCS: tuple[Callable, ...] = (
@@ -338,4 +345,11 @@ def apply_activation(z, act_ids, act_fns: Sequence[Callable] = ACT_FUNCS):
     because mutation only samples ``[0, len(act_fns))`` and ``-1`` is written
     only for output nodes.
     """
-    raise NotImplementedError("act.apply_activation: evoxc kernel, implemented in the implementation phase")
+    ids = evoxc.cast(act_ids, evoxc.int32)
+    # The accumulator starts at ``z``, which *is* the identity branch: an id of
+    # ``-1`` (or any id outside the option list) matches no ``select`` and keeps
+    # ``z`` untouched.
+    out = z
+    for index, fn in enumerate(act_fns):
+        out = evoxc.select(evoxc.equal(ids, index), fn(z), out)
+    return out

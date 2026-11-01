@@ -3,8 +3,8 @@
 Dependency DAG position: bottom of ``tensorneat.common`` (with
 :mod:`~tensorneat.common.errors`); it imports nothing from ``genome``,
 ``algorithm``, ``problem`` or ``pipeline``, and no ``jax``/``torch`` symbol and no
-NumPy global-RNG call — the only host-side numpy use is :func:`hash_rows`, which is
-explicitly marked host-only.
+NumPy global-RNG call — the only host-side numpy uses are :func:`hash_rows` and
+:func:`to_numpy`, which are explicitly marked host-only.
 
 Everything in this module is a **graph helper**: it is called *inside* an
 active ``@evoxc.defn`` trace, receives batch-first tensors (population on axis
@@ -43,16 +43,167 @@ Sentinel contract (shared with :mod:`~tensorneat.common.tensorization`):
 
 import numpy as np
 
+import evoxc
+import evoxc.numpy as enp
+
+from .errors import ConfigError
+
 #: ``int32`` max: "no index / unmatched / unavailable" in integer arrays.
 #: Never store it in a float array (use ``NaN`` there) and never use it as a
 #: real index — every consumer must test for it before indexing.
 I_INF: int = int(np.iinfo(np.int32).max)
 
-#: Exclusive upper bound of gene keys: keys are integer-valued ``float32`` in
-#: ``[0, KEY_MAX)`` so that *exact* equality (and therefore key matching)
-#: survives float32 representation. ``KEY_MAX = 2**24`` is the first integer
-#: that float32 can no longer distinguish from its neighbour.
+#: Exclusive upper bound of gene keys. Canonical payload keys are ``int32`` in
+#: ``[0, KEY_MAX)``; the pre-rewrite/parity spelling keeps the same integer
+#: values in ``float32``, where ``KEY_MAX = 2**24`` is the first integer the
+#: format can no longer distinguish from its neighbour. Staying below it makes
+#: key equality exact under either spelling.
 KEY_MAX: int = 1 << 24
+
+
+# --------------------------------------------------------------------------- #
+# host-side validation helpers (raise before a graph is traced)
+# --------------------------------------------------------------------------- #
+
+
+def _positive_static(value, name):
+    """Return ``value`` as a positive Python ``int``.
+
+    The single validator for every trace-time static count in this package
+    (population, node/connection bounds, in-degree window, key span, row
+    lengths): a static is baked into the trace, so it is checked on the host,
+    once, before any graph is built.
+
+    Args:
+        value: Static value to validate; an ``int`` or a NumPy integer scalar
+            (``numpy.shape`` entries and ``array.shape`` members are the usual
+            source). ``bool`` is refused — it is not a count.
+        name (str): Argument name used in the error message.
+
+    Returns:
+        int: ``value`` as a Python ``int`` (a NumPy integer is normalised, so
+        the trace never sees a NumPy scalar).
+
+    Raises:
+        tensorneat.common.errors.ConfigError: If ``value`` is not an
+            ``int``/``numpy.integer`` (``bool`` excluded), or is not positive.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise ConfigError(f"{name} must be a positive int, got {value!r}")
+    value = int(value)
+    if value <= 0:
+        raise ConfigError(f"{name} must be a positive int, got {value!r}")
+    return value
+
+
+def _rate(name, value, *, allow_one=False):
+    """Validate a mutation probability.
+
+    Args:
+        name (str): Argument name used in the error message.
+        value: Rate to validate; any object ``float()`` accepts.
+        allow_one (bool): Whether ``1.0`` is a legal value (``mutate_float``'s
+            perturb band and ``mutate_int``'s replace band are "always") or not
+            (a replacement band needs a non-empty keep band).
+
+    Returns:
+        float: The validated rate.
+
+    Raises:
+        tensorneat.common.errors.ConfigError: If the rate is not a real number,
+            is outside ``[0, 1)`` (or ``[0, 1]`` when ``allow_one``), or is
+            ``NaN``.
+    """
+    try:
+        rate = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name} must be a real number, got {value!r}") from exc
+    upper_ok = rate <= 1.0 if allow_one else rate < 1.0
+    if not (0.0 <= rate and upper_ok):
+        bound = "[0, 1]" if allow_one else "[0, 1)"
+        raise ConfigError(f"{name} must lie in {bound}, got {rate}")
+    return rate
+
+
+def _scalar(value):
+    """Normalize a scalar parameter that is handed to an ``evoxc.random`` op.
+
+    ``evoxc.random.normal``/``uniform`` accept Python scalars and symbolic
+    tensors but reject NumPy scalars, so a ``np.float32`` argument is unwrapped
+    to its Python counterpart here.
+
+    Args:
+        value: Python scalar, NumPy scalar, or ``evoxc`` symbolic tensor.
+
+    Returns:
+        The value unchanged, except that a NumPy scalar becomes a Python scalar.
+    """
+    return value.item() if isinstance(value, np.generic) else value
+
+
+def _scalar_constant(value, dtype):
+    """Zero-dimensional graph constant of ``dtype`` holding ``value``.
+
+    Used instead of a bare Python scalar wherever the *result dtype* of an
+    ``evoxc.select``/comparison must stay pinned: a bare Python int is weakly
+    promoted against an integer tensor via plain ``np.result_type`` (``int64``),
+    which would silently widen an ``int32`` block.
+
+    Args:
+        value: Static Python scalar (int/float) baked into the trace.
+        dtype: ``evoxc``/NumPy dtype of the constant.
+
+    Returns:
+        A rank-0 ``SymbolicTensor`` inside the active trace.
+    """
+    return enp.full((), value, dtype=dtype)
+
+
+# --------------------------------------------------------------------------- #
+# flat-index plumbing
+# --------------------------------------------------------------------------- #
+
+
+def _flat_index_block(x, idx, present, fallback):
+    """Turn per-row column indices into flat 1-D indices into the flattened ``x``.
+
+    ``idx`` holds one *column* per position; the flat index of position
+    ``(p, ...)`` is ``p * R + idx[p, ...]`` with ``R = x.shape[1]``.
+
+    Two safety rules, both mandated by the contract that evoxc's numpy backend
+    must raise rather than clamp:
+
+    * Positions with ``present == False`` are replaced by ``fallback`` *before*
+      the range test, so a masked ``I_INF`` never reaches the backend.
+    * Any remaining index outside ``[0, R)`` is redirected to ``P * R`` — one
+      past the end of the flattened payload — so the backend raises
+      ``evoxc.ShapeError`` instead of silently reading a neighbouring row
+      (plain ``row * R + col`` arithmetic would land inside the array for
+      ``R <= col < 2R``, and negative indices would wrap).
+
+    Args:
+        x: Batch-first destination/source of static shape ``(P, R)``.
+        idx: ``(P, *shape)`` integer column indices.
+        present: ``(P, *shape)`` bool mask broadcastable to ``idx``, or ``None``
+            for "every position is real".
+        fallback (int): In-range replacement for masked-out positions (``0`` for
+            a gather, the dump column for a scatter).
+
+    Returns:
+        ``(P, n)`` integer flat indices, ``n`` the product of ``idx.shape[1:]``.
+    """
+    pop_size, row_len = x.shape
+    if present is None:
+        safe = idx
+    else:
+        safe = evoxc.select(present, idx, _scalar_constant(fallback, idx.dtype))
+    escaped = evoxc.logical_or(
+        evoxc.less(safe, 0), evoxc.greater_equal(safe, row_len)
+    )
+    safe = evoxc.select(
+        escaped, _scalar_constant(pop_size * row_len, idx.dtype), safe
+    )
+    return evoxc.reshape(safe, (pop_size, -1)) + batch_offsets(pop_size, row_len)
 
 
 def batch_offsets(pop_size, row_len):
@@ -79,12 +230,20 @@ def batch_offsets(pop_size, row_len):
             overflow the ``int32`` flat-index range (``>= I_INF``).
 
     Notes:
-        The offsets are built with ``evoxc.numpy.arange`` (``enp``) and
-        ``enp.broadcast_to`` — there is no ``evoxc.broadcast_to``.
+        The offsets are built with ``evoxc.numpy.arange`` (``enp``) plus
+        ``enp.reshape``; there is no ``evoxc.broadcast_to``, so broadcasting the
+        ``(P, 1)`` table against a ``(P, K)`` block is left to the caller's
+        index arithmetic (``evoxc`` broadcasting rules do the rest).
     """
-    raise NotImplementedError(
-        "build the (P, 1) int32 row-offset table used to flatten batch indices"
-    )
+    _positive_static(pop_size, "pop_size")
+    _positive_static(row_len, "row_len")
+    if pop_size * row_len >= I_INF:
+        raise ConfigError(
+            "pop_size * row_len must stay below I_INF for a flat int32 index, "
+            f"got pop_size={pop_size} * row_len={row_len}"
+        )
+    offsets = enp.arange(0, pop_size * row_len, row_len, dtype=evoxc.int32)
+    return enp.reshape(offsets, (pop_size, 1))
 
 
 def flat_gather(x, idx):
@@ -109,11 +268,16 @@ def flat_gather(x, idx):
 
     Notes:
         ``idx`` shapes must be fully static; ``P * R`` must stay inside the
-        ``int32`` flat-index range.
+        ``int32`` flat-index range. An escaping index is redirected to
+        ``P * R`` (one past the flattened payload) before the gather, because
+        ``row * R + col`` alone would land **inside** the array for
+        ``R <= col < 2R`` (silently reading the next row) and numpy wraps
+        negative indices; the redirected value makes the backend raise.
     """
-    raise NotImplementedError(
-        "gather x through flat 1-D indices and reshape back to idx's batch shape"
-    )
+    flat_idx = _flat_index_block(x, idx, None, 0)
+    pop_size, row_len = x.shape
+    flat = evoxc.reshape(x, (pop_size * row_len,))
+    return evoxc.reshape(evoxc.gather(flat, flat_idx, axis=0), tuple(idx.shape))
 
 
 def masked_flat_gather(x, idx, mask=None, fill=float("nan")):
@@ -150,11 +314,18 @@ def masked_flat_gather(x, idx, mask=None, fill=float("nan")):
         Implemented as: sanitize ``idx`` by replacing masked-out / ``I_INF``
         slots with ``0``, :func:`flat_gather`, then ``evoxc.select`` to
         ``fill``. Replacing with ``0`` is safe only because the result is
-        discarded by the same predicate that selected the replacement.
+        discarded by the same predicate that selected the replacement, and the
+        out-of-range redirect of :func:`flat_gather` runs after the
+        sanitization, so only *selected* indices can raise.
     """
-    raise NotImplementedError(
-        "gather through flat indices with absent positions replaced by fill"
-    )
+    present = evoxc.not_equal(idx, _scalar_constant(I_INF, idx.dtype))
+    if mask is not None:
+        present = evoxc.logical_and(present, mask)
+    flat_idx = _flat_index_block(x, idx, present, 0)
+    pop_size, row_len = x.shape
+    flat = evoxc.reshape(x, (pop_size * row_len,))
+    values = evoxc.reshape(evoxc.gather(flat, flat_idx, axis=0), tuple(idx.shape))
+    return evoxc.select(present, values, _scalar_constant(fill, x.dtype))
 
 
 def flat_scatter(x, idx, updates):
@@ -179,9 +350,15 @@ def flat_scatter(x, idx, updates):
         need accumulation must reduce first (see the ``K``-axis aggregation in
         ``functions``). Masked writes belong in :func:`masked_flat_scatter`.
     """
-    raise NotImplementedError(
-        "scatter updates into x through flat 1-D indices and reshape back"
+    flat_idx = _flat_index_block(x, idx, None, 0)
+    pop_size, row_len = x.shape
+    out = evoxc.scatter(
+        evoxc.reshape(x, (pop_size * row_len,)),
+        evoxc.reshape(flat_idx, (-1,)),
+        evoxc.reshape(updates, (-1,)),
+        axis=0,
     )
+    return evoxc.reshape(out, (pop_size, row_len))
 
 
 def masked_flat_scatter(x, idx, updates, mask):
@@ -213,12 +390,21 @@ def masked_flat_scatter(x, idx, updates, mask):
 
     Notes:
         Also used to build the dense key→slot table
-        (:func:`tensorization.key_slot_table`), where absent (``NaN``) node
-        rows are the masked ones.
+        (:func:`tensorization.key_slot_table`), where the masked positions are
+        the node rows whose key is absent (``I_INF``) or outside
+        ``[0, key_span)`` — the caller's ``in_range`` mask, never an ``isnan``
+        test, because canonical keys are ``int32``.
     """
-    raise NotImplementedError(
-        "scatter with masked writes redirected to a trailing dump column"
+    pop_size, width = x.shape
+    dump_column = width - 1
+    flat_idx = _flat_index_block(x, idx, mask, dump_column)
+    out = evoxc.scatter(
+        evoxc.reshape(x, (pop_size * width,)),
+        evoxc.reshape(flat_idx, (-1,)),
+        evoxc.reshape(updates, (-1,)),
+        axis=0,
     )
+    return evoxc.reshape(out, (pop_size, width))
 
 
 def fetch_first(mask, default=I_INF):
@@ -227,7 +413,8 @@ def fetch_first(mask, default=I_INF):
     Args:
         mask: ``(P, L)`` ``bool`` tensor.
         default: ``int32`` value returned where ``mask`` has no ``True``
-            entry; ``I_INF`` by default.
+            entry; ``I_INF`` by default (``None`` also selects that
+            sentinel, so "unset" and "no candidate" read the same).
 
     Returns:
         ``(P,)`` ``int32`` tensor of indices in ``[0, L)``, or ``default``.
@@ -240,9 +427,11 @@ def fetch_first(mask, default=I_INF):
         ``evoxc.select(mask_selected, idx, default)`` — no ``where`` (evoxc has
         none), no ``cumsum`` (a StableHLO export deferral).
     """
-    raise NotImplementedError(
-        "return the first True index of each mask row, or default when none"
-    )
+    if default is None:  # "unset" -> the documented I_INF sentinel
+        default = I_INF
+    hit = evoxc.reduce_max(mask, axes=-1)
+    first = evoxc.cast(evoxc.argmax(mask, axis=-1), evoxc.int32)
+    return evoxc.select(hit, first, _scalar_constant(default, evoxc.int32))
 
 
 def fetch_random(key, mask, default=I_INF):
@@ -254,7 +443,7 @@ def fetch_random(key, mask, default=I_INF):
             result is a function of the key alone.
         mask: ``(P, L)`` ``bool`` tensor.
         default: ``int32`` value returned where ``mask`` has no ``True``
-            entry; ``I_INF`` by default.
+            entry; ``I_INF`` by default (``None`` also selects that sentinel).
 
     Returns:
         ``(P,)`` ``int32`` tensor of indices in ``[0, L)``, or ``default``.
@@ -273,9 +462,15 @@ def fetch_random(key, mask, default=I_INF):
         take the ``argmax`` — the maximiser of i.i.d. draws restricted to a set
         is uniform over that set.
     """
-    raise NotImplementedError(
-        "pick a uniform random True index per mask row without cumsum"
+    if default is None:  # "unset" -> the documented I_INF sentinel
+        default = I_INF
+    draws = evoxc.random.uniform(key, tuple(mask.shape), 0.0, 1.0, dtype=evoxc.float32)
+    candidate = evoxc.select(
+        mask, draws, _scalar_constant(float("-inf"), evoxc.float32)
     )
+    hit = evoxc.reduce_max(mask, axes=-1)
+    chosen = evoxc.cast(evoxc.argmax(candidate, axis=-1), evoxc.int32)
+    return evoxc.select(hit, chosen, _scalar_constant(default, evoxc.int32))
 
 
 def rank_elements(x, reverse=False):
@@ -299,9 +494,10 @@ def rank_elements(x, reverse=False):
         ``int64`` (cast down here) and needs ``stable=True`` so equal values
         keep a deterministic order — the schedule's group ranks depend on it.
     """
-    raise NotImplementedError(
-        "compute ordinal ranks along the last axis via a stable argsort inverse"
-    )
+    oriented = x if reverse else evoxc.negate(x)
+    order = evoxc.argsort(oriented, axis=-1, stable=True)
+    inverse = evoxc.argsort(order, axis=-1, stable=True)
+    return evoxc.cast(inverse, evoxc.int32)
 
 
 def argmin_with_mask(arr, mask):
@@ -325,9 +521,10 @@ def argmin_with_mask(arr, mask):
         sentinel: the legacy JAX helper silently returned slot ``0``, which is
         a real individual, so callers of this port must test for ``I_INF``.
     """
-    raise NotImplementedError(
-        "return the argmin over mask-selected entries, I_INF when none"
-    )
+    scored = evoxc.select(mask, arr, _scalar_constant(float("inf"), arr.dtype))
+    hit = evoxc.reduce_max(mask, axes=-1)
+    smallest = evoxc.cast(evoxc.argmin(scored, axis=-1), evoxc.int32)
+    return evoxc.select(hit, smallest, _scalar_constant(I_INF, evoxc.int32))
 
 
 def mutate_float(key, val, init_mean, init_std, mutate_power, mutate_rate, replace_rate):
@@ -349,7 +546,9 @@ def mutate_float(key, val, init_mean, init_std, mutate_power, mutate_rate, repla
         init_mean: Scalar ``float32``/Python float: mean of a replacement draw.
         init_std: Scalar: standard deviation of a replacement draw.
         mutate_power: Scalar: standard deviation of the additive perturbation.
-        mutate_rate: Scalar in ``[0, 1)``: probability of perturbation.
+        mutate_rate: Scalar in ``[0, 1]``: probability of perturbation; ``1``
+            means "always perturb" and is legal (the perturb band has no upper
+            keep bound to protect).
         replace_rate: Scalar in ``[0, 1)``: probability of replacement;
             ``mutate_rate + replace_rate`` must not exceed ``1``.
 
@@ -360,15 +559,33 @@ def mutate_float(key, val, init_mean, init_std, mutate_power, mutate_rate, repla
         evoxc.BackendError: Propagated unchanged (random ops are numpy-backend
             only in v1).
         tensorneat.common.errors.ConfigError: If the host-side rates are
-            outside ``[0, 1)`` or sum above ``1`` — validated before tracing.
+            outside ``[0, 1]`` (``mutate_rate``) / ``[0, 1)`` (``replace_rate``)
+            or sum above ``1`` — validated before tracing.
 
     Notes:
         Branching is ``evoxc.select``, never ``where``/Python ``if``; the
         legacy ``jnp.where`` nests map one-to-one onto two nested selects.
     """
-    raise NotImplementedError(
-        "apply the perturb-or-replace-or-keep float mutation rule with evoxc.random"
+    mutate_rate = _rate("mutate_rate", mutate_rate, allow_one=True)
+    replace_rate = _rate("replace_rate", replace_rate)
+    if mutate_rate + replace_rate > 1.0:
+        raise ConfigError(
+            "mutate_rate + replace_rate must not exceed 1, got "
+            f"{mutate_rate} + {replace_rate}"
+        )
+    shape = tuple(val.shape)
+    key_noise, key_replace, key_draw = evoxc.random.split_n(key, 3)
+    noise = evoxc.random.normal(
+        key_noise, shape, 0.0, _scalar(mutate_power), dtype=val.dtype
     )
+    replacement = evoxc.random.normal(
+        key_replace, shape, _scalar(init_mean), _scalar(init_std), dtype=val.dtype
+    )
+    draw = evoxc.random.uniform(key_draw, shape, 0.0, 1.0, dtype=val.dtype)
+    replaced = evoxc.select(
+        evoxc.less(draw, mutate_rate + replace_rate), replacement, val
+    )
+    return evoxc.select(evoxc.less(draw, mutate_rate), evoxc.add(val, noise), replaced)
 
 
 def mutate_int(key, val, options, replace_rate):
@@ -399,17 +616,27 @@ def mutate_int(key, val, options, replace_rate):
         ``options`` must be non-empty and static; an empty option list is a
         configuration bug, not a runtime condition.
     """
-    raise NotImplementedError(
-        "replace-or-keep int mutation using gather(options, randint(...))"
-    )
+    replace_rate = _rate("replace_rate", replace_rate, allow_one=True)
+    count = int(options.shape[0])
+    if count <= 0:
+        raise ConfigError(
+            "options must be a non-empty 1-D tensor, got an empty option list"
+        )
+    shape = tuple(val.shape)
+    key_draw, key_pick = evoxc.random.split_n(key, 2)
+    draw = evoxc.random.uniform(key_draw, shape, 0.0, 1.0, dtype=evoxc.float32)
+    picked = evoxc.random.randint(key_pick, shape, 0, count, dtype=evoxc.int32)
+    replacement = evoxc.cast(evoxc.gather(options, picked, axis=0), val.dtype)
+    return evoxc.select(evoxc.less(draw, replace_rate), replacement, val)
 
 
 def hash_rows(rows):
     """Hash each row of a gene array to a single ``uint32`` — **host only**.
 
     Args:
-        rows: ``(N, L)`` numpy array of gene rows (float32 gene payload or
-            int-valued columns). Host memory, not a traced tensor.
+        rows: ``(N, L)`` numpy array of gene rows — ``int32`` key columns,
+            ``float32`` attribute columns, or a whole mixed row array kept
+            integer-valued — in host memory, not a traced tensor.
 
     Returns:
         ``(N,)`` ``numpy.uint32`` array; equal rows give equal hashes, unequal
@@ -427,6 +654,55 @@ def hash_rows(rows):
         left-to-right with the legacy ``0x9E3779B9`` constant so the numbers
         stay comparable with the pre-rewrite library.
     """
-    raise NotImplementedError(
-        "hash each row to uint32 on the host via numpy bit-viewing"
-    )
+    array = np.ascontiguousarray(rows)
+    if array.ndim != 2:
+        raise ValueError(
+            f"hash_rows expects a 2-D (rows, columns) array, got {array.ndim}-D"
+        )
+    row_count = array.shape[0]
+    if array.shape[1] == 0:  # the empty fold: no word is mixed in
+        return np.zeros(row_count, dtype=np.uint32)
+    raw = array.view(np.uint8).reshape(row_count, -1)
+    padding = (-raw.shape[1]) % 4  # uint32 needs whole 4-byte words per row
+    if padding:
+        padded = np.zeros((row_count, raw.shape[1] + padding), dtype=np.uint8)
+        padded[:, : raw.shape[1]] = raw
+        raw = padded
+    words = raw.view(np.uint32)
+    hashes = np.zeros(row_count, dtype=np.uint32)
+    golden = np.uint32(0x9E3779B9)
+    shift_left, shift_right = np.uint32(6), np.uint32(2)
+    for column in range(words.shape[1]):
+        word = words[:, column]
+        hashes = hashes ^ (
+            word + golden + (hashes << shift_left) + (hashes >> shift_right)
+        )
+    return hashes
+
+
+def to_numpy(tensor):
+    """Host-side accessor: an ``evoxc.Tensor`` (or array) as a NumPy array.
+
+    **Host only** — never call this inside an ``@evoxc.defn`` graph. Every
+    logging, checkpoint and ``show`` path goes through it because
+    ``evoxc.Tensor`` has no ``__array__``, so ``np.asarray`` would leave it
+    untouched instead of unwrapping it.
+
+    Args:
+        tensor: An ``evoxc.Tensor`` (has ``.numpy()``), a ``numpy.ndarray``
+            (returned unchanged) or anything else ``np.asarray`` accepts.
+
+    Returns:
+        ``numpy.ndarray`` sharing the tensor's buffer where the backend allows.
+
+    Notes:
+        Kept deliberately shallow: a pytree of tensors is unwrapped by the
+        caller (``evoxc.tree_map``) or by ``test/support/runner.to_numpy``; this
+        helper converts one leaf.
+    """
+    if isinstance(tensor, np.ndarray):
+        return tensor
+    numpy_method = getattr(tensor, "numpy", None)
+    if callable(numpy_method):
+        return numpy_method()
+    return np.asarray(tensor)

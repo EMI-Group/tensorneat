@@ -32,6 +32,7 @@ module; none of them is used here (``evoxc.maximum`` / ``evoxc.reduce_sum`` are)
 from typing import Callable, Sequence
 
 import evoxc
+import evoxc.numpy as enp
 
 from ..tools import flat_gather
 
@@ -57,7 +58,7 @@ def sum(z, mask):
     ``jnp.sum(z, axis=0, where=mask, initial=0)``; a ``NaN`` contribution is
     *not* skipped (it poisons the node) because the mask, not ``isnan``, decides.
     """
-    raise NotImplementedError("agg.sum: evoxc kernel, implemented in the implementation phase")
+    return evoxc.reduce_sum(evoxc.select(mask, z, 0.0), axes=-1)
 
 
 def product(z, mask):
@@ -79,7 +80,7 @@ def product(z, mask):
     -----
     ``reduce_prod(select(mask, z, 1.0), axes=-1)``.
     """
-    raise NotImplementedError("agg.product: evoxc kernel, implemented in the implementation phase")
+    return evoxc.reduce_prod(evoxc.select(mask, z, 1.0), axes=-1)
 
 
 def max(z, mask):
@@ -104,7 +105,7 @@ def max(z, mask):
     (``evoxc.numpy.full`` with a float ``-inf`` fill, or an ``evoxc`` scalar
     literal) -- evoxc exports no ``inf`` constant.
     """
-    raise NotImplementedError("agg.max: evoxc kernel, implemented in the implementation phase")
+    return evoxc.reduce_max(evoxc.select(mask, z, float("-inf")), axes=-1)
 
 
 def min(z, mask):
@@ -127,7 +128,7 @@ def min(z, mask):
     -----
     ``reduce_min(select(mask, z, +inf), axes=-1)``.
     """
-    raise NotImplementedError("agg.min: evoxc kernel, implemented in the implementation phase")
+    return evoxc.reduce_min(evoxc.select(mask, z, float("inf")), axes=-1)
 
 
 def maxabs(z, mask):
@@ -154,15 +155,24 @@ def maxabs(z, mask):
     magnitude and flip the sign of every negative-dominant node, so the kernel
     is ``argmax`` + one flat gather::
 
-        a     = select(mask, abs(z), 0.0)                            # (P, N, K)
-        col   = evoxc.argmax(a, axis=-1)                             # (P, N) int64, first max
-        flat  = reshape(z, (P * N, K))                               # (P*N, K)
-        rows  = arange(P * N) * K                                    # (P*N,)
-        val   = flat_gather(flat, rows + reshape(col, (P * N,)))     # (P, N)
+        zeroed = select(mask, z, 0.0)                                # (P, N, K)
+        col    = cast(argmax(abs(zeroed), axis=-1), int32)           # (P, N), first max
+        flat   = reshape(zeroed, (P * N, K))                         # (P*N, K)
+        val    = flat_gather(flat, reshape(col, (P * N,)))           # (P*N,)
+        return reshape(val, (P, N))
 
-    Two extra ops beyond the magnitude variant, both O(P * N * K) gathers.
+    The gather reads the *zeroed* tensor, not ``z``: an all-``False`` column then
+    yields its neutral element ``0.0`` instead of an arbitrary (possibly ``NaN``)
+    padding slot, exactly like the pre-rewrite ``z[argmax]`` after zeroing.
+    Two extra ops beyond the magnitude variant, both ``O(P * N * K)`` gathers.
     """
-    raise NotImplementedError("agg.maxabs: evoxc kernel, implemented in the implementation phase")
+    zeroed = evoxc.select(mask, z, 0.0)
+    magnitudes = evoxc.abs(zeroed)
+    column = evoxc.cast(evoxc.argmax(magnitudes, axis=-1), evoxc.int32)
+    pop_size, num_nodes, width = z.shape
+    flat = evoxc.reshape(zeroed, (pop_size * num_nodes, width))
+    picked = flat_gather(flat, evoxc.reshape(column, (pop_size * num_nodes,)))
+    return evoxc.reshape(picked, (pop_size, num_nodes))
 
 
 def mean(z, mask):
@@ -190,7 +200,9 @@ def mean(z, mask):
     floor reproduces that value without relying on the guard, which makes the
     kernel safe to call standalone.
     """
-    raise NotImplementedError("agg.mean: evoxc kernel, implemented in the implementation phase")
+    total = evoxc.reduce_sum(evoxc.select(mask, z, 0.0), axes=-1)
+    count = evoxc.reduce_sum(evoxc.cast(mask, evoxc.float32), axes=-1)
+    return evoxc.divide(total, evoxc.maximum(count, 1.0))
 
 
 AGG_FUNCS = (sum, product, max, min, maxabs, mean)
@@ -234,14 +246,23 @@ def apply_aggregation(
     tensor and selected per node with ``select(agg_ids == i, ...)``. Cost is
     ``len(agg_fns)`` masked reductions plus ``len(agg_fns)`` selects -- 6 + 6
     more passes over ``(P, N, K)`` for the canonical list, on top of the
-    gathers the forward pass already performs. :func:`mean` reuses the
-    zero-padded tensor of :func:`sum`, so the constant factors stay small.
+    gathers the forward pass already performs. :func:`mean` computes the same
+    zero-padded sum as :func:`sum`, so the constant factors stay small.
 
     The ``has_valid`` guard is a final
     ``select(reduce_sum(cast(mask, float32), -1) > 0, result, 0.0)``; it is what
     keeps a node with no computable incoming edge from absorbing ``-inf`` /
-    ``+inf`` / ``NaN``. An id outside ``[0, len(agg_fns))`` yields ``0.0`` (the
-    cascade's initial value); the pre-rewrite ``lax.switch`` clamped such ids to
-    the last option, an unreachable divergence for well-formed genomes.
+    ``+inf`` / ``NaN`` (and a padded :func:`product` from becoming ``1.0``). An
+    id outside ``[0, len(agg_fns))`` yields ``0.0`` (the cascade's initial
+    ``enp.zeros`` value); the pre-rewrite ``lax.switch`` clamped such ids to the
+    last option, an unreachable divergence for well-formed genomes.
     """
-    raise NotImplementedError("agg.apply_aggregation: evoxc kernel, implemented in the implementation phase")
+    ids = evoxc.cast(agg_ids, evoxc.int32)
+    out = enp.zeros(z.shape[:-1], dtype=evoxc.float32)
+    for index, fn in enumerate(agg_fns):
+        out = evoxc.select(evoxc.equal(ids, index), fn(z, mask), out)
+    # ``has_valid``: a node with no real incoming edge gets exactly ``0.0``, so
+    # the ``-inf`` / ``+inf`` neutral padding of ``max`` / ``min`` cannot leak
+    # into a node value (and a padded product cannot become ``1``).
+    count = evoxc.reduce_sum(evoxc.cast(mask, evoxc.float32), axes=-1)
+    return evoxc.select(evoxc.greater(count, 0.0), out, 0.0)

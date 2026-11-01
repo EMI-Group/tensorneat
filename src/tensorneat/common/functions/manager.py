@@ -368,12 +368,13 @@ class FunctionManager:
 
         Notes
         -----
-        Graph code (this is the one evoxc op in this module): the recipe is
-        ``evoxc.random.randint(key, (), 0, len(self))`` -- ``high`` is
-        exclusive and an empty shape yields a rank-0 draw. A caller sampling a
-        *custom* option list of a different length calls
-        ``evoxc.random.randint(key, (), 0, len(options))`` directly.
+        Graph code (this is the one evoxc op in this module): one
+        ``evoxc.random.randint(key, (1,), 0, len(self))`` draw (``high`` is
+        exclusive) reshaped to rank 0. The draw is requested as shape ``(1,)``
+        rather than ``()`` because the numpy reference backend returns a bare
+        NumPy scalar for a 0-d result and rejects it when it builds the output
+        tensor; the reshape keeps the documented rank-0 contract without
+        depending on that path. A caller sampling a *custom* option list of a
+        different length calls the same two ops with ``len(options)``.
         """
-        raise NotImplementedError(
-            "FunctionManager.random_index: evoxc kernel, implemented in the implementation phase"
-        )
+        return evoxc.reshape(evoxc.random.randint(key, (1,), 0, len(self)), ())

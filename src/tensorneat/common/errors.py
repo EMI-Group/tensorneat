@@ -58,8 +58,9 @@ class ConfigError(TensorNEATError):
     Raised on the host at configuration/build time, for example when
 
     * two nodes of one genome carry the same gene key (keys must be unique),
-    * a key falls outside the integer-exact float32 range ``[0, KEY_MAX)``
-      (``KEY_MAX = 2**24``, see :data:`tensorneat.common.tools.KEY_MAX`),
+    * a key falls outside ``[0, KEY_MAX)`` (``KEY_MAX = 2**24``, the bound the
+      ``int32`` key columns and the parity ``float32`` spelling share — see
+      :data:`tensorneat.common.tools.KEY_MAX`),
     * ``pop_size``/``max_nodes``/``max_conns``/``max_in_degree``/``key_span``
       is not a positive ``int``,
     * a genome class is used with an algorithm whose ``num_inputs`` /
