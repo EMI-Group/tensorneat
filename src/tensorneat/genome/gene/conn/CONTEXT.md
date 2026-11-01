@@ -45,7 +45,7 @@ Shape disagreements, an unknown marker, a wrong column count or an unusable attr
 - `forward` is pure elementwise in the edge slot: never gather, reduce or branch on traced values inside a family.
 - Additional key columns shift nothing in `attr_specs`; consumers read `attr_specs`/`fixed_attrs`, never hardcoded column indices.
 - `sympy_func` names the weight symbol from `(in, out)` only, so two `OriginConn`s that differ solely in `historical_marker` share a symbol name.
-- Known evoxc v1 gap, not worked around here: reverse mode through `BaseGene.column` (a dim-dropping static index) raises `ShapeError` in the slice VJP, so `Genome.grad` needs a shape-preserving column read in `gene/base.py` before `DefaultConn.forward` is differentiable.
+- `BaseGene.column` is a shape-preserving slice (`slice(i, i+1)` + `evoxc.reshape`), so `DefaultConn.forward` is differentiable end to end through `evoxc.grad`; a dim-dropping integer index or `[..., i]` is rejected in a trace and must never be reintroduced.
 - Files ≤ ~1000 lines.
 
 ## Routing Table
