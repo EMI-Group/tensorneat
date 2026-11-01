@@ -13,18 +13,32 @@ This is test code: it is imported (`from support.runner import run_defn ...`) an
 `compile_graph(graph, backend="numpy")`, `to_numpy(tree)`, `spec_like(array)`, `tensor(array)`, `DEFAULT_BACKEND = "numpy"`.
 Rules the runner exists to encode: statics must be passed **again** at `run` (they are baked per call here), an `Executable` is not callable, and `evoxc.Tensor` has no `__array__`.
 A test that needs a *method* inside a graph closes over the host objects and passes only tensors/statics: `run_defn(lambda nk, ck: genome.transform(state, nk, ck), node_keys, conn_keys)` — never nest two `@evoxc.defn` functions.
-### `payloads.py`
+### `payloads.py` (implemented)
 `I_INF` — the `int32` sentinel re-exported from `tensorneat.common.tools`, so a payload and the kernels agree on one value.
-`new_payload(pop_size, max_nodes, max_conns, *, node_attr_width=3, conn_key_width=3, conn_attr_width=1) -> Payload` — `I_INF`-padded `node_keys`/`conn_keys` (`int32`) and NaN-padded `node_attrs`/`conn_attrs` (`float32`).
-`Payload` — the four arrays in `GenomeTensors` order with `.args()` (a tuple for `run_defn`), `.of(p)` (one individual's view) and `__getitem__`.
+`new_payload(pop_size=1, max_nodes=8, max_conns=16, *, node_attr_width=4, conn_key_width=2, conn_attr_width=1) -> Payload` — `I_INF`-padded `node_keys`/`conn_keys` (`int32`) and NaN-padded `node_attrs`/`conn_attrs` (`float32`).
+The default widths are the real gene layouts (`NA=4` = `bias, response, aggregation, activation`; `CK=2` = `(input_index, output_index)`; `CA=1` = `weight`), and a `NA==3` payload reproduces the pre-rewrite node layout that has no activation column.
+`Payload` — the four arrays in `GenomeTensors` order with `.args()` (a tuple for `run_defn`), `.of(p)` (a **one-individual batch**, `P == 1`, so it feeds straight back into a kernel) and `__getitem__` (`int` → `.of(p)`, `str` → the field array).
+`Payload` also exposes `.pop_size`/`.max_nodes`/`.max_conns`/`.node_attr_width`/`.conn_key_width`/`.conn_attr_width`/`.field_names`, and `__repr__` prints the three shapes.
 `set_node(payload, p, row, key, attrs=None)` / `set_conn(payload, p, row, in_key, out_key, attrs=None)` — write one gene row in place, host-side, with attribute count validated against the payload widths.
-`default_genome(**kwargs)` / `recurrent_genome(**kwargs)` / `genome_state(genome)` — a `DefaultGenome`/`RecurrentGenome` with default genes and operators over `num_inputs=2, num_outputs=1, max_nodes=8, max_conns=16`, and the `State` from its `setup()`.
+`attrs=None` writes the neutral row (`(bias=0, response=1, aggregation=0, activation=0)` / `(weight=1)`), and `key == I_INF` (any endpoint `I_INF` for `set_conn`) *clears* the row back to the sentinels instead of writing garbage.
+`set_conn` writes the connection's row index into the key columns past `(input_index, output_index)` — the documented `historical_marker` of `OriginConn`.
+`default_genome(**kwargs)` / `recurrent_genome(**kwargs)` / `genome_state(genome)` — a `DefaultGenome`/`RecurrentGenome` with default genes and operators over `num_inputs=2, num_outputs=1, max_nodes=8, max_conns=16`, and the `State` from its `setup(State())`.
+The two factories only construct the genome and call `setup`; a `NotImplementedError` raised by a `src` constructor is the source skeleton's and propagates untouched (src is filled in in parallel).
 `chain_payload(...)`, `skip_payload(...)`, `isolated_payload(...)`, `ring_payload(...)` — the four canonical topologies the forward/grad tests start from (dense chain, a node bypassed by its consumers, a node with no edges, a recurrent cycle).
-### `oracle.py`
+Each topology builder takes `pop_size`, `max_nodes`, `max_conns`, `num_inputs`, `num_outputs`, the three widths and `weight`, uses node key == row index, and documents the exact rows/edges/levels it writes in its docstring.
+### `functions_ref.py` (implemented)
+The numpy kernels of the two option registries, split out because a registry is not a network algorithm and `oracle.py` must stay inside the line budget.
+`ACT_FUNCS` — the 12 activations in the documented order (`scaled_sigmoid, sigmoid, scaled_tanh, tanh, sin, relu, lelu, identity, inv, log, exp, abs`) with the `ACT_SCALE`/`LELU_SLACK`/`INV_EPS`/`LOG_EPS` constants, and `AGG_FUNCS` — the 6 aggregations (`sum, product, max, min, maxabs, mean`); option **ids** are positions in the configured list, `-1` is identity for an activation and never an aggregation id.
+`apply_activation(z, act_ids, act_fns=(act_sigmoid,))` / `apply_aggregation(z, mask, agg_ids, agg_fns=(agg_sum,))` — dispatch per row, neutral-pad the masked-out slots per option (a fully dead row aggregates to exactly `0.0`), and fall back to `0.0` for an out-of-range id.
+`oracle.py` re-exports all of it, so a test may import kernels and algorithms from `support.oracle` alone.
+### `oracle.py` (implemented)
 `schedule(node_keys, conn_in, conn_out, input_keys, output_keys, *, max_in_degree, key_span)` → a `Transformed`-shaped namedtuple of numpy arrays derived independently of the evoxc kernel (dense key→slot table, in-group rank, counting trick, longest-path levels), for `test/unit/common/test_tensorization.py` and for cross-checking the forward oracle.
-`forward(payload, transformed, inputs, *, node_attrs_of, conn_attr_of, activation, aggregation, is_output, network_type="feedforward", activate_time=10)` → `(P, num_outputs)` NaN-aware numpy forward that follows the documented level-synchronous algorithm (NaN→0 sanitization, neutral-padded aggregation, `has_valid` guard, output nodes not activated by the node gene).
-`func_fit_loss(pred, targets, error_method)` → per-individual loss, matching `problem/func_fit`'s reduction over sample *and* output axes.
-`cartpole_rollout(actions, obs0, *, max_step, params)` → per-episode return of the documented Euler dynamics with the frozen-state-after-death rule.
+`schedule` accepts either sentinel for an absent row (`I_INF` from the payloads, or the `NaN` `derive_schedule` documents), and reports a node on or downstream of a cycle as `level = I_INF`.
+`default_node_attrs_of(node_attrs)` → `(bias, response, agg_ids, act_ids)` and `default_conn_attr_of(conn_attrs)` → `(P, E)` weights are the column readers `forward` uses by default; a test overrides them for another gene layout.
+`forward(payload, transformed, inputs, *, node_attrs_of=None, conn_attr_of=None, activation=None, aggregation=None, is_output=None, network_type="feedforward", activate_time=10)` → `(P, num_outputs)` NaN-aware numpy forward that follows the documented level-synchronous algorithm (NaN→0 sanitization, neutral-padded aggregation, `has_valid` guard, output nodes not activated by the node gene).
+`activation`/`aggregation` are either one callable or a sequence of callables (the configured option list the id columns index), and `is_output` defaults to the last `num_outputs` node slots.
+`func_fit_loss(pred, targets, error_method="mse")` → per-individual `(P,)` loss, matching `problem/func_fit`'s reduction over sample *and* output axes; `FUNC_FIT_ERROR_METHODS` names the four accepted strings.
+`cartpole_params(**knobs)` → the documented Gym `CartPole-v1` constants (`theta_threshold` in **degrees**, `length` = half-pole), and `cartpole_rollout(actions, obs0, *, max_step=500, params=None)` → per-episode return of the documented Euler dynamics with the frozen-state-after-death rule.
 `mutate_float_oracle(...)`, `distance_oracle(...)` — only if a unit test needs them; parity covers the real ones.
 
 ## Constraints
