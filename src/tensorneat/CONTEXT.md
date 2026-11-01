@@ -42,6 +42,11 @@ There is no `problem.jitable` flag any more: whether a graph compiles is the bac
 - Errors: user/config validation raises `common.errors.TensorNEATError` (and its subclasses); tensor/backend errors are never caught and re-wrapped.
 - Files ≤ ~1000 lines; shared math lives in `common/`, never duplicated per genome/algorithm.
 
+## Known Issues
+- `pipeline.py` is still the pre-rewrite JAX implementation (`pipeline.py:5 import jax`, `:33 assert problem.jitable`, `:82 def setup(self, state=State())`), so `import tensorneat` imports `jax` today and the `Pipeline` API Surface above describes the intended file, not the current one.
+- The replacement `Pipeline` must register `backend` / `device` / `compile_options` on `State`: `NEAT._build_options` reads exactly those keys (`algorithm/neat/neat.py:349-354`), defaulting `backend` to `"numpy"`.
+- No `fitness_history` attribute exists anywhere in `src/`; the integration suite expects the new `Pipeline` to expose one.
+
 ## Routing Table
 | Path | Responsibility |
 |---|---|
