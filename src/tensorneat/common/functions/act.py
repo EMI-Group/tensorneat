@@ -292,7 +292,7 @@ ACT_FUNCS: tuple[Callable, ...] = (
 """Canonical ACT option order -- part of the gene encoding, do not reorder.
 
 A node gene stores the *position in the user's option list*; when a genome is
-configured with ``ACT.get_all_funcs()`` this tuple is that order, so appending
+configured with ``ACT.evoxc_fns`` this tuple is that order, so appending
 is safe, reordering or deleting is a checkpoint/parity break. ``clip`` is
 deliberately absent (see ``CONTEXT.md``, Design Decisions).
 """

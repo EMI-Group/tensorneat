@@ -146,7 +146,13 @@ class FunctionManager:
         return len(self.evoxc_fns)
 
     def __repr__(self) -> str:
-        """Return a short host-side representation listing the option names."""
+        """Return a short host-side representation listing the option names.
+
+        Returns
+        -------
+        str
+            ``FunctionManager(scaled_sigmoid, sigmoid, ...)``.
+        """
         return f"{type(self).__name__}({', '.join(self.names)})"
 
     def __getattr__(self, name: str) -> Callable:
@@ -192,9 +198,16 @@ class FunctionManager:
         Raises
         ------
         IndexError
-            If ``index`` is outside ``[0, len(self))``.
+            If ``index`` is outside ``[0, len(self))`` -- a negative id is
+            rejected rather than wrapped, because a gene id that reaches here
+            is either a valid option or a corrupted payload.
         """
-        return self.evoxc_fns[int(index)]
+        index = int(index)
+        if not 0 <= index < len(self.evoxc_fns):
+            raise IndexError(
+                f"option id {index} is outside [0, {len(self.evoxc_fns)}) of {self!r}"
+            )
+        return self.evoxc_fns[index]
 
     def get_sympy_func(self, index: Union[int, np.integer]) -> type:
         """Return the sympy counterpart stored at an option id.
@@ -212,14 +225,20 @@ class FunctionManager:
         Raises
         ------
         IndexError
-            If ``index`` is outside ``[0, len(self))``.
+            If ``index`` is outside ``[0, len(self))`` (negative ids are
+            rejected, not wrapped).
         ValueError
             If the option has no sympy counterpart (``None`` entry).
         """
-        sympy_cls = self.sympy_fns[int(index)]
+        index = int(index)
+        if not 0 <= index < len(self.sympy_fns):
+            raise IndexError(
+                f"option id {index} is outside [0, {len(self.sympy_fns)}) of {self!r}"
+            )
+        sympy_cls = self.sympy_fns[index]
         if sympy_cls is None:
             raise ValueError(
-                f"option {self.names[int(index)]!r} has no sympy representation"
+                f"option {self.names[index]!r} has no sympy representation"
             )
         return sympy_cls
 

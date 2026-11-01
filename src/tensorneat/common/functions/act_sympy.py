@@ -6,6 +6,10 @@ or LaTeX. They therefore use plain ``sympy``/``numpy`` and must stay numerically
 identical to the kernels in :mod:`.act` -- every constant is imported from there
 so the two representations cannot drift.
 
+Shapes and dtypes do not apply here -- every class rewrites one symbolic
+expression, and the numeric contract (shapes, dtypes, sentinels) lives in
+:mod:`.act`.
+
 Each class is a *constructor-time rewriter*: ``SympySigmoid(z)`` returns the
 ordinary sympy expression ``1 / (1 + exp(-z))`` (not an instance of
 ``SympySigmoid``), which is what keeps the generated code readable and keeps

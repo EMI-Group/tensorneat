@@ -20,10 +20,10 @@ Contract shared by all kernels in this module:
   slots to its neutral element (``0`` for sum/maxabs, ``1`` for product,
   ``-inf`` for max, ``+inf`` for min) with ``evoxc.select`` and then reduces.
 * **Empty input is the caller's problem.** With ``K >= 1`` an all-``False``
-  mask yields the neutral element (``0``, ``1``, ``-inf``, ``+inf``) or ``NaN``
-  for :func:`mean`; :func:`apply_aggregation` overrides those to exactly
-  ``0.0``, which is what the pre-rewrite library did with its
-  ``all(~mask) -> 0.0`` short-circuit.
+  mask column yields the neutral element (``0``, ``1``, ``-inf``, ``+inf``),
+  except :func:`mean`, whose ``maximum(count, 1.0)`` floor already gives
+  ``0.0``; :func:`apply_aggregation` overrides every such column to exactly
+  ``0.0``.
 
 Note that ``sum``, ``max``, ``min`` and ``abs`` shadow the builtins inside this
 module; none of them is used here (``evoxc.maximum`` / ``evoxc.reduce_sum`` are).
@@ -154,9 +154,11 @@ def maxabs(z, mask):
     magnitude and flip the sign of every negative-dominant node, so the kernel
     is ``argmax`` + one flat gather::
 
-        a   = select(mask, abs(z), 0.0)          # (P, N, K)
-        idx = evoxc.argmax(a, axis=-1)           # (P, N) int64, first maximum
-        val = flat_gather(reshape(z, (P * N, K)), row * K + idx)   # (P, N)
+        a     = select(mask, abs(z), 0.0)                            # (P, N, K)
+        col   = evoxc.argmax(a, axis=-1)                             # (P, N) int64, first max
+        flat  = reshape(z, (P * N, K))                               # (P*N, K)
+        rows  = arange(P * N) * K                                    # (P*N,)
+        val   = flat_gather(flat, rows + reshape(col, (P * N,)))     # (P, N)
 
     Two extra ops beyond the magnitude variant, both O(P * N * K) gathers.
     """

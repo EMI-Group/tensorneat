@@ -13,13 +13,14 @@ Nothing here knows about genomes, populations or the Pipeline: a node gene hands
 | `act_sympy.py` | `sp.Function` counterparts of `ACT_FUNCS` plus `SympyClip`, `ACT_SYMPY_FUNCS`, `ACT_SYMPY_HELPERS`. |
 | `agg_sympy.py` | `sp.Function` counterparts of the aggregations, `AGG_SYMPY_FUNCS`. |
 | `manager.py` | `FunctionManager`: names/ids/lookups, pairing validation, `sympy_module`, `random_index`. |
-| `__init__.py` | Wiring only: builds `ACT` / `AGG` and re-exports exactly five names. |
+| `__init__.py` | Wiring only: builds `ACT` / `AGG`; `__all__` is exactly five names (the canonical tuples stay importable but are not public surface). |
 
 ## Registry contract
 A node gene stores an integer id = **position in the user's option list** (`activation_options` / `aggregation_options`), not a global registry index; `ACT_FUNCS` / `AGG_FUNCS` are the canonical order used when a genome passes the registry itself as its option list.
 An option's registry name is its kernel's `__name__`, so kernels must be named after the option they implement; `FunctionManager` derives `names`, `name2index`, `index2name` from the tuples.
 The order is part of the gene encoding: **append only** — reordering or deleting changes sampled ids and breaks checkpoint/parity.
-Ids are sampled on the host side with `evoxc.random` (`FunctionManager.random_index(key)` → rank-0 int32 in `[0, len)`); genome code mutates them within `[0, len)` only.
+Ids are sampled with `evoxc.random` stateless keys (`FunctionManager.random_index(key)` → rank-0 int32 in `[0, len)`, in-graph) and mutated within `[0, len)` only.
+Host lookups (`get_evoxc_func`, `get_sympy_func`, `obtain_sympy`) reject ids outside `[0, len)` with `IndexError` instead of wrapping, so a corrupted gene id fails loudly.
 
 ### ACT — canonical order (12)
 | id | name | definition (`z` elementwise, float32) |
@@ -73,7 +74,7 @@ All kernels take and return `float32`; ids arrive as integral-valued `float32` g
 No bitcast exists in evoxc, which changes nothing here: activations and aggregations are numerics, not payload bit-twiddling.
 
 ## Sympy / interpretability contract (host-only)
-`ACT` / `AGG` pair every option with an `sp.Function` subclass in the same order; `FunctionManager.__init__` validates the pairing by class name (`SympyScaledSigmoid` → `scaled_sigmoid`) and raises `ValueError` on a mismatch, which is what makes the legacy `"inv" → SympyIdentity` bug impossible to reintroduce.
+`ACT` / `AGG` pair every option with an `sp.Function` subclass in the same order; `FunctionManager.__init__` validates the pairing by class name (`SympyScaledSigmoid` → `scaled_sigmoid`) and raises `ValueError` on a mismatch, so an `inv` / `SympyIdentity` mix-up cannot reach the codegen path.
 Each sympy class is a constructor-time rewriter (`SympySigmoid(z)` returns `1/(1+exp(-z))`), so generated formulas are plain sympy expressions; `SympyClip` is the exception and defines `numerical_eval`, exposed through `sympy_module()` for `sp.lambdify`.
 `sp.lambdify(..., modules=["numpy", AGG.sympy_module(), ACT.sympy_module()])` is the sanctioned codegen path; `sympy_module(backend)` accepts `"numpy"` only and raises `ValueError` for anything else (the JAX backend disappeared with the rewrite).
 `sympy_module()` emits a `partial(cls.numerical_eval, backend=numpy)` for every counterpart **and** every `extra_sympy_classes` entry that defines `numerical_eval` — `SympyClip` is such a helper (`ACT_SYMPY_HELPERS`), because `SympyExp` builds it while not being an option itself; the binding is by keyword, since `numerical_eval(val, min_val, max_val, backend=np)` would otherwise receive numpy as `val`.
@@ -81,22 +82,22 @@ The codegen path is exercised, not aspirational: every activation and aggregatio
 Shared numeric constants (`SCALE`, `LELU_SLACK`, `INV_EPS`, `LOG_EPS`, `EXP_CLIP`) live in `act.py` and are imported by `act_sympy.py`, so the two representations cannot drift.
 
 ## Design Decisions
-1. **`inv` pairs with `SympyInv`** (`1 / clamped(z)`), fixing the pre-rewrite `"inv" → SympyIdentity` bug: the numeric kernel was always `1/z`, so numeric parity is untouched and only interpretability output changes (formulas for `inv` nodes now match the executed kernel).
-2. **`clip` is not a registry option**: the pre-rewrite sympy table carried a 13th name with no numeric counterpart, which made `ACT`'s two tables disagree in length; `clip` stays internal to `SympyExp` (`SympyClip`) and the ACT option list is exactly the 12 names above, so sampled activation ids are unchanged.
+1. **`inv` pairs with `SympyInv`** (`1 / clamped(z)`): the numeric kernel is `1/z`, so the interpretability output states the executed function; pairing `inv` with an identity would make generated formulas disagree with the compiled graph and is rejected by the pairing check.
+2. **`clip` is not a registry option**: a 13th sympy-only name would make `ACT`'s two tables disagree in length and shift no numeric behaviour; `clip` stays internal to `SympyExp` (`SympyClip`, exported as a codegen helper) and the ACT option list is exactly the 12 names above, so sampled activation ids stay stable.
 3. **Dispatch is a `select` cascade, not a branch**: evoxc has no `switch` and `cond` demands a 0-d predicate, so every option is evaluated and selected per node; the documented op counts above are the accepted price.
 4. **Aggregations are rank-3 and last-axis reducing**: one shape class, one reduce axis, testable against a numpy oracle; HyperNEAT's substrate shape adaptation belongs to that node.
 5. **`maxabs` stays signed** (argmax + `flat_gather`) rather than the cheaper `reduce_max(abs(z))`, because the pre-rewrite kernel returned the signed value and parity tests compare against it.
 6. **The manager is immutable** (no `add_func` / `update_sympy`): a gene id indexes the *user's* option list, so custom options need no global registration; a genome wanting sympy support for a custom option constructs its own `FunctionManager`.
-7. **`get_func_name` is gone**; names are registry data (`ACT.name_of(fn)`, `ACT.index2name[id]`), which is also what `to_dict` / `repr` need.
+7. **Names are registry data** (`ACT.name_of(fn)`, `ACT.index2name[id]`), with no module-level `get_func_name` helper: `to_dict` / `repr` ask the manager, which knows the canonical spelling of an option.
 8. **Registry validation raises `ValueError`, not `ConfigError`**: a mismatched table is a programmer error in this package, whereas `common.errors.ConfigError` is reserved for user configuration raised by the layer that owns the config.
 
 ## Known Divergences from the pre-rewrite library
 `SympyExp` clips its argument to `[-EXP_CLIP, EXP_CLIP] = [-10, 10]` while `exp` does not — generated formulas over/under-estimate strongly positive/negative pre-activations (kept for formula stability, as before).
 Out-of-range activation/aggregation ids fall back to identity / `0.0` instead of clamping to the last option (`lax.switch` behaviour); mutation only samples valid ids, so this is reachable only through hand-written genes or a stale checkpoint replayed against a shortened option list.
 `mean` is `0.0` instead of `NaN` for an all-`False` mask; indistinguishable through the dispatcher, different only when the kernel is called standalone.
-`sympy_module` no longer accepts `"jax"`; `obtain_sympy` accepts an option id as well as a name or callable.
+`sympy_module` accepts only `"numpy"` (a `"jax"` argument raises `ValueError`), and `obtain_sympy` accepts an option id as well as a name or callable.
 `sympy_module()` binds numpy as the *keyword* `backend` (the pre-rewrite `partial(fn, jnp_or_np)` bound it to `val`, so `lambdify`d `clip` evaluations raised `AttributeError`); and `SympyMaxabs` renders as an explicit `Piecewise` over `Eq(Abs(t_i), max_j Abs(t_j))`, because `sp.Max(*z, key=sp.Abs)` is rejected by current sympy — the signed term and its first-maximum tie-break are unchanged.
-The aggregation reduce axis moved from the legacy per-node axis 0 to the batch-first last axis of `(P, N, K)`; numerically identical, but HyperNEAT substrate code that used to call `AGG.sum(inputs)` directly must reshape to `(..., K)`.
+The aggregation reduce axis is the last axis of `(P, N, K)` (the pre-rewrite library reduced a per-node axis 0); numerically identical for the same edge order, but HyperNEAT substrate code must reshape its contributions to `(..., K)` instead of calling `AGG.sum(inputs)` on a raw input vector.
 
 ## Constraints
 - No `jax`, `torch`, `numpy.random` anywhere in this package; graph code uses `evoxc` ops only, host code may use `numpy` / `sympy`.
@@ -111,7 +112,7 @@ The aggregation reduce axis moved from the legacy per-node axis 0 to the batch-f
 Node genes: `apply_aggregation(z, mask, agg_ids, self.aggregation_options)` then `apply_activation(z, act_ids, self.activation_options)`; the option lists are plain tuples of kernels, normalised once in the gene constructor.
 Configs reference an option by name through attribute access (`AGG.sum`, `ACT.sigmoid`) and resolve ids through `ACT.name2index` / `ACT.get_evoxc_func`; `ACT.random_index(key)` samples an id in-graph from a stateless evoxc key.
 Interpretability: `ACT.obtain_sympy(name_or_id_or_func)` / `AGG.obtain_sympy(...)` return the sympy class for a `to_dict`-style name.
-The parent `common/__init__.py` must import exactly `ACT, AGG, apply_activation, apply_aggregation` (plus optionally `FunctionManager`) — the legacy `get_func_name` import no longer exists.
+The parent `common/__init__.py` imports exactly `ACT, AGG, apply_activation, apply_aggregation` (plus optionally `FunctionManager`); there is no `get_func_name` symbol in this package, so `repr` / `to_dict` code takes names from `ACT.name_of` / `AGG.name_of`.
 
 ## Test Hooks
 `test/unit/` must be able to test every kernel on the numpy backend with no optional dependency: each activation against a numpy reference on a `(P, N)` tensor, each aggregation against a numpy oracle (including an all-`False` mask column and a `maxabs` tie), and the dispatchers against a per-element Python loop over the option list.

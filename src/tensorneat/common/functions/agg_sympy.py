@@ -4,6 +4,9 @@ Nothing here runs inside a graph. ``sp.Function`` subclasses take an *iterable*
 of incoming expressions and expand it into a single sympy expression, which is
 what makes an evolved topology printable as one formula.
 
+Shapes and dtypes do not apply here -- every class rewrites an iterable of
+symbolic terms, and the numeric contract lives in :mod:`.agg`.
+
 The semantic contract mirrors :mod:`.agg`:
 
 * the input iterable is the list of *valid* incoming contributions (the graph

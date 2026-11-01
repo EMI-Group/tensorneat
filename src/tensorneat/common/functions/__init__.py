@@ -1,13 +1,18 @@
 """ACT / AGG option registries and the per-node dispatchers.
 
 This package is the single source of truth for the activation and aggregation
-options a NEAT node gene may select. It exposes exactly five names:
+options a NEAT node gene may select. Its public surface (``__all__``) is
+exactly five names:
 
 * ``ACT`` / ``AGG`` -- module-level :class:`FunctionManager` instances pairing
   the evoxc kernels with their sympy counterparts, in canonical option order.
 * ``FunctionManager`` -- the registry class, for genomes that need a private
   registry (custom options with their own sympy form).
 * ``apply_activation`` / ``apply_aggregation`` -- the in-graph dispatchers.
+
+The canonical tuples (``ACT_FUNCS``, ``AGG_FUNCS``, ``ACT_SYMPY_FUNCS``,
+``ACT_SYMPY_HELPERS``, ``AGG_SYMPY_FUNCS``) stay importable because the manager
+wiring and the tests need them, but they are not part of the public surface.
 
 Import order matters only in that ``.act``/``.agg`` own the canonical option
 order and ``.act_sympy``/``.agg_sympy`` own the paired sympy tuple; the manager
