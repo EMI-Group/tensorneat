@@ -42,7 +42,22 @@ Output nodes are never activated by the node gene; activation of the final outpu
 `forward` runs `jax.lax.fori_loop(0, activate_time, ...)` (ctor arg, default 10) ticks of a synchronous (Jacobi) update: every existing node is recomputed from the previous tick's values, then `jnp.where(node_exists & any(valid_mask, axis=1), new_values, values)`.
 `expand_conns_attrs = attach_with_inf(conns_attrs, u_conns)` gathers the weight of every `(src, dst)` pair, `conn_exists = (u_conns != I_INF).T` so masks are `(dst, src)`, and `node_ins.T` puts the destination axis first before `vmap(node_gene.forward)`.
 Inputs are re-injected every tick (`values.at[input_idx].set(inputs)`), so the input node gene is bypassed exactly as in the feedforward path.
+The loop is a fixed-depth relaxation, not convergence: `activate_time` (default 10) ticks exactly, and tick `t` can propagate information at most `t+1` edges from the inputs — a network deeper than `activate_time` leaves output rows NaN.
+`vals` starts as all-NaN, so a node is written only once one of its sources is non-NaN; nodes with no path from an input stay NaN forever and poison descendants.
+`valid_masks` are computed after re-injection each tick, so an edge from an input becomes usable in the same tick; output rows are recomputed like any other node, and `is_output_nodes` is recomputed inside the loop from `nodes[:, 0]`.
+No edge is ever added into an input node (`choose_node_key(..., allow_input_keys=False)` for the target), so injected input values are never overwritten inside a tick.
 `RecurrentGenome` does **not** apply `self.input_transform` (only `DefaultGenome.forward` does), and never builds `cal_seqs`.
+`RecurrentGenome.sympy_func`/`visualize` raise `ValueError` (unsupported for cyclic graphs).
+
+## Gene Variants and RecurrentMutation
+`OriginNode` is `DefaultNode` with only `crossover` overridden: one scalar `jax.random.normal(randkey) > 0` picks the whole attribute vector (bias/response/agg/act together), instead of the per-attribute draw in `BaseGene.crossover`; attr layout, identity/random attrs, mutation powers (`bias/response` power 0.15, rate 0.2, replace 0.015) and `forward` are inherited unchanged.
+`OriginConn` is `DefaultConn` plus `fixed_attrs = ["input_index", "output_index", "historical_marker"]` (row = `[in, out, marker, weight]`), the same whole-gene `crossover`, `get_historical_marker(gene) -> gene[2]`, and `repr`/`to_dict` that also print `historical_marker`; weight defaults/mutation are inherited.
+`RecurrentMutation` subclasses `DefaultMutation` and inherits `__call__` (which asserts scalar `new_node_key` and `new_conn_keys.shape == (3,)`) and `mutate_values` unchanged; it overrides only `mutate_structure`.
+Its scheduling draws all four probabilities from one key (`split(randkey, 5)` → `uniform(k_schedule, (4,))`) instead of splitting into four keys, and it gates each branch with `(p > 0) & (probs[i] < p)` rather than a python `if`; same order: node_add, node_delete, conn_add, conn_delete.
+Its add-connection branch is retry-based: up to `max_conn_tries` (default 20) `(src, dst)` draws (src may be input or output, dst never input), first valid draw accepted, duplicate pairs rejected.
+Cycle checking is not skipped but re-purposed: `p_recur` (default 0.1, validated `[0,1]`) forces a cycle — with probability `p_recur` an attempt is accepted only if `check_cycles` says it closes one, otherwise any non-duplicate pair is accepted (cycles allowed, as in `DefaultMutation`'s recurrent branch).
+`conns_exist_matrix = unflatten_conns(...) != I_INF` is computed once outside the attempt `vmap`, and free space (`remain_conn_space >= 1`) is checked once up front, so retries do not re-check capacity.
+All other branches (add-node, delete-node, delete-conn) are byte-for-byte the `DefaultMutation` logic, re-implemented inline as closures.
 
 ## Constraints
 Everything on the evaluation path must be jit-safe: no python branching on traced values, no `device_get`, no python containers; use `lax.cond`/`lax.fori_loop`/`lax.switch`/`jnp.where`.
