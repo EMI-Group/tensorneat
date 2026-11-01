@@ -17,7 +17,11 @@ batch-first convention (population on axis 0, static shapes, ``NaN`` = absent
 float, ``I_INF`` = absent int index).
 """
 
+import pickle
+
 import evoxc
+
+from .errors import ConfigError
 
 
 class State:
@@ -56,9 +60,10 @@ class State:
                 :meth:`registered_keys`, :meth:`tree_flatten` and
                 :meth:`__repr__`.
         """
-        raise NotImplementedError(
-            "store kwargs in an internal dict without exposing mutators"
-        )
+        # The entries live in ``__dict__`` under one reserved name so that
+        # ``__getattr__`` (which is only consulted for names that normal lookup
+        # misses) can reach them without recursing into itself.
+        self.__dict__["state_dict"] = kwargs
 
     def registered_keys(self):
         """Names of the entries currently held.
@@ -68,9 +73,7 @@ class State:
             is a live view of an immutable mapping, so callers may iterate it
             but must not rely on modifying the ``State`` through it.
         """
-        raise NotImplementedError(
-            "return the live key view of the internal dict"
-        )
+        return self.state_dict.keys()
 
     def __getattr__(self, name):
         """Read an entry by name.
@@ -88,9 +91,13 @@ class State:
                 ``AttributeError`` would make it silent (``hasattr`` would
                 swallow it).
         """
-        raise NotImplementedError(
-            "return the stored value for name or raise KeyError"
-        )
+        # ``self.__dict__`` is a type-level descriptor, so it never reaches
+        # ``__getattr__``; ``.get`` also keeps an unpickling half-built object
+        # (no ``state_dict`` yet) from recursing instead of failing.
+        state_dict = self.__dict__.get("state_dict")
+        if state_dict is None or name not in state_dict:
+            raise KeyError(name)
+        return state_dict[name]
 
     def __contains__(self, item):
         """Membership test over entry names (``"nodes" in state``).
@@ -101,9 +108,7 @@ class State:
         Returns:
             bool: ``True`` if the entry exists.
         """
-        raise NotImplementedError(
-            "test membership of an entry name"
-        )
+        return item in self.state_dict
 
     def __repr__(self):
         """Debug representation listing every entry name and value.
@@ -112,9 +117,38 @@ class State:
             str: ``"State ({'a': 1, ...})"`` — the legacy format, kept so logs
             and saved checkpoints read the same.
         """
-        raise NotImplementedError(
-            "render the entry dict in the legacy State (...) format"
-        )
+        return f"State ({self.state_dict})"
+
+    def __setattr__(self, name, value):
+        """Refuse attribute assignment: a ``State`` is immutable.
+
+        Args:
+            name (str): Attribute name.
+            value: Ignored.
+
+        Raises:
+            AttributeError: Always. The entries are only ever changed by the
+                mutators, which build a new ``State``; the internal dict is
+                reached through ``self.__dict__`` (and by ``__setstate__``),
+                not through this hook.
+        """
+        raise AttributeError("State is immutable")
+
+    def __getstate__(self):
+        """Pickle support: hand the entry dict to :mod:`pickle`.
+
+        Returns:
+            dict: A shallow copy of the entries.
+        """
+        return self.state_dict.copy()
+
+    def __setstate__(self, state):
+        """Pickle support: restore the entry dict without ``__setattr__``.
+
+        Args:
+            state (dict): The entries produced by :meth:`__getstate__`.
+        """
+        self.__dict__["state_dict"] = state
 
     def register(self, **kwargs):
         """Return a new ``State`` with extra entries.
@@ -129,9 +163,10 @@ class State:
             tensorneat.common.errors.ConfigError: If any key already exists —
                 ``register`` never overwrites; use :meth:`update` for that.
         """
-        raise NotImplementedError(
-            "return a new State with the given entries added, rejecting duplicates"
-        )
+        for key in kwargs:
+            if key in self.state_dict:
+                raise ConfigError(f"Key {key} already exists in state")
+        return State(**{**self.state_dict, **kwargs})
 
     def update(self, **kwargs):
         """Return a new ``State`` with existing entries replaced.
@@ -147,9 +182,10 @@ class State:
                 ``update`` never creates entries; use :meth:`register` for
                 that.
         """
-        raise NotImplementedError(
-            "return a new State with the given entries replaced, rejecting unknown keys"
-        )
+        for key in kwargs:
+            if key not in self.state_dict:
+                raise ConfigError(f"Key {key} does not exist in state")
+        return State(**{**self.state_dict, **kwargs})
 
     def remove(self, *keys):
         """Return a new ``State`` without the named entries.
@@ -164,9 +200,10 @@ class State:
             tensorneat.common.errors.ConfigError: If any key is missing, so a
                 typo cannot silently remove nothing.
         """
-        raise NotImplementedError(
-            "return a new State without the given entries, rejecting unknown keys"
-        )
+        for key in keys:
+            if key not in self.state_dict:
+                raise ConfigError(f"Key {key} does not exist in state")
+        return State(**{k: v for k, v in self.state_dict.items() if k not in keys})
 
     def save(self, file_name):
         """Pickle the ``State`` to ``file_name`` (checkpointing).
@@ -187,9 +224,8 @@ class State:
             compiled executables are not, so the ``Pipeline`` keeps those out
             of the ``State``.
         """
-        raise NotImplementedError(
-            "pickle the state to file_name"
-        )
+        with open(file_name, "wb") as f:
+            pickle.dump(self, f)
 
     @classmethod
     def load(cls, file_name):
@@ -207,9 +243,8 @@ class State:
             pickle.UnpicklingError: Propagated unchanged for a corrupt file;
                 never swallowed into a default ``State``.
         """
-        raise NotImplementedError(
-            "unpickle a state from file_name"
-        )
+        with open(file_name, "rb") as f:
+            return pickle.load(f)
 
     def tree_flatten(self):
         """Flatten into evoxc pytree ``(children, aux_data)``.
@@ -221,9 +256,7 @@ class State:
             leaves) so that unflattening restores the key→value association
             even when a kernel rebuilds the leaves.
         """
-        raise NotImplementedError(
-            "return the stored values as children and their names as aux data"
-        )
+        return list(self.state_dict.values()), list(self.state_dict.keys())
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
@@ -240,9 +273,14 @@ class State:
             ValueError: If ``len(aux_data) != len(children)`` (a pytree
                 misuse, e.g. hand-built children).
         """
-        raise NotImplementedError(
-            "rebuild a State by zipping names with children"
-        )
+        names = list(aux_data)
+        values = list(children)
+        if len(names) != len(values):
+            raise ValueError(
+                "State.tree_unflatten: "
+                f"{len(names)} entry names but {len(values)} leaf values"
+            )
+        return cls(**dict(zip(names, values)))
 
 
 # Register with evoxc's pytree registry so a `State` can cross a graph boundary

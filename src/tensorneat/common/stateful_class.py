@@ -45,9 +45,9 @@ class StatefulBaseClass:
                 value is missing or invalid; validation happens here, on the
                 host, before any graph is traced.
         """
-        raise NotImplementedError(
-            "return a new State carrying this object's configuration keys"
-        )
+        if state is None:
+            state = State()
+        return state
 
     def show_config(self, registered_objects: list | None = None) -> dict:
         """Collect the (possibly nested) configuration for run logging.
@@ -70,6 +70,32 @@ class StatefulBaseClass:
             None: Host-only presentation code; it never raises for a value it
             cannot render, and never validates the configuration.
         """
-        raise NotImplementedError(
-            "walk the configuration attributes into a nested dict for logging"
-        )
+        if registered_objects is None:  # root call
+            registered_objects = []
+
+        config = {}
+        for key, value in self.__dict__.items():
+            if isinstance(value, StatefulBaseClass) and value not in registered_objects:
+                registered_objects.append(value)
+                config[str(key)] = value.show_config(registered_objects)
+            else:
+                config[str(key)] = self._render_value(value)
+        return config
+
+    @staticmethod
+    def _render_value(value) -> str:
+        """Render one non-configuration attribute for the run header.
+
+        Args:
+            value: Any attribute value of a ``StatefulBaseClass``.
+
+        Returns:
+            str: ``str(value)``, or ``"<unrenderable TypeName>"`` when the value's
+            own ``__str__`` fails. Logging must not abort a run, and the
+            fallback still names the type, so the failure is visible in the
+            header rather than swallowed into an empty string.
+        """
+        try:
+            return str(value)
+        except Exception:
+            return f"<unrenderable {type(value).__name__}>"
