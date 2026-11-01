@@ -25,7 +25,7 @@ evoxc has no `.at[]`, no in-place mutation and no `cumsum`/`max(where=…)`/`sum
 `num_inputs`, `num_outputs`, `pop_size` are static Python ints; `Pipeline` asserts the first two against `problem.input_shape[-1]` / `output_shape[-1]`.
 
 ## State Layout
-The algorithm registers exactly four keys on the shared `State`: `pop_nodes`, `pop_conns`, `generation` (0-d float32 — kept float so it flows through `last_improved`), and `species`.
+The algorithm registers exactly five keys on the shared `State`: `pop_size` (static Python int, so the batch-first `genome.initialize` can size axis 0), `pop_nodes`, `pop_conns`, `generation` (0-d float32 — kept float so it flows through `last_improved`), and `species`.
 `randkey` is created by `Pipeline.setup` with `evoxc.random.key(seed)` and consumed here; the algorithm never seeds itself, and a `(seed, config, shape)` triple reproduces a run bit-for-bit.
 `species` is a frozen dataclass `SpeciesState` (owned by `./neat`): `(species_size,)` float32 `species_keys`, `best_fitness`, `last_improved`, `member_count` (NaN = dead slot), `(pop_size,)` float32 `idx2species`, `(species_size, max_nodes, node_len)` int `center_nodes`, `(species_size, max_conns, conn_len)` int `center_conns`, and 0-d `next_species_key`.
 Dead species slots are addressed solely by the `isnan(species_keys)` mask; the center gene rows of a dead slot hold stale integers that are never read, because the integer gene payload cannot carry NaN.
