@@ -52,7 +52,7 @@ The worker prepends `benchmarks/legacy_jax` (old side) or `src` (new side) to `s
 - `--list` and `--dry-run` must work on an interpreter without numpy: `cases.py` is stdlib-only at module scope and `harness/protocol.py` guards its numpy import (`np = None`), so keep new module-scope imports on the numpy-free paths clean.
 - A failing run is always an `error`/`skipped` row, never a missing row: `harness/worker.py` writes its record even on a traceback, and the CLI synthesises a row when a worker dies without writing one.
 - `benchmarks/.gitignore` keeps `results/*.json` untracked; `RESULTS.md` is committed evidence and is only ever rewritten by `run_benchmark.py`.
-- The committed `RESULTS.md` is INCOMPLETE because only the old side has been measured so far: the full old matrix (7 cases, 150 timed generations, 2 repeats) has ok rows, the new side has no comparison yet.
+- The committed `RESULTS.md` currently carries the old-side baseline only (7 cases, 150 timed generations, 2 repeats, verdict `INCOMPLETE`); the old-vs-new comparison appears as soon as the rewrite can be driven through `Pipeline.setup/step`.
 - A case's `fitness_target` must be unreachable by the initial population, or `generations_to_target` reads 1 for every run and the column carries no information: XOR3d's `-0.05` sits below the trivial linear-baseline fitness of `-0.25`, and Pagie's `-0.01` sits below the ~`-0.049` the legacy first generation already reaches (its measured final best is ~`-0.005`).
 - Bench environment: `jax` only on the old side, `evoxc` on the new side; the verdict compares the old row measured on the same box, never the declared 51/109/157 ms contract numbers.
 ## Constraints
