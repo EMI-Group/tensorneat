@@ -58,6 +58,11 @@ A problem is pure host-side configuration (`StatefulBaseClass`) plus plain-Pytho
 - There is no CartPole parity oracle (the legacy RL problems are deleted), so `test/unit/problem/test_cartpole.py`'s host numpy reference *is* the oracle.
 - `test/integration/` owns end-to-end runs (XOR through the Pipeline); a CartPole smoke run uses `max_step=20`, a small population and two generations.
 
+## Known Issues
+- `show(state, key, act_fn, transformed)` builds its own one-individual graph, so the `act_fn` it receives must be a predictor over **traced** tensors (`act_fn(batch)` with the schedule bound inside the same trace).
+  A `Pipeline.show` that passes a host-bound `functools.partial(algorithm.forward, state, transformed, payload)` therefore fails with `evoxc.TraceError: Concrete Tensor operands are not allowed in graph ops`; the pipeline must build the transform → forward graph itself or hand over a schedule-parametric predictor.
+- `FuncFit.setup`/`CartPole.setup` still come from `common.stateful_class.StatefulBaseClass.setup`, which is a skeleton while `common` is implemented (no shipped problem registers keys, so `evaluate` never calls it).
+
 ## Notes for Agents
 - CartPole cost is interpreter-bound, not batch-bound: a measured 500-step scan with a ~30-op body takes ~165 ms per `evaluate` at `P=100` and ~300 ms at `P=1000` on the numpy reference interpreter, but ~30 ms at `P=100` when built with `backend="iree"` (llvm-cpu); a real genome forward is heavier per step than the measured toy linear policy.
 - Practical guidance for RL runs: `backend="iree"` for anything beyond smoke tests, or a smaller `max_step` on numpy.
