@@ -187,6 +187,8 @@ Per level `l = 0 .. reduce_max(node_level)`:
 - `new = functions.act.apply_activation(z, act_ids)`; `vals = select((node_level == l) & valid_count > 0, new, vals)` with `valid_count = reduce_sum(in_valid, -1)`.
 The per-node `valid_count` guard matters: a node whose incoming edges are all invalid keeps `NaN` (legacy behaviour relied on `lax.cond(has_valid, ...)`).
 Kernels must never index outside `[0, size)` — evoxc's numpy backend **raises** on out-of-range gather/scatter where JAX clamped, so clamping plus masking is mandatory, not an optimisation.
+Cost of one level on the numpy interpreter at `(P, N, K) = (1000, 50, 8)` with the executable built once and `evoxc.run` timed (median of 15): 2.68 ms with one activation and one aggregation option, 17.8 ms with the canonical option lists.
+About 54 % of the one-option figure is the mandatory `select(mask, z, 0.0)` pass and 34 % the `reduce_sum`, so the dispatch machinery around them is ~0.3 ms per level; the `(P, N, K)` aggregation passes, not the dispatch, are the term to attack next.
 
 ## API Surface
 ### `state.py`
