@@ -41,9 +41,12 @@ attribute row uses activation id ``-1``, so the two ACT/AGG semantics agree.
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 pytestmark = [pytest.mark.parity]
+
+pytest.importorskip("jax", reason="parity needs the `bench` extra (jax)")
 
 #: The two shipped function-fitting problems: ``(name, num_inputs)``.
 PROBLEMS = [("XOR", 2), ("XOR3d", 3)]
@@ -63,19 +66,31 @@ def test_fitness_matches_legacy(
     ``payloads.chain_payload(num_inputs=num_inputs)`` — a fully connected chain
     whose read-out is finite, so the loss is finite for every method except
     ``mape`` — and the pair is built with ``num_inputs=num_inputs`` so
-    ``problem.input_shape`` matches the network width (``max_conns=16`` exactly
-    holds the legacy dense initial network of the three-input layout).
+    ``problem.input_shape`` matches the network width (the default ``max_conns=16``
+    holds the legacy dense initial network of both layouts: 15 edges for two
+    inputs, 16 for three).
 
     Assertion: ``np.isclose(new[0], legacy, rtol=1e-5, atol=1e-6)`` for the four
-    methods on both problems — twelve comparisons — and the fitness is finite for
+    methods on both problems — eight comparisons — and the fitness is finite for
     ``mse``/``rmse``/``mae``, so a pair of equal ``NaN``/``-inf`` values cannot
     stand in for equality.  For ``mape`` both sides are ``-inf`` (the targets
     contain zeros) and the assertion is the exact ``==`` instead.
     """
-    pytest.skip(
-        "not implemented: problem fitness equals the legacy problem fitness "
-        "(owner: problem/func_fit/func_fit.FuncFit.evaluate, problem/func_fit/xor.XOR)"
-    )
+    pair = genome_pair(num_inputs=num_inputs)
+    payload = payloads.chain_payload(num_inputs=num_inputs)
+
+    new = new_fitness(pair, payload, problem_name=problem_name, error_method=error_method)
+    legacy = legacy_fitness(pair, payload, problem_name=problem_name, error_method=error_method)
+
+    assert new.shape == (1,)
+    if error_method == "mape":
+        # Two XOR samples (four of the eight XOR3d samples) have a zero target.
+        assert new[0] == -np.inf
+        assert legacy == -np.inf
+    else:
+        assert np.isfinite(new[0])
+        assert np.isfinite(legacy)
+        assert np.isclose(new[0], legacy, rtol=1e-5, atol=1e-6)
 
 
 def test_mape_uses_the_targets_as_the_denominator(
@@ -94,23 +109,38 @@ def test_mape_uses_the_targets_as_the_denominator(
     prediction that exactly equals a zero target) yields ``NaN`` on the legacy
     side and is called out as out of scope here; the fixed genome does not hit it.
     """
-    pytest.skip(
-        "not implemented: mape divides by the target, so a zero target is infinite "
-        "(owner: problem/func_fit/func_fit.FuncFit._loss)"
-    )
+    pair = genome_pair()
+    payload = payloads.chain_payload()
+
+    mape = new_fitness(pair, payload, problem_name="XOR", error_method="mape")
+    legacy_mape = legacy_fitness(pair, payload, problem_name="XOR", error_method="mape")
+    mse = new_fitness(pair, payload, problem_name="XOR", error_method="mse")
+
+    assert mape.shape == (1,)
+    assert mape[0] == -np.inf
+    assert legacy_mape == -np.inf
+    assert np.isfinite(mse[0])
 
 
+@pytest.mark.parametrize("error_method", ERROR_METHODS)
 def test_nan_prediction_is_the_documented_divergence(
-    payloads, genome_pair, new_fitness, legacy_fitness
+    error_method, payloads, genome_pair, new_fitness, legacy_fitness
 ):
     """Invariant (divergence, asserted on purpose): NaN prediction is ``-inf`` now, NaN before.
 
     Oracle: the two documented behaviours, not a shared number.  ``XOR`` on
-    ``payloads.isolated_payload()`` **plus** one edge from the isolated row to the
-    output row gives a ``NaN`` read-out on both sides; the rewrite's
+    ``payloads.isolated_payload()`` with its two input-to-output edges replaced by
+    the single edge ``2->7`` gives a ``NaN`` read-out on both sides; the rewrite's
     ``FuncFit.evaluate`` then ends with ``finalize_fitness`` (NaN -> ``-inf``),
     while the legacy ``FuncFit.evaluate`` returns ``-loss`` unchanged and leaves
     the sanitising to the algorithm's ``tell``.
+
+    The edge rewrite is what reaches the corner: both libraries mask a ``NaN``
+    *source* slot out of the aggregation (``live = ~isnan(values)``), so the
+    isolated row only poisons the read-out once nothing else feeds the output —
+    with ``0->7``/``1->7`` still present the read-out stays finite and both
+    problem layers agree (``-1`` for ``mse``), which is a parity case, not this
+    one.
 
     Assertion: ``np.isnan(legacy_fitness(...))`` **and**
     ``new_fitness(...) == -np.inf``, for all four ``error_method`` values.  This
@@ -118,7 +148,16 @@ def test_nan_prediction_is_the_documented_divergence(
     and it is pinned so a rewrite that started leaking ``NaN`` fitness is caught
     here rather than in a flaky speciation test.
     """
-    pytest.skip(
-        "not implemented: NaN fitness is -inf in the rewrite and NaN in the legacy problem "
-        "(owner: problem/base.finalize_fitness, problem/func_fit/func_fit.FuncFit.evaluate)"
-    )
+    pair = genome_pair()
+    payload = payloads.isolated_payload()
+    # Node row 2 is present but edge-less, so its value stays the NaN seed; make
+    # it the output row's only incoming edge and drop ``1->7``.
+    payloads.set_conn(payload, 0, 0, 2, 7)
+    payloads.set_conn(payload, 0, 1, payloads.I_INF, payloads.I_INF)
+
+    new = new_fitness(pair, payload, problem_name="XOR", error_method=error_method)
+    legacy = legacy_fitness(pair, payload, problem_name="XOR", error_method=error_method)
+
+    assert new.shape == (1,)
+    assert np.isnan(legacy)
+    assert new[0] == -np.inf
