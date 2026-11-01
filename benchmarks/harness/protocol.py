@@ -1,8 +1,8 @@
 """Schema, measurement summarisers, repeat aggregation and verdicts for the harness.
 
 This module is the single copy of the ``tensorneat-bench/1`` schema, of the aggregation
-maths and of the PASS/FAIL/INCOMPLETE rules: the CLI, the worker and the reporter import
-them from here instead of re-implementing them.
+maths, of the error summaries and of the PASS/FAIL/INCOMPLETE rules: the CLI, the worker
+and the reporter import them from here instead of re-implementing them.
 It never imports the implementation under test (jax / tensorneat / evoxc are only looked up
 in installed-package metadata), and numpy is optional so ``--list``/``--dry-run`` work on a
 bare interpreter.
@@ -42,6 +42,9 @@ DEFAULT_BACKEND = "numpy"
 DEFAULT_TIMEOUT = 3600
 OLD_BACKEND_LABEL = "jax"
 
+NO_ERROR_TEXT = "(no error recorded)"
+"""Placeholder for a run that recorded no error text at all (``short_error`` returns ``""``)."""
+
 __all__ = [
     "SCHEMA",
     "STATUS_OK",
@@ -57,6 +60,8 @@ __all__ = [
     "DEFAULT_TIMEOUT",
     "OLD_BACKEND_LABEL",
     "RunResult",
+    "NO_ERROR_TEXT",
+    "short_error",
     "rss_mb",
     "env_report",
     "summarize_timing",
@@ -120,6 +125,42 @@ def _json_safe(value):
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     return value
+
+
+# --- Error summaries --------------------------------------------------------------------
+
+
+_TRACEBACK_MARKER = "Traceback (most recent call last)"
+
+
+def _truncate(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` characters, ending in ``…`` when anything had to go."""
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def short_error(text: str | None, limit: int = 200) -> str:
+    """One-line, actionable summary of an error string (``""`` when there is none).
+
+    A plain message is returned as its first non-empty line, cut to ``limit`` characters.
+    A traceback — anything containing ``"Traceback (most recent call last)"`` or spanning
+    several lines — is summarised by its *last* non-empty line, because that is the
+    exception line (``ModuleNotFoundError: No module named 'evoxc'``) and not the header.
+    The result is always a single line of at most ``limit`` characters (``…`` marks a cut),
+    so it can go straight into a verdict reason or a markdown table cell.
+    """
+    if text is None:
+        return ""
+    raw = str(text).strip()
+    if not raw:
+        return ""
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    if _TRACEBACK_MARKER in raw or len(lines) > 1:
+        return _truncate(" ".join(lines[-1].split()), limit)
+    return _truncate(raw, limit)
 
 
 # --- Environment ------------------------------------------------------------------------
@@ -330,18 +371,6 @@ def _seed_int(run: dict) -> int | None:
         return None
 
 
-def _first_line(error) -> str:
-    """First non-empty line of an error (list-valued aggregation errors included), <=200 chars."""
-    if error is None:
-        return "(no error recorded)"
-    if isinstance(error, (list, tuple)):
-        error = next((item for item in error if item), None)
-        if error is None:
-            return "(no error recorded)"
-    lines = [line.strip() for line in str(error).strip().splitlines() if line.strip()]
-    return lines[0][:200] if lines else "(no error recorded)"
-
-
 def aggregate(runs: list[dict]) -> list[dict]:
     """Collapse repeat records into one record per ``(case, impl, backend)``.
 
@@ -378,7 +407,7 @@ def aggregate(runs: list[dict]) -> list[dict]:
                 continue
             text = run.get("error")
             if text:
-                errors.append(_first_line(text))
+                errors.append(short_error(text))
 
         aggregated.append(
             {
@@ -510,9 +539,12 @@ def verdict(aggregated: list[dict], runs: list[dict] | None = None) -> dict:
         error = record.get("error")
         if error is None:
             error = record.get("errors")
+        if isinstance(error, (list, tuple)):
+            error = next((item for item in error if item), None)
         reasons.append(
             f"{record.get('case', '?')}/{record.get('impl', '?')}/"
-            f"{record.get('backend', '?')}: {record.get('status')} — {_first_line(error)}"
+            f"{record.get('backend', '?')}: {record.get('status')} — "
+            f"{short_error(error) or NO_ERROR_TEXT}"
         )
 
     if not pairs:

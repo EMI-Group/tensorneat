@@ -12,7 +12,13 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from harness.protocol import QUALITY_TOLERANCE_REL, STATUS_OK, comparisons
+from harness.protocol import (
+    NO_ERROR_TEXT,
+    QUALITY_TOLERANCE_REL,
+    STATUS_OK,
+    comparisons,
+    short_error,
+)
 
 __all__ = ["render_report", "write_report", "IMPL_LABELS"]
 
@@ -58,6 +64,32 @@ def _table(headers, rows) -> str:
     for row in rows:
         lines.append("| " + " | ".join(_cell(cell) for cell in row) + " |")
     return "\n".join(lines)
+
+
+HEADINGS = ("## ", "### ")
+"""The heading levels this report emits; :func:`_spaced_headings` keeps their spacing uniform."""
+
+
+def _spaced_headings(markdown: str) -> str:
+    """Put exactly one blank line before and after every ``##``/``###`` heading.
+
+    Markdown renders a heading followed directly by a table, but the section blocks are
+    assembled by hand, so this single normaliser guarantees the blank lines instead of
+    every section having to remember them.
+    """
+    lines = markdown.split("\n")
+    spaced: list[str] = []
+    for index, line in enumerate(lines):
+        if not line.startswith(HEADINGS):
+            spaced.append(line)
+            continue
+        if spaced and spaced[-1].strip():
+            spaced.append("")
+        spaced.append(line)
+        following = lines[index + 1] if index + 1 < len(lines) else ""
+        if following.strip():
+            spaced.append("")
+    return "\n".join(spaced)
 
 
 def _number(value) -> float | None:
@@ -138,18 +170,18 @@ def _text(value, fallback: str = "n/a") -> str:
 
 
 def _first_error(record: dict) -> str:
-    """First line of an aggregated record's error list (never empty)."""
+    """The record's error, summarised by :func:`harness.protocol.short_error` (never empty)."""
     errors = record.get("errors")
     candidates = []
     if isinstance(errors, (list, tuple)):
-        candidates.extend(str(item) for item in errors if item)
-    if record.get("error"):
-        candidates.append(str(record["error"]))
+        candidates.extend(errors)
+    if record.get("error") is not None:
+        candidates.append(record["error"])
     for candidate in candidates:
-        lines = [line.strip() for line in candidate.splitlines() if line.strip()]
-        if lines:
-            return lines[0][:200]
-    return "(no error recorded)"
+        text = short_error(candidate)
+        if text:
+            return text
+    return NO_ERROR_TEXT
 
 
 def _impl_label(impl) -> str:
@@ -330,8 +362,46 @@ def _case_matrix_section(doc: dict) -> str:
     return "## Case matrix\n\n" + body
 
 
-def _result_row(record: dict, timed_generations) -> list:
-    """One aggregated record as a table row."""
+def _curve_length(curve) -> int | None:
+    """Number of recorded generations in one best-fitness curve (``None`` when absent)."""
+    return len(curve) if isinstance(curve, list) and curve else None
+
+
+def _recorded_lengths(doc: dict) -> dict[tuple[str, str, str], int]:
+    """Length of the first recorded best-fitness curve per ``(case, impl, backend)``."""
+    lengths: dict[tuple[str, str, str], int] = {}
+    for run in doc.get("runs") or []:
+        quality = run.get("quality") or {}
+        length = _curve_length(quality.get("best_fitness"))
+        if length is None:
+            continue
+        key = (
+            _text(run.get("case"), ""),
+            _text(run.get("impl"), ""),
+            _text(run.get("backend"), ""),
+        )
+        lengths.setdefault(key, length)
+    return lengths
+
+
+def _declared_length(doc: dict) -> int | None:
+    """``warmup + timed`` generations from the protocol, for records without a curve."""
+    proto = _protocol_meta(doc)
+    timed, warmup = proto.get("generations"), proto.get("warmup")
+    if not isinstance(timed, int) or isinstance(timed, bool):
+        return None
+    if isinstance(warmup, int) and not isinstance(warmup, bool):
+        return timed + warmup
+    return timed
+
+
+def _result_row(record: dict, recorded_generations) -> list:
+    """One aggregated record as a table row.
+
+    ``recorded_generations`` is the budget ``generations_to_target`` is indexed against:
+    the length of the recorded best-fitness curve (warmup + timed), never just the timed
+    part, so this table and the quality-curves table print the same ``>N`` bound.
+    """
     targets = record.get("generations_to_target")
     return [
         _impl_label(record.get("impl")),
@@ -341,7 +411,7 @@ def _result_row(record: dict, timed_generations) -> list:
         _num(record.get("gens_per_second"), 2),
         _mib(record.get("rss_final_mb")),
         _fitness(record.get("final_best_fitness")),
-        _gens_to_target(targets, timed_generations),
+        _gens_to_target(targets, recorded_generations),
         _plain(record.get("n_repeats")),
     ]
 
@@ -366,7 +436,8 @@ def _results_section(doc: dict) -> str:
     """Per-case table of every aggregated ``(impl, backend)`` record."""
     aggregated = doc.get("aggregated") or []
     grouped = _by_case(aggregated)
-    timed = _protocol_meta(doc).get("generations")
+    lengths = _recorded_lengths(doc)
+    fallback_length = _declared_length(doc)
     parts = ["## Results per case", ""]
     for case in _case_order(doc, list(grouped)):
         records = grouped.get(case)
@@ -381,7 +452,12 @@ def _results_section(doc: dict) -> str:
         ):
             status = _text(record.get("status"), "ok")
             if status == STATUS_OK:
-                rows.append(_result_row(record, timed))
+                key = (
+                    _text(record.get("case"), ""),
+                    _text(record.get("impl"), ""),
+                    _text(record.get("backend"), ""),
+                )
+                rows.append(_result_row(record, lengths.get(key) or fallback_length))
             else:
                 rows.append(_empty_row(record))
                 notes.append(
@@ -496,7 +572,7 @@ def _fitness_at(curve, index: int) -> str:
 
 
 def _gens_to_target(value, length) -> str:
-    """Reached generation, or ``>N`` when the target was not reached within N generations."""
+    """Reached generation, or ``>N`` when the target was not reached within the N recorded ones."""
     number = _number(value)
     if number is not None and not math.isinf(number):
         return str(int(number))
@@ -554,8 +630,9 @@ def _curves_section(doc: dict) -> str:
         parts.append(_table(CURVE_HEADERS, rows))
         parts.append("")
     parts.append(
-        "Percent columns are generation `round(fraction × N)` of the N-generation timed run; "
-        "`>N` means the case's fitness target was not reached within those N generations. "
+        "Percent columns are generation `round(fraction × N)` of the N recorded generations "
+        "(warmup + timed — the budget `generations_to_target` is indexed against), and `>N` means "
+        "the case's fitness target was not reached within those N recorded generations. "
         "Each row is the first ok run recorded for that case/implementation/backend."
     )
     return "\n".join(parts)
@@ -700,7 +777,7 @@ def render_report(doc: dict) -> str:
         _reproduce_section(document),
         _footer(document),
     ]
-    return "\n\n".join(block.rstrip() for block in blocks) + "\n"
+    return _spaced_headings("\n\n".join(block.rstrip() for block in blocks)) + "\n"
 
 
 def write_report(doc: dict, path) -> None:
