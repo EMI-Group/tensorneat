@@ -20,7 +20,7 @@ Population layout: node keys equal the slot index in the legacy genome's order (
 Population shape: per individual a random, level-ordered DAG (so no cycles, and the legacy `topological_sort` sees a legal graph), fan-in per node capped by the window K, weights uniform in [-1, 1].
 Both formulations are fed the exact same graph and the legacy forward returns finite output for 1000/1000 individuals.
 Timing: median of 20 iterations of the steady-state forward after one warmup call; build/compile medians over 5 fresh builds (jax's compilation cache is cleared before each compile sample).
-Run-to-run spread on this box over the runs behind this record: legacy forward 8.8–9.6 ms, window-gather at depth 8 7.3–8.1 ms, edge-segment 0.63–0.77 ms — i.e. ±5 %, so only differences of that order or larger are meaningful.
+Run-to-run spread on this box over the runs behind this record: legacy forward 8.8–9.6 ms, window-gather at depth 8 7.3–8.3 ms, edge-segment 0.63–0.80 ms — i.e. ±5 %, so only differences of that order or larger are meaningful.
 
 ## Legacy per-node forward (`--mode legacy`)
 
