@@ -194,9 +194,15 @@ def identity(z):
     Notes
     -----
     Also the branch selected by the :data:`ACT_IDENTITY` (``-1``) gene sentinel
-    inside :func:`apply_activation`.
+    inside :func:`apply_activation` -- which is why the kernel carries the
+    ``is_identity`` flag: selecting it is a no-op, so the dispatcher emits no
+    ``equal``/``select`` pair for an option whose kernel is this one.
     """
     return z
+
+
+identity.is_identity = True
+"""Static flag read by :func:`apply_activation`: this option returns ``z`` itself."""
 
 
 def inv(z):
@@ -333,11 +339,18 @@ def apply_activation(z, act_ids, act_fns: Sequence[Callable] = ACT_FUNCS):
 
     Notes
     -----
-    Cost: one evaluation of *every* option plus one ``select`` per option over
-    the ``(P, N)`` shape -- 12 + 12 ops for the canonical list, independent of
-    the in-degree bound ``K`` and therefore subdominant to the ``(P, N, K)``
-    gathers of the forward pass. There is no static way to compute only the
-    options the population happens to use: the id is gene data, not a shape.
+    Cost: one evaluation of *every* option plus one ``equal``/``select`` pair per
+    option over the ``(...,)`` shape (2 + 2 ops for a one-option list, 12 + 12 for
+    the canonical list), independent of the in-degree bound ``K`` and therefore
+    subdominant to the ``(P, N, K)`` gathers of the forward pass. There is no
+    static way to compute only the options the population happens to use: the id
+    is gene data, not a shape.
+
+    Two traced ops are *not* emitted: the ``cast`` of an id column that is
+    already ``int32`` (the gene's ``prepare`` casts once per forward pass, and the
+    ids reach every level slice typed), and the ``equal``/``select`` pair of an
+    option whose kernel is :func:`identity` (``is_identity``), because selecting
+    it returns the accumulator unchanged.
 
     An id outside ``[-1, len(act_fns))`` falls back to :func:`identity` (the
     cascade's initial value). The pre-rewrite ``lax.switch`` clamped such ids
@@ -345,11 +358,14 @@ def apply_activation(z, act_ids, act_fns: Sequence[Callable] = ACT_FUNCS):
     because mutation only samples ``[0, len(act_fns))`` and ``-1`` is written
     only for output nodes.
     """
-    ids = evoxc.cast(act_ids, evoxc.int32)
+    ids = act_ids if act_ids.dtype == evoxc.int32 else evoxc.cast(act_ids, evoxc.int32)
     # The accumulator starts at ``z``, which *is* the identity branch: an id of
     # ``-1`` (or any id outside the option list) matches no ``select`` and keeps
-    # ``z`` untouched.
+    # ``z`` untouched. An ``identity`` option is skipped for the same reason --
+    # selecting it would only rewrite ``z`` with itself.
     out = z
     for index, fn in enumerate(act_fns):
+        if getattr(fn, "is_identity", False):
+            continue
         out = evoxc.select(evoxc.equal(ids, index), fn(z), out)
     return out
