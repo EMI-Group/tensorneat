@@ -139,7 +139,7 @@ Cost of the exact path on the numpy backend (`P=1000`, `max_nodes=50`, `max_conn
 | `./operations/mutation/` | Structural (add/delete node, add/delete conn) and value mutation, `DefaultMutation` and `RecurrentMutation`. |
 | `./operations/crossover/` | Key-alignment crossover (`DefaultCrossover`). |
 | `./operations/distance/` | Compatibility distance (disjoint/excess + attribute distance). |
-| `./base.py` | `BaseGenome`: configuration, `initialize`, `transform`, the shared window-reduce node step (`_hit_conn_attrs`/`_node_step`), the `grad` entry point that delegates to `./grad.py`, `_padding_safe_attrs`, abstract `sympy_func`/`visualize` hooks (1375 lines). |
+| `./base.py` | `BaseGenome`: configuration, `initialize`, `transform`, the shared window-reduce node step (`_hit_conn_attrs`/`_node_step`), the `grad` entry point that delegates to `./grad.py`, `_padding_safe_attrs`, `_output_row_mask`/`_is_output_row` (the output-row helper the forward spec names), abstract `sympy_func`/`visualize` hooks (1375 lines). |
 | `./grad.py` | The exact gradient path and why it exists: `build_grad` (the `evoxc.grad` graph factory), `dense_grad_plan` (host statics), `dense_forward`, `dense_node_step`, `_DenseGradPlan`, `_sanitize_attrs`/`_graph_constant`/`_tensor_spec` — the dense-weight twin of the window forward that sidesteps evoxc 0.1.0's put-semantics `gather` VJP (498 lines). |
 | `./host.py` | `BaseGenomeHost` mixin: host-only helpers (`network_dict`, `_get_node_dict`, `_get_conn_dict`, `repr`, `hash`, `_row_hashes`, `get_input_idx`, `get_output_idx`, `_individual`), `HASH_QUANT_SCALE`, `_row_slice` (348 lines). |
 | `./default.py` | `DefaultGenome`: depth-unrolled level-synchronous forward. |
