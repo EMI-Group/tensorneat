@@ -11,7 +11,7 @@ The two star-imports have no `__all__`, so `tensorneat.common` also re-exports `
 
 ### state.py — `State` (immutable pytree)
 `State(**kwargs)` stores a dict in `self.__dict__["state_dict"]`; `@register_pytree_node_class` makes it a JAX pytree whose children are the dict values and aux_data the key list (so insertion order defines flatten order).
-`registered_keys()` → `dict_keys`; `__getattr__(name)` → `state_dict[name]`; `__contains__`; `__repr__`.
+`registered_keys()` → `dict_keys`; `__getattr__(name)` → `state_dict[name]`, so a missing key raises `KeyError` (not `AttributeError`, which breaks `hasattr`/`getattr(state, k, default)` probes); `__contains__`; `__repr__`.
 `register(**kwargs)` → new `State` (raises `ValueError` if any key already exists), `update(**kwargs)` → new `State` (raises if any key is missing), `remove(*keys)` → new `State` (raises if any key is missing); all three are pure and preserve insertion order.
 `__setattr__` always raises `AttributeError("State is immutable")`, and `__init__` bypasses it by writing `self.__dict__` directly.
 `save(file_name)` / `classmethod load(file_name)` pickle the whole `State` via `__getstate__`/`__setstate__`.
