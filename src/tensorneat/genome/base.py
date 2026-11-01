@@ -45,6 +45,14 @@ from .gene import BaseConn, BaseNode
 from .grad import build_grad
 from .host import BaseGenomeHost
 from .operations import BaseCrossover, BaseDistance, BaseMutation
+from .window import (
+    _column_index,
+    _column_mask,
+    _gather_prepared,
+    _i32,
+    _iinf,
+    _slot_index,
+)
 from .utils import GenomeTensors, check_cycles as _check_cycles
 
 
@@ -74,140 +82,6 @@ def _positive_int(value: Any, name: str) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be a positive int, got {value!r}")
     return value
-
-
-def _i32(value: int) -> evoxc.SymbolicTensor:
-    """Rank-0 ``int32`` constant.
-
-    Written out instead of a bare Python literal because an ``int32`` tensor plus a Python
-    ``int`` promotes to ``int64`` in ``evoxc``, which would silently widen index arithmetic.
-
-    Args:
-        value: Static integer baked into the trace.
-
-    Returns:
-        Rank-0 ``int32`` tensor inside the active trace.
-    """
-    return enp.full((), int(value), dtype=evoxc.int32)
-
-
-def _slot_index(
-    idx: evoxc.SymbolicTensor,
-    mask: evoxc.SymbolicTensor,
-    row_len: int,
-) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
-    """Flatten one window index table to a batch-wide gather index plus a liveness mask.
-    ``evoxc.gather`` follows ``np.take`` semantics — it splices the *whole* index shape into
-    the axis it indexes — so an index that already carries the population axis cannot gather
-    along the table's second axis. The batch-wide flat index ``p * row_len + row`` is the
-    form that works, and it keeps the gather one-dimensional.
-    Both results depend only on the schedule (``idx`` and ``mask``) and on the static
-    ``row_len``, so :meth:`BaseGenome._hit_conn_attrs` derives them once per forward pass and
-    every unrolled level reuses them instead of re-deriving them.
-    Args:
-        idx: ``(P, *block) int32`` row indices into the source table's second axis; ``I_INF``
-            (or a masked-out position) means "no slot".
-        mask: ``(P, *block) bool`` liveness of each slot.
-        row_len: ``R``, the source table's second-axis length.
-    Returns:
-        ``(flat_index, present)``: the ``(P * prod(block),)`` flat index with every absent
-        slot redirected to row ``0`` of its own individual (the backend never sees an
-        out-of-range index) and the ``(P, *block) bool`` liveness mask — block-shaped, which
-        is the shape the per-level value step ANDs against its ``isnan`` test.
-    """
-    pop_size = int(idx.shape[0])
-    block = tuple(int(size) for size in idx.shape[1:])
-    count = 1
-    for size in block:
-        count *= size
-    present = evoxc.logical_and(
-        enp.not_equal(idx, _iinf(tuple(idx.shape), idx.dtype)), mask
-    )
-    safe = evoxc.select(present, idx, enp.zeros((), dtype=idx.dtype))
-    offsets = evoxc.reshape(
-        evoxc.multiply(enp.arange(0, pop_size, dtype=evoxc.int32), _i32(row_len)),
-        (pop_size, *([1] * len(block))),
-    )
-    return evoxc.reshape(evoxc.add(safe, offsets), (pop_size * count,)), present
-def _column_index(
-    rows: evoxc.SymbolicTensor, attr_width: int
-) -> evoxc.SymbolicTensor:
-    """Widen a ``(P, N, K)`` connection-row index to every attribute column.
-    Args:
-        rows: ``(P, N, K) int32`` connection **row** index of each window slot.
-        attr_width: ``CA``, the number of attribute columns of one connection row.
-    Returns:
-        ``(P, N, K, CA) int32`` index into the flattened ``(P, E * CA)`` attribute table,
-        i.e. ``row * CA + column``.
-    """
-    pop_size, max_nodes, window = (int(size) for size in rows.shape)
-    scaled = evoxc.multiply(
-        evoxc.reshape(rows, (pop_size, max_nodes, window, 1)), _i32(attr_width)
-    )
-    return evoxc.add(
-        scaled,
-        enp.reshape(enp.arange(0, attr_width, dtype=evoxc.int32), (1, 1, 1, attr_width)),
-    )
-
-
-def _column_mask(
-    present: evoxc.SymbolicTensor, attr_width: int
-) -> evoxc.SymbolicTensor:
-    """Broadcast a ``(P, N, K)`` slot mask over the attribute columns of a connection row.
-    Args:
-        present: ``(P, N, K) bool`` liveness of each window slot.
-        attr_width: ``CA``, the number of attribute columns of one connection row.
-    Returns:
-        ``(P, N, K, CA) bool`` mask, True where the whole attribute row is real.
-    """
-    pop_size, max_nodes, window = (int(size) for size in present.shape)
-    return enp.broadcast_to(
-        evoxc.reshape(present, (pop_size, max_nodes, window, 1)),
-        (pop_size, max_nodes, window, attr_width),
-    )
-
-
-def _gather_prepared(
-    x: evoxc.SymbolicTensor,
-    flat_index: evoxc.SymbolicTensor,
-    present: evoxc.SymbolicTensor,
-    block: tuple[int, ...],
-    fill: float | None,
-) -> evoxc.SymbolicTensor:
-    """Gather one already-indexed window out of a batch-first ``(P, R)`` table.
-    The per-level half of :meth:`BaseGenome._gather_slots`: three ops (flatten the table,
-    gather, reshape back) once the index table of :func:`_slot_index` exists, plus one fill
-    ``select`` when the caller asks for one.
-    Args:
-        x: ``(P, R)`` source table (node values, or a reshaped attribute payload).
-        flat_index: ``(P * prod(block),)`` flat index from :func:`_slot_index`.
-        present: ``(P, *block) bool`` liveness mask from :func:`_slot_index`.
-        block: The window shape the result is reshaped to.
-        fill: Value written where the slot is absent, or ``None`` to leave the gathered value
-            in place — a value gather does not need the fill, because the slots it would
-            overwrite are exactly the ones its liveness mask marks dead and the aggregation
-            neutralises, whereas an attribute gather must fill NaN for the gene to clean.
-    Returns:
-        ``(P, *block)`` tensor with ``x``'s dtype.
-    """
-    pop_size, row_len = (int(size) for size in x.shape)
-    len_flat = round(int(flat_index.shape[0]) / pop_size)
-    values = evoxc.gather(evoxc.reshape(x, (pop_size * row_len,)), flat_index, axis=0)
-    if fill is not None:
-        present = evoxc.reshape(present, (pop_size * len_flat,))
-        values = evoxc.select(present, values, enp.full((), float(fill), dtype=x.dtype))
-    return evoxc.reshape(values, (pop_size, *block))
-def _iinf(shape: tuple[int, ...], dtype: Any = evoxc.int32) -> evoxc.SymbolicTensor:
-    """``I_INF`` broadcast to ``shape`` — the padding sentinel of every key array.
-
-    Args:
-        shape: Static shape of the result.
-        dtype: Integer dtype of the result.
-
-    Returns:
-        ``shape``-shaped tensor full of ``I_INF``.
-    """
-    return enp.full(tuple(shape), I_INF, dtype=dtype)
 
 
 def _constant_int32(values: Sequence[int]) -> evoxc.SymbolicTensor:
@@ -937,9 +811,9 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         shape = tuple(attrs.shape)
         if not shape[-1]:  # a family without evolvable attributes
             return attrs
-        rows = enp.broadcast_to(
-            evoxc.reshape(self.node_exists(keys), (*shape[:-1], 1)), shape
-        )
+        # ``select`` broadcasts the trailing-``1`` mask over the attribute columns, so the
+        # widening ``broadcast_to`` op costs nothing here.
+        rows = evoxc.reshape(self.node_exists(keys), (*shape[:-1], 1))
         return evoxc.select(rows, attrs, enp.zeros((), dtype=evoxc.float32))
 
     # ---------------------------------------------------------------- shared kernel
@@ -1002,7 +876,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
             hit = self._gather_slots(
                 evoxc.reshape(conn_attrs, (pop_size, conn_rows * attr_width)),
                 _column_index(transformed.in_conn, attr_width),
-                _column_mask(transformed.in_valid, attr_width),
+                _column_mask(transformed.in_valid),
                 float("nan"),
             )
         else:  # a family without evolvable attributes: nothing to gather
@@ -1029,12 +903,14 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         :class:`_StepStatics` of this pass:
 
         1. ``xv = gather(values, statics.flat_index)`` -> ``(P, N, K)`` source values per
-           slot, then the fill on every slot the index table marks absent; ``values`` stays
+           slot (flatten, one flat gather, reshape back); ``values`` stays
            ``(P, N)`` and is never widened into a ``max_nodes``-wide column per node. The index
-           table is derived once per pass, so a level pays only flatten/gather/fill/reshape.
-        2. ``live = ~isnan(xv)`` — a slot is live exactly when the gathered value is a number,
-           because the gather already wrote ``NaN`` on every absent slot; the static
-           ``in_valid`` term is therefore implied and no extra ``logical_and`` is emitted.
+           table is derived once per pass, so a level pays only flatten/gather/reshape.
+        2. ``live = statics.present & (xv == xv)`` — IEEE makes ``x == x`` False exactly on
+           ``NaN``, so that equality *is* ``~isnan(xv)`` in a single comparison instead of
+           ``isnan`` plus ``logical_not``. The static ``present`` term is still required: the
+           value gather is the fill-free one, so an absent slot carries the (finite) value of
+           whatever row the index table redirects it to, and only ``present`` marks it dead.
         3. ``msg = conn_gene.forward(state, statics.conn, xv)`` -> ``(P, N, K)``, one scalar
            message per edge slot: the gene sanitises the source value, and the weight column
            arrives already NaN-cleaned. The window is gathered *without* a fill, so an absent
@@ -1057,9 +933,11 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
             hit_conn_attrs: The :class:`_StepStatics` of :meth:`_hit_conn_attrs` for this
                 forward pass.
             values: ``(P, N) float32`` current node values, NaN where not yet computed.
-            update_mask: ``(P, N) bool`` caller gate — the level mask for the feedforward
-                genome, ``node_exists & (valid_count > 0)`` for the recurrent one; the dynamic
-                "has a live slot" term is ANDed in here (step 5).
+            update_mask: ``(P, N) bool`` caller gate — for the feedforward genome the plain
+                ``node_level == level`` comparison (the schedule already stores ``I_INF`` on
+                every absent row, so a separate ``node_exists`` term is redundant), for the
+                recurrent one ``node_exists & (valid_count > 0)``; the dynamic "has a live
+                slot" term is ANDed in here (step 5).
 
         Returns:
             ``(P, N) float32`` updated values; rows masked off are returned unchanged.
@@ -1078,9 +956,10 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         xv = _gather_prepared(
             values, hit_conn_attrs.flat_index, hit_conn_attrs.present, block, None
         )
-        live = evoxc.logical_and(
-            hit_conn_attrs.present, evoxc.logical_not(evoxc.isnan(xv))
-        )
+        # ``xv == xv`` is False exactly on NaN, i.e. it *is* ``~isnan(xv)`` — one comparison
+        # instead of ``isnan`` plus ``logical_not``. The static ``present`` term still has to
+        # be ANDed in because a dead slot is redirected to a real (finite) row by the gather.
+        live = evoxc.logical_and(hit_conn_attrs.present, evoxc.equal(xv, xv))
         messages = self.conn_gene.forward(state, hit_conn_attrs.conn, xv)
         z = self.node_gene.forward(
             state,
@@ -1117,9 +996,10 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         Returns:
             ``(P, N) bool``, True on the last ``num_outputs`` rows.
         """
-        rows = enp.arange(0, max_nodes, dtype=evoxc.int32)
-        flag = evoxc.greater_equal(rows, _i32(max_nodes - self.num_outputs))
-        return enp.broadcast_to(evoxc.reshape(flag, (1, max_nodes)), (pop_size, max_nodes))
+        flag = np.zeros(max_nodes, dtype=bool)
+        flag[max_nodes - self.num_outputs :] = True
+        row = evoxc.constant(evoxc.from_numpy(np.ascontiguousarray(flag)))
+        return enp.broadcast_to(evoxc.reshape(row, (1, max_nodes)), (pop_size, max_nodes))
 
     def _output_values(
         self, values: evoxc.SymbolicTensor, output_transform: Callable | None
@@ -1314,7 +1194,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         Returns:
             ``(P, N) bool``, True where the row is not the padding sentinel.
         """
-        return enp.not_equal(node_keys, _iinf(tuple(node_keys.shape), node_keys.dtype))
+        return enp.not_equal(node_keys, _iinf(node_keys.dtype))
 
     def conn_exists(self, conn_keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
         """Mark the connection rows that hold a real connection.
@@ -1328,7 +1208,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         columns = conn_keys[(slice(None), slice(None), slice(0, 1))]
         sources = evoxc.reshape(columns, (int(conn_keys.shape[0]), int(conn_keys.shape[1])))
         return enp.not_equal(
-            sources, _iinf(tuple(sources.shape), sources.dtype)
+            sources, _iinf(sources.dtype)
         )
 
     def max_node_key(

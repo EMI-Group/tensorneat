@@ -147,13 +147,14 @@ class DefaultGenome(BaseGenome):
            columns to ``int32``, and those rows are never read back into ``values``.
         3. ``for level in range(1, self.max_depth + 1)`` (a Python loop, hence unrolled at trace
            time): ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs,
-           values, update_mask=(transformed.node_level == level) & transformed.node_exists &
-           (valid_count > 0))``, with ``valid_count = reduce_sum(transformed.in_valid,
-           axis=-1)`` the static "this row has at least one incoming connection" gate (a
-           per-row live-slot count, not ``.utils.valid_count``, which counts existing rows).
-           The dynamic "at least one *live* slot" term is ANDed in inside ``_node_step``, so a
-           node whose sources are all NaN keeps NaN and its descendants lose their only live
-           source: the legacy NaN poisoning, reproduced exactly.
+           values, update_mask=(transformed.node_level == level))``. The two further terms the
+           pre-rewrite formulation ANDed in are both implied: ``node_exists`` because the
+           schedule stores ``I_INF`` in ``node_level`` on every absent (and every unreachable)
+           row, and the static ``reduce_sum(in_valid, axis=-1) > 0`` because a row with no
+           incoming slot has no *live* slot either. The dynamic "at least one *live* slot" term
+           is ANDed in inside ``_node_step``, so a node whose sources are all NaN keeps NaN and
+           its descendants lose their only live source: the legacy NaN poisoning, reproduced
+           exactly.
         4. ``return self._output_values(values, self.output_transform)`` — rows
            ``max_nodes-num_outputs..max_nodes-1``, then ``output_transform``.
 
@@ -196,10 +197,12 @@ class DefaultGenome(BaseGenome):
         for level in range(1, self.max_depth + 1):
             # One level per unrolled step: the "has a live incoming slot" term is ANDed in by
             # ``_node_step`` itself, so the mask here stays a cheap int comparison.
-            level_mask = evoxc.equal(
+            # ``node_exists`` is not ANDed in: the schedule sets ``node_level`` to ``I_INF`` on
+            # every absent (or unreachable) row, so ``node_level == level`` is already False
+            # there and the extra ``logical_and`` cost one op per level for nothing.
+            update_mask = evoxc.equal(
                 transformed.node_level, enp.full((), level, dtype=evoxc.int32)
             )
-            update_mask = evoxc.logical_and(level_mask, transformed.node_exists)
             values = self._node_step(
                 state,
                 transformed,
