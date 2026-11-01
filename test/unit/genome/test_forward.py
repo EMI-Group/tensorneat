@@ -26,8 +26,9 @@ Oracles used here (never the kernel itself)
   ``response`` and one known activation per row, evaluated literally in the
   docstring and in a short numpy expression;
 * ``support.oracle.forward`` — the independent numpy rollout of the same
-  documented algorithm, used for the topologies that are tedious to write out
-  (the skipped node, the unconnected node, random DAGs);
+  documented algorithm: the primary oracle for the topologies that are tedious to
+  write out (the skipped node, the unconnected node, random DAGs) and a second,
+  independent cross-check on every hand-built network;
 * the NaN pattern itself, which is data in the legacy semantics: an assertion on
   ``np.isnan`` is as strong as one on the values.
 
