@@ -11,12 +11,14 @@ clause.
    ``(2,)``/``(1,)``, ``CartPole`` → ``(4,)``/``(2,)``), so ``input_shape[-1]``
    is the network's input arity and not the dataset length. The legacy
    dataset-shaped tuples are gone.
-2. ``setup(state)`` returns a ``State`` -- a *new* one, since ``State`` is
-   immutable -- and adds no keys: no shipped problem registers any today.
+2. ``setup(state)`` returns a ``State`` -- the same container when one is
+   handed in, a fresh empty one for ``None`` -- and adds no keys: no shipped
+   problem registers any today.
 3. ``static_batch_size(transformed)`` is the only thing a problem reads from
    the execution schedule: the static leading dimension of its leaves. A
-   schedule whose leaves disagree, or one with no leading dimension at all, is
-   a ``TensorNEATError``.
+   schedule whose leaves disagree, or one that exposes no leading dimension at
+   all (rank-0 leaves, an empty schedule, a leaf that is not a tensor), is a
+   ``TensorNEATError``.
 4. ``finalize_fitness`` maps ``NaN`` to ``-inf`` and touches nothing else --
    importantly ``+inf`` stays ``+inf``, so the helper is a NaN rule and not a
    general "make it finite" rule.
@@ -45,20 +47,26 @@ Gotchas this module encodes
   ``problem/base.py``, not ``BaseProblem`` methods, so a test reaches them
   through ``problem.base`` (the package re-exports only ``BaseProblem`` and the
   concrete problems).
-* Both helpers are in-trace code: ``finalize_fitness`` uses ``evoxc.isnan`` /
-  ``evoxc.select``, and ``static_batch_size`` relies on
-  ``SymbolicTensor.shape[0]`` being a plain ``int``. They are therefore called
-  through the shared runner, never on host numpy arrays where an ``np.*``
-  shortcut would accidentally work.
+* ``finalize_fitness`` is in-trace only: it uses ``evoxc.isnan`` /
+  ``evoxc.select``, so it is exercised through the shared runner.
+  ``static_batch_size`` only walks pytree shapes, so it answers on host numpy
+  arrays too -- both routes are checked below, and the malformed schedules are
+  rejected identically on either side of the trace boundary.
 * ``show`` builds and runs its own graph of one individual, so the test only
   needs a fake schedule of ``P = 1`` and a genome-free ``act_fn``.
 
-Backend is ``"numpy"`` throughout, through the shared runner only; no
-``jax``/``torch``, no network, no GPU.
+Backend is ``"numpy"`` throughout and every graph goes through the shared
+runner; the host-side protocol calls (``setup``, ``show``, ``show_details``,
+the malformed-schedule checks) need no backend at all. No ``jax``/``torch``, no
+network, no GPU.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
+
+import numpy as np
 import pytest
 
 
@@ -137,10 +145,24 @@ def test_shapes_are_per_sample_and_match_the_dataset(
     identity is the real guard: it fails for a legacy dataset-shaped
     declaration (``(4, 2)`` for XOR) even though ``S`` is never hard-coded here.
     """
-    pytest.skip(
-        "not implemented: input_shape/output_shape are per-sample tuples "
-        "(owner: problem/*/*.input_shape/output_shape)"
-    )
+    subject = factory(problem)
+    assert tuple(subject.input_shape) == input_shape
+    assert tuple(subject.output_shape) == output_shape
+
+    if not hasattr(subject, "inputs"):  # CartPole has no dataset
+        assert not hasattr(subject, "targets")
+        return
+
+    inputs = np.asarray(subject.inputs)
+    targets = np.asarray(subject.targets)
+    assert inputs.ndim == len(input_shape) + 1
+    assert targets.ndim == len(output_shape) + 1
+    assert inputs.shape[1:] == input_shape
+    assert targets.shape[1:] == output_shape
+    assert inputs.shape[0] == targets.shape[0]  # one target row per sample
+    # "per sample, never the dataset": the declaration is strictly narrower.
+    assert inputs.shape != input_shape
+    assert targets.shape != output_shape
 
 
 def test_the_input_and_output_arity_match_the_algorithm(problem, algorithm, payloads):
@@ -158,10 +180,23 @@ def test_the_input_and_output_arity_match_the_algorithm(problem, algorithm, payl
         drifted by one (the classic ``input_shape`` dataset-shaped mistake)
         passes every single-problem test and fails here.
     """
-    pytest.skip(
-        "not implemented: problem.input_shape[-1] == algorithm.num_inputs "
-        "(owner: problem/*/*.input_shape + algorithm/neat/neat.num_inputs)"
-    )
+    cases = [
+        (
+            problem.XOR(),
+            payloads.default_genome(num_inputs=2, num_outputs=1),
+            (2, 1),
+        ),
+        (
+            problem.CartPole(max_step=20),
+            payloads.default_genome(num_inputs=4, num_outputs=2),
+            (4, 2),
+        ),
+    ]
+    for subject, genome, arity in cases:
+        neat = algorithm.NEAT(genome, 10)  # 10 >= species_size * min_species_size
+        assert (neat.num_inputs, neat.num_outputs) == arity
+        assert subject.input_shape[-1] == neat.num_inputs
+        assert subject.output_shape[-1] == neat.num_outputs
 
 
 # --------------------------------------------------------------------------- #
@@ -184,12 +219,20 @@ def test_setup_returns_a_state_and_registers_no_keys(common, problem, state, fac
     ``registered_keys()`` equal the input's -- not a superset. ``setup`` exists
     for protocol uniformity (and for user problems that add normalization
     statistics), which is why the assertion is "no new keys" rather than
-    "a new object".
+    "a new object". ``setup(None)`` -- the documented default -- must likewise
+    start from an empty ``State``, so it is checked against the same key list.
     """
-    pytest.skip(
-        "not implemented: setup(state) returns a State with the same keys "
-        "(owner: common/stateful_class.StatefulBaseClass.setup)"
-    )
+    before = list(state.registered_keys())
+    subject = factory(problem)
+
+    returned = subject.setup(state)
+    assert isinstance(returned, common.State)
+    assert list(returned.registered_keys()) == before
+    assert list(state.registered_keys()) == before  # the argument is untouched
+
+    fresh = subject.setup(None)  # documented default: start from an empty State
+    assert isinstance(fresh, common.State)
+    assert list(fresh.registered_keys()) == before
 
 
 # --------------------------------------------------------------------------- #
@@ -205,17 +248,29 @@ def test_static_batch_size_reads_the_static_leading_dimension(
     Oracle: the leaves themselves. A fake schedule of ``P`` individuals is
     passed through the runner and the kernel returns the size it read back, so
     the value is observed *inside* a trace (where ``shape[0]`` is a plain
-    ``int``) rather than on host numpy arrays where any ``len()`` would do.
+    ``int``), and the helper's host-side answer is required to agree.
 
     Notes:
         ``P = 1`` and ``P = 4`` are both checked, and the second field of the
         schedule carries the same leading dimension as the first, so an
-        implementation that only reads the first leaf cannot pass.
+        implementation that only reads the first leaf cannot pass. The feature
+        width is deliberately different from ``P`` (``7``), so reading the
+        *second* axis instead of the leading one is caught as well.
     """
-    pytest.skip(
-        "not implemented: static_batch_size reads the static leading dim of the leaves "
-        "(owner: problem/base.static_batch_size)"
-    )
+    schedule_type = type(fake_schedule(1))
+
+    def read_size(*arrays):
+        """Return the size the kernel reads, as a rank-0 graph value."""
+        size = problem.base.static_batch_size(schedule_type(*arrays))
+        return enp.full((), float(size))
+
+    for pop_size in (1, 4):
+        schedule = fake_schedule(pop_size, feature_width=7)
+        observed = run_in_graph(read_size, *tuple(schedule))
+        assert int(observed) == pop_size
+
+    # The host-side answer must agree with the traced one (same helper, no trace).
+    assert problem.base.static_batch_size(fake_schedule(4, feature_width=7)) == 4
 
 
 def test_static_batch_size_rejects_leaves_that_disagree(
@@ -227,28 +282,55 @@ def test_static_batch_size_rejects_leaves_that_disagree(
     leading dimension, or if the leaves disagree about it". A schedule of
     ``(3, 2)`` and ``(4,)`` leaves must raise instead of silently picking one of
     the two sizes, because a wrong ``P`` would corrupt the ``(P, S, O)`` reshape
-    somewhere far from the mistake.
+    somewhere far from the mistake. Both routes are checked: on the host and
+    inside a trace, where the same ``TensorNEATError`` escapes the build.
     """
-    pytest.skip(
-        "not implemented: disagreeing leaf sizes raise TensorNEATError "
-        "(owner: problem/base.static_batch_size)"
+    disagreeing = schedule_type(
+        np.zeros((3, 2), dtype=np.float32),
+        np.zeros((4,), dtype=np.int32),
     )
+
+    with pytest.raises(common.TensorNEATError, match="disagree"):
+        problem.base.static_batch_size(disagreeing)
+
+    def read_size(*arrays):
+        """Ask the kernel for the population size of the traced schedule."""
+        return enp.full(
+            (), float(problem.base.static_batch_size(schedule_type(*arrays)))
+        )
+
+    with pytest.raises(common.TensorNEATError, match="disagree"):
+        run_in_graph(read_size, *tuple(disagreeing))
 
 
 def test_static_batch_size_rejects_a_schedule_without_a_leading_dimension(
     problem, common, enp, run_in_graph, schedule_type
 ):
-    """Invariant: a schedule made of rank-0 leaves raises ``TensorNEATError``.
+    """Invariant: a schedule exposing no static leading dimension raises ``TensorNEATError``.
 
     Oracle: same ``Raises:`` clause from the other side -- "no leaf exposes a
     static leading dimension". A population cannot be recovered from a scalar
     schedule, so the failure must be a configuration error naming the problem's
-    only input, never a silent ``P = 1``.
+    only input, never a silent ``P = 1``. Every shape that exposes no leading
+    dimension is covered: rank-0 leaves (in either position), an empty
+    schedule, and a leaf that is not a tensor at all. The runner widens a rank-0
+    numpy input to ``(1,)``, so these degenerate schedules are built host-side,
+    where the helper's contract is exercised without a trace.
     """
-    pytest.skip(
-        "not implemented: a schedule with no leading dimension raises TensorNEATError "
-        "(owner: problem/base.static_batch_size)"
-    )
+    size = problem.base.static_batch_size
+
+    with pytest.raises(common.TensorNEATError, match="rank-0"):
+        size(schedule_type(np.zeros((), np.float32), np.zeros((), np.float32)))
+
+    # ... and a rank-0 leaf is rejected wherever it sits in the pytree.
+    with pytest.raises(common.TensorNEATError, match="rank-0"):
+        size(schedule_type(np.zeros((4, 3), np.float32), np.zeros((), np.float32)))
+
+    with pytest.raises(common.TensorNEATError, match="no leaves"):
+        size(())
+
+    with pytest.raises(common.TensorNEATError, match="has no ``shape``"):
+        size(schedule_type(4, 4))
 
 
 # --------------------------------------------------------------------------- #
@@ -270,10 +352,13 @@ def test_finalize_fitness_maps_only_nan_to_negative_infinity(problem, run_in_gra
         "make it finite" implementation built from ``f - f`` would be NaN for
         both infinities and turn a perfect individual into the worst one.
     """
-    pytest.skip(
-        "not implemented: finalize_fitness maps NaN to -inf and leaves +inf alone "
-        "(owner: problem/base.finalize_fitness)"
-    )
+    fitness = np.array([-np.inf, -1.5, 0.0, 3.0, np.inf, np.nan], dtype=np.float32)
+    finalized = run_in_graph(problem.base.finalize_fitness, fitness)
+
+    assert np.asarray(finalized).dtype == np.float32
+    expected = np.array([-np.inf, -1.5, 0.0, 3.0, np.inf, -np.inf], dtype=np.float32)
+    assert np.array_equal(np.asarray(finalized), expected)
+    assert not np.isnan(np.asarray(finalized)).any()
 
 
 # --------------------------------------------------------------------------- #
@@ -292,17 +377,42 @@ def test_show_is_host_side_and_returns_nothing(
     ``P = 1`` schedule (no runner, no graph of its own), captures stdout, and
     asserts the return value is ``None`` and that at least one row per sample
     plus a summary line was printed -- so an implementation that computed
-    silently would be caught.
+    silently would be caught. The func-fit half is closed-form: a constant
+    ``0.5`` predictor on XOR prints four ``input: / target: / predict:`` rows
+    and ``loss: 0.25``. The CartPole half asserts the other documented report
+    (the survival length and the return) on a deterministic rollout
+    (``reset_scale = 0.0``, ``max_step = 10``, always-push-right), whose
+    ``9/10`` survival is the analytic value.
 
     Notes:
         The call is made outside any ``@evoxc.defn``; whatever graph ``show``
         needs internally is its own business (and is the ``src``'s only place to
         do so).
     """
-    pytest.skip(
-        "not implemented: show is host-side, prints a report and returns None "
-        "(owner: problem/*/*.show)"
-    )
+    xor = problem.XOR()
+    schedule = fake_schedule(pop_size=1)
+
+    report = io.StringIO()
+    with contextlib.redirect_stdout(report):
+        returned = xor.show(
+            state, evoxc_key, _constant_predictor(enp, 0.5), schedule
+        )
+    assert returned is None
+
+    lines = report.getvalue().splitlines()
+    rows = [line for line in lines if line.startswith("input:")]
+    assert len(rows) == int(np.asarray(xor.inputs).shape[0])
+    assert all("target:" in line and "predict:" in line for line in rows)
+    loss_lines = [line for line in lines if line.startswith("loss:")]
+    assert len(loss_lines) == 1
+    assert float(loss_lines[0].split(":", 1)[1]) == pytest.approx(0.25)
+
+    cartpole = problem.CartPole(max_step=10, reset_scale=0.0)
+    rollout = io.StringIO()
+    with contextlib.redirect_stdout(rollout):
+        returned = cartpole.show(state, evoxc_key, _two_logits(enp), schedule)
+    assert returned is None
+    assert "survived 9/10 steps" in rollout.getvalue()
 
 
 @pytest.mark.parametrize(
@@ -321,11 +431,18 @@ def test_show_details_is_a_no_op_hook(state, problem, fake_schedule, evoxc_key, 
     no-op is exactly what is asserted (empty stdout, ``None`` return), so a
     subclass that started printing to stderr or returned a value would fail on
     the shared base.
+
+    Notes:
+        ``act_fn`` is ``None`` on purpose: a no-op hook must not touch it, so an
+        implementation that started evaluating the population would raise here.
     """
-    pytest.skip(
-        "not implemented: show_details is a host-side no-op returning None "
-        "(owner: problem/base.BaseProblem.show_details)"
-    )
+    subject = factory(problem)
+    returned = subject.show_details(state, evoxc_key, None, fake_schedule())
+
+    assert returned is None
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 # --------------------------------------------------------------------------- #
@@ -356,7 +473,10 @@ def test_the_legacy_jitable_flag_is_gone(problem, factory):
         assertion has no counterpart in the rewrite, so a stale attribute would
         be dead weight that could silently re-enable a host-side fallback.
     """
-    pytest.skip(
-        "not implemented: the jitable flag is gone (AttributeError) "
-        "(owner: problem/base.BaseProblem)"
-    )
+    subject = factory(problem)
+
+    assert not hasattr(subject, "jitable")
+    assert "jitable" not in dir(type(subject))
+    assert "jitable" not in dir(problem.BaseProblem)
+    with pytest.raises(AttributeError):
+        subject.jitable
