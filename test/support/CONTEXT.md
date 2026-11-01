@@ -41,7 +41,7 @@ The numpy kernels of the two option registries, split out because a registry is 
 `activation`/`aggregation` are either one callable or a sequence of callables (the configured option list the id columns index), and `is_output` defaults to the last `num_outputs` node slots.
 `func_fit_loss(pred, targets, error_method="mse")` → per-individual `(P,)` loss, matching `problem/func_fit`'s reduction over sample *and* output axes; `FUNC_FIT_ERROR_METHODS` names the four accepted strings.
 `cartpole_params(**knobs)` → the documented Gym `CartPole-v1` constants (`theta_threshold` in **degrees**, `length` = half-pole), and `cartpole_rollout(actions, obs0, *, max_step=500, params=None)` → per-episode return of the documented Euler dynamics with the frozen-state-after-death rule.
-`mutate_float_oracle(...)`, `distance_oracle(...)` — only if a unit test needs them; parity covers the real ones.
+No distance or mutation oracle here: parity compares the real operators against the frozen legacy library, and `./unit/algorithm` builds the controlled distance table it needs inside its own module.
 
 ## Constraints
 No `jax`, no `torch`, no network, no GPU; `runner.py` is the only module allowed to call `evoxc.build`/`evoxc.run`/`evoxc.lower`/`evoxc.compile`/`evoxc.load`.
