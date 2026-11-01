@@ -29,13 +29,16 @@ class BaseAlgorithm:
           constructor may build an evoxc graph.
     """
 
-    def setup(self, state: State = State()) -> State:
+    def setup(self, state: State | None = None) -> State:
         """Register this algorithm's tensors onto ``state``.
 
         Args:
             state: Threaded immutable state, already carrying the genome's,
                 problem's and pipeline's keys -- in particular ``randkey``, the
-                only random source of a run.
+                only random source of a run.  ``None`` means "start from an empty
+                :class:`tensorneat.common.State`"; it must be spelled this way
+                because a ``State()`` default argument would be evaluated while
+                this module is being imported.
 
         Returns:
             A new :class:`tensorneat.common.State` carrying this algorithm's keys
