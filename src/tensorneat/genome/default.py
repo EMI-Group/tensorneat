@@ -205,6 +205,10 @@ class DefaultGenome(BaseGenome):
         # warning (and a garbage id) even though those rows never reach ``values``.
         node_attrs = self._padding_safe_attrs(node_attrs, node_keys)
         hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs)
+        # The node gene builds its operand bundle lazily on the first step; force it here so
+        # the bundle is traced in this block instead of inside the loop body, where the
+        # region would re-evaluate it on every iteration for a loop-invariant result.
+        hit_conn_attrs.node_operands(self, node_attrs)
         # One level per loop iteration, bounded by the *real* depth of this batch instead of
         # the static ``max_depth`` ceiling: an evolved network is typically 2-4 levels deep,
         # so a third of the unrolled passes used to be no-ops that still cost real time on
