@@ -1,122 +1,148 @@
-import jax
-from jax import vmap, numpy as jnp
+"""Key-aligned crossover: parent 1 keeps its structure, attributes may come from parent 2.
 
+Alignment is exact on the whole key column tuple of a gene (``(in_key, out_key)`` plus
+``historical_marker`` for connections), found through a hash plus ``argsort`` plus a fixed
+collision window: ``O(M log M)`` per array, never an ``O(M^2)`` scan, and still one batched
+kernel for the whole population.
+"""
+
+from typing import TYPE_CHECKING
+
+import evoxc
+
+from ....common import I_INF, State
+from ...utils import GenomeTensors
 from .base import BaseCrossover
-from ...utils import extract_gene_attrs, set_gene_attrs
 
-from tensorneat.common import I_INF, hash_array
-from tensorneat.genome.gene import BaseGene
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ...base import BaseGenome
+    from ...gene import BaseGene
 
+#: Number of sorted neighbours compared around each hashed position (hash collisions).
 _COLLISION_WINDOW = 4
 
 
-def _find_homologous_indices(keys1, keys2):
-    """
-    For each gene in keys1, find the index of its homologous gene in keys2.
-    Uses hash + searchsorted: O(M log M) time, O(M) memory.
-    Replaces the old nested-vmap linear scan which was O(M^2) and caused OOM
-    when pop_size and max_conns were both large.
-
-    keys1: (M, K) fixed attributes of genome1's genes
-    keys2: (M, K) fixed attributes of genome2's genes
-    Returns: (M,) int32 array, I_INF where no homologous gene is found
-
-    See: https://github.com/EMI-Group/tensorneat/issues/40
-    """
-    M = keys1.shape[0]
-
-    valid1 = ~jnp.isnan(keys1[:, 0])
-    valid2 = ~jnp.isnan(keys2[:, 0])
-
-    safe1 = jnp.where(jnp.isnan(keys1), 0, keys1)
-    safe2 = jnp.where(jnp.isnan(keys2), 0, keys2)
-
-    hash1 = vmap(hash_array)(safe1)
-    hash2 = vmap(hash_array)(safe2)
-
-    hash1 = jnp.where(valid1, hash1, jnp.uint32(0xFFFFFFFE))
-    hash2 = jnp.where(valid2, hash2, jnp.uint32(0xFFFFFFFF))
-
-    sort_idx = jnp.argsort(hash2)
-    sorted_h2 = hash2[sort_idx]
-
-    pos = jnp.searchsorted(sorted_h2, hash1, side="left")
-
-    result = jnp.full(M, I_INF, dtype=jnp.int32)
-    for offset in range(_COLLISION_WINDOW):
-        p = jnp.clip(pos + offset, 0, M - 1)
-        orig = sort_idx[p]
-        same_hash = sorted_h2[p] == hash1
-        exact = jnp.all(keys1 == keys2[orig], axis=1)
-        is_new = result == I_INF
-        result = jnp.where(same_hash & exact & valid1 & is_new, orig, result)
-
-    return result
-
-
-def _crossover_with_index(
-    state, randkey, gene: BaseGene, attrs1, homologous_idx, all_attrs2
-):
-    """Crossover a single gene using a pre-computed homologous index."""
-
-    def use_winner():
-        return attrs1
-
-    def do_crossover():
-        return gene.crossover(state, randkey, attrs1, all_attrs2[homologous_idx])
-
-    return jax.lax.cond(homologous_idx == I_INF, use_winner, do_crossover)
-
-
 class DefaultCrossover(BaseCrossover):
-    def __call__(self, state, genome, randkey, nodes1, conns1, nodes2, conns2):
+    """Cross two parents per individual by exact key alignment.
+
+    Parent 1 (the fitter parent) supplies ``node_keys``/``conn_keys`` verbatim; for each of
+    its genes the homologous row in parent 2 is located and the float attributes are
+    recombined by the gene's ``crossover`` hook (per-attribute 50/50 by default).  Genes with
+    no homologue keep parent 1's attributes, and padded rows stay padded.
+    """
+
+    def __call__(
+        self,
+        state: State,
+        genome: "BaseGenome",
+        key: evoxc.SymbolicTensor,
+        node_keys1: evoxc.SymbolicTensor,
+        node_attrs1: evoxc.SymbolicTensor,
+        conn_keys1: evoxc.SymbolicTensor,
+        conn_attrs1: evoxc.SymbolicTensor,
+        node_keys2: evoxc.SymbolicTensor,
+        node_attrs2: evoxc.SymbolicTensor,
+        conn_keys2: evoxc.SymbolicTensor,
+        conn_attrs2: evoxc.SymbolicTensor,
+    ) -> GenomeTensors:
+        """Cross node and connection genes of the two parents, batch-first.
+
+        Splits the key into one key per gene family, computes the homologue table with
+        :meth:`find_homologous` (once for nodes, once for connections) and recombines the
+        attributes with :meth:`crossover_gene_attrs`; the key arrays of parent 1 are returned
+        unchanged.
+
+        Args:
+            state (State): Immutable host configuration container.
+            genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene``.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this call.
+            node_keys1 (evoxc.SymbolicTensor): ``(P, N, NK) int32`` node keys, parent 1
+                (fitter), ``I_INF`` padded.
+            node_attrs1 (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs, parent 1,
+                NaN padded.
+            conn_keys1 (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys, parent 1,
+                ``I_INF`` padded.
+            conn_attrs1 (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs, parent 1,
+                NaN padded.
+            node_keys2 (evoxc.SymbolicTensor): ``(P, N, NK) int32`` node keys, parent 2,
+                ``I_INF`` padded.
+            node_attrs2 (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs, parent 2,
+                NaN padded.
+            conn_keys2 (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys, parent 2,
+                ``I_INF`` padded.
+            conn_attrs2 (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs, parent 2,
+                NaN padded.
+
+        Returns:
+            GenomeTensors: ``(node_keys1, recombined_node_attrs, conn_keys1,
+            recombined_conn_attrs)``.
         """
-        use genome1 and genome2 to generate a new genome
-        notice that genome1 should have higher fitness than genome2 (genome1 is winner!)
+        raise NotImplementedError(
+            "align both gene families with find_homologous and recombine their attributes"
+        )
+
+    def find_homologous(
+        self,
+        keys1: evoxc.SymbolicTensor,
+        keys2: evoxc.SymbolicTensor,
+    ) -> evoxc.SymbolicTensor:
+        """Locate, for every gene of parent 1, its homologous row in parent 2.
+
+        Exact match on the whole key-column tuple: one hash per gene (the gene's ``hash``
+        over its ``int32`` key columns), one ``argsort`` of parent 2's hashes, a
+        ``searchsorted``-style position for each parent-1 hash and then a comparison of at
+        most ``_COLLISION_WINDOW`` sorted neighbours to confirm the keys really are equal.
+        That is ``O(M log M)`` in the gene count ``M`` — never an ``O(M^2)`` scan — and all of
+        it is one batched kernel over the population axis.
+
+        Args:
+            keys1 (evoxc.SymbolicTensor): ``(P, M, K) int32`` key columns of parent 1,
+                ``I_INF`` padded.
+            keys2 (evoxc.SymbolicTensor): ``(P, M, K) int32`` key columns of parent 2,
+                ``I_INF`` padded.
+
+        Returns:
+            evoxc.SymbolicTensor: ``(P, M) int32`` row indices into parent 2, with ``I_INF``
+            for genes whose homologue is absent there (and for parent 1's padded rows).
         """
-        randkey1, randkey2 = jax.random.split(randkey, 2)
-        node_randkeys = jax.random.split(randkey1, genome.max_nodes)
-        conn_randkeys = jax.random.split(randkey2, genome.max_conns)
-
-        # crossover nodes
-        node_keys1 = nodes1[:, 0 : len(genome.node_gene.fixed_attrs)]
-        node_keys2 = nodes2[:, 0 : len(genome.node_gene.fixed_attrs)]
-        node_attrs1 = vmap(extract_gene_attrs, in_axes=(None, 0))(
-            genome.node_gene, nodes1
-        )
-        node_attrs2 = vmap(extract_gene_attrs, in_axes=(None, 0))(
-            genome.node_gene, nodes2
+        raise NotImplementedError(
+            "hash both key tables, argsort parent 2 and confirm exact matches in the sorted window"
         )
 
-        node_hom = _find_homologous_indices(node_keys1, node_keys2)
-        new_node_attrs = vmap(
-            _crossover_with_index, in_axes=(None, 0, None, 0, 0, None)
-        )(state, node_randkeys, genome.node_gene, node_attrs1, node_hom, node_attrs2)
+    def crossover_gene_attrs(
+        self,
+        state: State,
+        gene: "BaseGene",
+        key: evoxc.SymbolicTensor,
+        attrs1: evoxc.SymbolicTensor,
+        homologous_rows: evoxc.SymbolicTensor,
+        attrs2: evoxc.SymbolicTensor,
+    ) -> evoxc.SymbolicTensor:
+        """Recombine one gene family's attributes through the homologue table.
 
-        new_nodes = vmap(set_gene_attrs, in_axes=(None, 0, 0))(
-            genome.node_gene, nodes1, new_node_attrs
+        Homologous rows are gathered from ``attrs2`` and crossed with
+        ``gene.crossover(state, key, attrs1, gathered_attrs2)`` in a single batched call; a
+        gene whose ``homologous_rows`` entry is ``I_INF`` keeps ``attrs1`` unchanged (no
+        gather is allowed to read a bogus row), and padded rows stay NaN.
+
+        Args:
+            state (State): Immutable host configuration container.
+            gene ("BaseGene"): Node or connection gene supplying the ``crossover`` hook.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this gene family.
+            attrs1 (evoxc.SymbolicTensor): ``(P, M, A) float32`` parent 1 attributes, NaN
+                padded.
+            homologous_rows (evoxc.SymbolicTensor): ``(P, M) int32`` output of
+                :meth:`find_homologous` — row in parent 2, or ``I_INF``.
+            attrs2 (evoxc.SymbolicTensor): ``(P, M, A) float32`` parent 2 attributes, NaN
+                padded.
+
+        Returns:
+            evoxc.SymbolicTensor: ``(P, M, A) float32`` recombined attributes; entries whose
+            homologue is missing equal ``attrs1``, padding rows remain NaN.
+        """
+        raise NotImplementedError(
+            "gather parent 2's homologous rows, cross them and select parent 1 where absent"
         )
 
-        # crossover connections
-        # all fixed_attrs together will use to identify a connection
-        # if using historical marker, use it
-        # related to issue: https://github.com/EMI-Group/tensorneat/issues/11
-        conn_keys1 = conns1[:, 0 : len(genome.conn_gene.fixed_attrs)]
-        conn_keys2 = conns2[:, 0 : len(genome.conn_gene.fixed_attrs)]
-        conn_attrs1 = vmap(extract_gene_attrs, in_axes=(None, 0))(
-            genome.conn_gene, conns1
-        )
-        conn_attrs2 = vmap(extract_gene_attrs, in_axes=(None, 0))(
-            genome.conn_gene, conns2
-        )
 
-        conn_hom = _find_homologous_indices(conn_keys1, conn_keys2)
-        new_conn_attrs = vmap(
-            _crossover_with_index, in_axes=(None, 0, None, 0, 0, None)
-        )(state, conn_randkeys, genome.conn_gene, conn_attrs1, conn_hom, conn_attrs2)
-
-        new_conns = vmap(set_gene_attrs, in_axes=(None, 0, 0))(
-            genome.conn_gene, conns1, new_conn_attrs
-        )
-
-        return new_nodes, new_conns
+__all__ = ["DefaultCrossover"]

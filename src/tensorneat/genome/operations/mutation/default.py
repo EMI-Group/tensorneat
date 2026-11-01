@@ -1,24 +1,53 @@
-import jax
-from jax import vmap, numpy as jnp
-from . import BaseMutation
-from tensorneat.common import (
-    fetch_first,
-    fetch_random,
-    I_INF,
-    check_cycles,
-)
+"""NEAT-python style mutation: at most one structural change plus value mutation.
+
+All four structural operations are batch-wide kernels: each gate is an elementwise mask on
+the population axis, and an individual whose gate is off — or whose candidate is invalid —
+comes out unchanged.  Capacity invariants are hard: ``max_nodes``, ``max_conns`` and the
+genome's ``max_in_degree`` are never exceeded, a refused add is a no-op for that individual
+(never a silent repair), and new rows go to ``first_free_row`` in the same layout for keys
+and attributes.
+"""
+
+from typing import TYPE_CHECKING
+
+import evoxc
+import evoxc.numpy as enp
+
+from ....common import I_INF, State, TensorNEATError
 from ...utils import (
-    unflatten_conns,
-    add_node,
     add_conn,
-    delete_node_by_pos,
+    add_node,
     delete_conn_by_pos,
-    extract_gene_attrs, 
-    set_gene_attrs
+    delete_conns_by_key,
+    delete_node_by_pos,
+    fetch_random_index,
+    first_free_row,
+    valid_count,
 )
+from .base import BaseMutation
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ...base import BaseGenome
 
 
 class DefaultMutation(BaseMutation):
+    """Structural and value mutation with per-operation probabilities.
+
+    The four probabilities are independent per individual and per generation: one
+    ``evoxc.random.uniform(key, (4, P))`` draw gates all of them, so at most one structural
+    mutation per individual is applied while value mutation always runs afterwards.
+    A probability of ``0`` removes its operation from the graph entirely.
+
+    Args:
+        conn_add (float): Probability per individual of attempting to add one connection.
+        conn_delete (float): Probability per individual of attempting to delete a connection.
+        node_add (float): Probability per individual of attempting a node split.
+        node_delete (float): Probability per individual of attempting to delete a hidden node.
+
+    Raises:
+        TensorNEATError: If any probability is outside ``[0, 1]``.
+    """
+
     def __init__(
         self,
         conn_add: float = 0.2,
@@ -26,294 +55,296 @@ class DefaultMutation(BaseMutation):
         node_add: float = 0.1,
         node_delete: float = 0.1,
     ):
-        self.conn_add = conn_add
-        self.conn_delete = conn_delete
-        self.node_add = node_add
-        self.node_delete = node_delete
+        """Store the four probabilities (their meaning is documented on the class).
 
-    def __call__(
-        self, state, genome, randkey, nodes, conns, new_node_key, new_conn_key
-    ):
-        assert (
-            new_node_key.shape == ()
-        )  # scalar, as there is max one new node in each mutation
-        assert new_conn_key.shape == (
-            3,
-        )  # there are max 3 new connections (mutate add node + mutate add conn)
+        Validating here means a bad configuration fails at construction time, not at the
+        first ``evoxc.build``.
 
-        k1, k2 = jax.random.split(randkey)
-
-        nodes, conns = self.mutate_structure(
-            state, genome, k1, nodes, conns, new_node_key, new_conn_key
+        Raises:
+            TensorNEATError: If any probability is outside ``[0, 1]``.
+        """
+        raise NotImplementedError(
+            "store the four probabilities and reject values outside [0, 1]"
         )
-        nodes, conns = self.mutate_values(state, genome, k2, nodes, conns)
-
-        return nodes, conns
 
     def mutate_structure(
-        self, state, genome, randkey, nodes, conns, new_node_key, new_conn_key
-    ):
-        def mutate_add_node(key_, nodes_, conns_):
-            """
-            add a node while do not influence the output of the network
-            """
+        self,
+        state: State,
+        genome: "BaseGenome",
+        key: evoxc.SymbolicTensor,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+        new_node_keys: evoxc.SymbolicTensor,
+        new_conn_keys: evoxc.SymbolicTensor,
+    ) -> GenomeTensors:
+        """Apply at most one gated structural mutation per individual.
 
-            remain_node_space = jnp.isnan(nodes_[:, 0]).sum()
-            remain_conn_space = jnp.isnan(conns_[:, 0]).sum()
-            i_key, o_key, idx = self.choose_connection_key(
-                key_, conns_
-            )  # choose a connection
+        Draws ``evoxc.random.uniform(key, (4, P))`` once; its rows gate add-node,
+        delete-node, add-conn and delete-conn, each helper below being a batch-wide op that
+        is a no-op for the individuals whose gate is off.
 
-            def successful_add_node():
-                # remove the original connection and record its attrs
-                original_attrs = extract_gene_attrs(genome.conn_gene, conns_[idx])
-                new_conns = delete_conn_by_pos(conns_, idx)
+        Args:
+            state (State): Immutable host configuration container.
+            genome ("BaseGenome"): Genome providing genes, ``max_in_degree``, ``network_type``.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this stage.
+            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
+            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
+            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
+            new_node_keys (evoxc.SymbolicTensor): ``(P,) int32`` allocated node keys at most.
+            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated conn keys:
+                ``[:, 0]``/``[:, 1]`` for the add-node edges, ``[:, 2]`` for add-conn.
 
-                # add a new node with identity attrs
-                new_nodes = add_node(
-                    nodes_, jnp.array([new_node_key]), genome.node_gene.new_identity_attrs(state)
-                )
+        Returns:
+            GenomeTensors: the four payload arrays after the structural stage.
 
-                # whether to use historical marker in connection
-                if "historical_marker" in genome.conn_gene.fixed_attrs:
-                    fix_attrs1 = jnp.array([i_key, new_node_key, new_conn_key[0]])
-                    fix_attrs2 = jnp.array([new_node_key, o_key, new_conn_key[1]])
-                else:
-                    fix_attrs1 = jnp.array([i_key, new_node_key])
-                    fix_attrs2 = jnp.array([new_node_key, o_key])
-
-                # add two new connections
-                # first is with identity attrs
-                new_conns = add_conn(
-                    new_conns,
-                    fix_attrs1,
-                    genome.conn_gene.new_identity_attrs(state),
-                )
-                # second is with the origin attrs
-                new_conns = add_conn(
-                    new_conns,
-                    fix_attrs2,
-                    original_attrs,
-                )
-
-                return new_nodes, new_conns
-
-            return jax.lax.cond(
-                (idx == I_INF) | (remain_node_space < 1) | (remain_conn_space < 2),
-                lambda: (nodes_, conns_),  # do nothing
-                successful_add_node,
-            )
-
-        def mutate_delete_node(key_, nodes_, conns_):
-            """
-            delete a node
-            """
-            # randomly choose a node
-            key, idx = self.choose_node_key(
-                key_,
-                nodes_,
-                genome.input_idx,
-                genome.output_idx,
-                allow_input_keys=False,
-                allow_output_keys=False,
-            )
-
-            def successful_delete_node():
-                # delete the node
-                new_nodes = delete_node_by_pos(nodes_, idx)
-
-                # delete all connections
-                new_conns = jnp.where(
-                    ((conns_[:, 0] == key) | (conns_[:, 1] == key))[:, None],
-                    jnp.nan,
-                    conns_,
-                )
-
-                return new_nodes, new_conns
-
-            return jax.lax.cond(
-                idx == I_INF,  # no available node to delete
-                lambda: (nodes_, conns_),  # do nothing
-                successful_delete_node,
-            )
-
-        def mutate_add_conn(key_, nodes_, conns_):
-            """
-            add a connection while do not influence the output of the network
-            """
-
-            remain_conn_space = jnp.isnan(conns_[:, 0]).sum()
-
-            # randomly choose two nodes
-            k1_, k2_ = jax.random.split(key_, num=2)
-
-            # input node of the connection can be any node
-            i_key, from_idx = self.choose_node_key(
-                k1_,
-                nodes_,
-                genome.input_idx,
-                genome.output_idx,
-                allow_input_keys=True,
-                allow_output_keys=True,
-            )
-
-            # output node of the connection can be any node except input node
-            o_key, to_idx = self.choose_node_key(
-                k2_,
-                nodes_,
-                genome.input_idx,
-                genome.output_idx,
-                allow_input_keys=False,
-                allow_output_keys=True,
-            )
-
-            conn_pos = fetch_first((conns_[:, 0] == i_key) & (conns_[:, 1] == o_key))
-            is_already_exist = conn_pos != I_INF
-
-            def nothing():
-                return nodes_, conns_
-
-            def successful():
-                # add a connection with zero attrs
-                if "historical_marker" in genome.conn_gene.fixed_attrs:
-                    new_fix_attrs = jnp.array([i_key, o_key, new_conn_key[2]])
-                else:
-                    new_fix_attrs = jnp.array([i_key, o_key])
-                return nodes_, add_conn(
-                    conns_, new_fix_attrs, genome.conn_gene.new_zero_attrs(state)
-                )
-
-            if genome.network_type == "feedforward":
-                u_conns = unflatten_conns(nodes_, conns_)
-                conns_exist = u_conns != I_INF
-                is_cycle = check_cycles(nodes_, conns_exist, from_idx, to_idx)
-
-                return jax.lax.cond(
-                    is_already_exist | is_cycle | (remain_conn_space < 1),
-                    nothing,
-                    successful,
-                )
-
-            elif genome.network_type == "recurrent":
-                return jax.lax.cond(
-                    is_already_exist | (remain_conn_space < 1),
-                    nothing,
-                    successful,
-                )
-
-            else:
-                raise ValueError(f"Invalid network type: {genome.network_type}")
-
-        def mutate_delete_conn(key_, nodes_, conns_):
-            # randomly choose a connection
-            i_key, o_key, idx = self.choose_connection_key(key_, conns_)
-
-            return jax.lax.cond(
-                idx == I_INF,
-                lambda: (nodes_, conns_),  # nothing
-                lambda: (nodes_, delete_conn_by_pos(conns_, idx)),  # success
-            )
-
-        k1, k2, k3, k4 = jax.random.split(randkey, num=4)
-        r1, r2, r3, r4 = jax.random.uniform(k1, shape=(4,))
-
-        def nothing(_, nodes_, conns_):
-            return nodes_, conns_
-
-        if self.node_add > 0:
-            nodes, conns = jax.lax.cond(
-                r1 < self.node_add, mutate_add_node, nothing, k1, nodes, conns
-            )
-
-        if self.node_delete > 0:
-            nodes, conns = jax.lax.cond(
-                r2 < self.node_delete, mutate_delete_node, nothing, k2, nodes, conns
-            )
-
-        if self.conn_add > 0:
-            nodes, conns = jax.lax.cond(
-                r3 < self.conn_add, mutate_add_conn, nothing, k3, nodes, conns
-            )
-
-        if self.conn_delete > 0:
-            nodes, conns = jax.lax.cond(
-                r4 < self.conn_delete, mutate_delete_conn, nothing, k4, nodes, conns
-            )
-
-        return nodes, conns
-
-    def mutate_values(self, state, genome, randkey, nodes, conns):
-        k1, k2 = jax.random.split(randkey)
-        nodes_randkeys = jax.random.split(k1, num=genome.max_nodes)
-        conns_randkeys = jax.random.split(k2, num=genome.max_conns)
-
-        node_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(
-            genome.node_gene, nodes
-        )
-        new_node_attrs = vmap(genome.node_gene.mutate, in_axes=(None, 0, 0))(
-            state, nodes_randkeys, node_attrs
-        )
-        new_nodes = vmap(set_gene_attrs, in_axes=(None, 0, 0))(
-            genome.node_gene, nodes, new_node_attrs
+        Raises:
+            TensorNEATError: If ``genome.network_type`` is neither ``"feedforward"`` nor
+                ``"recurrent"``.
+        """
+        raise NotImplementedError(
+            "draw the (4, P) gate matrix and run the four gated helpers in order"
         )
 
-        conn_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(
-            genome.conn_gene, conns
-        )
-        new_conn_attrs = vmap(genome.conn_gene.mutate, in_axes=(None, 0, 0))(
-            state, conns_randkeys, conn_attrs
-        )
-        new_conns = vmap(set_gene_attrs, in_axes=(None, 0, 0))(
-            genome.conn_gene, conns, new_conn_attrs
+    def _mutate_add_node(
+        self,
+        state: State,
+        genome: "BaseGenome",
+        key: evoxc.SymbolicTensor,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+        new_node_keys: evoxc.SymbolicTensor,
+        new_conn_keys: evoxc.SymbolicTensor,
+    ) -> GenomeTensors:
+        """Split one connection per individual with a new node, preserving network output.
+
+        The chosen connection is deleted, the new node is written at ``first_free_row`` with
+        the node gene's identity attributes, then two connections are added: an identity one
+        from the old source (``conn_gene.new_identity_attrs``) and a copy of the original one
+        into the old destination (with the recorded original attributes).
+
+        No-op for an individual when the ``node_add`` gate is off, when
+        :meth:`choose_connection_key` finds no connection (``I_INF``), when
+        ``first_free_row`` finds no free node row, or when fewer than two connection rows
+        are free.
+
+        Args:
+            state (State): Immutable host configuration container.
+            genome ("BaseGenome"): Genome providing the identity attribute factories.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this helper.
+            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
+            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
+            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
+            new_node_keys (evoxc.SymbolicTensor): ``(P,) int32`` allocated node keys.
+            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated conn keys;
+                ``[:, 0]``/``[:, 1]`` become the ``historical_marker`` of the identity/copy
+                edge when the conn gene declares one.
+
+        Returns:
+            GenomeTensors: the four payload arrays; an individual that cannot split is unchanged.
+        """
+        raise NotImplementedError(
+            "choose a connection, delete it, insert the node and add the two replacement edges"
         )
 
-        # nan nodes not changed
-        new_nodes = jnp.where(jnp.isnan(nodes), jnp.nan, new_nodes)
-        new_conns = jnp.where(jnp.isnan(conns), jnp.nan, new_conns)
+    def _mutate_delete_node(
+        self,
+        state: State,
+        genome: "BaseGenome",
+        key: evoxc.SymbolicTensor,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+    ) -> GenomeTensors:
+        """Delete one hidden node per individual together with all its connections.
 
-        return new_nodes, new_conns
+        Input rows (``0..num_inputs-1``) and output rows (``N-num_outputs..N-1``) are never
+        candidates, so :meth:`choose_node_key` is called with both ``allow_*_keys=False``;
+        the node row is cleared with ``delete_node_by_pos`` and every connection touching the
+        deleted key is cleared with ``delete_conns_by_key``.
+
+        No-op when the ``node_delete`` gate is off or when no hidden node exists
+        (:meth:`choose_node_key` returns ``I_INF``).
+
+        Args:
+            state (State): Immutable host configuration container.
+            genome ("BaseGenome"): Genome providing the input/output row ranges.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this helper.
+            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
+            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
+            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
+
+        Returns:
+            GenomeTensors: the four payload arrays, with the deleted node's row and every touching
+            connection row sent back to their padding sentinels.
+        """
+        raise NotImplementedError(
+            "choose a hidden node, clear its row and every connection touching its key"
+        )
+
+    def _mutate_add_conn(
+        self,
+        state: State,
+        genome: "BaseGenome",
+        key: evoxc.SymbolicTensor,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+        new_conn_keys: evoxc.SymbolicTensor,
+    ) -> GenomeTensors:
+        """Add one connection per individual with the connection gene's zero attributes.
+
+        Two independent :meth:`choose_node_key` draws pick the endpoints: the source may be
+        any existing node (``allow_input_keys=True, allow_output_keys=True``), the
+        destination any existing node that is not an input (``allow_input_keys=False``).
+
+        No-op for an individual when the ``conn_add`` gate is off, when an endpoint is
+        ``I_INF``, when ``first_free_row`` finds no free connection row, when the
+        ``(in_key, out_key)`` pair already exists, when the edge would close a cycle and
+        ``genome.network_type == "feedforward"`` (the genome's ``check_cycles`` predicate,
+        equivalent to the legacy ``common.graph.check_cycles`` reachability test), or when it
+        would push the destination's in-degree past ``genome.max_in_degree``.
+
+        Args:
+            state (State): Immutable host configuration container.
+            genome ("BaseGenome"): Genome providing ``max_in_degree``, ``network_type`` and
+                ``conn_gene.new_zero_attrs``.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this helper.
+            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
+            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
+            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
+            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated conn keys;
+                ``[:, 2]`` becomes the ``historical_marker`` of the new edge when declared.
+
+        Returns:
+            GenomeTensors: the four payload arrays; a refused add leaves the individual unchanged.
+        """
+        raise NotImplementedError(
+            "draw both endpoints, reject duplicates/cycles/in-degree overflow and add the edge"
+        )
+
+    def _mutate_delete_conn(
+        self,
+        state: State,
+        genome: "BaseGenome",
+        key: evoxc.SymbolicTensor,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+    ) -> GenomeTensors:
+        """Delete one connection per individual.
+
+        The candidate row comes from :meth:`choose_connection_key` and is cleared with
+        ``delete_conn_by_pos``.  No-op when the ``conn_delete`` gate is off or when there is
+        no connection to delete (``I_INF`` row).
+
+        Args:
+            state (State): Immutable host configuration container.
+            genome ("BaseGenome"): Genome owning the connection gene.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this helper.
+            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
+            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
+            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
+
+        Returns:
+            GenomeTensors: the four payload arrays, with the chosen connection row cleared.
+        """
+        raise NotImplementedError(
+            "choose a connection row and clear it with delete_conn_by_pos"
+        )
+
+    def mutate_values(
+        self,
+        state: State,
+        genome: "BaseGenome",
+        key: evoxc.SymbolicTensor,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+    ) -> GenomeTensors:
+        """Mutate every existing gene's attributes with one batched draw per array.
+
+        ``genome.node_gene.mutate`` and ``genome.conn_gene.mutate`` are called once each on
+        the full ``(P, N, NA)`` / ``(P, E, CA)`` arrays (genes are batched over their leading
+        axes); the result is re-masked so padded rows keep NaN, and key arrays are returned
+        untouched.
+
+        Args:
+            state (State): Immutable host configuration container.
+            genome ("BaseGenome"): Genome whose gene objects perform the attribute draw.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this stage.
+            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
+            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
+            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
+
+        Returns:
+            GenomeTensors: mutated attributes, unchanged keys, padding sentinels restored.
+        """
+        raise NotImplementedError(
+            "call each gene's batched mutate once and re-mask padded rows to NaN"
+        )
 
     def choose_node_key(
         self,
-        key,
-        nodes,
-        input_idx,
-        output_idx,
+        key: evoxc.SymbolicTensor,
+        node_keys: evoxc.SymbolicTensor,
         allow_input_keys: bool = False,
         allow_output_keys: bool = False,
-    ):
+    ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+        """Pick one candidate node per individual, out of the eligible rows.
+
+        Eligibility is an elementwise mask over ``node_keys``: absent rows (``I_INF``) are
+        dropped, and input rows (``0..num_inputs-1``) / output rows
+        (``N-num_outputs..N-1``) are dropped unless the matching flag is ``True``.  The draw
+        is a single batched ``fetch_random_index`` over the ``(P, N)`` mask — never a Python
+        loop over individuals.
+
+        Args:
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this draw.
+            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
+            allow_input_keys (bool): Whether input rows may be chosen.
+            allow_output_keys (bool): Whether output rows may be chosen.
+
+        Returns:
+            tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]: ``(keys, rows)``, both
+            ``(P,) int32``, with ``I_INF`` in both entries where no candidate exists.
         """
-        Randomly choose a node key from the given nodes. It guarantees that the chosen node not be the input or output node.
-        :param key:
-        :param nodes:
-        :param input_idx:
-        :param output_idx:
-        :param allow_input_keys:
-        :param allow_output_keys:
-        :return: return its key and position(idx)
+        raise NotImplementedError(
+            "build the eligibility mask and draw one row per individual"
+        )
+
+    def choose_connection_key(
+        self,
+        key: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+    ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+        """Pick one candidate connection per individual, out of the existing rows.
+
+        Args:
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this draw.
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
+
+        Returns:
+            tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+            ``(in_keys, out_keys, rows)``, all ``(P,) int32``, with ``I_INF`` in all three
+            entries for individuals that have no connection.
         """
+        raise NotImplementedError(
+            "draw one existing connection row per individual and gather its in/out keys"
+        )
 
-        node_keys = nodes[:, 0]
-        mask = ~jnp.isnan(node_keys)
 
-        if not allow_input_keys:
-            mask = jnp.logical_and(mask, ~jnp.isin(node_keys, input_idx))
-
-        if not allow_output_keys:
-            mask = jnp.logical_and(mask, ~jnp.isin(node_keys, output_idx))
-
-        idx = fetch_random(key, mask)
-        key = jnp.where(idx != I_INF, nodes[idx, 0], jnp.nan)
-        return key, idx
-
-    def choose_connection_key(self, key, conns):
-        """
-        Randomly choose a connection key from the given connections.
-        :return: i_key, o_key, idx
-        """
-
-        idx = fetch_random(key, ~jnp.isnan(conns[:, 0]))
-        i_key = jnp.where(idx != I_INF, conns[idx, 0], jnp.nan)
-        o_key = jnp.where(idx != I_INF, conns[idx, 1], jnp.nan)
-
-        return i_key, o_key, idx
+__all__ = ["DefaultMutation"]

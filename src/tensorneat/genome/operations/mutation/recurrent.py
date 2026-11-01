@@ -1,298 +1,125 @@
-# recurrent_mutation.py
-import jax
-import jax.numpy as jnp
+"""Mutation variant whose add-connection step is directed at recurrent (cyclic) edges.
 
-# same helpers as DefaultMutation
-from tensorneat.common import fetch_first, I_INF, check_cycles, fetch_random
-from tensorneat.genome.operations.mutation.default import DefaultMutation
-from tensorneat.genome.utils import (
-    extract_gene_attrs,
+Inherits the structural/value mutation of :class:`~.default.DefaultMutation` unchanged and
+overrides only the add-connection strategy: candidate endpoint pairs are drawn as one batched
+``randint`` tableau and the first accepted row is selected with a reduce (never a ``cond``
+region), so the whole population is still resolved by one batch-wide kernel.
+"""
+
+from typing import TYPE_CHECKING
+
+import evoxc
+import evoxc.numpy as enp
+
+from ....common import I_INF, State, TensorNEATError
+from ...utils import (
+    GenomeTensors,
     add_conn,
-    add_node,
-    unflatten_conns,
-    delete_conn_by_pos,
-    delete_node_by_pos,
-    set_gene_attrs, 
-    )
+    fetch_random_index,
+    first_free_row,
+    valid_count,
+)
+from .default import DefaultMutation
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ...base import BaseGenome
+
 
 class RecurrentMutation(DefaultMutation):
-    """
-    A DefaultMutation variant that *biases* (not forces) evolution toward
-    recurrent connections, controlled by the parameter "p_recur".
+    """Add-connection mutation that *forces* a cycle with probability ``p_recur``.
 
-    Applies add/delete node and delete connection mutations identically to
-    the user's original implementation provided, but uses an optimized
-    add-connection strategy with cycle bias and retries.
+    Node add/delete and connection delete behave exactly as in
+    :class:`~.default.DefaultMutation`; only the add-connection step changes.  Instead of one
+    candidate pair per individual, the helper samples a bounded tableau of candidate
+    ``(src, dst)`` rows and keeps the first acceptable one, which lets the operator insist on
+    a cycle-closing edge rather than merely bias the draw toward one.
 
-    Parameters
-    ----------
-    p_recur : float, default 0.1
-        Probability (0 to 1) that any single *successful* add-connection
-        mutation *must* result in forming a cycle in the graph.
-    max_conn_tries : int, default 20
-        Maximum number of distinct (source, target) node pairs to sample
-        when attempting the add-connection mutation before giving up for
-        this genome in this generation.
-    conn_add : float
-        Probability of attempting connection addition. Inherited from 
-        DefaultMutation.
-    conn_delete : float
-        Probability of attempting connection deletion. Inherited from 
-        DefaultMutation.
-    node_add : float
-        Probability of attempting node addition. Inherited from DefaultMutation.
-    node_delete : float
-        Probability of attempting node deletion. Inherited from DefaultMutation.
-    kwargs : Other arguments accepted by DefaultMutation.__init__
+    Args:
+        p_recur (float): Probability that an accepted add-connection *must* close a cycle.
+            When the flag fires, a candidate edge that does not close a cycle is discarded —
+            the requirement is hard, not a bias.  A value of ``0`` degenerates to the
+            :class:`~.default.DefaultMutation` behaviour.
+        max_conn_tries (int): Number of candidate ``(src, dst)`` rows drawn per individual and
+            generation; bounds the work of the add-connection step independently of the
+            population size.
+        **kwargs: Forwarded to :class:`~.default.DefaultMutation`
+            (``conn_add``, ``conn_delete``, ``node_add``, ``node_delete``).
+
+    Raises:
+        TensorNEATError: If ``p_recur`` is outside ``[0, 1]``, if ``max_conn_tries < 1``, or if
+            an inherited probability is outside ``[0, 1]``.
     """
-    # constructor                                                        
+
     def __init__(
         self,
         *,
         p_recur: float = 0.1,
         max_conn_tries: int = 20,
-        **kwargs        # Pass conn_add, conn_delete etc. through to base class
-        ):
-        # Initialize base class probabilities from DefaultMutation
-        super().__init__(**kwargs)
+        **kwargs,
+    ):
+        """Store ``p_recur``/``max_conn_tries`` and forward the inherited probabilities.
 
-        if not 0.0 <= p_recur <= 1.0:
-            raise ValueError("p_recur must be in [0, 1]")
-        if max_conn_tries < 1:
-            raise ValueError("max_conn_tries must be >= 1")
+        Raises:
+            TensorNEATError: If ``p_recur`` is outside ``[0, 1]``, if ``max_conn_tries < 1``,
+                or if an inherited probability is outside ``[0, 1]``.
+        """
+        raise NotImplementedError(
+            "validate p_recur/max_conn_tries, store them and forward **kwargs to DefaultMutation"
+        )
 
-        self.p_recur        = float(p_recur)
-        self.max_conn_tries = int(max_conn_tries)
-
-    # structural mutation (all value‑mutation logic is inherited intact) 
     def mutate_structure(
-        self, state, genome, randkey, nodes, conns, new_node_key, new_conn_key
-        ):
+        self,
+        state: State,
+        genome: "BaseGenome",
+        key: evoxc.SymbolicTensor,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+        new_node_keys: evoxc.SymbolicTensor,
+        new_conn_keys: evoxc.SymbolicTensor,
+    ) -> GenomeTensors:
+        """Apply at most one gated structural mutation, with the recurrent add-connection.
+
+        The gate draw, the add-node / delete-node / delete-conn helpers and their no-op
+        conditions are those of :class:`~.default.DefaultMutation`; only add-conn is replaced.
+
+        The replacement draws every candidate at once with one
+        ``evoxc.random.randint(key, (max_conn_tries, 2), 0, N)`` batch — one row per attempt
+        per individual, no per-attempt Python loop and no per-individual key split.  Per
+        attempt, a ``p_recur`` draw decides whether that attempt *must* close a cycle; an
+        attempt is accepted when the edge is not a duplicate, respects the ``max_in_degree``
+        cap, and satisfies its cycle requirement.  The *first* accepted row wins, selected
+        with a reduce over the attempt axis (``where(accept, attempt_row, I_INF)`` reduced to
+        its minimum) rather than a ``cond`` region, and the edge is written at
+        ``first_free_row`` with ``conn_gene.new_zero_attrs``.  No-op for an individual when
+        its ``conn_add`` gate is off, when no attempt is accepted, or when no connection row
+        is free.
+
+        Args:
+            state (State): Immutable host configuration container.
+            genome ("BaseGenome"): Genome providing ``max_in_degree``, ``network_type``,
+                ``conn_gene.new_zero_attrs`` and the cycle predicate ``check_cycles``.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this stage.
+            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
+            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
+            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
+            new_node_keys (evoxc.SymbolicTensor): ``(P,) int32`` allocated node keys at most.
+            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated conn keys:
+                ``[:, 0]``/``[:, 1]`` for the add-node edges, ``[:, 2]`` for add-conn (written
+                as the ``historical_marker`` when the conn gene declares one).
+
+        Returns:
+            GenomeTensors: the four payload arrays after the structural stage.
+
+        Raises:
+            TensorNEATError: If ``genome.network_type`` is neither ``"feedforward"`` nor
+                ``"recurrent"``.
         """
-        Apply ONE structural mutation (node-add/del, conn-add/del) chosen
-        according to the probabilities stored in this object.
-        Uses the custom `_mutate_add_conn_recurrent_optimized`.
-        Uses user's original implementations for add_node, delete_node, 
-        delete_conn.
-        """
-        # Helper functions (kept as per user request, structure preserved
-        def mutate_add_node(key_, nodes_, conns_):
-            remain_node_space = jnp.isnan(nodes_[:, 0]).sum()
-            remain_conn_space = jnp.isnan(conns_[:, 0]).sum()
-          
-            i_key, o_key, idx = self.choose_connection_key(key_, conns_)
+        raise NotImplementedError(
+            "draw the (max_conn_tries, 2) candidate tableau and keep the first accepted row"
+        )
 
-            def successful_add_node():
-                # remove the original connection and record its attrs
-                original_attrs = extract_gene_attrs(
-                    genome.conn_gene, conns_[idx]
-                    )
-                new_conns = delete_conn_by_pos(conns_, idx)
 
-                # add a new node with identity attrs
-                new_nodes = add_node(
-                    nodes_, 
-                    jnp.array([new_node_key]), 
-                    genome.node_gene.new_identity_attrs(state)
-                    )
-
-                # build two replacement connections
-                if "historical_marker" in genome.conn_gene.fixed_attrs:
-                    f1 = jnp.array([i_key, new_node_key, new_conn_key[0]])
-                    f2 = jnp.array([new_node_key, o_key, new_conn_key[1]])
-                else:
-                    f1 = jnp.array([i_key, new_node_key])
-                    f2 = jnp.array([new_node_key, o_key])
-                
-                new_conns = add_conn(
-                    new_conns, 
-                    f1, 
-                    genome.conn_gene.new_identity_attrs(state)
-                    )
-                new_conns = add_conn(new_conns, f2, original_attrs)
-                return new_nodes, new_conns
-
-            cond_do_nothing = (idx == I_INF) | \
-                              (remain_node_space < 1) | \
-                              (remain_conn_space < 2)
-            return jax.lax.cond(
-                cond_do_nothing,            # condition for doing nothing
-                lambda: (nodes_, conns_),   # do nothing branch (if cond is true)
-                successful_add_node         # do add branch (if cond is false)
-                )
-
-        def mutate_delete_node(key_, nodes_, conns_):
-            k, idx = self.choose_node_key(
-                key_, nodes_, genome.input_idx, genome.output_idx,
-                allow_input_keys=False, allow_output_keys=False,
-                )
-            
-            def do():
-                # delete the node
-                new_nodes = delete_node_by_pos(nodes_, idx)
-                
-                # delete all connections
-                new_conns = jnp.where(
-                    ((conns_[:, 0] == k) | (conns_[:, 1] == k))[:, None],
-                    jnp.nan, conns_
-                    )
-                return new_nodes, new_conns
-                
-            return jax.lax.cond(
-                idx == I_INF,               # cond to determine "doing nothing" 
-                lambda: (nodes_, conns_),   # Do nothing branch
-                do                          # do delete branch
-                )
-
-        # NEW biased add‑connection with optimizations and p_recur bias
-        def _mutate_add_conn_recurrent_optimized(key_, nodes_, conns_):
-            """
-            Optimized: Attempts to insert one connection with recurrent bias.
-            Makes up to "self.max_conn_tries" draws.
-            Computes graph structure once before vmap.
-            Checks prerequisites before cycle check.
-            """
-            remain_conn_space = jnp.isnan(conns_[:, 0]).sum()
-            space_available = remain_conn_space >= 1
-
-            # Optimization: Calculate graph structure ONCE before vmap 
-            u_conns = unflatten_conns(nodes_, conns_)
-            conns_exist_matrix = u_conns != I_INF
-
-            # Function for a single attempt 
-            def attempt(k_triplet):
-                """One sampling attempt; returns (accept?, i_key, o_key)."""
-                k1_node, k2_node, k_recur = jax.random.split(k_triplet, 3)
-
-                # 1. Sample endpoints
-                i_key, from_idx = self.choose_node_key(
-                    k1_node, nodes_, genome.input_idx, genome.output_idx,
-                    allow_input_keys=True, allow_output_keys=True,
-                    )
-                o_key, to_idx = self.choose_node_key(
-                    k2_node, nodes_, genome.input_idx, genome.output_idx,
-                    allow_input_keys=False, allow_output_keys=True,
-                    )
-
-                # 2. Basic checks: nodes selected? space available?
-                nodes_chosen = (from_idx != I_INF) & (to_idx != I_INF)
-                prereqs_met = nodes_chosen & space_available
-
-                # --- Nested conditional logic for efficiency ---
-                def check_existence_and_cycle():
-                    # 3. Duplicate check (only if prereqs met)
-                    exists = fetch_first(
-                        (conns_[:, 0] == i_key) & (conns_[:, 1] == o_key)
-                        ) != I_INF
-                    not_duplicate = ~exists
-
-                    def check_cycle_logic():
-                        # 4. Cycle check (only if valid, non-duplicate candidate)
-                        forms_cy = check_cycles(
-                            nodes_, 
-                            conns_exist_matrix, 
-                            from_idx, to_idx
-                            )
-
-                        # 5. Decide if we *require* a cycle
-                        force_recur = jax.random.uniform(k_recur) < self.p_recur
-
-                        # 6. Final check: cycle requirement satisfaction
-                        cycle_req_satisfied = (force_recur & forms_cy) | \
-                                              (~force_recur)
-
-                        # Attempt is valid if cycle requirement is met
-                        is_valid = cycle_req_satisfied
-                        return is_valid, i_key, o_key
-
-                    # If not duplicate, check cycle logic, else invalid
-                    is_valid, final_i_key, final_o_key = jax.lax.cond(
-                        not_duplicate,
-                        check_cycle_logic,
-                        lambda: (jnp.array(False), jnp.nan, jnp.nan) # is_valid=False if duplicate
-                    )
-                    return is_valid, final_i_key, final_o_key
-
-                # If basic prereqs met, check existence/cycle, else invalid
-                is_valid_attempt, i_key_attempt, o_key_attempt = jax.lax.cond(
-                    prereqs_met,
-                    check_existence_and_cycle,
-                    lambda: (jnp.array(False), jnp.nan, jnp.nan) # is_valid=False if prereqs not met
-                    )
-
-                return is_valid_attempt, i_key_attempt, o_key_attempt # bool, float, float
-
-            # Vectorize attempts and find first success
-            keys = jax.random.split(key_, self.max_conn_tries)
-            accept_flags, i_keys_all, o_keys_all = jax.vmap(attempt)(keys)
-
-            # find FIRST successful draw (if any)
-            first_success_idx = fetch_first(accept_flags)
-            found_valid_candidate = first_success_idx != I_INF
-
-            # Conditionally add the connection
-            def do_accept():
-                # Get the keys from the first successful attempt
-                i_key_chosen = i_keys_all[first_success_idx]
-                o_key_chosen = o_keys_all[first_success_idx]
-                
-                # Create fixed attributes (using 3rd marker for add_conn)
-                if "historical_marker" in genome.conn_gene.fixed_attrs:
-                    fix = jnp.array([i_key_chosen, o_key_chosen, new_conn_key[2]])
-                else:
-                    fix = jnp.array([i_key_chosen, o_key_chosen])
-
-                # Add the connection
-                new_conns = add_conn(
-                    conns_,
-                    fix,
-                    genome.conn_gene.new_zero_attrs(state) # Add with zero/default attrs
-                    )
-
-                return nodes_, new_conns
-            
-            # If a valid candidate was found, add it; otherwise return original 
-            # arrays
-            return jax.lax.cond(
-                found_valid_candidate,   # Condition is True if we should accept
-                do_accept,               # Do accept branch (if cond is true)
-                lambda: (nodes_, conns_) # Do nothing branch (if cond is false)
-                )
-
-        def mutate_delete_conn(key_, nodes_, conns_):        
-            i_key, o_key, idx = self.choose_connection_key(key_, conns_)
-            return jax.lax.cond(
-                idx == I_INF,
-                lambda: (nodes_, conns_),
-                lambda: (nodes_, delete_conn_by_pos(conns_, idx)),
-                )
-
-        # --- Scheduling Logic (unchanged from user's code) ---
-        k_node_add, k_node_del, k_conn_add, k_conn_del, k_schedule = \
-            jax.random.split(randkey, 5)
-        probs = jax.random.uniform(k_schedule, (4,))
-
-        def nothing(_, n_, c_): return n_, c_
-
-        # Apply mutations conditionally using original helper functions
-        nodes, conns = jax.lax.cond(
-            (self.node_add > 0) & (probs[0] < self.node_add),
-            mutate_add_node, nothing, k_node_add, nodes, conns
-            )
-        nodes, conns = jax.lax.cond(
-            (self.node_delete > 0) & (probs[1] < self.node_delete),
-            mutate_delete_node, nothing, k_node_del, nodes, conns
-            )
-        # Apply connection addition using the OPTIMIZED version
-        nodes, conns = jax.lax.cond(
-            (self.conn_add > 0) & (probs[2] < self.conn_add),
-            _mutate_add_conn_recurrent_optimized, # <<< Use optimized add_conn
-             nothing, k_conn_add, nodes, conns
-            )
-        # Apply connection deletion using original helper function
-        nodes, conns = jax.lax.cond(
-            (self.conn_delete > 0) & (probs[3] < self.conn_delete),
-            mutate_delete_conn, nothing, k_conn_del, nodes, conns
-             )
-        return nodes, conns
-
+__all__ = ["RecurrentMutation"]

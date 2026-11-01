@@ -1,47 +1,33 @@
-# Intent
-Tensor-valued (JAX) gene abstraction for TensorNEAT: a gene object is a stateless `StatefulBaseClass` descriptor that owns the layout and the operators for one fixed-width float32 row of a flattened gene array.
-Gene objects hold no per-individual data; per-gene values live in `nodes` rows (width `node_gene.length`, shape `(max_nodes, length)`) and `conns` rows (width `conn_gene.length`, shape `(max_conns, length)`) created inside `genome/base.py`.
-All gene arrays are float32, including index/marker columns, which are cast with `int()` at export time (`repr`, `to_dict`).
+# gene — attr-table driven gene families
 
-# API Surface
-`BaseGene` (`base.py`), subclass of `common/stateful_class.py::StatefulBaseClass`:
-- class attrs `fixed_attrs: list[str]` (identity/key columns) and `custom_attrs: list[str]` (evolvable columns); both are ordered python lists of names.
-- property `length` = `len(fixed_attrs) + len(custom_attrs)` — the row width.
-- `new_identity_attrs(state)` — custom attrs that make a gene behave as identity (used by "add node" mutation on the split connection; nan for `BaseGene`).
-- `new_random_attrs(state, randkey)` — custom attrs sampled at initialization.
-- `mutate(state, randkey, attrs)` — attrs are the custom-attr slice only.
-- `crossover(state, randkey, attrs1, attrs2)` — default is per-element coin flip `jnp.where(jax.random.normal(randkey, attrs1.shape) > 0, attrs1, attrs2)` ("attrs exchange").
-- `distance(state, attrs1, attrs2)` — scalar jnp for genome distance.
-- `forward(state, attrs, inputs)` — one gene's numeric transform; returns a scalar.
-- `repr(state, gene, precision=2)` and `hash(gene)` (full row → uint32 via `common/tools.py::hash_array`).
-- `setup(state)`/`show_config()` come from `StatefulBaseClass`; genes are stateless so `setup()` just returns the passed `State`.
-- `sympy_func` and `to_dict` are declared only on `BaseNode`/`BaseConn` (not on `BaseGene`); both host-side (python) and return sympy expressions + `{symbol: value}` or a plain dict.
+## Intent
+Define what a gene *is* (its key columns and its float attribute columns) and how it converts, mutates, crosses over, distances, and forwards, so that node and conn families are declarations over a shared mechanism instead of copy-paste.
+`BaseGene` owns the table-driven plumbing; `node/` and `conn/` add only their structural hooks.
 
-# Index Layout Of A Gene Row
-Columns `[0 : len(fixed_attrs)]` are the gene identity key, columns `[len(fixed_attrs) :]` are `custom_attrs` in declaration order.
-`genome/utils.py::extract_gene_attrs(gene, row)` = `row[len(gene.fixed_attrs):]` and `set_gene_attrs` writes the same slice — the single source of truth for both directions.
-Widths: `DefaultNode`/`OriginNode` 5 (`index,bias,response,aggregation,activation`), `BiasNode` 4 (`index,bias,aggregation,activation`), `DefaultConn` 3 (`input_index,output_index,weight`), `OriginConn` 4 (`input_index,output_index,historical_marker,weight`).
-NaN padding: empty slots are the *entire* row set to NaN (`nodes.at[pos].set(jnp.nan)`); row existence is tested via the first column (`~jnp.isnan(row[0])`, `utils.valid_cnt`) and a new gene is inserted at the first all-NaN row (`fetch_first`).
-Column order is load-bearing: `unflatten_conns` reads `conns[:,0]`/`conns[:,1]` as in/out node keys and `nodes[:,0]` as node key; `genome/base.py` writes `historical_marker` into column 2 when `"historical_marker" in conn_gene.fixed_attrs`; crossover/distance use `row[:len(fixed_attrs)]` as the matching key.
+## API Surface
+`BaseGene(StatefulBaseClass)`:
+- class data: `fixed_attrs: list[str]` (int32 key columns), `attr_specs: tuple[GeneAttr, ...]` (float32 attribute columns, in row order).
+- `key_width` / `attr_width` properties (`len(fixed_attrs)` / `len(attr_specs)`), `length` = `key_width + attr_width` for display only.
+- `new_random_attrs(state, key, shape) -> (*shape, attr_width)` — one batched `evoxc.random` draw per attribute spec, clipped to the spec bounds.
+- `new_identity_attrs(state) -> (attr_width,)` — attribute values that make the gene an identity transform (used by add-node splits); `new_zero_attrs(state)` for add-conn.
+- `mutate(state, key, attrs) -> attrs` — batched over leading axes; per float spec `mutate_rate` noise / `replace_rate` re-init (legacy `mutate_float` distribution), per int spec `replace_rate` re-draw over the option indices (legacy `mutate_int`).
+- `crossover(state, key, attrs1, attrs2) -> attrs` — per-attribute 50/50 pick; `OriginNode`/`OriginConn` override with a whole-gene pick.
+- `distance(state, attrs1, attrs2) -> (...)` — sum over the attribute axis of `|Δ|` for floats and `!=` for ints.
+- `hash(keys) -> (...,) uint32` — xor-mix over the int32 key columns (no bitcast available; hash is taken over keys, not float bits).
+- Host-only: `repr`, `to_dict`, `sympy_func`.
+`BaseNode.forward(state, attrs, messages, is_output_node, valid_mask) -> (P, N)` and `BaseConn.forward(state, attrs, source_values) -> (P, N, K)` are the only trace-time entry points.
+`GeneAttr` is a small dataclass: `name`, `kind` (`"float"`/`"int"`), init mean/std or option index list, mutate power/rate, replace rate, optional lower/upper bound.
 
-# Constraints
-Everything except `repr`/`to_dict`/`sympy_func` runs inside jit/vmap/fori_loop: no python branching on traced values, no host transfers, attrs are jnp arrays of shape `(len(custom_attrs),)`.
-Attribute order returned by `new_random_attrs`/`new_identity_attrs`/`new_zero_attrs`/`mutate` must match `custom_attrs` order, because genome/mutation code concatenates `fixed_attrs` with those arrays.
-`AGG`/`ACT` indices are stored as floats in the row: aggregation is a plain index into `aggregation_options`, activation index `-1` means `ACT.identity` (see `common/functions/__init__.py::apply_activation`).
-A conn gene may optionally expose `get_historical_marker(state, gene_array)`; `algorithm/neat/neat.py` and `genome/base.py` branch on `"historical_marker" in fixed_attrs` and otherwise number connections themselves.
-Genes are shared objects across the whole population and must stay immutable after construction (mutation/crossover return new attrs, never in-place edits).
+## Constraints
+- Attribute order in `attr_specs` *is* the column order of `*_attrs`; never reorder without changing every consumer.
+- `new_random_attrs` draws with the full batched shape in one call — one `evoxc.random.normal(key, shape)` per spec, never a per-row Python loop and never a per-row key split (evoxc keys are rank-0 only).
+- Int attributes (aggregation/activation option indices) live in the float32 attr array and are compared with exact equality; `-1` means "identity activation" and is handled by `apply_activation`, not by an option-table index.
+- No `jax`/`torch`; no eager NumPy on the compute path; NaN-free branches only, since every option is evaluated by a `select` chain.
+- Files ≤ ~1000 lines; a new gene family adds declarations plus hooks, never a copy of the mutation/crossover code.
 
-# JAX Usage
-`forward` implementations use `jax.lax.cond`, `jax.lax.switch` (indirectly via `apply_activation`/`apply_aggregation`) and `jnp.isnan` masks; they are called through `vmap` from `DefaultGenome.forward` (per-node loop in `lax.fori_loop`) and `RecurrentGenome.forward` (per-timestep loop).
-Aggregation receives a boolean `valid_mask` selecting which incoming connection values participate; `apply_aggregation` returns `0.0` when the mask is empty.
-`hash_array` is jit-compatible (`lax.bitcast_convert_type` + `fori_loop` over `arr.size`), so gene hashing can run under jit.
-Non-jittable/host-side: `repr`, `to_dict`, `sympy_func` (sympy symbols, `sp.lambdify`, `AGG.sympy_module(backend)`/`ACT.sympy_module(backend)` for `numerical_eval`), `__init__` option lists.
-
-# Known Issues
-`DefaultNode.new_identity_attrs` returns `self.activation_default` although its inline comment claims "activation=-1 means ACT.identity"; only `BiasNode.new_identity_attrs` actually emits `-1`.
-Both `DefaultNode.__init__` and `BiasNode.__init__` store the `response_lower_bound` argument into a misspelled attribute `self.reponse_lower_bound`, which the clipping code then uses.
-`DefaultConn.sympy_func` takes a `precision=None` parameter instead of the `is_output_node` argument used by node genes, so it is not signature-compatible with `BaseNode.sympy_func`.
-
-# Routing Table
-`./conn` — `BaseConn`, `DefaultConn`, `OriginConn`: connection genes (weight, optional historical marker).
-`./node` — `BaseNode`, `DefaultNode`, `BiasNode`, `OriginNode`: node genes (bias/response/aggregation/activation).
+## Routing Table
+| Path | Responsibility |
+|---|---|
+| `./base.py` | `GeneAttr` and `BaseGene`: table-driven attrs, batched mutate/crossover/distance/hash, host `repr`/`to_dict` hooks. |
+| `./node/` | Node genes: hit-window aggregation, combine, activation selection. |
+| `./conn/` | Conn genes: per-edge message from (attrs, source value). |

@@ -1,28 +1,50 @@
-import warnings
+"""``DefaultGenome``: depth-unrolled, level-synchronous feedforward evaluation.
 
-import jax
-from jax import vmap, numpy as jnp
-import numpy as np
-import sympy as sp
+The forward pass seeds the input rows once, then walks the *static* depth levels in a plain
+Python ``for`` loop, so the traced graph contains only ``gather``/``select``/``reduce_*`` and
+elementwise ops — no ``scan``/``while_loop``/``cond`` — which is what lets ``evoxc.grad``
+differentiate it.
+Everything is batch-first (population on axis 0); the shared window reduce lives in
+:class:`.base.BaseGenome` and must not be re-implemented here.
+"""
 
-from .base import BaseGenome
-from .gene import DefaultNode, DefaultConn
-from .operations import DefaultMutation, DefaultCrossover, DefaultDistance
-from .utils import unflatten_conns, extract_gene_attrs, extract_gene_attrs
+from collections.abc import Callable, Sequence
+from typing import Any
 
-from tensorneat.common import (
-    topological_sort,
-    topological_sort_python,
-    find_useful_nodes,
+import evoxc
+import evoxc.numpy as enp  # noqa: F401 - tensor creation for the implementation wave
+import numpy as np  # noqa: F401 - host-only graph utilities
+import sympy as sp  # noqa: F401 - host-only code generation
+
+from ..common import (
     I_INF,
-    attach_with_inf,
-    ACT,
-    AGG,
+    State,
+    TensorNEATError,
+    find_useful_nodes,
+    topological_sort_python,
 )
+from ..common.functions import ACT, AGG
+from ..common.tensorization import Transformed
+from .base import BaseGenome
+from .gene import BaseConn, BaseNode, DefaultConn, DefaultNode
+from .operations import (
+    BaseCrossover,
+    BaseDistance,
+    BaseMutation,
+    DefaultCrossover,
+    DefaultDistance,
+    DefaultMutation,
+)
+from .utils import GenomeTensors
 
 
 class DefaultGenome(BaseGenome):
-    """Default genome class, with the same behavior as the NEAT-Python"""
+    """Feedforward NEAT genome, behaviourally equivalent to NEAT-python.
+
+    ``network_type = "feedforward"``: the schedule carries ``node_level`` (longest-path depth,
+    inputs at level 0) and the forward pass evaluates one level per Python-unrolled step, so a
+    node is computed only after all of its real sources already have a value.
+    """
 
     network_type = "feedforward"
 
@@ -30,376 +52,234 @@ class DefaultGenome(BaseGenome):
         self,
         num_inputs: int,
         num_outputs: int,
-        max_nodes=50,
-        max_conns=100,
-        node_gene=DefaultNode(),
-        conn_gene=DefaultConn(),
-        mutation=DefaultMutation(),
-        crossover=DefaultCrossover(),
-        distance=DefaultDistance(),
-        output_transform=None,
-        input_transform=None,
-        init_hidden_layers=(),
+        max_nodes: int = 50,
+        max_conns: int = 100,
+        node_gene: BaseNode | None = None,
+        conn_gene: BaseConn | None = None,
+        mutation: BaseMutation | None = None,
+        crossover: BaseCrossover | None = None,
+        distance: BaseDistance | None = None,
+        output_transform: Callable | None = None,
+        input_transform: Callable | None = None,
+        init_hidden_layers: Sequence[int] = (),
+        max_in_degree: int | None = None,
+        max_depth: int = 16,
     ):
+        """Configure a feedforward genome with NEAT-python default genes and operators.
 
-        super().__init__(
-            num_inputs,
-            num_outputs,
-            max_nodes,
-            max_conns,
-            node_gene,
-            conn_gene,
-            mutation,
-            crossover,
-            distance,
-            output_transform,
-            input_transform,
-            init_hidden_layers,
+        Gene/operator arguments default to ``None`` and are then built **per instance**
+        (``DefaultNode()``, ``DefaultConn()``, ``DefaultMutation()``, ``DefaultCrossover()``,
+        ``DefaultDistance()``), never shared through a mutable default argument: a genome owns
+        its gene objects, and two genomes that shared one would silently mutate each other's
+        attribute tables.
+
+        See :class:`.base.BaseGenome` for the dense initial network
+        (``num_inputs -> init_hidden_layers -> num_outputs``), the row/key invariant and the
+        transform probes.
+
+        Args:
+            num_inputs: Input node count, also the network input width.
+            num_outputs: Output node count, also the network output width.
+            max_nodes: Static node capacity ``N``.
+            max_conns: Static connection capacity ``E``.
+            node_gene: Node gene; ``None`` builds a fresh ``DefaultNode()``.
+            conn_gene: Connection gene; ``None`` builds a fresh ``DefaultConn()``.
+            mutation: Mutation operator; ``None`` builds a fresh ``DefaultMutation()``.
+            crossover: Crossover operator; ``None`` builds a fresh ``DefaultCrossover()``.
+            distance: Distance operator; ``None`` builds a fresh ``DefaultDistance()``.
+            output_transform: Optional elementwise map of the ``(P, num_outputs)`` read-out.
+            input_transform: Optional elementwise map of ``inputs`` before it is written into
+                the input rows.
+            init_hidden_layers: Width of each dense hidden layer; empty means one dense
+                input-to-output layer.
+            max_in_degree: Static window width ``K``; ``None`` resolves to
+                ``max(initial in-degree, 4)``.
+            max_depth: Static depth unroll count ``D``; deeper networks leave their unreachable
+                tail NaN (and raise ``Transformed.overflow``).
+
+        Raises:
+            NotImplementedError: Skeleton stub; the per-instance default construction and the
+                ``super().__init__`` call land in the implementation wave.
+            TensorNEATError: (implementation wave) if ``max_nodes``/``max_conns`` cannot hold
+                the initial network or ``init_hidden_layers`` exceeds ``max_in_degree``.
+        """
+        raise NotImplementedError(
+            "build DefaultNode/DefaultConn/DefaultMutation/DefaultCrossover/DefaultDistance "
+            "per instance where the argument is None, then call super().__init__"
         )
 
-    def transform(self, state, nodes, conns):
-        u_conns = unflatten_conns(nodes, conns)
-        conn_exist = u_conns != I_INF
+    def forward(
+        self,
+        state: State,
+        transformed: Transformed,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+        inputs: evoxc.SymbolicTensor,
+    ) -> evoxc.SymbolicTensor:
+        """Evaluate the population level by level, in one unrolled graph.
 
-        seqs = topological_sort(nodes, conn_exist)
+        The exact algebra, with ``P`` the population, ``N`` ``max_nodes`` and ``D``
+        ``max_depth``:
 
-        return seqs, nodes, conns, u_conns
+        1. ``values = full((P, N), NaN)``, then ``values = select(input_row, input_transform(
+           inputs), values)`` — only the input rows (``0..num_inputs-1``) hold a number.
+        2. ``hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs)`` **once**: edge
+           attributes are constant during a forward pass, so the per-slot gather is hoisted out
+           of the loop.
+        3. ``for level in range(1, self.max_depth + 1)`` (a Python loop, hence unrolled at trace
+           time): ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs,
+           values, update_mask=(transformed.node_level == level) & transformed.node_exists &
+           (valid_count > 0))``, with ``valid_count = reduce_sum(transformed.in_valid,
+           axis=-1)`` the static "this row has at least one incoming connection" gate (a
+           per-row live-slot count, not ``.utils.valid_count``, which counts existing rows).
+           The dynamic "at least one *live* slot" term is ANDed in inside ``_node_step``, so a
+           node whose sources are all NaN keeps NaN and its descendants lose their only live
+           source: the legacy NaN poisoning, reproduced exactly.
+        4. ``return self._output_values(values, self.output_transform)`` — rows
+           ``max_nodes-num_outputs..max_nodes-1``, then ``output_transform``.
 
-    def forward(self, state, transformed, inputs):
+        Cost is ``O(D x N x K)`` elementwise work: proportional to depth and real in-degree,
+        never ``max_nodes**2`` per node.
 
-        if self.input_transform is not None:
-            inputs = self.input_transform(inputs)
+        Args:
+            state: Host configuration container.
+            transformed: Execution schedule of the same population (``node_level``,
+                ``node_exists (P, N)``, ``in_valid``/``in_src``/``in_conn (P, N, K)``).
+            node_keys: ``(P, N) int32`` node keys, ``I_INF`` padded.
+            node_attrs: ``(P, N, NA) float32`` node attributes, NaN padded.
+            conn_keys: ``(P, E, CK) int32`` connection keys, ``I_INF`` padded.
+            conn_attrs: ``(P, E, CA) float32`` connection attributes, NaN padded.
+            inputs: ``(P, num_inputs) float32`` network inputs.
 
-        cal_seqs, nodes, conns, u_conns = transformed
+        Returns:
+            ``(P, num_outputs) float32`` outputs after ``output_transform``.
 
-        ini_vals = jnp.full((self.max_nodes,), jnp.nan)
-        ini_vals = ini_vals.at[self.input_idx].set(inputs)
-        nodes_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(self.node_gene, nodes)
-        conns_attrs = vmap(extract_gene_attrs, in_axes=(None, 0))(self.conn_gene, conns)
-
-        def body_func(idx, values):
-            i = cal_seqs[idx]
-
-            def valid_node():
-                def input_node():
-                    return values
-
-                def otherwise():
-                    conn_indices = u_conns[:, i]
-                    conn_exists = conn_indices != I_INF
-                    src_valid = ~jnp.isnan(values)
-                    valid_mask = conn_exists & src_valid
-
-                    hit_attrs = attach_with_inf(
-                        conns_attrs, conn_indices
-                    )
-                    ins = vmap(self.conn_gene.forward, in_axes=(None, 0, 0))(
-                        state, hit_attrs, values
-                    )
-
-                    z = self.node_gene.forward(
-                        state,
-                        nodes_attrs[i],
-                        ins,
-                        is_output_node=jnp.isin(
-                            nodes[i, 0], self.output_idx
-                        ),
-                        valid_mask=valid_mask,
-                    )
-
-                    has_valid = jnp.any(valid_mask)
-                    new_values = jax.lax.cond(
-                        has_valid,
-                        lambda: values.at[i].set(z),
-                        lambda: values,
-                    )
-                    return new_values
-
-                return jax.lax.cond(jnp.isin(i, self.input_idx), input_node, otherwise)
-
-            def invalid_node():
-                return values
-
-            return jax.lax.cond(i != I_INF, valid_node, invalid_node)
-
-        vals = jax.lax.fori_loop(0, self.max_nodes, body_func, ini_vals)
-
-        if self.output_transform is None:
-            return vals[self.output_idx]
-        else:
-            return self.output_transform(vals[self.output_idx])
-
-    def network_dict(self, state, nodes, conns):
-        network = super().network_dict(state, nodes, conns)
-        topo_order, topo_layers = topological_sort_python(
-            set(network["nodes"]), set(network["conns"])
+        Raises:
+            NotImplementedError: Skeleton stub; the unrolled loop is pending.
+        """
+        raise NotImplementedError(
+            "NaN-seed values, write input_transform(inputs) into the input rows, gather "
+            "hit_conn_attrs once, unroll _node_step over levels 1..max_depth with the level "
+            "mask, then read out the output rows and apply output_transform"
         )
-        network["topo_order"] = topo_order
-        network["topo_layers"] = topo_layers
-        network["useful_nodes"] = find_useful_nodes(
-            set(network["nodes"]), 
-            set(network["conns"]), 
-            set(self.output_idx)
+
+    def network_dict(
+        self, state: State, genome: GenomeTensors, whether_re_cound_idx: bool = True
+    ) -> dict[str, Any]:
+        """Convert one individual to host dicts plus feedforward graph utilities.
+
+        Extends :meth:`.base.BaseGenome.network_dict` with three host-only entries computed on
+        the renumbered key sets — ``topological_sort_python`` and ``find_useful_nodes`` run in
+        Python and never enter a graph.
+
+        Args:
+            state: Host configuration container.
+            genome: Payload of one individual.
+            whether_re_cound_idx: Renumber hidden keys to be contiguous above
+                ``max(input/output keys)`` before converting.
+
+        Returns:
+            ``{"nodes", "conns", "topo_order", "topo_layers", "useful_nodes"}``: the key dicts
+            of the base method plus the topological order, the layer grouping and the set of
+            nodes that actually reach an output (nodes outside it may be NaN and are skipped by
+            code generation).
+
+        Raises:
+            NotImplementedError: Skeleton stub.
+        """
+        raise NotImplementedError(
+            "super().network_dict(...) plus topological_sort_python(nodes, conns) -> "
+            "topo_order/topo_layers and find_useful_nodes(..., output_idx) -> useful_nodes"
         )
-        return network
 
     def sympy_func(
         self,
-        state,
-        network,
-        sympy_input_transform=None,
-        sympy_output_transform=None,
-        backend="jax",
-    ):
+        state: State,
+        network: dict,
+        sympy_input_transform: Any = None,
+        sympy_output_transform: Any = None,
+        backend: str = "numpy",
+    ) -> tuple:
+        """Build sympy expressions of a network and a NumPy evaluator (host-only).
 
-        assert backend in ["jax", "numpy"], "backend should be 'jax' or 'numpy'"
+        The legacy 8-tuple contract with ``..common.sympy_tools``: symbols are named by role
+        (``i<k>`` raw input, ``norm<k>`` transformed input, ``h<k>`` hidden, ``o<k>`` output),
+        nodes are emitted in ``topo_order`` and every node expression is substituted into its
+        successors, so ``output_exprs`` are closed forms.  ``backend`` is ``"numpy"`` only in
+        this rewrite (there is no JAX); ``AGG``/``ACT`` contribute their sympy modules to the
+        ``lambdify`` call.  A missing ``sympy_*_transform`` while the genome has the
+        corresponding transform emits a warning, as before.
 
-        if sympy_input_transform is None and self.input_transform is not None:
-            warnings.warn(
-                "genome.input_transform is not None but sympy_input_transform is None!"
-            )
+        Args:
+            state: Host configuration container.
+            network: Output of :meth:`network_dict` (needs ``topo_order``/``useful_nodes``).
+            sympy_input_transform: Sympy counterpart of ``input_transform``; a list with one
+                entry per input, or a single callable applied to each.
+            sympy_output_transform: Sympy counterpart of ``output_transform``.
+            backend: Codegen backend, ``"numpy"`` only.
 
-        if sympy_input_transform is None:
-            sympy_input_transform = lambda x: x
+        Returns:
+            ``(symbols, args_symbols, input_symbols, nodes_exprs, output_exprs, forward_func,
+            topo_order, useful_nodes)`` — ``forward_func`` maps a sequence of inputs to a NumPy
+            array of outputs with the gene values already substituted.
 
-        if sympy_input_transform is not None:
-            if not isinstance(sympy_input_transform, list):
-                sympy_input_transform = [sympy_input_transform] * self.num_inputs
-
-        if sympy_output_transform is None and self.output_transform is not None:
-            warnings.warn(
-                "genome.output_transform is not None but sympy_output_transform is None!"
-            )
-
-        input_idx = self.get_input_idx()
-        output_idx = self.get_output_idx()
-        order = network["topo_order"]
-
-        hidden_idx = [
-            i for i in network["nodes"] if i not in input_idx and i not in output_idx
-        ]
-        symbols = {}
-        for i in network["nodes"]:
-            if i in input_idx:
-                symbols[-i - 1] = sp.Symbol(f"i{i - min(input_idx)}")  # origin_i
-                symbols[i] = sp.Symbol(f"norm{i - min(input_idx)}")
-            elif i in output_idx:
-                symbols[i] = sp.Symbol(f"o{i - min(output_idx)}")
-            else:  # hidden
-                symbols[i] = sp.Symbol(f"h{i - min(hidden_idx)}")
-
-        nodes_exprs = {}
-        args_symbols = {}
-        for i in order:
-
-            if i in input_idx:
-                nodes_exprs[symbols[-i - 1]] = symbols[
-                    -i - 1
-                ]  # origin equal to its symbol
-                nodes_exprs[symbols[i]] = sympy_input_transform[i - min(input_idx)](
-                    symbols[-i - 1]
-                )  # normed i
-
-            else:
-                in_conns = [c for c in network["conns"] if c[1] == i]
-                node_inputs = []
-                for conn in in_conns:
-                    val_represent = symbols[conn[0]]
-                    # a_s -> args_symbols
-                    val, a_s = self.conn_gene.sympy_func(
-                        state,
-                        network["conns"][conn],
-                        val_represent,
-                    )
-                    args_symbols.update(a_s)
-                    node_inputs.append(val)
-                nodes_exprs[symbols[i]], a_s = self.node_gene.sympy_func(
-                    state,
-                    network["nodes"][i],
-                    node_inputs,
-                    is_output_node=(i in output_idx),
-                )
-                args_symbols.update(a_s)
-
-                if i in output_idx and sympy_output_transform is not None:
-                    nodes_exprs[symbols[i]] = sympy_output_transform(
-                        nodes_exprs[symbols[i]]
-                    )
-
-        input_symbols = [symbols[-i - 1] for i in input_idx]
-        reduced_exprs = nodes_exprs.copy()
-        for i in order:
-            reduced_exprs[symbols[i]] = reduced_exprs[symbols[i]].subs(reduced_exprs)
-
-        output_exprs = [reduced_exprs[symbols[i]] for i in output_idx]
-
-        lambdify_output_funcs = [
-            sp.lambdify(
-                input_symbols + list(args_symbols.keys()),
-                exprs,
-                modules=[backend, AGG.sympy_module(backend), ACT.sympy_module(backend)],
-            )
-            for exprs in output_exprs
-        ]
-
-        fixed_args_output_funcs = []
-        for i in range(len(output_idx)):
-
-            def f(inputs, i=i):
-                return lambdify_output_funcs[i](*inputs, *args_symbols.values())
-
-            fixed_args_output_funcs.append(f)
-
-        forward_func = lambda inputs: jnp.array(
-            [f(inputs) for f in fixed_args_output_funcs]
-        )
-
-        return (
-            symbols,
-            args_symbols,
-            input_symbols,
-            nodes_exprs,
-            output_exprs,
-            forward_func,
-            network["topo_order"],
-            network["useful_nodes"]
+        Raises:
+            NotImplementedError: Skeleton stub; the expression walk is pending.
+            AssertionError: (implementation wave) if ``backend`` is not ``"numpy"``.
+        """
+        raise NotImplementedError(
+            "walk topo_order, build per-node sympy expressions from gene sympy_func, substitute "
+            "into successors, lambdify with the numpy backend -> the 8-tuple"
         )
 
     def visualize(
         self,
-        network,
-        rotate=0,
-        reverse_node_order=False,
-        size=(300, 300, 300),
-        color=("yellow", "white", "blue"),
-        with_labels=False,
-        edgecolors="k",
-        arrowstyle="->",
-        arrowsize=3,
-        edge_color=(0.3, 0.3, 0.3),
-        save_path="network.svg",
-        save_dpi=800,
-        **kwargs,
-    ):
-        import networkx as nx
-        from matplotlib import pyplot as plt
+        network: dict,
+        rotate: float = 0,
+        reverse_node_order: bool = False,
+        size: tuple = (300, 300, 300),
+        color: tuple = ("yellow", "white", "blue"),
+        with_labels: bool = False,
+        edgecolors: str = "k",
+        arrowstyle: str = "->",
+        arrowsize: int = 3,
+        edge_color: tuple = (0.3, 0.3, 0.3),
+        save_path: str = "network.svg",
+        save_dpi: int = 800,
+        **kwargs: Any,
+    ) -> None:
+        """Draw a network as a layered directed graph (host-only).
 
-        conns_list = list(network["conns"])
-        input_idx = self.get_input_idx()
-        output_idx = self.get_output_idx()
+        ``networkx`` and ``matplotlib`` are imported **inside** the body, so
+        ``import tensorneat`` never pulls them in.  Nodes are placed with the multipartite
+        layout of ``topo_layers``, reordered per layer to reduce edge crossings, then rotated by
+        ``rotate`` degrees; input nodes use ``size[0]``/``color[0]``, hidden nodes the middle
+        entry and output nodes the last.
 
-        topo_order, topo_layers = network["topo_order"], network["topo_layers"]
-        node2layer = {
-            node: layer for layer, nodes in enumerate(topo_layers) for node in nodes
-        }
+        Args:
+            network: Output of :meth:`network_dict` (needs ``topo_order``/``topo_layers``).
+            rotate: Rotation of the layout in degrees.
+            reverse_node_order: Reverse the node order within every layer.
+            size: Node sizes ``(input, hidden, output)`` in drawing units.
+            color: Node colours ``(input, hidden, output)``.
+            with_labels: Draw the node keys.
+            edgecolors: Marker edge colour.
+            arrowstyle: Matplotlib arrow style of the edges.
+            arrowsize: Arrow size in drawing units.
+            edge_color: Edge colour.
+            save_path: Output path of the figure.
+            save_dpi: Resolution of the saved figure.
+            **kwargs: Extra keyword arguments forwarded to ``networkx.draw``.
 
-        # reorder nodes in each layer to make them more compact
-        subset_key = {}
-        for layer, nodes in enumerate(topo_layers):
-            if layer == 0 or len(nodes) == 1:
-                subset_key[layer] = nodes
-                continue
-            nodes_y = []
-            for node in nodes:
-                node_y = 0
-                for y, last_node in enumerate(topo_layers[layer-1]):
-                    if (last_node, node) in conns_list:
-                        node_y += y
-                nodes_y.append(node_y)
-            nodes = [node for _, node in sorted(zip(nodes_y, nodes))]
-            subset_key[layer] = nodes
+        Returns:
+            ``None``; the figure is written to ``save_path`` and the matplotlib figure closed.
 
-        if reverse_node_order:
-            for layer, nodes in subset_key.items():
-                subset_key[layer] = nodes[::-1]
-
-        G = nx.DiGraph()
-
-        if not isinstance(size, tuple):
-            size = (size, size, size)
-        if not isinstance(color, tuple):
-            color = (color, color, color)
-
-        for node in topo_order:
-            if node in input_idx:
-                G.add_node(node, subset=node2layer[node], size=size[0], color=color[0])
-            elif node in output_idx:
-                G.add_node(node, subset=node2layer[node], size=size[2], color=color[2])
-            else:
-                G.add_node(node, subset=node2layer[node], size=size[1], color=color[1])
-
-        for conn in conns_list:
-            G.add_edge(conn[0], conn[1])
-        pos = nx.multipartite_layout(G, subset_key=subset_key)
-
-        # if layout == "spring":
-        #     pos = nx.spring_layout(G, pos = pos, fixed=input_idx + output_idx, weight=None)
-        # elif layout == "spectral":
-        #     pos = nx.spectral_layout(G, weight=None)
-
-        def rotate_layout(pos, angle):
-            angle_rad = np.deg2rad(angle)
-            cos_angle, sin_angle = np.cos(angle_rad), np.sin(angle_rad)
-            rotated_pos = {}
-            for node, (x, y) in pos.items():
-                rotated_pos[node] = (
-                    cos_angle * x - sin_angle * y,
-                    sin_angle * x + cos_angle * y,
-                )
-            return rotated_pos
-
-        rotated_pos = rotate_layout(pos, rotate)
-
-        node_sizes = [n["size"] for n in G.nodes.values()]
-        node_colors = [n["color"] for n in G.nodes.values()]
-
-        # for layer, nodes in enumerate(topo_layers):
-        #     if layer < 2 or len(nodes) == 0:
-        #         continue
-        #     arc_edges_posi, arc_edges_nega = [], []
-        #     for node in nodes:
-        #         for input_node in input_idx:
-        #             if (input_node, node) not in conns_list:
-        #                 continue
-        #             relative_pos = pos[input_node] - pos[node]
-        #             relative_pos = relative_pos[0] * relative_pos[1]
-        #             if relative_pos > 0:
-        #                 arc_edges_posi.append((input_node, node))
-        #             else:
-        #                 arc_edges_nega.append((input_node, node))
-        #     if len(arc_edges_posi) > 0:
-        #         nx.draw_networkx_edges(
-        #             G,
-        #             pos=rotated_pos,
-        #             edgelist=arc_edges_posi,
-        #             arrowstyle=arrowstyle,
-        #             arrowsize=arrowsize,
-        #             edge_color=edge_color,
-        #             connectionstyle="arc3,rad=0.5"
-        #         )
-        #         G.remove_edges_from(arc_edges_posi)
-        #     if len(arc_edges_nega) > 0:
-        #         nx.draw_networkx_edges(
-        #             G,
-        #             pos=rotated_pos,
-        #             edgelist=arc_edges_nega,
-        #             arrowstyle=arrowstyle,
-        #             arrowsize=arrowsize,
-        #             edge_color=edge_color,
-        #             connectionstyle="arc3,rad=-0.5"
-        #         )
-        #         G.remove_edges_from(arc_edges_nega)
-
-        nx.draw(
-            G,
-            pos=rotated_pos,
-            node_size=node_sizes,
-            node_color=node_colors,
-            with_labels=with_labels,
-            edgecolors=edgecolors,
-            arrowstyle=arrowstyle,
-            arrowsize=arrowsize,
-            edge_color=edge_color
+        Raises:
+            NotImplementedError: Skeleton stub; the drawing code is pending.
+        """
+        raise NotImplementedError(
+            "import networkx/matplotlib inside the body, build the DiGraph from "
+            "network['conns'], multipartite_layout over topo_layers, rotate, draw and savefig"
         )
-        plt.savefig(save_path, dpi=save_dpi)
-        plt.close()
