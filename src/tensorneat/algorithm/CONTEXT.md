@@ -99,8 +99,10 @@ Per-phase build: whole cycle 846–910 ms, evaluation 439–450 ms, `tell` 410�
 The algorithm layer alone therefore sits ~2.3× / 3.1× / 3.2× under the legacy budget, leaving the genome and problem their own share; these are **not** end-to-end numbers — the real `DefaultGenome` and the XOR/XOR3d contract are still pending (see `## Known Issues`).
 
 ## Known Issues
-`import tensorneat` is broken by the still-skeletal sibling nodes, not by this subtree: `genome/base.py` imports `build_schedule` (renamed `derive_schedule` in `common/tensorization.py`) and `genome/gene/node/bias.py` imports the removed `get_func_name`.
-`test/unit/algorithm/**` is a spec written ahead of the implementation — its bodies are hard-coded `pytest.skip`, so it currently verifies nothing even against a working tree; `test/parity/algorithm` and `test/integration` cannot run until `genome` and `problem` land.
+`test/unit/algorithm/**` is a spec written ahead of the implementation — its bodies are hard-coded `pytest.skip`, so it currently verifies nothing even against a working tree.
+`test/unit/algorithm/conftest.py` builds algorithm states with `pop_nodes`/`pop_conns`, but nothing in this subtree stores those names: the payload is the single `pop` entry (fallbacks `pop_node_keys`/`pop_node_attrs`/`pop_conn_keys`/`pop_conn_attrs` in `neat/_kernels.py`).
+`base.py`'s `ask` docstring still describes a `(pop_nodes, pop_conns)` pair while `NEAT.ask` returns the four-array `GenomeTensors`.
+`BaseAlgorithm` is a plain class (it does not extend `StatefulBaseClass`), so `NEAT` exposes no `show_config()` and no per-generation fitness history; `SpeciesController` is the only object in this subtree that inherits `show_config()`.
 `test/unit/algorithm/test_spawn.py` encodes `loc(p) = #{i : spawn[i] > 0 and E[i] <= p} - 1`; that count disagrees with `block_layout` for a live zero-spawn species in the middle of a table, so the oracle needs the "last qualifying block" form (cross-node item, `test/` is not writable from here).
 `next_species_key` must stay strictly greater than every live key (`setup` seeds it at `1.0`, slot 0 uses `0.0`); a colliding counter silently merges two species' `member_count`.
 `NEAT.setup` runs one `genome.initialize` graph on the host — it must be called outside any trace, and it advances `randkey` once, so the pipeline's per-generation key budget is unaffected.

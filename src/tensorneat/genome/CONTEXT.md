@@ -33,7 +33,8 @@ The shared window step is `_hit_conn_attrs` + `_node_step` + `_output_values`, a
 - `execute_crossover(state, key, genome1, genome2) -> GenomeTensors`
 - `execute_distance(state, genome1, genome2) -> (P,)` — pairwise, batched over pairs; the algorithm forms the pairs.
 - Host-only (NumPy in, Python out, never traced): `network_dict`, `sympy_func`, `visualize`, `repr`, `hash`, `get_input_idx`, `get_output_idx` — the non-`sympy_func`/`visualize` ones live in `host.py::BaseGenomeHost`, so each takes **one** individual: `_individual` raises `TensorNEATError` telling the caller to slice first, e.g. `GenomeTensors(*(a[i:i+1] for a in payload))` (there is no `payload.of(i)`).
-`GenomeTensors` is a namedtuple-like pytree of exactly the four payload arrays; every kernel takes and returns it by field, never by column offsets.
+`GenomeTensors` (`utils.py:38`) is a `typing.NamedTuple` of exactly `node_keys, node_attrs, conn_keys, conn_attrs`, flattened as a pytree by duck typing (evoxc treats any tuple with `_fields` as a node; nothing is registered here) with a `field_names` property; every kernel takes and returns it by field, never by column offsets.
+There is no `from_numpy`/`of` helper: `GenomeTensors(*four_arrays)` is plain NamedTuple construction that validates nothing, plain NumPy arrays only work with the host-only helpers (`to_numpy` passes ndarrays through), and the traced kernels need evoxc tensors.
 Structural mutation keys (`new_node_keys`, `new_conn_keys`) are **allocated by the caller** (globally unique across the population) and passed in as int32 tensors — they are not RNG draws.
 
 ## Execution schedule (`Transformed`, owned by `../common/tensorization.py`)
