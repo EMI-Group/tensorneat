@@ -18,7 +18,10 @@ Hidden node keys are arbitrary and may move rows; always compare keys (`node_key
 Padding sentinels never mix: `I_INF` (`int32` max) for "no index", float NaN for "no value" and for "unconnected node value".
 
 ## Genome API (batch-first, population on axis 0)
-`BaseGenome` holds host-side configuration (`num_inputs`, `num_outputs`, `max_nodes`, `max_conns`, `max_in_degree`, `max_depth`, transforms, `init_hidden_layers`) and the gene/operator objects; nothing on the compute path reads `State`.
+`BaseGenome` holds host-side configuration (`num_inputs`, `num_outputs`, `max_nodes`, `max_conns`, `max_in_degree`, `max_depth`, `key_span`, transforms, `init_hidden_layers`) and the gene/operator objects; nothing on the compute path reads `State`.
+`key_span` (`S`, default `max(max_nodes, num_inputs + num_outputs) + max_conns`) bounds every node key: keys must lie in `[0, S)`, a caller allocating larger keys must raise it, and `S` is part of the Pipeline's shape signature.
+`node_exists`, `conn_exists`, `max_node_key`, `max_conn_marker` are the thin in-graph helpers `algorithm/` calls; `execute_mutation`/`execute_crossover`/`execute_distance`/`transform` accept both the `GenomeTensors` payload and the positional four-array spelling.
+The shared window step is `_hit_conn_attrs` + `_node_step` + `_output_values`, and `_gather_slots` is the flat-index gather both use (one-dimensional indices, because evoxc's scatter VJP requires equal ranks).
 - `initialize(state, key, pop_size) -> GenomeTensors` — `key` is a rank-0 `evoxc.random` key and randomness is drawn once per tensor with the batched output shape, so individual `i` gets an independent stream from one call.
 - `transform(state, node_keys, conn_keys) -> Transformed` — schedule derivation, delegated to `../common/tensorization.py`; pure tensor ops, no host round-trip.
 - `forward(state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, inputs) -> (P, num_outputs)` — trace-time kernel.
@@ -63,7 +66,8 @@ No control-flow (region) op exists in the forward, so reverse-mode works; but th
 - `evoxc.grad` requires a **single scalar output**, so the loss is scalarized as `sum(loss_fn(outputs))`; per-individual gradients are unaffected because the population axis is independent.
 - Only float inputs are differentiable: `node_attrs` and `conn_attrs` are the differentiated arguments; keys and the schedule are non-differentiated int inputs (an int32 *differentiated* argument is a hard `TransformError`).
 - `sort`/`argsort` have no AD rule, so the schedule derivation must **not** be inside the differentiated graph — this is why `grad` takes an already-derived `transformed` and returns its own graph.
-Gradients are cleaned with `select(isnan(g), 0, g)` and by masking absent rows, so padding never carries NaN.
+Attribute gradients are masked at the graph input (`select(exists & ~isnan(a), a, 0)`), so padding rows gradient to exactly `0`.
+Known evoxc limitation (reported, not fixed here): its `gather` VJP scatters with *put* semantics, so gradients through a fan-out gather under-accumulate; `evoxc` needs `scatter_add` before `grad` is numerically exact on evolved topologies.
 
 ## Static invariants (performance knobs, never silent)
 - `max_in_degree` (`K`, default `max(initial in-degree, 4)`): enforced by `execute_mutation`, which refuses an added connection that would push a node past `K`; `initialize` rejects an `init_hidden_layers` layout that needs more.
