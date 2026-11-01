@@ -22,11 +22,17 @@ With ``chain_payload`` (7 edges, 8 nodes) and its one-extra-connection variant
   ``(1 * 1.0 + 0 * 0.4) / 8 = 0.125`` — so ``0.125`` is the exact answer, not a
   tolerance question;
 * all weights doubled (``weight=2``): the connection term is
-  ``(0 * 1.0 + 7 * 1.0 * 0.4) / 7 = 0.4``.
+  ``(0 * 1.0 + 7 * 1.0 * 0.4) / 7 = 0.4``;
+* all weights doubled *and* one node's ``bias`` raised by ``1``: the same ``0.4``
+  connection term plus a node term ``(0 * 1.0 + 1 * 1.0 * 0.4) / 8 = 0.05``, so
+  ``0.45``;
+* ``skip_payload`` (5 nodes, 4 edges) against the chain (8 nodes, 7 edges): the
+  node term is ``3 / 8`` (three chain-only nodes) and the connection term is
+  ``7 / 7`` (two homologous edges, seven detached), so ``1.375``.
 
-These three numbers pin the normalisation (``max`` of the two counts) and the
-weight of each term independently, which is why they are asserted exactly rather
-than through a loose tolerance.
+These numbers pin the normalisation (``max`` of the two counts) and the weight of
+each term independently, which is why they are asserted exactly rather than
+through a loose tolerance.
 
 Scope rules (``../CONTEXT.md``)
 ------------------------------
@@ -43,9 +49,31 @@ payloads are the ones ``test_forward`` proves lossless.
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 pytestmark = [pytest.mark.parity]
+
+pytest.importorskip("jax", reason="parity needs the `bench` extra (jax)")
+
+
+def _stack(payloads, individuals):
+    """Concatenate ``P == 1`` payloads along the population axis.
+
+    Args:
+        payloads: The ``support.payloads`` module, for the ``Payload`` constructor.
+        individuals: Payloads of identical static shape, one per parent pair.
+
+    Returns:
+        A ``Payload`` with ``P == len(individuals)`` whose row ``p`` is
+        ``individuals[p]`` — the layout both distance kernels pair individual-wise.
+    """
+    return payloads.Payload(
+        *(
+            np.concatenate([getattr(item, field) for item in individuals], axis=0)
+            for field in payloads.Payload.field_names
+        )
+    )
 
 
 def test_identical_genomes_yield_exactly_zero(payloads, genome_pair, new_distance, legacy_distance):
@@ -60,10 +88,19 @@ def test_identical_genomes_yield_exactly_zero(payloads, genome_pair, new_distanc
     second call returns the identical value, i.e. ``execute_distance`` draws no
     random numbers.
     """
-    pytest.skip(
-        "not implemented: identical genomes have distance exactly 0 "
-        "(owner: genome/operations/distance/default.DefaultDistance.__call__)"
-    )
+    pair = genome_pair()
+    left = payloads.chain_payload()
+    right = payloads.chain_payload()
+
+    new = new_distance(pair, left, right)
+    legacy = legacy_distance(pair, left.of(0), right.of(0))
+
+    assert new.shape == (1,)
+    assert new[0] == 0.0
+    assert legacy == 0.0
+
+    again = new_distance(pair, left, right)
+    assert again[0] == new[0]
 
 
 def test_one_extra_connection_matches_legacy(payloads, genome_pair, new_distance, legacy_distance):
@@ -80,10 +117,17 @@ def test_one_extra_connection_matches_legacy(payloads, genome_pair, new_distance
     the closed form at the same time, so neither a shared bug nor a drifted
     normalisation can pass.
     """
-    pytest.skip(
-        "not implemented: one extra connection gives distance 0.125 "
-        "(owner: genome/operations/distance/default.DefaultDistance.gene_distance)"
-    )
+    pair = genome_pair()
+    left = payloads.chain_payload()
+    # Rows 0..6 hold the chain's seven edges, so row 7 is the free row for the extra one.
+    right = payloads.set_conn(payloads.chain_payload(), 0, 7, 0, 3)
+    assert int(np.sum(~np.isnan(right.conn_attrs[0, :, 0]))) == 8
+
+    new = new_distance(pair, left, right)
+    legacy = legacy_distance(pair, left.of(0), right.of(0))
+
+    assert np.isclose(new[0], legacy, rtol=0, atol=1e-6)
+    assert np.isclose(new[0], 0.125, rtol=0, atol=1e-6)
 
 
 def test_attribute_only_difference_matches_legacy(payloads, genome_pair, new_distance, legacy_distance):
@@ -101,11 +145,27 @@ def test_attribute_only_difference_matches_legacy(payloads, genome_pair, new_dis
     included the same way (``bias`` of one hidden row shifted by ``1`` adds
     ``1.0 * 0.4 / 8``), so the node gene's own ``distance`` is covered too.
     """
-    pytest.skip(
-        "not implemented: attribute-only differences follow the weighted term "
-        "(owner: genome/operations/distance/default.DefaultDistance.gene_distance, "
-        "genome/gene/node/default.DefaultNode.distance)"
+    pair = genome_pair()
+    left = payloads.chain_payload(weight=1.0)
+    right = payloads.chain_payload(weight=2.0)
+
+    new = new_distance(pair, left, right)
+    legacy = legacy_distance(pair, left.of(0), right.of(0))
+
+    assert np.isclose(new[0], legacy, rtol=0, atol=1e-6)
+    assert np.isclose(new[0], 0.4, rtol=0, atol=1e-6)
+
+    # The node gene's own distance: the same doubled-weight network, with the bias of
+    # the hidden row 3 raised from 0 to 1.  Its |Δ| is 1, so the node term adds
+    # (0 * 1.0 + 1 * 1.0 * 0.4) / 8 = 0.05 on top of the 0.4 connection term.
+    shifted = payloads.set_node(
+        payloads.chain_payload(weight=2.0), 0, 3, 3, attrs=(1.0, 1.0, 0.0, 0.0)
     )
+    new_node = new_distance(pair, left, shifted)
+    legacy_node = legacy_distance(pair, left.of(0), shifted.of(0))
+
+    assert np.isclose(new_node[0], legacy_node, rtol=0, atol=1e-6)
+    assert np.isclose(new_node[0], 0.4 + 1.0 * 0.4 / 8, rtol=0, atol=1e-6)
 
 
 def test_batch_of_pairs_matches_pairwise_legacy(payloads, genome_pair, new_distance, legacy_distance):
@@ -122,10 +182,36 @@ def test_batch_of_pairs_matches_pairwise_legacy(payloads, genome_pair, new_dista
     operator that reduced across the population axis would return one repeated
     number and fail both halves.
     """
-    pytest.skip(
-        "not implemented: batched distance equals the per-pair distance "
-        "(owner: genome/operations/distance/default.DefaultDistance.__call__)"
+    pair = genome_pair()
+    chain = payloads.chain_payload()
+    left = _stack(
+        payloads,
+        [
+            chain,
+            chain,
+            payloads.chain_payload(weight=1.0),
+            payloads.skip_payload(),
+        ],
     )
+    right = _stack(
+        payloads,
+        [
+            payloads.chain_payload(),
+            payloads.set_conn(payloads.chain_payload(), 0, 7, 0, 3),
+            payloads.chain_payload(weight=2.0),
+            payloads.chain_payload(),
+        ],
+    )
+    assert left.pop_size == right.pop_size == 4
+
+    new = new_distance(pair, left, right)
+    assert new.shape == (4,)
+
+    for p in range(4):
+        legacy = legacy_distance(pair, left.of(p), right.of(p))
+        assert np.isclose(new[p], legacy, rtol=0, atol=1e-6), f"pair {p}"
+
+    assert len(set(np.asarray(new, dtype=float).tolist())) == 4
 
 
 def test_empty_pair_yields_zero_not_nan(payloads, genome_pair, new_distance, legacy_distance):
@@ -141,7 +227,16 @@ def test_empty_pair_yields_zero_not_nan(payloads, genome_pair, new_distance, leg
     ``not np.isnan(new)``: a divide-by-zero would give ``NaN`` here, and ``NaN``
     silently poisons the species assignment that consumes this number.
     """
-    pytest.skip(
-        "not implemented: an empty pair yields 0, not NaN "
-        "(owner: genome/operations/distance/default.DefaultDistance.gene_distance)"
-    )
+    pair = genome_pair()
+    empty = payloads.new_payload(pop_size=1)
+    assert empty.pop_size == 1
+    assert np.all(empty.node_keys == np.iinfo(np.int32).max)
+    assert np.all(empty.conn_keys == np.iinfo(np.int32).max)
+
+    new = new_distance(pair, empty, empty)
+    legacy = legacy_distance(pair, empty, empty)
+
+    assert new.shape == (1,)
+    assert not np.isnan(new[0])
+    assert new[0] == 0.0
+    assert legacy == 0.0
