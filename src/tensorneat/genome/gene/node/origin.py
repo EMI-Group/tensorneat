@@ -33,9 +33,10 @@ class OriginNode(DefaultNode):
     ) -> evoxc.SymbolicTensor:
         """Pick one parent's whole attribute vector for each gene pair.
 
-        A ``(*shape, 1)`` broadcast of one normal draw per gene row selects between
-        the two parents' attribute rows, so an offspring gene never mixes columns of
-        two different parents (NEAT-paper gene-level inheritance).
+        A ``(*shape, 1)`` draw per gene row is broadcast over the attribute axis, so an
+        offspring gene never mixes the columns of two different parents (NEAT-paper
+        gene-level inheritance); ``draw > 0`` selects the first parent, exactly the
+        strict comparison :meth:`...base.BaseGene.crossover` uses per column.
 
         Args:
             state: Host configuration container.
@@ -47,12 +48,14 @@ class OriginNode(DefaultNode):
         Returns:
             Child attribute rows, ``(*shape, attr_width)`` float32, each row copied
             verbatim from one parent.
-
-        Raises:
-            NotImplementedError: Skeleton stub; the per-row scalar draw and its
-                broadcast ``select`` land in the implementation wave.
         """
-        raise NotImplementedError(
-            "one scalar draw per gene row (broadcast over attr_width) selects the whole "
-            "attribute vector from attrs1 or attrs2"
+        if not self.attr_specs:
+            return attrs1
+        shape = tuple(attrs1.shape[:-1])
+        # One draw per gene row, broadcast over the attribute axis; a rank-0 row is
+        # drawn as shape ``(1,)`` because the numpy reference backend rejects a 0-d
+        # random output (see ``..base.BaseGene.new_random_attrs``).
+        draw = evoxc.random.normal(
+            key, (*shape, 1) if shape else (1,), 0.0, 1.0, dtype=evoxc.float32
         )
+        return evoxc.select(evoxc.greater(draw, 0.0), attrs1, attrs2)
