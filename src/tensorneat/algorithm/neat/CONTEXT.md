@@ -70,10 +70,12 @@ Carries are kept narrow and packed (`idx2species` and the running distance as tw
 No random draw happens inside a scan body — keys never travel through a carry.
 
 ## Gene Keys & Padding
-`new_node_keys = max_node_key(state, pop.node_keys) + 1 + arange(P)`; `new_conn_markers = max_conn_marker(state, pop.conn_keys) + 1 + arange(P * 3).reshape(P, 3)`, or zeros when `conn_gene.uses_historical_marker` is False.
+`max_node_key(state, node_keys)` and `max_conn_marker(state, conn_keys)` return one maximum **per individual** (`(P,) int32`, `0` for an individual with no real row), so `_new_gene_keys` builds a per-individual base: `new_node_keys = base + 1 + arange(P)` (`(P,) int32`, no reshape) and `new_conn_markers = reshape(base_marker, (P, 1)) + 1 + arange(P * 3).reshape(P, 3)` when `conn_gene.uses_historical_marker`, else zeros.
+Uniqueness is therefore guaranteed **within one individual's own keys** (keys are namespaced per individual; a key handed to one genome may coincide with a key held by another, which is legal because the mutation kernel only inspects an individual's own rows): each allocated key is strictly above that individual's own maximum, and the three markers of one individual are distinct from each other.
+Node keys and connection markers live in different key columns, so a numerical coincidence between an allocated node key and an allocated marker is meaningless.
 The width `3` is a genome-level convention: one mutation call may add at most three connections per genome.
-The `+1` is an int32 constant on purpose: mixing a float literal into the int32 chain would promote the keys to int64.
-Validity is never inferred from packaging: this subtree calls `node_exists`, `conn_exists`, `max_node_key` and `max_conn_marker` on the genome.
+The `+1` is an int32 constant tensor on purpose: an `evoxc` addition against a Python int promotes the whole chain to int64, and the gene key columns are int32.
+Validity is never inferred from packaging: this subtree calls `node_exists(node_keys)`, `conn_exists(conn_keys)`, `max_node_key` and `max_conn_marker` on the genome — the two validity helpers take only the key array and derive the padding sentinel themselves.
 Dead species slots are recognised by `isnan(species_keys)` alone; their centre rows hold stale integers because int32 cannot carry NaN, and no kernel reads a centre gated by that mask.
 
 ## Divergences from the Pre-Rewrite Baseline (deliberate fixes)
