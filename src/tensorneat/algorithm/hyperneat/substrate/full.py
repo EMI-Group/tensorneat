@@ -20,8 +20,6 @@ Within one block the source index varies slowest (see
 import numpy as np
 from numpy.typing import ArrayLike
 
-from tensorneat.common.errors import TensorNEATError
-
 from .base import (
     as_coor_array,
     cartesian_product,
@@ -85,7 +83,19 @@ class FullSubstrate(DefaultSubstrate):
             TensorNEATError: If any coordinate set is not 2-D, ``cd < 1``, the
                 sets disagree on ``cd``, or ``hidden_coors`` is empty.
         """
-        raise NotImplementedError
+        self.input_coors = as_coor_array(input_coors, "input_coors")
+        self.hidden_coors = as_coor_array(hidden_coors, "hidden_coors")
+        self.output_coors = as_coor_array(output_coors, "output_coors")
+        query_coors, nodes, conn_index = analysis_substrate(
+            self.input_coors, self.hidden_coors, self.output_coors
+        )
+        super().__init__(
+            int(self.input_coors.shape[0]),
+            int(self.output_coors.shape[0]),
+            query_coors,
+            nodes,
+            conn_index,
+        )
 
     @property
     def num_inputs(self) -> int:
@@ -94,7 +104,7 @@ class FullSubstrate(DefaultSubstrate):
         Returns:
             int: ``input_coors.shape[0]``.
         """
-        raise NotImplementedError
+        return int(self.input_coors.shape[0])
 
     @property
     def num_outputs(self) -> int:
@@ -103,7 +113,7 @@ class FullSubstrate(DefaultSubstrate):
         Returns:
             int: ``output_coors.shape[0]``.
         """
-        raise NotImplementedError
+        return int(self.output_coors.shape[0])
 
 
 def analysis_substrate(
@@ -140,4 +150,42 @@ def analysis_substrate(
             ``cd``, ``hidden_coors`` is empty, or ``input_coors`` /
             ``output_coors`` is empty.
     """
-    raise NotImplementedError
+    inputs = as_coor_array(input_coors, "input_coors")
+    hidden = as_coor_array(hidden_coors, "hidden_coors")
+    outputs = as_coor_array(output_coors, "output_coors")
+    check_same_coordinate_dim(
+        ("input_coors", inputs),
+        ("hidden_coors", hidden),
+        ("output_coors", outputs),
+    )
+
+    input_keys, output_keys, hidden_keys = node_key_blocks(
+        int(inputs.shape[0]), int(outputs.shape[0]), (int(hidden.shape[0]),)
+    )
+
+    input_hidden_coors, input_hidden_conns = cartesian_product(
+        input_keys, hidden_keys, inputs, hidden
+    )
+    hidden_hidden_coors, hidden_hidden_conns = cartesian_product(
+        hidden_keys, hidden_keys, hidden, hidden
+    )
+    hidden_output_coors, hidden_output_conns = cartesian_product(
+        hidden_keys, output_keys, hidden, outputs
+    )
+
+    query_coors = np.ascontiguousarray(
+        np.concatenate(
+            [input_hidden_coors, hidden_hidden_coors, hidden_output_coors], axis=0
+        ),
+        dtype=np.float32,
+    )
+    conn_index = np.ascontiguousarray(
+        np.concatenate(
+            [input_hidden_conns, hidden_hidden_conns, hidden_output_conns], axis=0
+        ),
+        dtype=np.int32,
+    )
+    nodes = np.ascontiguousarray(
+        np.concatenate([input_keys, output_keys, hidden_keys]), dtype=np.int32
+    )
+    return query_coors, nodes, conn_index
