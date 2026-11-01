@@ -116,13 +116,15 @@ With those five blockers monkeypatched out, both variants complete `setup()` and
 
 ## Test Strategy
 Tests live in the sibling `./../../../test` tree (read-only from here) and mirror this node.
+**No test file for this node exists today**: `test/unit/algorithm/` holds only `test_neat_tell.py`/`test_parent_selection.py`/`test_spawn.py`/`test_speciation.py`, all of whose bodies are hard-coded skips (`pytest test/unit/algorithm` → 71 skipped), `test/parity/algorithm/` does not exist, and `test/integration/` has no HyperNEAT case; the only reference is the import-name check in `test/release_gate_no_jax.py:82`.
+The intended coverage below is therefore a specification, not a description of existing files:
 `test/unit/algorithm/hyperneat/test_weights.py`: the weight map against hand-computed values at `0`, `±weight_threshold`, `±(weight_threshold + ε)` and `±large`, plus NaN-in → NaN-out.
 `test/unit/algorithm/hyperneat/test_node_gene.py`: masked aggregation with mixed `valid_mask` (absent edges contribute `0`), output nodes aggregated but not activated, and a `(P, N, K)` batch agreeing with a per-individual loop.
-`test/unit/algorithm/hyperneat/test_conn_gene.py`: `source * weight` column selection under a batched `attrs (..., K, CA)`.
+`test/unit/algorithm/hyperneat/test_conn_gene.py`: `source * weight` column selection from a `ConnOperands` bundle (the spelling the genome actually passes).
 `test/unit/algorithm/hyperneat/test_assembly.py`: `_assemble_substrate` shapes and column alignment against `substrate.conn_index`/`substrate.nodes`, `_expand_leaf` row order `p * Q + q`, and the `(P, Q) -> (P * Q)` reshape agreement with `_query_coors`.
 `test/unit/algorithm/hyperneat/test_validate.py`: every `TensorNEATError` condition, including the multi-output CPPN and a non-feedforward substrate for `HyperNEATFeedForward`.
 `test/parity/algorithm/hyperneat/`: decode parity against `benchmarks/legacy_jax` for the same CPPN population (identical weights, node keys and connection endpoints), allowing only the documented divergences; the tests require the `bench` extra.
-Integration: `examples/func_fit/xor_hyperneat.py` and `xor_hyperneat_feedforward.py` reach their fitness target with a fixed seed, deterministically, on the numpy backend.
+Integration: `examples/func_fit/xor_hyperneat.py` and `xor_hyperneat_feedforward.py` must reach their fitness target with a fixed seed, deterministically, on the numpy backend (neither can run yet — see Known Issues).
 
 ## Notes for Agents
 Every shape above is static: derive it from `self.neat`/`self.substrate`/`self.hyper_genome`, never from a traced tensor shape.
