@@ -1,55 +1,116 @@
-# tensorneat/common/functions — ACT/AGG registries used by node genes
+# tensorneat/common/functions — ACT/AGG option registries and their evoxc kernels
 
 ## Intent
-Single source of truth for the activation and aggregation functions that a NEAT node gene may select, holding a jnp implementation (traced forward) and a sympy counterpart (interpretability) for each name, plus the `lax.switch` dispatchers.
-Consumed by `../../genome/gene/node/{default,bias}.py` (`apply_activation`, `apply_aggregation`, `ACT.obtain_sympy`, `AGG.obtain_sympy`), `../../algorithm/hyperneat/*`, `../../genome/default.py` (`AGG/ACT.sympy_module(backend)` for `sp.lambdify`), and user configs (`ACT.tanh`, `AGG.sum`).
+Single source of truth for the activation and aggregation options a NEAT node gene may select: the evoxc-native kernels, the per-node dispatchers that replace `lax.switch`, the sympy counterparts used for interpretability, and the `FunctionManager` that pairs them in a fixed, parity-critical order.
+Everything in `act.py` / `agg.py` is graph code (runs only inside an `@evoxc.defn` trace); everything in `act_sympy.py` / `agg_sympy.py` / `manager.py` is host-only.
+Nothing here knows about genomes, populations or the Pipeline: a node gene hands in the option list it was configured with and a per-node id array, and gets back values.
 
-## API Surface
-### `__init__.py` (registry tables + dispatchers)
-Four plain dicts, in this key order: `act_name2jnp` = scaled_sigmoid, sigmoid, scaled_tanh, tanh, sin, relu, lelu, identity, inv, log, exp, abs (12 entries, each a `*_` function from `act_jnp`); `act_name2sympy` = the same 12 plus `clip` (13 entries); `agg_name2jnp` / `agg_name2sympy` = sum, product, max, min, maxabs, mean (6 each).
-`ACT = FunctionManager(act_name2jnp, act_name2sympy)`, `AGG = FunctionManager(agg_name2jnp, agg_name2sympy)`.
-`apply_activation(idx, z, act_funcs)` — casts `idx` to `jnp.int32`, then `jax.lax.cond(idx == -1, lambda: z, lambda: jax.lax.switch(idx, act_funcs, z))`; `idx == -1` is the identity sentinel produced by `BiasNode.new_identity_attrs`, otherwise `idx` indexes the static python list `act_funcs`.
-`apply_aggregation(idx, z, agg_funcs, mask)` — casts `idx` to int32, then `jax.lax.cond(jnp.all(~mask), lambda: 0.0, lambda: jax.lax.switch(idx, agg_funcs, z, mask))`, i.e. an empty input mask short-circuits to `0.0` and aggregation functions always receive `(z, mask)`.
-`get_func_name(func)` — `func.__name__` with one trailing `_` stripped (used by node `repr`/`to_dict` to recover the registry name).
+## Module map (no child directories)
+| File | Responsibility |
+|---|---|
+| `act.py` | 12 elementwise activation kernels, the constants they share with the sympy counterparts, `ACT_FUNCS` (canonical order), `apply_activation`. |
+| `agg.py` | 6 masked aggregations over the incoming-edge axis, `AGG_FUNCS` (canonical order), `apply_aggregation`. |
+| `act_sympy.py` | `sp.Function` counterparts of `ACT_FUNCS` plus `SympyClip`, `ACT_SYMPY_FUNCS`. |
+| `agg_sympy.py` | `sp.Function` counterparts of the aggregations, `AGG_SYMPY_FUNCS`. |
+| `manager.py` | `FunctionManager`: names/ids/lookups, pairing validation, `sympy_module`, `random_index`. |
+| `__init__.py` | Wiring only: builds `ACT` / `AGG` and re-exports exactly five names. |
 
-### `act_jnp.py` — scalar→scalar, pure jnp
-`SCALE = 3`; `scaled_sigmoid_`, `sigmoid_`, `scaled_tanh_`, `tanh_`, `sin_`, `relu_` (`jnp.maximum(z, 0)`), `lelu_` (leaky 0.005), `identity_`, `inv_` (clamps `|z| >= 1e-7` then `1/z`), `log_` (`jnp.maximum(z, 1e-7)` then `log`), `exp_`, `abs_`.
-Signature convention: `f(z)` only, no mask, no side data.
+## Registry contract
+A node gene stores an integer id = **position in the user's option list** (`activation_options` / `aggregation_options`), not a global registry index; `ACT_FUNCS` / `AGG_FUNCS` are the canonical order used when a genome passes the registry itself as its option list.
+An option's registry name is its kernel's `__name__`, so kernels must be named after the option they implement; `FunctionManager` derives `names`, `name2index`, `index2name` from the tuples.
+The order is part of the gene encoding: **append only** — reordering or deleting changes sampled ids and breaks checkpoint/parity.
+Ids are sampled on the host side with `evoxc.random` (`FunctionManager.random_index(key)` → rank-0 int32 in `[0, len)`); genome code mutates them within `[0, len)` only.
 
-### `agg_jnp.py` — `f(z, mask)` reducing over axis 0
-`sum_`, `product_`, `max_`, `min_` use `jnp.{sum,prod,max,min}(z, axis=0, where=mask, initial=<0/1/-inf/+inf>)`; `maxabs_` zeroes masked entries then returns `z[jnp.argmax(jnp.abs(z))]`; `mean_` = masked sum / `jnp.sum(mask, axis=0)`.
+### ACT — canonical order (12)
+| id | name | definition (`z` elementwise, float32) |
+|---|---|---|
+| 0 | `scaled_sigmoid` | `SCALE / (1 + exp(-z))`, `SCALE = 3.0` |
+| 1 | `sigmoid` | `1 / (1 + exp(-z))` |
+| 2 | `scaled_tanh` | `SCALE * tanh(z)` |
+| 3 | `tanh` | `tanh(z)` |
+| 4 | `sin` | `sin(z)` |
+| 5 | `relu` | `maximum(z, 0)` |
+| 6 | `lelu` | `select(z > 0, z, LELU_SLACK * z)`, `LELU_SLACK = 0.005` |
+| 7 | `identity` | `z` (also the `-1` sentinel target) |
+| 8 | `inv` | `1 / select(z > 0, maximum(z, INV_EPS), minimum(z, -INV_EPS))`, `INV_EPS = 1e-7` |
+| 9 | `log` | `log(maximum(z, LOG_EPS))`, `LOG_EPS = 1e-7` |
+| 10 | `exp` | `exp(z)`, unclipped (overflows to `inf` above ~88) |
+| 11 | `abs` | `abs(z)` |
+Activations are shape-polymorphic and elementwise: canonical call shape `(P, N)`, also valid for `(P, out_dim)` output transforms and HyperNEAT substrate nodes; `NaN` in → `NaN` out, no masking.
 
-### `act_sympy.py` — `sp.Function` subclasses with `eval(cls, z)`
-`SympySigmoid`, `SympyScaledSigmoid` (= `SympySigmoid(z)*3`), `SympyTanh`, `SympyScaledTanh`, `SympySin`, `SympyRelu` (`sp.Max(z, 0)`), `SympyLelu` (`sp.Piecewise`), `SympyIdentity`, `SympyInv`, `SympyLog`, `SympyExp` (wraps `SympyClip(z, -10, 10)`), `SympyAbs`.
-`SympyClip` has three args and defines `numerical_eval(val, min_val, max_val, backend=np)` plus `_sympystr`/`_latex` so `lambdify` can evaluate it.
+### AGG — canonical order (6)
+| id | name | reduce over the last axis of `z (P, N, K)` | neutral padding |
+|---|---|---|---|
+| 0 | `sum` | `reduce_sum` | `0.0` |
+| 1 | `product` | `reduce_prod` | `1.0` |
+| 2 | `max` | `reduce_max` | `-inf` |
+| 3 | `min` | `reduce_min` | `+inf` |
+| 4 | `maxabs` | signed value of largest `abs` (argmax + flat gather) | `0.0` |
+| 5 | `mean` | `reduce_sum / maximum(count, 1.0)` | `0.0` |
+Aggregations are rank-3 only (`(P, N, K)` → `(P, N)`); a consumer with a different incoming layout reshapes to `(..., K)` and passes an all-`True` mask, or reduces on its own.
 
-### `agg_sympy.py` — `sp.Function` over an iterable of exprs
-`SympySum` (`sp.Add(*z)`), `SympyProduct` (`sp.Mul(*z)`), `SympyMax`, `SympyMin`, `SympyMaxabs` (`sp.Max(*z, key=sp.Abs)`), `SympyMean` (`sp.Add(*z)/len(z)`).
+## Aggregation contract over the `K` axis
+`z` and `mask` are both `(P, N, K)`: axis 0 population, axis 1 node slot, axis 2 the static in-degree bound `K`; the reduce axis is always the last one and the result is `(P, N) float32`.
+`mask` is supplied by the genome (`level == l` ∧ edge matched ∧ source value not `NaN`); it — not `isnan(z)` — decides which slots count, so a genuinely `NaN` contribution still poisons its node exactly as in the pre-rewrite library.
+evoxc reductions have no `where=` / `initial=`, so each kernel first rewrites masked-out slots to its neutral element with `evoxc.select` and then reduces; there is no `inf` constant in evoxc, so `±inf` neutrals are built in-graph (`evoxc.numpy.full` with a float fill, or a scalar literal).
+`maxabs` is **signed** and legacy-exact: masked-out slots become `0.0`, `evoxc.argmax(abs)` picks the first maximum, and one `flat_gather` (`..tools.flat_gather`) returns `z[argmax]`; reducing `abs` alone would return a magnitude and flip the sign of every negative-dominant node.
+`mean` divides by `maximum(count, 1.0)` with `count = reduce_sum(cast(mask, float32), -1)`, so it is `0.0` — never `NaN` — for a node with no valid incoming edge; the pre-rewrite kernel divided by the raw count and relied on the dispatcher's guard.
+`has_valid`: a node whose mask column is entirely `False` gets exactly `0.0` from the dispatcher (the legacy `all(~mask) -> 0.0` short-circuit), never `-inf` / `+inf` / `NaN`; the genome still decides via its own `has_valid` select whether the node's value is written at all (an uncomputed node keeps `NaN`).
 
-### `manager.py` — `FunctionManager(name2jnp, name2sympy)`
-`__init__` stores both dicts and `setattr(self, name, func)` for every jnp entry, so registries are used as `ACT.tanh`, `AGG.sum`, `ACT.identity`.
-`get_all_funcs()` → list of the jnp callables in `name2jnp` order.
-`add_func(name, func)` → validates `callable`, rejects an existing name, appends to `name2jnp` and `setattr`s it (jnp half of a registration).
-`update_sympy(name, sympy_cls: sp.Function)` → fills the sympy half.
-`obtain_sympy(func)` → accepts a registry name (`str`) or a callable (matched with `f == func` over `name2jnp`) and returns the sympy class; raises `ValueError` for unknown names/functions.
-`_obtain_sympy_by_name(name)`.
-`sympy_module(backend)` → `assert backend in ["jax","numpy"]`, then a dict `{sympy_cls.__name__: partial(sympy_cls.numerical_eval, backend)}` for the classes that define `numerical_eval` (only `SympyClip` today); it is passed to `sp.lambdify(..., modules=[backend, AGG.sympy_module(backend), ACT.sympy_module(backend)])`.
+## Dispatch contract (no `lax.switch` in evoxc)
+`apply_activation(z, act_ids, act_fns=ACT_FUNCS)` — `z (...,) float32`, `act_ids (...,) float32` integral or `int32` broadcastable against `z`, `act_fns` = the node gene's static option tuple; returns `(...,) float32`.
+Activation dispatch is a `select` cascade starting from `z` (the identity / `-1` branch) and folding `select(ids == i, act_fns[i](z), acc)` for every `i`: **12 evaluations + 12 selects** for the canonical list, over the `(P, N)` level slice only.
+That cost is independent of `K` and of the population's actual id histogram, and it is subdominant to the `(P, N, K) × attrs` gathers the forward pass already performs; there is no static way to evaluate only the used options because the id is gene data, not a shape.
+`apply_aggregation(z, mask, agg_ids, agg_fns=AGG_FUNCS)` — `z (P, N, K) float32`, `mask (P, N, K) bool`, `agg_ids (P, N)` integral, `agg_fns` = the node gene's static option tuple; returns `(P, N) float32`.
+Aggregation dispatch is the same cascade (accumulator starts at `0.0`, then one `select` per option) over **6 masked reductions + 6 selects + 1 count reduction**, with `mean` reusing the zero-padded tensor of `sum`; it is the only place where the whole `(P, N, K)` tensor is traversed several times per level.
+There is no `-1` sentinel for aggregation (the pre-rewrite library had none); `-1` means identity for activation only.
+An id outside `[-1, len(options))` (activation) / `[0, len(options))` (aggregation) falls back to the cascade's initial value — `z` / `0.0`; the pre-rewrite `lax.switch` clamped such ids to the last option, an unreachable divergence for well-formed genomes (see Known Divergences).
+`act_fns` / `agg_fns` must be **trace-time static** Python sequences (they are host configuration), and every entry must be a kernel with the documented signature; ids are cast with `evoxc.cast(ids, evoxc.int32)`, so a `NaN` id (only possible on absent nodes, whose values are discarded) casts to an unspecified int32 and never faults.
 
-## Registering a new function
-1. Add `foo_(z)` (activation, single arg) or `foo_(z, mask)` (aggregation, axis-0 reduction with `where`/`initial`) in `act_jnp.py` / `agg_jnp.py`.
-2. Optionally add `class SympyFoo(sp.Function)` with a classmethod `eval` in `act_sympy.py` / `agg_sympy.py` (and `numerical_eval` if `lambdify` must evaluate it).
-3. At runtime: `ACT.add_func("foo", foo_)` (or `AGG.add_func`) and `ACT.update_sympy("foo", SympyFoo)` — see `examples/func_fit/custom_func_fit.py`; adding to the module-level dicts is not enough, since `__init__.py` snapshots them at import.
-4. Reference it in the node gene: `activation_options=[ACT.identity, ACT.foo]` / `aggregation_options=[...]`; the stored gene value is the **position in that user list**, not the registry index.
+## Shapes, dtypes, sentinels
+All kernels take and return `float32`; ids arrive as integral-valued `float32` gene columns and are cast to `int32` inside the dispatchers.
+`NaN` is the only float sentinel (absent node row, uncomputed node value, unmatched attribute slot); `I_INF = int32 max` is the only integer sentinel and never appears in this package — the mask plus `(P, N, K)` padding already encode absence on the aggregation axis.
+No bitcast exists in evoxc, which changes nothing here: activations and aggregations are numerics, not payload bit-twiddling.
 
-## Constraints & Conventions
-Everything in `act_jnp.py`/`agg_jnp.py` is traced: jnp only, no numpy, no python branching on traced values.
-`lax.switch` requires a static python list of branches with identical signatures; the option list is fixed at gene-construction time (`DefaultNode.__init__` normalises a bare callable to `[callable]` and stores `*_default` as `options.index(default)`), so per-individual dispatch happens only via the integer stored in the gene row.
-`apply_activation` / `apply_aggregation` do not bound-check `idx`; `lax.switch` clamps out-of-range indices, so a stale index silently selects the last option.
-Neither `act_jnp` nor `act_sympy` is imported lazily: both are `*`-imported eagerly by `__init__.py`, so `import tensorneat` pulls in `sympy` (a declared pyproject dependency); only `sympy_module()`'s `partial(..., numerical_eval)` bindings are created on demand.
-Registering a name that collides with a `FunctionManager` method or attribute (`add_func`, `sympy_module`, `name2jnp`, ...) silently shadows that method through `setattr` — avoid such names.
+## Sympy / interpretability contract (host-only)
+`ACT` / `AGG` pair every option with an `sp.Function` subclass in the same order; `FunctionManager.__init__` validates the pairing by class name (`SympyScaledSigmoid` → `scaled_sigmoid`) and raises `ValueError` on a mismatch, which is what makes the legacy `"inv" → SympyIdentity` bug impossible to reintroduce.
+Each sympy class is a constructor-time rewriter (`SympySigmoid(z)` returns `1/(1+exp(-z))`), so generated formulas are plain sympy expressions; `SympyClip` is the exception and defines `numerical_eval`, exposed through `sympy_module()` for `sp.lambdify`.
+`sp.lambdify(..., modules=["numpy", AGG.sympy_module(), ACT.sympy_module()])` is the sanctioned codegen path; `sympy_module(backend)` accepts `"numpy"` only and raises `ValueError` for anything else (the JAX backend disappeared with the rewrite).
+Shared numeric constants (`SCALE`, `LELU_SLACK`, `INV_EPS`, `LOG_EPS`, `EXP_CLIP`) live in `act.py` and are imported by `act_sympy.py`, so the two representations cannot drift.
 
-## Known Issues
-`act_name2sympy["inv"] = SympyIdentity`, so sympy/interpretability output for an `inv` activation renders as the identity instead of `1/z`, and the existing `SympyInv` class is dead code.
-`act_name2sympy` has a `clip` entry with no `act_name2jnp` counterpart, so `ACT.clip` does not exist, `ACT.get_all_funcs()` yields 12 activations while `ACT.name2sympy` has 13, and the two indices are not interchangeable.
-`agg_jnp.mean_` divides by the mask count with no guard, so it yields NaN for an all-False mask; correctness depends on `apply_aggregation`'s `jnp.all(~mask)` shortcut rather than on the function itself.
-`FunctionManager.obtain_sympy` matches callables by `==`, so a `functools.partial`/wrapped or lambdified variant of a registered function raises `ValueError("Func ... doesn't not registered.")`.
+## Design Decisions
+1. **`inv` pairs with `SympyInv`** (`1 / clamped(z)`), fixing the pre-rewrite `"inv" → SympyIdentity` bug: the numeric kernel was always `1/z`, so numeric parity is untouched and only interpretability output changes (formulas for `inv` nodes now match the executed kernel).
+2. **`clip` is not a registry option**: the pre-rewrite sympy table carried a 13th name with no numeric counterpart, which made `ACT`'s two tables disagree in length; `clip` stays internal to `SympyExp` (`SympyClip`) and the ACT option list is exactly the 12 names above, so sampled activation ids are unchanged.
+3. **Dispatch is a `select` cascade, not a branch**: evoxc has no `switch` and `cond` demands a 0-d predicate, so every option is evaluated and selected per node; the documented op counts above are the accepted price.
+4. **Aggregations are rank-3 and last-axis reducing**: one shape class, one reduce axis, testable against a numpy oracle; HyperNEAT's substrate shape adaptation belongs to that node.
+5. **`maxabs` stays signed** (argmax + `flat_gather`) rather than the cheaper `reduce_max(abs(z))`, because the pre-rewrite kernel returned the signed value and parity tests compare against it.
+6. **The manager is immutable** (no `add_func` / `update_sympy`): a gene id indexes the *user's* option list, so custom options need no global registration; a genome wanting sympy support for a custom option constructs its own `FunctionManager`.
+7. **`get_func_name` is gone**; names are registry data (`ACT.name_of(fn)`, `ACT.index2name[id]`), which is also what `to_dict` / `repr` need.
+8. **Registry validation raises `ValueError`, not `ConfigError`**: a mismatched table is a programmer error in this package, whereas `common.errors.ConfigError` is reserved for user configuration raised by the layer that owns the config.
+
+## Known Divergences from the pre-rewrite library
+`SympyExp` clips its argument to `[-EXP_CLIP, EXP_CLIP] = [-10, 10]` while `exp` does not — generated formulas over/under-estimate strongly positive/negative pre-activations (kept for formula stability, as before).
+Out-of-range activation/aggregation ids fall back to identity / `0.0` instead of clamping to the last option (`lax.switch` behaviour); mutation only samples valid ids, so this is reachable only through hand-written genes or a stale checkpoint replayed against a shortened option list.
+`mean` is `0.0` instead of `NaN` for an all-`False` mask; indistinguishable through the dispatcher, different only when the kernel is called standalone.
+`sympy_module` no longer accepts `"jax"`; `obtain_sympy` accepts an option id as well as a name or callable.
+The aggregation reduce axis moved from the legacy per-node axis 0 to the batch-first last axis of `(P, N, K)`; numerically identical, but HyperNEAT substrate code that used to call `AGG.sum(inputs)` directly must reshape to `(..., K)`.
+
+## Constraints
+- No `jax`, `torch`, `numpy.random` anywhere in this package; graph code uses `evoxc` ops only, host code may use `numpy` / `sympy`.
+- Nothing here imports `genome`, `algorithm`, `problem`, `pipeline`, `benchmarks` or `test`; the only intra-package dependency is `..tools.flat_gather` (used by `maxabs`).
+- Files ≤ ~1000 lines; each file here is a single responsibility (kernels+dispatcher per side, sympy per side, registry bookkeeping).
+- Do not reorder `ACT_FUNCS` / `AGG_FUNCS` or their sympy tuples; append only.
+- `sum`, `max`, `min`, `abs` shadow builtins inside `agg.py` / `act.py` — that is intentional (the registry names must equal the kernel names); never use the builtin of the same name in those modules.
+- Errors: broken tables raise `ValueError` at import time (fail fast); unknown option names/ids raise `ValueError` / `IndexError`; nothing is swallowed.
+
+## Consumers (the API sibling nodes may rely on)
+`from tensorneat.common import ACT, AGG, apply_activation, apply_aggregation` is the only public surface of this package (`__all__` is exactly those five names, `FunctionManager` included).
+Node genes: `apply_aggregation(z, mask, agg_ids, self.aggregation_options)` then `apply_activation(z, act_ids, self.activation_options)`; the option lists are plain tuples of kernels, normalised once in the gene constructor.
+Configs reference an option by name through attribute access (`AGG.sum`, `ACT.sigmoid`) and resolve ids through `ACT.name2index` / `ACT.get_evoxc_func`; `ACT.random_index(key)` samples an id in-graph from a stateless evoxc key.
+Interpretability: `ACT.obtain_sympy(name_or_id_or_func)` / `AGG.obtain_sympy(...)` return the sympy class for a `to_dict`-style name.
+The parent `common/__init__.py` must import exactly `ACT, AGG, apply_activation, apply_aggregation` (plus optionally `FunctionManager`) — the legacy `get_func_name` import no longer exists.
+
+## Test Hooks
+`test/unit/` must be able to test every kernel on the numpy backend with no optional dependency: each activation against a numpy reference on a `(P, N)` tensor, each aggregation against a numpy oracle (including an all-`False` mask column and a `maxabs` tie), and the dispatchers against a per-element Python loop over the option list.
+Host-side tests need no backend at all: registry order/names, pairing validation (feed a deliberately wrong sympy tuple and expect `ValueError`), `name_of` / `get_sympy_func` / `obtain_sympy`, and `sympy_module()` shape.
+`test/parity/` compares each kernel and the dispatchers against `benchmarks/legacy_jax/tensorneat_legacy/common/functions/` with the same inputs and option lists — the legacy `maxabs` sign, the `mean` guard and the `-1` identity sentinel are the three cases most likely to regress.
