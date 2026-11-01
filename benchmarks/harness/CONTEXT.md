@@ -9,6 +9,12 @@ This package is import-safe for both sides: nothing here imports `jax`, `tensorn
 - `adapters/old.py` — `tensorneat_legacy` + JAX; one-off cost is `jax.jit(pipeline.step).lower(state).compile()`.
 - `adapters/new.py` — `src/tensorneat` + evoxc; one-off cost is the first `Pipeline.step` call (the build), and it asserts no `jax`/`torch` module was pulled in.
 - `reporter.py` — aggregated records + run metadata -> `RESULTS.md` markdown (tables, verdict, fairness, reproduce block).
+## Report Document
+The CLI writes one JSON document to `--json` and hands the same dict to the reporter: `{schema, generated_at, meta, runs, aggregated, verdict}`.
+`meta` carries `env`, `cases`, `impls`, `backends`, `protocol` (generations/warmup/repeats/seed/threads/timeout), `command`, `case_matrix` (each case's `as_dict()`) and the paths.
+`reporter.render_report(doc) -> str` and `reporter.write_report(doc, path)` are the only consumers; the reporter is presentation only and reuses `protocol.comparisons` / `doc["verdict"]` instead of recomputing verdicts.
+`protocol.short_error(text)` is the single error summariser: it keeps the exception line of a traceback (not `Traceback (most recent call last):`) and is used by `aggregate`, `verdict`, the CLI progress line and the reporter.
+The worker redirects stdout/stderr for `prepare`, the warmup and the timed loop; the quality curve covers warmup + timed generations, so the new side's build generation (excluded by `generations_consumed_before_timing`) is the only index the two sides do not share.
 ## Adapter Contract
 ```python
 class Adapter:
