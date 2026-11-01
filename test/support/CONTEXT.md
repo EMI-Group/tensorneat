@@ -11,6 +11,8 @@ This is test code: it is imported (`from support.runner import run_defn ...`) an
 `run_defn(fn, *args, backend="numpy", **options)` → build + run, returns host numpy leaves (namedtuples keep their type, so a `Transformed` comes back readable).
 `run_graph(graph, *arrays, backend="numpy")` → `lower`→`compile`→`load`→`run` for an already traced `evoxc.Graph` (what `genome.grad` returns).
 `compile_graph(graph, backend="numpy")`, `to_numpy(tree)`, `spec_like(array)`, `tensor(array)`, `DEFAULT_BACKEND = "numpy"`.
+Arguments may be nested pytrees of arrays (a `Transformed` namedtuple, a dict of payloads): `_split_arg` recurses, so the spec tree always mirrors the runtime tree; the spec shape is read off the *wrapped* tensor because `evoxc.from_numpy` reports a 0-d array as shape `(1,)`.
+`lazy.py::require(module)` imports a module at call time and converts a design-skeleton `NotImplementedError` into a named `pytest.skip`, so a suite stays collectable while `src/` is unfinished; every suite's `conftest.py` resolves the package through it inside a module-scoped fixture.
 Rules the runner exists to encode: statics must be passed **again** at `run` (they are baked per call here), an `Executable` is not callable, and `evoxc.Tensor` has no `__array__`.
 A test that needs a *method* inside a graph closes over the host objects and passes only tensors/statics: `run_defn(lambda nk, ck: genome.transform(state, nk, ck), node_keys, conn_keys)` — never nest two `@evoxc.defn` functions.
 ### `payloads.py` (implemented)
