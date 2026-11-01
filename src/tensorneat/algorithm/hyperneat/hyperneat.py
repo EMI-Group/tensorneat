@@ -19,8 +19,7 @@ Why this module contains no ``vmap``
     ``scan``/``cond`` regions, so the query axis is *fused into the population axis* instead: the
     per-individual CPPN schedule is repeated along the query axis and flattened to ``(P * Q, ...)``,
     which is exactly the batching that ``vmap(self.neat.forward, in_axes=(None, None, 0))`` performed
-    in the pre-rewrite library.  Every kernel therefore keeps the plain batch-first contract of
-    ``Genome.forward``: ``inputs (P, *input_shape) -> outputs (P, *output_shape)``.
+    in the pre-rewrite library.
 
 Notation used throughout (all sizes are static ints known at construction)
     ``P`` = ``neat.pop_size``; ``Q`` = ``substrate.conns_cnt``; ``N`` = ``substrate.nodes_cnt``;
@@ -33,10 +32,6 @@ Notation used throughout (all sizes are static ints known at construction)
     ``conn_gene.attr_width`` (the split gene-column widths of the substrate payload).
 
 evoxc facts this module is designed against
-    * ``evoxc.constant`` takes a ``core.Tensor`` (``evoxc.constant(evoxc.from_numpy(arr))``) and warns
-      above ``EVOXC_LARGE_CONSTANT_BYTES`` (1 MiB default); the substrate tables are a few KiB.
-    * ``enp.broadcast_to`` exists and has a batching rule; ``evoxc.tile`` exists but has none, so
-      ``broadcast_to`` is the preferred way to repeat a static table.
     * ``evoxc.select`` is the mask primitive (``enp.where`` is the same op); branches are both
       evaluated, so masking never short-circuits.
     * There is no bitcast / reinterpret op anywhere in evoxc, so a gene row is split into ``int32``
@@ -47,6 +42,7 @@ evoxc facts this module is designed against
       with an explicit ``(slice(None),) * (rank - 1) + (index,)`` key (see :func:`_attr_column`).
 """
 
+import numbers
 from typing import Any, Callable, NamedTuple, Optional
 
 import numpy as np
@@ -79,8 +75,7 @@ def _attr_column(attrs: Any, index: int) -> Any:
 
     Note:
         ``attrs[..., index]`` is not available: evoxc's ``getitem`` is static indexing over
-        ``int``/``slice`` keys only and rejects ``Ellipsis``.  Spelling the leading axes out is
-        equivalent and is the reason this helper exists instead of a literal index expression.
+        ``int``/``slice`` keys only and rejects ``Ellipsis``.
     """
     key = (slice(None),) * (len(attrs.shape) - 1) + (index,)
     return attrs[key]
@@ -94,6 +89,14 @@ def _key_int(key_row: Any, column: int) -> int:
 def _attr_float(attr_row: Any, column: int) -> float:
     """Read one ``float32`` attribute column of a single gene row on the host (never in a trace)."""
     return float(np.asarray(to_numpy(attr_row)).reshape(-1)[column])
+
+
+def _require_real(name: str, value: Any) -> None:
+    """Raise ``TensorNEATError`` unless ``value`` is a real number (``bool`` is rejected)."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise TensorNEATError(
+            f"{name} must be a real number, got {value!r} ({type(value).__name__})"
+        )
 
 
 class SubstrateSchedule(NamedTuple):
@@ -114,8 +117,7 @@ class SubstrateSchedule(NamedTuple):
 
     Note:
         Every leaf keeps the population on axis 0, so ``problem.static_batch_size`` still recovers
-        ``P`` by walking the leaves; the substrate payload is dense (``max_nodes == nodes_cnt``,
-        ``max_conns == conns_cnt``) and carries no NaN padding row.
+        ``P`` by walking the leaves.
     """
 
     schedule: Any
@@ -238,9 +240,8 @@ class HyperNEAT(BaseAlgorithm):
             and the hyper genome's keys.
 
         Note:
-            The substrate is stateless by contract -- it holds no learned state and exposes no
-            ``setup`` -- so only ``neat.setup`` and ``hyper_genome.setup`` are chained here, and the
-            substrate's host arrays are read at trace time (see :meth:`_query_coors`).
+            The substrate is stateless by contract (no learned state, no ``setup``), so only
+            ``neat`` and ``hyper_genome`` are chained here; its host arrays are read at trace time.
         """
         if state is None:
             state = State()
@@ -293,15 +294,13 @@ class HyperNEAT(BaseAlgorithm):
             A :class:`SubstrateSchedule`: the substrate genome's batch-first ``Transformed`` schedule
             (individual on axis 0) plus the dense gene payload it executes.  The schedule's structure
             is defined by the genome, not by HyperNEAT: this module only appends the bias column in
-            :meth:`forward` and never inspects schedule fields, and every leaf keeps the population
-            on axis 0 so ``problem.static_batch_size`` still recovers ``P``.
+            :meth:`forward` and never inspects schedule fields.
 
         Note:
             ``neat.pop_batch_size`` does not chunk this pass: the CPPN query is a single
             whole-population forward over the static ``(P, Q, C)`` grid, so peak memory scales with
-            ``pop_size * conns_cnt`` (a few tens of thousands of floats in practice).  Shape changes
-            (``pop_size``, ``conns_cnt``, ``nodes_cnt``) are static inputs to the traced graph, so the
-            pipeline rebuilds the executable when they change.
+            ``pop_size * conns_cnt``; shape changes (``pop_size``, ``conns_cnt``, ``nodes_cnt``) are
+            static inputs to the traced graph, so the pipeline rebuilds the executable.
         """
         query_res = self._query_substrate(state, pop)
         weights = self._weights_from_query(query_res)
@@ -330,11 +329,10 @@ class HyperNEAT(BaseAlgorithm):
 
         Note:
             The substrate's **last** input coordinate is the bias, so the column of ones is appended
-            at the end: ``(B, I - 1) -> (B, I)``.  :attr:`num_inputs` is therefore
-            ``substrate.num_inputs - 1``, which is what ``Pipeline`` asserts against the problem's
-            ``input_shape[-1]``.  The ones column is sized from ``inputs.shape[0]``, never from the
-            static ``pop_size``, because the genome expands the payload's population axis to ``B``
-            internally -- rebuilding the column from ``pop_size`` would break the tiled case.
+            at the end: ``(B, I - 1) -> (B, I)``; :attr:`num_inputs` is therefore
+            ``substrate.num_inputs - 1``.  The ones column is sized from ``inputs.shape[0]``, never
+            from the static ``pop_size``, because the genome expands the payload's population axis to
+            ``B`` internally -- rebuilding the column from ``pop_size`` would break the tiled case.
         """
         batch = int(inputs.shape[0])
         ones = enp.ones((batch, 1), dtype=evoxc.float32)
@@ -395,14 +393,10 @@ class HyperNEAT(BaseAlgorithm):
 
     @property
     def pop_size(self) -> int:
-        """CPPN population size, i.e. ``neat.pop_size``.
+        """CPPN population size, i.e. ``neat.pop_size`` (read-only property, not an attribute).
 
         Returns:
             int: Length of axis 0 of every population tensor.
-
-        Note:
-            This is a read-only property (the base protocol declares it as one), not an instance
-            attribute: it stays in sync with ``neat`` by construction.
         """
         return self.neat.pop_size
 
@@ -411,11 +405,8 @@ class HyperNEAT(BaseAlgorithm):
 
         Raises:
             TensorNEATError: On any inconsistent arity, threshold, weight bound, activation horizon,
-                substrate table shape, node-key block order, or required ``connection_type``.
-
-        Note:
-            Called once from ``__init__``; it reads only static Python/Numpy values and therefore
-            never appears inside a trace.
+                substrate table shape, node-key block order, required ``connection_type``, or a
+                non-real ``weight_threshold`` / ``max_weight`` / ``activate_time``.
         """
         substrate = self.substrate
         neat = self.neat
@@ -433,11 +424,13 @@ class HyperNEAT(BaseAlgorithm):
                 "Query coors of Substrate should be equal to NEAT input size: "
                 f"query_coors has width {width}, neat.num_inputs is {neat.num_inputs}"
             )
+        _require_real("weight_threshold", self.weight_threshold)
         if not 0 <= self.weight_threshold < 1:
             raise TensorNEATError(
                 "weight_threshold must be in [0, 1) because the weight map divides by "
                 f"1 - weight_threshold, got {self.weight_threshold}"
             )
+        _require_real("max_weight", self.max_weight)
         if self.max_weight <= 0:
             raise TensorNEATError(f"max_weight must be > 0, got {self.max_weight}")
         if num_substrate_inputs < 2:
@@ -445,6 +438,7 @@ class HyperNEAT(BaseAlgorithm):
                 "substrate.num_inputs must be >= 2 (the last substrate input is the bias "
                 f"neuron fed with a constant 1), got {num_substrate_inputs}"
             )
+        _require_real("activate_time", getattr(self, "activate_time", 1))
         if getattr(self, "activate_time", 1) < 1:
             raise TensorNEATError(
                 f"activate_time must be >= 1, got {self.activate_time}"
@@ -495,11 +489,9 @@ class HyperNEAT(BaseAlgorithm):
             ``self._genome_cls(num_inputs=substrate.num_inputs, num_outputs=substrate.num_outputs,
             max_nodes=substrate.nodes_cnt, max_conns=substrate.conns_cnt,
             node_gene=HyperNEATNode(aggregation, activation), conn_gene=HyperNEATConn(),
-            output_transform=output_transform, **self._genome_extra_kwargs())``.
-
-        Note:
-            ``max_nodes`` / ``max_conns`` equal the substrate's counts, so the substrate arrays are
-            dense and pruning is expressed through zero weights rather than absent genes.
+            output_transform=output_transform, **self._genome_extra_kwargs())``, whose
+            ``max_nodes`` / ``max_conns`` equal the substrate's counts (dense arrays, pruning through
+            zero weights rather than absent genes).
         """
         return self._genome_cls(
             num_inputs=self.substrate.num_inputs,
@@ -517,11 +509,8 @@ class HyperNEAT(BaseAlgorithm):
 
         Returns:
             ``{"activate_time": self.activate_time}`` for the recurrent variant; ``{}`` for the
-            feedforward variant, whose genome has no recurrent horizon.
-
-        Note:
-            Subclass hook: it is the only place where the two HyperNEAT variants differ in genome
-            construction, so the decode path stays single-sourced.
+            feedforward variant, whose genome has no recurrent horizon.  This is the subclass hook
+            where the two variants differ in genome construction, so the decode stays single-sourced.
         """
         return {"activate_time": self.activate_time}
 
@@ -583,10 +572,8 @@ class HyperNEAT(BaseAlgorithm):
             The flat row order is ``p * Q + q`` (individual slowest), matching the ``(P, Q, C) ->
             (P * Q, C)`` reshape of the query grid, so the ``(P * Q,) -> (P, Q)`` reshape in
             :meth:`_query_substrate` is exact.  Leaves holding no per-individual data (a shared
-            ordering or key table) are left alone and broadcast inside the genome kernels.  This is
-            the evoxc-native replacement for the legacy
-            ``vmap(self.neat.forward, in_axes=(None, None, 0))``; the walk is a static Python
-            recursion over the pytree, legal at trace time because the structure is static.
+            ordering or key table) are left alone and broadcast inside the genome kernels; the walk is
+            a static Python recursion over the pytree, legal at trace time because it is static.
         """
         return evoxc.tree_map(lambda leaf: self._expand_leaf(leaf, n_query), transformed)
 
@@ -662,11 +649,10 @@ class HyperNEAT(BaseAlgorithm):
 
         Note:
             The map is ``sign(w) * max(|w| - weight_threshold, 0) * max_weight / (1 -
-            weight_threshold)``, i.e. the legacy three-``where`` chain (dead-zone to zero, then the
-            ``+/- weight_threshold`` continuity shift, then the scale) expressed as
+            weight_threshold)``, built from
             ``abs``/``greater``/``select``/``subtract``/``sign``/``multiply``.  The dead zone is
-            strict -- ``|w| <= weight_threshold`` lands on ``0``, a pruned edge -- which is exactly
-            the legacy ``-t < w < t`` test, including the ``|w| == t`` boundary.
+            strict -- ``|w| <= weight_threshold`` lands on ``0``, a pruned edge -- the legacy
+            ``-t < w < t`` test including its ``|w| == t`` boundary.
 
             NaN is *not* masked: ``sign(NaN)`` is NaN, so the final multiply carries it through even
             though the dead-zone ``select`` picks ``0`` for a NaN input.  A broken CPPN therefore
@@ -840,9 +826,8 @@ class HyperNEATNode(BaseNode):
             activation: Activation applied to every node that is not an output node.
 
         Note:
-            Both callables are configuration, not state: they are shared by every individual and
-            never appear in ``State``, and they are never mutated by the evolutionary operators (the
-            hyper genome is not evolved).
+            Both callables are configuration shared by every individual: they never enter ``State``
+            and are never mutated, because the hyper genome is not evolved.
         """
         self.aggregation = aggregation
         self.activation = activation
@@ -883,8 +868,6 @@ class HyperNEATNode(BaseNode):
             because every ``AGG`` member is ``(z, mask)``.  Output nodes are handled by one
             ``evoxc.select`` on the result (aggregation only, no activation), not by a per-node
             ``evoxc.cond``: the batch is heterogeneous and ``cond`` requires a scalar predicate.
-            Masking is explicit, so absent edges contribute ``0`` instead of relying on NaN
-            propagation.
         """
         masked = evoxc.select(valid_mask, messages, 0.0)
         aggregated = self.aggregation(masked, valid_mask)
@@ -943,12 +926,7 @@ class HyperNEATConn(BaseConn):
     )
 
     def __init__(self):
-        """Resolve the weight column by name, once, at construction.
-
-        Note:
-            The index is looked up in ``attr_specs`` instead of being hardcoded, so reordering
-            attribute columns cannot silently scale by the wrong one.
-        """
+        """Resolve ``self.weight_index`` from the ``attr_specs`` names (never from an offset)."""
         self.weight_index = [spec.name for spec in self.attr_specs].index("weight")
 
     def forward(self, state: State, attrs: Any, source_values: Any) -> Any:
