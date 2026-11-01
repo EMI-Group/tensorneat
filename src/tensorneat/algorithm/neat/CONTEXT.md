@@ -63,6 +63,14 @@ Speciation, scan 1 (centre reservation): per live slot `i`, `d_i = gather(D1, i)
 Speciation, scan 2 (member assignment): a live slot assigns every genome with `d < compatibility_threshold` and `(unassigned | d < current distance)`; a dead slot with anything still unassigned creates a species keyed `next_species_key` seeded by the first unassigned genome, then assigns the same way; an iteration with nothing to do writes nothing.
 Speciation post-pass: leftovers adopt the last species key, slots created this generation get `best_fitness = -inf` / `last_improved = generation`, and `member_count` is one masked compare-sum over `(S, P)`.
 
+## Speciation Distance Table (`distance_table`, `TABLE_ROWS`)
+Phase 1's distance rows are fully precomputable: iteration `slot` reads the centre row it inherited and only ever writes *its own* row, so no earlier iteration can change row `slot`.
+`_kernels.distance_table` therefore broadcasts every centre row against the whole population and issues **one** `distance_fn` call with `species_size · pop_size` pairs, reshaped to `(S, P)`; the scan body just takes `gather(D1, slot)`.
+Bit-identity holds because the compatibility kernel is strictly row-independent (elementwise per-pair ops plus per-row reductions over the gene axis, one sorted alignment per row), so a `(k·P)` batch returns exactly the floats `k` batches of `P` would.
+The hoist is gated on `species_size · pop_size ≤ TABLE_ROWS` (2000): the interpreter pays ~2.7 ms of dispatch per call but ~5 µs per tiled row, so one 2000-row table beats 20 broadcast calls by ~28 % at `P=100` while a 20 000-row table at `P=1000` costs ~10 % more than the per-slot calls, whose loop body reuses warm buffers.
+Above the gate the scan body keeps the original `distance_fn(state, centre_payload(...), population)` call, so that path is unchanged and bit-identical to the pre-hoist behaviour by construction.
+Phase 2 is not hoisted, and cannot be: a *created* species takes the first unassigned genome as its centre and immediately measures against it, so the row a dead slot needs is a function of the assignments made by every earlier iteration — computing it up front would need a `pop_size × pop_size` table, which is strictly more pairs than the `species_size · pop_size` it would save.
+
 ## Scan Patterns (why fixed-length scans are exact)
 `evoxc` de-sugars `scan` into `while` + `gather`/`scatter`, so a trip count must be static and the carry must keep identical dtypes and shapes: both speciation phases are `scan(f, carry, enp.arange(species_size))` with per-slot masks, never a data-dependent `while_loop`.
 The legacy early-exit conditions survive as masks, and because every write is mask-then-single-`scatter` the extra iterations are provably no-ops.
