@@ -108,6 +108,7 @@ Host-only (`sympy`, `numpy`, regex): `analysis_nodes_exprs`, `round_expr`, `repl
 - Errors: validation raises `errors.TensorNEATError` subclasses on the host, at configuration/build time, before a graph is traced; in-graph overflow is reported as data (`edge_overflow`), never silenced.
 
 ## Known Gaps / Open Decisions
+- The pre-rewrite helper names are gone and must not be re-introduced by consumers: `attach_with_inf` → `masked_flat_gather`; `hash_array` → `hash_rows` (host-only); `graph.topological_sort*`, `find_useful_nodes`, `check_cycles` have **no in-graph replacement** — execution order is `level`/`topo_key`, and host-side graph walks (visualisation, `network_dict`, sympy codegen) build their own adjacency from the payload with plain Python.
 - **No bitcast op in evoxc** (v1): gene payloads stay float32; `genome.hash()` is host-only bit-hashing; in-graph gene identity (crossover matching) must compare key columns with `equal` instead of hashing whole rows. Revisit if evoxc grows `bitcast`/`reinterpret`.
 - **`cumsum` is a StableHLO export deferral** in evoxc (works on the numpy interpreter only), which is why the schedule avoids it (see the `cc` trick in the derivation recipe). `argsort`/`sort`/`scatter`/`gather` have no such caveat.
 - No scatter-with-reduce ⇒ per-node aggregation uses the padded `(P, N, K)` table; `K` is a static bound, so in-degree growth forces a rebuild (reported via `edge_overflow`).
