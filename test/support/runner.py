@@ -75,18 +75,46 @@ def spec_like(value: Any) -> evoxc.TensorSpec:
     if isinstance(value, evoxc.Tensor):
         return evoxc.TensorSpec(tuple(value.shape), value.dtype)
     array = np.asarray(value)
-    try:
-        dtype = _DTYPES[array.dtype]
-    except KeyError:  # pragma: no cover - a wrong dtype is a test bug
+    if array.dtype not in _DTYPES:  # a wrong dtype is a test bug, not a backend error
         raise TypeError(
             f"no evoxc dtype for numpy dtype {array.dtype}; extend support.runner._DTYPES"
-        ) from None
-    return evoxc.TensorSpec(tuple(array.shape), dtype)
+        )
+    # Derive the spec from the *wrapped* tensor: ``evoxc.from_numpy`` reports a
+    # 0-d array as shape ``(1,)``, and the spec must agree with what ``run``
+    # receives or evoxc raises a rank mismatch.
+    wrapped = evoxc.from_numpy(np.ascontiguousarray(array))
+    return evoxc.TensorSpec(tuple(wrapped.shape), wrapped.dtype)
 
 
 def _is_data(value: Any) -> bool:
     """True for leaves that cross the graph boundary as tensors (vs. static values)."""
     return isinstance(value, (np.ndarray, evoxc.Tensor, np.generic))
+
+
+def _split_arg(value: Any) -> tuple[Any, Any]:
+    """Split one argument into ``(build arg, run arg)``, recursing into pytrees.
+
+    A pytree of arrays (a ``Transformed`` namedtuple, a tuple of payload
+    arrays) must be treated as data leaf by leaf: a container that holds at
+    least one array is traversed, so the spec tree mirrors the runtime tree
+    exactly — which is what ``evoxc.build``/``evoxc.run`` compare against.
+    """
+    if _is_data(value):
+        return spec_like(value), tensor(value)
+    if isinstance(value, tuple):
+        pairs = [_split_arg(item) for item in value]
+        return type(value)(*(build for build, _ in pairs)), type(value)(
+            *(run for _, run in pairs)
+        )
+    if isinstance(value, list):
+        pairs = [_split_arg(item) for item in value]
+        return [build for build, _ in pairs], [run for _, run in pairs]
+    if isinstance(value, dict):
+        build, run = {}, {}
+        for key, item in value.items():
+            build[key], run[key] = _split_arg(item)
+        return build, run
+    return value, value
 
 
 def _split_args(args: tuple[Any, ...]) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
@@ -95,16 +123,8 @@ def _split_args(args: tuple[Any, ...]) -> tuple[tuple[Any, ...], tuple[Any, ...]
     Data leaves become a ``TensorSpec`` for ``build`` and the concrete tensor
     for ``run``; static leaves are passed through unchanged to both.
     """
-    build_args: list[Any] = []
-    run_args: list[Any] = []
-    for argument in args:
-        if _is_data(argument):
-            build_args.append(spec_like(argument))
-            run_args.append(tensor(argument))
-        else:
-            build_args.append(argument)
-            run_args.append(argument)
-    return tuple(build_args), tuple(run_args)
+    pairs = [_split_arg(argument) for argument in args]
+    return tuple(build for build, _ in pairs), tuple(run for _, run in pairs)
 
 
 def build_defn(
