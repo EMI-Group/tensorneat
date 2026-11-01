@@ -10,7 +10,7 @@ Nothing here knows about genomes, populations or the Pipeline: a node gene hands
 |---|---|
 | `act.py` | 12 elementwise activation kernels, the constants they share with the sympy counterparts, `ACT_FUNCS` (canonical order), `apply_activation`. |
 | `agg.py` | 6 masked aggregations over the incoming-edge axis, `AGG_FUNCS` (canonical order), `apply_aggregation`. |
-| `act_sympy.py` | `sp.Function` counterparts of `ACT_FUNCS` plus `SympyClip`, `ACT_SYMPY_FUNCS`. |
+| `act_sympy.py` | `sp.Function` counterparts of `ACT_FUNCS` plus `SympyClip`, `ACT_SYMPY_FUNCS`, `ACT_SYMPY_HELPERS`. |
 | `agg_sympy.py` | `sp.Function` counterparts of the aggregations, `AGG_SYMPY_FUNCS`. |
 | `manager.py` | `FunctionManager`: names/ids/lookups, pairing validation, `sympy_module`, `random_index`. |
 | `__init__.py` | Wiring only: builds `ACT` / `AGG` and re-exports exactly five names. |
