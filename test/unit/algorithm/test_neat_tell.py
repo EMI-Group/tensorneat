@@ -2,73 +2,46 @@
 
 What this module proves
 -----------------------
-``tell`` closes one generation and opens the next: sanitise the fitness, advance the
-counter, update stagnation and spawn, cross and mutate, apply elitism, re-speciate.
-The species-level pieces live in ``./test_spawn.py``/``./test_parent_selection.py``/
-``./test_speciation.py``; this module pins what only ``NEAT`` owns:
-
-* ``_sanitize_fitness`` maps ``NaN`` **and both infinities** to ``-inf`` *before*
-  selection, so an unevaluable topology can never win and a species'
-  ``best_fitness`` can never become ``NaN``;
-* ``generation`` is incremented at the **start** of ``tell`` (the legacy order): a
-  species created by the re-speciation records the *incremented* generation in
-  ``last_improved``;
-* stagnation kills a species that fails to improve within ``max_stagnation`` and
-  never kills one of the top ``species_elitism`` ranked species;
-* the population size and every payload/species shape and dtype survive a full
-  ``tell``, the ``randkey`` advances, and ``ask`` neither changes state nor costs an op;
-* ``tell`` is deterministic for ``(state, fitness)``;
-* ``pop_batch_size`` chunking is a pure reshape (see the RNG caveat below);
-* the constructor rejects every documented out-of-domain argument with ``TensorNEATError``;
-* ``ask`` → ``transform`` → ``forward`` wire up on the default genome, down to the
-  documented ``Transformed`` fields and a finite ``(P, num_outputs)`` output.
+``tell`` closes one generation and opens the next; the species-level pieces live in
+``./test_spawn.py``/``./test_parent_selection.py``/``./test_speciation.py``, and this
+module pins what only ``NEAT`` owns: ``_sanitize_fitness`` maps every non-finite entry
+to ``-inf`` *before* selection, ``generation`` is incremented at the **start** of
+``tell`` (so a created species records the new value), stagnation spares the top
+``species_elitism`` ranked species, the population and species shapes survive a
+generation, ``tell`` is deterministic for ``(state, fitness)``, the ``randkey``
+advances, ``ask`` costs no op, ``pop_batch_size`` chunking is a pure reshape, the
+constructor rejects every out-of-domain argument, and ``ask`` → ``transform`` →
+``forward`` wire up on the default genome.
 
 Strict xfails: a source defect
 ------------------------------
-``NEAT.tell`` raises ``evoxc.ShapeError`` for any ``pop_size > 1``.  The
-structural-key allocation in ``_new_gene_keys`` does
-``evoxc.reshape(self.genome.max_node_key(state, node_keys), ())``, but the genome's
-documented and implemented ``max_node_key`` returns ``(P,)`` (one maximum per
-individual), so the reshape has ``P`` elements and a ``()`` target: ``ShapeError:
-reshape: element counts differ: 8 vs 1`` at ``neat.py:574``.  ``pop_size == 1``
-runs to completion, which pins the cause to that reshape.  The four tests that
-drive a real ``tell`` carry their full assertions but are marked
-``xfail(strict=True)`` with that reason: they flip to XPASS (a failure) once the
-source is fixed, and nothing else here needs ``tell``.
+``NEAT.tell`` raises ``evoxc.ShapeError`` for any ``pop_size > 1``: ``_new_gene_keys``
+reshapes the genome's ``(P,)`` ``max_node_key`` result to ``()`` (``neat.py:574``).
+``pop_size == 1`` runs to completion, which pins the cause, so the four tests that
+drive a real ``tell`` keep their full assertions under ``xfail(strict=True)``: they
+flip to XPASS once the source is fixed.
 
 Oracles used here (never the implementation)
 --------------------------------------------
 :func:`sanitize_reference` and :func:`stagnation_reference` are closed forms, the
 generation/shape/dtype/key claims are read back from the state itself, and the
-chunking test passes ``lambda key, x: x + 1`` to ``_batched`` so only the reshape
-and the gather can differ between the chunked and the unchunked call.
+chunking test passes ``lambda key, x: x + 1`` to ``_batched``.
 
 How a traced method is run
 --------------------------
-``evoxc.build`` turns only an ``ndarray``/``Tensor`` argument into a graph input and
-bakes the rest in as statics, so :func:`run_tell` passes the state's *tensor leaves*
-positionally and rebuilds the ``State`` (and its dataclasses) **inside** the traced
-closure; the host configuration travels as statics.  The graph returns nested tuples,
-which ``support.runner.to_numpy`` turns into plain numpy arrays.
+``evoxc.build`` turns only an ``ndarray``/``Tensor`` argument into a graph input, so
+:func:`run_tell` passes the state's *tensor leaves* positionally and rebuilds the
+``State`` (and its dataclasses) **inside** the traced closure.
 
 Gotchas
 -------
 * ``generation`` is a 0-d **float32**, not an int (it is written into the float32
   ``last_improved`` inside a scan carry), so comparisons cast explicitly.
-* ``_sanitize_fitness`` is a module-level function reached as
-  ``neat_module._sanitize_fitness(fitness, pop_size)``; ``pop_size`` exists only to
-  validate the shape at trace time.
 * **Chunking and RNG.** a chunk draws ``pop_batch_size`` rows of randomness from its
   own subkey, so numerical equality between a chunked and an unchunked *mutation* is
   not a contract and is not asserted; only the population axis and the shapes are.
-* ``weight_threshold``/``max_weight`` are ``HyperNEAT.__init__`` arguments
-  (``./hyperneat/test_validation.py``), and a ``species_fitness_func`` without
-  ``axes=`` fails at trace time, not in the constructor.
 * The hand-written species tables are built here rather than with the shared
-  ``species_state`` fixture: that factory still spells the centre arrays
-  ``center_nodes``/``center_conns``, which the implemented ``SpeciesState``
-  (``center_node_keys``/``center_node_attrs``/``center_conn_keys``/
-  ``center_conn_attrs``) does not accept.
+  ``species_state`` fixture, whose centre-array field names are stale.
 
 Backend is ``"numpy"`` throughout: no optional dependency, no ``jax``/``torch``.
 """
@@ -102,11 +75,10 @@ TELL_DEFECT = (
 
 
 def sanitize_reference(fitness):
-    """``np.where(np.isfinite(f), f, -inf)`` — the documented sanitising map.
-
-    ``evoxc`` has ``isnan`` but no ``isfinite``, so the kernel's
-    ``finite = ~isnan(f - f)`` must agree with ``np.isfinite`` on every entry,
-    including ``-inf`` staying ``-inf`` (the map is idempotent, not ``-f``-based).
+    """
+    ``np.where(np.isfinite(f), f, -inf)`` — the documented sanitising map.
+    ``evoxc`` has ``isnan`` but no ``isfinite``, and the map is idempotent (``-inf``
+    stays ``-inf``), not ``-f``-based.
     """
     values = np.asarray(fitness, dtype=np.float64)
     return np.where(np.isfinite(values), values, -np.inf).astype(np.float32)
@@ -120,24 +92,10 @@ def stagnation_reference(
     max_stagnation,
     species_elitism,
 ):
-    """``(f_s <= best) & (generation - last_improved > max_stagnation)``, minus the elite ranks.
-
-    Args:
-        best_fitness: ``(S,)`` float, ``NaN`` on dead slots.
-        last_improved: ``(S,)`` float generation of the last improvement.
-        species_fitness: ``(S,)`` float, this generation's per-species maximum.
-        generation: float, the generation that produced ``species_fitness``.
-        max_stagnation: int, the allowed number of unimproved generations.
-        species_elitism: int, how many best-ranked species are exempt.
-
-    Returns:
-        ``(S,) bool``: True where the species must be killed.
-
-    Notes:
-        The rank exemption is derived from ``species_fitness`` itself (descending
-        stable ``argsort``, i.e. ``rank_elements``' inverse permutation: ties keep
-        their original order), so the oracle never depends on the order the kernel
-        happens to produce.
+    """
+    ``(f_s <= best) & (generation - last_improved > max_stagnation)``, minus elite ranks.
+    The rank exemption comes from the descending stable ``argsort`` of ``species_fitness``
+    (ties keep their order), so the oracle never depends on the kernel's own order.
     """
     best = np.asarray(best_fitness, dtype=np.float64)
     improved_at = np.asarray(last_improved, dtype=np.float64)
@@ -189,27 +147,10 @@ def species_table(
     max_nodes=8,
     max_conns=16,
 ):
-    """Build a :class:`SpeciesState` from the scalar fields, with empty centre rows.
-
-    Args:
-        species_module: The ``tensorneat.algorithm.neat.species`` module fixture.
-        species_keys: ``(S,)`` keys; ``NaN`` marks a dead slot.
-        best_fitness: ``(S,)`` best per-species fitness (``NaN`` where dead).
-        last_improved: ``(S,)`` generation of the last improvement.
-        member_count: ``(S,)`` member counts (``NaN`` where dead).
-        idx2species: ``(P,)`` species key of each individual.
-        next_species_key: 0-d key handed to the next created species.
-        max_nodes: Static node capacity of the (unused) centre rows.
-        max_conns: Static connection capacity of the (unused) centre rows.
-
-    Returns:
-        The ``SpeciesState``.
-
-    Notes:
-        ``_species_fitness``, ``_stagnation`` and ``_pair_parents`` read only the
-        five scalar fields, so the centre arrays are zero-filled at the
-        ``DefaultGenome`` widths and never inspected — exactly like a dead slot's
-        centre rows, which the contract says are never read.
+    """
+    Build a :class:`SpeciesState` from the scalar fields, with empty centre rows.
+    The three kernels under test read only those scalars, so the centre arrays are
+    zero-filled at the ``DefaultGenome`` widths and never inspected.
     """
     size = len(species_keys)
     return species_module.SpeciesState(
@@ -295,18 +236,10 @@ def _rebuild_state(values, context):
 
 
 def run_tell(algorithm, state, fitness):
-    """Run one ``NEAT.tell`` inside a graph and return the next state's numpy arrays.
-
-    Returns:
-        tuple: ``(population, generation, species, randkey)`` — the payload and the
-        species fields as tuples in dataclass order, then the 0-d generation
-        (``float32``) and ``randkey`` (``int64``).
-
-    Notes:
-        The ``State`` and both dataclasses are rebuilt *inside* the traced closure:
-        a container passed as an argument would be baked in as a static constant
-        whose leaves are plain numpy.  ``pop_size``, the gene configuration and the
-        operators genuinely are static.
+    """
+    Run one ``NEAT.tell`` inside a graph; ``(population, generation, species, randkey)``.
+    The ``State`` is rebuilt *inside* the traced closure, because a container passed as
+    an argument would be baked in as a static constant.
     """
     context = _trace_context(state)
 
@@ -332,11 +265,8 @@ def run_tell(algorithm, state, fitness):
 
 
 def run_decode_and_forward(algorithm, state, inputs):
-    """Run ``transform`` + ``forward`` twice on one population, inside one graph.
-
-    Returns:
-        tuple: ``(transformed, first, second)`` — the genome's ``Transformed``
-        pytree and two ``(P, num_outputs)`` outputs that must agree.
+    """
+    Run ``transform`` + ``forward`` twice on one population, inside one graph.
     """
     context = _trace_context(state)
 
@@ -370,11 +300,10 @@ def algorithm(neat):
 
 @pytest.fixture
 def neat_state(algorithm, common, evoxc_key):
-    """Generation-0 state: ``algorithm.setup(State(randkey=evoxc_key))``.
-
-    ``Pipeline.setup`` is normally the one that creates ``randkey``; the suites do it
-    directly so a run is reproducible from the ``evoxc_key`` fixture (which is seeded
-    from the test id, see ``../conftest.py``).
+    """
+    Generation-0 state: ``algorithm.setup(State(randkey=evoxc_key))``.
+    ``Pipeline.setup`` normally creates ``randkey``; doing it here keeps a run
+    reproducible from the test-id-seeded key.
     """
     return algorithm.setup(common.State(randkey=evoxc_key))
 
@@ -499,6 +428,39 @@ def test_tell_increments_the_generation_before_the_species_update(
     assert np.all(fields["last_improved"][live] <= np.float32(previous + 1.0))
 
 
+
+# --------------------------------------------------------------------------- #
+# the generation counter, through a whole ``tell`` (``pop_size = 1``)
+# --------------------------------------------------------------------------- #
+
+
+def test_tell_increments_the_generation_before_the_stagnation_bookkeeping(
+    neat, common, evoxc_key, species
+):
+    """Invariant: ``tell`` advances ``generation`` *before* the species update.
+
+    Oracle: ``pop_size = 1`` — the one size the ``_new_gene_keys`` reshape defect does
+    not break — starts at generation ``0`` with the seeded species at
+    ``best_fitness = -inf`` and ``last_improved = 0``.  The first finite fitness
+    improves it, so the recorded generation must be the already-incremented ``1``, not
+    the generation that produced the fitness (which would grant a stale species one
+    extra generation of grace before stagnation can kill it).
+    """
+    algorithm = neat(pop_size=1, species_size=1, min_species_size=1)
+    state = algorithm.setup(common.State(randkey=evoxc_key))
+    previous = float(to_numpy(state.generation))
+    assert previous == 0.0
+
+    _, generation, species_values, _ = run_tell(
+        algorithm, state, np.array([0.3], dtype=np.float32)
+    )
+    fields = dict(zip(species_field_names(species), species_values))
+
+    assert float(generation) == np.float32(previous + 1.0)
+    assert fields["last_improved"][0] == np.float32(previous + 1.0)
+    assert fields["best_fitness"][0] == np.float32(0.3)
+
+
 # --------------------------------------------------------------------------- #
 # selection never sees a raw non-finite fitness
 # --------------------------------------------------------------------------- #
@@ -508,21 +470,13 @@ def test_tell_increments_the_generation_before_the_species_update(
 def test_a_non_finite_fitness_can_never_become_a_parent(
     species, controller, table, species_kernel, neat_module, evoxc_key
 ):
-    """Invariant: sanitised before selection, so a NaN/inf genome loses to any finite one.
-
-    Oracle: :func:`sanitize_reference` on the raw fitness, then the documented
-    selection steps on a hand-written table with two live species:
-
-    * species ``0`` holds rows ``0..3`` with raw fitness ``[NaN, +inf, 0.9, -inf]``,
-      species ``1`` holds rows ``4..7`` with finite fitness;
-    * ``_species_fitness`` reduces with a masked maximum, so the broken species
-      scores the finite ``0.9`` of its one good member — never ``NaN`` — while a
-      species whose members are *all* non-finite scores ``-inf``;
-    * ``_pair_parents`` ranks each species' members by the sanitised fitness, so the
-      broken members are never the species' best (never elite-pinned) and never the
-      fitter parent of a pair.  The exact parent *rows* are a random draw, so the
-      assertable claim is the structural one: every winner's fitness is finite and no
-      winner is worse than its loser.
+    """
+    Invariant: sanitised before selection, so a NaN/inf genome loses to any finite one.
+    Oracle: :func:`sanitize_reference` then the documented selection steps on a table
+    whose species ``0`` holds ``[NaN, +inf, 0.9, -inf]``: the masked ``max`` scores the
+    finite ``0.9`` (and ``-inf`` when every member is non-finite), so no non-finite row
+    is ever elite-pinned or drawn as the fitter parent.  Parent rows are a random draw,
+    so the assertable claim is structural: finite winners, never worse than the loser.
     """
     raw = np.array([np.nan, np.inf, 0.9, -np.inf, 0.4, 0.1, 0.6, 0.2], np.float32)
     sanitized = sanitize_reference(raw)
@@ -536,7 +490,7 @@ def test_a_non_finite_fitness_can_never_become_a_parent(
         idx2species=[0, 0, 0, 0, 1, 1, 1, 1],
     )
     species_fitness = species_kernel(
-        "_species_fitness", controller(species_elitism=0), bookkeeping, sanitized
+        "_species_fitness", bookkeeping, sanitized, controller=controller(species_elitism=0)
     )
     assert not np.isnan(species_fitness).any()
     assert species_fitness[0] == np.float32(0.9)
@@ -552,9 +506,9 @@ def test_a_non_finite_fitness_can_never_become_a_parent(
     )
     broken_fitness = species_kernel(
         "_species_fitness",
-        controller(species_elitism=0),
         bookkeeping,
         np.asarray(sanitize_reference(broken_raw)),
+        controller=controller(species_elitism=0),
     )
     assert np.isneginf(broken_fitness[0])
     assert broken_fitness[1] == np.float32(0.6)
@@ -563,11 +517,11 @@ def test_a_non_finite_fitness_can_never_become_a_parent(
     spawn = np.array([4, 4, 0, 0], dtype=np.int32)
     winner, loser, elite_mask = species_kernel(
         "_pair_parents",
-        controller(species_elitism=0),
         bookkeeping,
         evoxc_key,
         spawn,
         np.asarray(sanitized),
+        controller=controller(species_elitism=0),
     )
 
     assert winner.shape == (POP_SIZE,)
@@ -582,6 +536,43 @@ def test_a_non_finite_fitness_can_never_become_a_parent(
 
 
 # --------------------------------------------------------------------------- #
+# species membership is a key match, not a slot match
+# --------------------------------------------------------------------------- #
+
+
+def test_species_membership_matches_keys_by_value_not_by_slot(
+    controller, table, species_kernel
+):
+    """Invariant: ``idx2species`` holds species *keys*, so membership is a value match.
+
+    Oracle: keys ``[5.0, 2.0]`` — neither equal to its slot index — with
+    ``idx2species`` carrying those same keys.  ``_species_fitness`` reduces each
+    species over its own rows (``0.9`` for key ``5.0``, ``0.7`` for key ``2.0``),
+    which a mask built from ``arange(species_size)`` cannot reproduce: it matches
+    nothing and reports ``-inf`` for both live species.
+    """
+    fitness = np.array([0.4, 0.9, 0.1, 0.2, 0.7, 0.1, 0.5, 0.3], np.float32)
+    bookkeeping = table(
+        species_keys=[5.0, 2.0, np.nan, np.nan],
+        best_fitness=[-np.inf, -np.inf, np.nan, np.nan],
+        last_improved=[0.0, 0.0, np.nan, np.nan],
+        member_count=[4.0, 4.0, np.nan, np.nan],
+        idx2species=[5.0, 5.0, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0],
+    )
+
+    species_fitness = species_kernel(
+        "_species_fitness",
+        bookkeeping,
+        fitness,
+        controller=controller(species_elitism=0),
+    )
+
+    np.testing.assert_array_equal(
+        species_fitness, np.array([0.9, 0.7, -np.inf, -np.inf], np.float32)
+    )
+
+
+# --------------------------------------------------------------------------- #
 # stagnation
 # --------------------------------------------------------------------------- #
 
@@ -589,14 +580,12 @@ def test_a_non_finite_fitness_can_never_become_a_parent(
 def test_stagnation_kills_a_species_that_stops_improving(
     species, controller, table, species_kernel
 ):
-    """Invariant: ``(f_s <= best_fitness) & (generation - last_improved > max_stagnation)`` kills.
-
-    Oracle: :func:`stagnation_reference` on a table with three live slots — one that
-    improved this generation, one at exactly ``max_stagnation`` unimproved
-    generations (must **survive**, the comparison is ``>``) and one just past it
-    (must die) — plus an already-dead slot no comparison touches.  A killed slot is
-    ``NaN`` in every float field and ``-inf`` in its species fitness, so the
-    descending sort pushes it last.
+    """
+    Invariant: ``(f_s <= best_fitness) & (generation - last_improved > max_stagnation)``.
+    Oracle: :func:`stagnation_reference` over three live slots — improved, exactly at
+    ``max_stagnation`` (survives, the comparison is ``>``) and one past it (dies) — plus
+    a dead slot no comparison touches; a killed slot is ``NaN`` everywhere and ``-inf``
+    in its species fitness.
     """
     generation = 10.0
     max_stagnation = 5
@@ -613,10 +602,10 @@ def test_stagnation_kills_a_species_that_stops_improving(
 
     next_state, next_fitness = species_kernel(
         "_stagnation",
-        controller(max_stagnation=max_stagnation, species_elitism=0),
         bookkeeping,
         np.asarray(species_fitness),
         np.float32(generation),
+        controller=controller(max_stagnation=max_stagnation, species_elitism=0),
     )
     after = species_arrays(species, next_state)
 
@@ -652,14 +641,11 @@ def test_stagnation_kills_a_species_that_stops_improving(
 def test_stagnation_exempts_the_top_species_elitism(
     species, controller, table, species_kernel
 ):
-    """Invariant: the ``species_elitism`` best-ranked species are never killed by stagnation.
-
-    Oracle: :func:`stagnation_reference` with ``species_elitism = 1`` over a table
-    where the *rank 0* species is maximally stagnant; it survives while a
-    lower-ranked equally stagnant species dies.  The same table re-run with
-    ``species_elitism = 0`` kills rank 0 too, which makes this a test of the
-    exemption rather than of the predicate.  Slot 2 pins the ``<=``: its fitness
-    equals its ``best_fitness``, so it is not an improvement and it dies.
+    """
+    Invariant: the ``species_elitism`` best-ranked species are never killed.
+    Oracle: :func:`stagnation_reference` where the rank-0 species is maximally stagnant;
+    the same table with ``species_elitism = 0`` kills it too, so the test isolates the
+    exemption.  Slot 2 pins ``<=``: equal fitness is not an improvement.
     """
     generation = 10.0
     max_stagnation = 2
@@ -677,12 +663,12 @@ def test_stagnation_exempts_the_top_species_elitism(
     def kill_mask(species_elitism):
         next_state, next_fitness = species_kernel(
             "_stagnation",
-            controller(
-                max_stagnation=max_stagnation, species_elitism=species_elitism
-            ),
             bookkeeping,
             np.asarray(species_fitness),
             np.float32(generation),
+            controller=controller(
+                max_stagnation=max_stagnation, species_elitism=species_elitism
+            ),
         )
         after = species_arrays(species, next_state)
         return np.isnan(after["species_keys"]), after, next_fitness
@@ -720,6 +706,52 @@ def test_stagnation_exempts_the_top_species_elitism(
 
 
 # --------------------------------------------------------------------------- #
+def test_stagnation_exempts_the_best_ranked_species_not_the_first_slot(
+    species, controller, table, species_kernel
+):
+    """Invariant: the ``species_elitism`` exemption follows the fitness rank, not the slot.
+
+    Oracle: three maximally stagnant species whose best-rated one sits in slot ``1``
+    (``species_fitness = [0.3, 0.9, 0.2]``).  With ``species_elitism = 1`` only slot
+    ``1`` survives, so an exemption keyed on the slot index would instead spare slot
+    ``0`` and kill the fittest species in the table.
+    """
+    generation, max_stagnation = 10.0, 2
+    best = np.array([0.9, 0.9, 0.9, np.nan], np.float32)
+    last_improved = np.array([0.0, 0.0, 0.0, np.nan], np.float32)
+    species_fitness = np.array([0.3, 0.9, 0.2, -np.inf], np.float32)
+    bookkeeping = table(
+        species_keys=[0.0, 1.0, 2.0, np.nan],
+        best_fitness=best,
+        last_improved=last_improved,
+        member_count=[3.0, 3.0, 2.0, np.nan],
+        idx2species=[0, 0, 0, 1, 1, 1, 2, 2],
+    )
+
+    next_state, next_fitness = species_kernel(
+        "_stagnation",
+        bookkeeping,
+        np.asarray(species_fitness),
+        np.float32(generation),
+        controller=controller(max_stagnation=max_stagnation, species_elitism=1),
+    )
+    killed = np.isnan(species_arrays(species, next_state)["species_keys"])
+    expected = stagnation_reference(
+        best,
+        last_improved,
+        species_fitness,
+        generation,
+        max_stagnation,
+        species_elitism=1,
+    ) | np.isnan(np.asarray(bookkeeping.species_keys))
+
+    assert np.array_equal(killed, expected)
+    assert not killed[1], "the best-ranked species (slot 1) is exempt"
+    assert killed[0] and killed[2], "the equally stagnant lower ranks die"
+    assert np.all(np.isneginf(next_fitness[killed]))
+
+
+# --------------------------------------------------------------------------- #
 # the population survives a generation
 # --------------------------------------------------------------------------- #
 
@@ -728,12 +760,8 @@ def test_stagnation_exempts_the_top_species_elitism(
 def test_tell_preserves_the_population_size_and_payload_shapes(
     algorithm, neat_state, species
 ):
-    """Invariant: after ``tell`` the population has the same static shapes, dtypes and size.
-
-    Oracle: the generation-0 payload read before the call — every tensor keeps its
-    shape and dtype, every species field keeps its ``(S, ...)`` shape,
-    ``idx2species`` is fully assigned (no ``NaN``) and no live slot has a ``NaN``
-    member count; shapes are static at build time, so a mismatch breaks the cache.
+    """
+    Invariant: after ``tell`` every payload and species tensor keeps its shape and dtype.
     """
     before_population = {
         name: to_numpy(getattr(neat_state.pop, name)) for name in POP_FIELDS
@@ -763,12 +791,8 @@ def test_tell_preserves_the_population_size_and_payload_shapes(
 
 
 def test_ask_costs_no_ops_and_is_idempotent(algorithm, neat_state):
-    """Invariant: ``ask`` returns the stored population unchanged and never consumes a key.
-
-    Oracle: both calls return ``state.pop`` itself (and byte-equal tensors), and
-    ``state.randkey`` is byte-identical before and after — ``ask`` is the documented
-    zero-op hand-off, and a stray ``random.split`` would desynchronise the RNG budget
-    and make a seeded run irreproducible.
+    """
+    Invariant: ``ask`` returns the stored population and consumes no key.
     """
     key_before = to_numpy(neat_state.randkey)
     first = algorithm.ask(neat_state)
@@ -787,12 +811,10 @@ def test_ask_costs_no_ops_and_is_idempotent(algorithm, neat_state):
 
 
 def test_setup_requires_the_pipeline_to_have_created_the_randkey(algorithm, common, errors):
-    """Invariant: ``setup`` on a state without ``randkey`` raises ``TensorNEATError``.
-
-    Oracle: the documented ``Raises`` clause — ``Pipeline.setup`` is the only place
-    that creates the key, and a silent fallback to a default seed would break the
-    "same seed reproduces the run" contract.  Both spellings are checked: an explicit
-    empty ``State`` and the ``None`` default that builds one in the body.
+    """
+    Invariant: ``setup`` without a ``randkey`` raises ``TensorNEATError``.
+    Oracle: the documented ``Raises`` clause, in both spellings (explicit empty ``State``
+    and the ``None`` default), since a silent default seed breaks reproducibility.
     """
     with pytest.raises(errors.TensorNEATError) as excinfo:
         algorithm.setup(common.State())
@@ -810,12 +832,8 @@ def test_setup_requires_the_pipeline_to_have_created_the_randkey(algorithm, comm
 
 @pytest.mark.xfail(strict=True, reason=TELL_DEFECT)
 def test_tell_is_deterministic_for_the_same_state_and_fitness(algorithm, neat_state, species):
-    """Invariant: ``tell(state, fitness)`` twice from the same state yields identical next states.
-
-    Oracle: byte equality over the population pytree, every species field and the
-    advanced ``randkey``.  Both calls start from the same immutable state and the
-    same raw fitness, so a host RNG, a dict order or a mutable default would show up
-    as a divergence.
+    """
+    Invariant: ``tell(state, fitness)`` twice yields byte-identical next states.
     """
     fitness = np.array([0.8, 0.1, 0.6, 0.2, 0.9, 0.3, 0.5, 0.4], dtype=np.float32)
 
@@ -835,12 +853,8 @@ def test_tell_is_deterministic_for_the_same_state_and_fitness(algorithm, neat_st
 
 @pytest.mark.xfail(strict=True, reason=TELL_DEFECT)
 def test_tell_advances_the_randkey(algorithm, neat_state):
-    """Invariant: the next state carries a different ``randkey`` than the one it consumed.
-
-    Oracle: ``not same_bytes(next_state.randkey, state.randkey)`` after a full
-    ``tell`` (a 0-d ``int64``, compared byte-exactly).  Two generations consuming the
-    same key would produce identical mutations — a bug that still passes a
-    single-generation test.
+    """
+    Invariant: the next state's ``randkey`` differs from the one it consumed.
     """
     fitness = np.array([0.8, 0.1, 0.6, 0.2, 0.9, 0.3, 0.5, 0.4], dtype=np.float32)
 
@@ -856,14 +870,11 @@ def test_tell_advances_the_randkey(algorithm, neat_state):
 
 
 def test_batched_chunking_preserves_the_population_axis(neat, evoxc_key):
-    """Invariant: ``_batched`` is a pure reshape — chunked and unchunked agree for a deterministic kernel.
-
-    Oracle: ``lambda key, x: x + 1`` run through ``_batched`` on an ``(P, 3)`` tensor
-    with ``pop_batch_size`` ``None``, ``4`` and ``1``; the outputs must be
-    ``same_bytes`` and keep the input's shape/dtype, and the sequence-returning
-    branch must restore both leaves.  Numerical equality of two *real* mutation runs
-    is deliberately not asserted: a chunk draws its own subkey's randomness, so the
-    streams differ by design and chunking is part of the reproducibility config.
+    """
+    Invariant: ``_batched`` is a pure reshape — chunked and unchunked agree for a
+    deterministic kernel, and the sequence branch restores both leaves.  Numerical
+    equality of two real mutation runs is not a contract (each chunk draws its own
+    subkey), so only the population axis and the shapes are asserted.
     """
     values = np.arange(POP_SIZE * 3, dtype=np.float32).reshape(POP_SIZE, 3)
 
@@ -911,12 +922,9 @@ TRANSFORMED_FIELDS = (
 
 
 def test_ask_transform_forward_wire_up_on_the_default_genome(algorithm, neat_state, rng):
-    """Invariant: one generation-0 payload decodes and runs as a batch-first schedule.
-
-    Oracle: the documented ``Transformed`` field list and its static shapes — the
-    population axis on every field, ``(P, max_nodes)`` node tables,
-    ``(P, num_inputs)``/``(P, num_outputs)`` slots — plus a finite ``float32``
-    ``(P, num_outputs)`` output that two identical ``forward`` calls reproduce.
+    """
+    Invariant: one generation-0 payload decodes to the documented ``Transformed`` fields,
+    batch-first, and runs to a finite ``(P, num_outputs)`` output.
     """
     payload = algorithm.ask(neat_state)
     inputs = rng.uniform(-1.0, 1.0, size=(POP_SIZE, algorithm.num_inputs)).astype(
@@ -972,13 +980,9 @@ def test_ask_transform_forward_wire_up_on_the_default_genome(algorithm, neat_sta
     ],
 )
 def test_constructor_rejects_each_out_of_domain_argument(neat, errors, overrides, parameter):
-    """Invariant: every documented out-of-domain constructor argument raises ``TensorNEATError``.
-
-    Oracle: the ``Raises`` clause of ``NEAT.__init__`` plus each parameter's
-    documented domain, one case per rule.  The rewrite replaced the legacy
-    ``assert``/``ValueError`` with ``TensorNEATError`` so a caller can catch
-    configuration errors without catching programming errors, and the message must
-    name the offending parameter so the failure is actionable.
+    """
+    Invariant: every out-of-domain constructor argument raises ``TensorNEATError`` naming
+    the offending parameter, one case per documented rule.
     """
     with pytest.raises(errors.TensorNEATError) as excinfo:
         neat(**overrides)
@@ -988,11 +992,8 @@ def test_constructor_rejects_each_out_of_domain_argument(neat, errors, overrides
 
 
 def test_constructor_accepts_a_dividing_pop_batch_size(neat):
-    """Invariant: a ``pop_batch_size`` that divides ``pop_size`` is accepted and stored.
-
-    Oracle: ``NEAT(pop_batch_size=4)`` does not raise, keeps ``pop_size == 8`` and
-    stores ``4`` (two chunks).  Pairing this with the rejection table keeps the
-    validation from being a blanket "reject any int".
+    """
+    Invariant: a ``pop_batch_size`` dividing ``pop_size`` is accepted and stored.
     """
     algorithm = neat(pop_batch_size=4)
 
