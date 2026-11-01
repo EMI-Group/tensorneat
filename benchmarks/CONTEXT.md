@@ -61,6 +61,13 @@ The worker prepends `benchmarks/legacy_jax` (old side) or `src` (new side) to `s
 - Nothing outside `benchmarks/` is read except the two implementation trees under test, and nothing outside `benchmarks/` is written.
 - Files stay under ~1000 lines with one responsibility each: protocol / adapters / worker / reporter / CLI / cases.
 - A run that cannot work must fail loudly (`status="error"` with the traceback in JSON and a non-zero exit from the worker) — never a silently missing row.
+## Test Strategy
+There is no pytest suite in this node (`test/` is a sibling, read-only); its verification is running the harness, and every check below is cheap.
+- `python benchmarks/run_benchmark.py --list` prints the 8-case matrix on an interpreter without `numpy` (exit 0); `--dry-run --impl both --cases xor_p100,cartpole_p100` prints both worker commands and skips `cartpole_p100/old` with a reason.
+- Old-side smoke: `--impl old --cases xor_p100 --generations 5 --warmup 2 --repeats 1` gives one `ok` row (~30 ms/gen at pop 100) and the verdict `INCOMPLETE` because no new-side row exists.
+- New-side failure path: `--impl new --cases xor_p100 --generations 2 --repeats 1` must render `status="error"` rows with the exception line and exit 1 — the CLI never crashes on a broken implementation.
+- `python benchmarks/spikes/forward_micro.py --mode unrolled` runs numpy-only, asserts the two prototype forms agree to `1e-5` and reproduces `FORMULATION.md` within ~±5%.
+- Regression rule: a harness change must leave the old-side rows within ~10% of the committed `RESULTS.md`; a larger shift means the protocol moved and `RESULTS.md` is regenerated in the same commit.
 ## Routing Table
 | Path | Purpose |
 |---|---|
