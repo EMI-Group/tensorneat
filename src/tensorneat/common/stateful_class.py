@@ -1,75 +1,75 @@
-from typing import Optional
-from . import State
-import pickle
-import datetime
-import warnings
+"""Base class for the host-side, state-aware configuration objects.
+
+Dependency DAG position: bottom of ``tensorneat.common``, next to
+:mod:`~tensorneat.common.state` (which is its only package import). It is the
+common ancestor of ``genome``, ``algorithm`` and ``problem`` classes; nothing
+here traces a graph or touches a tensor — a ``StatefulBaseClass`` is
+configuration plus a hook that *extends* a ``State`` with its own keys.
+
+Contract for subclasses: ``setup(state)`` is the single place where a
+configuration object contributes keys (its own evoxc RNG key splits, its gene
+payload shapes, its operator configuration) to the shared ``State``; after
+``setup`` the resulting ``State`` is self-contained, and every kernel receives
+it explicitly instead of reading attributes off the object during a trace.
+"""
+
+from .state import State
 
 
 class StatefulBaseClass:
-    def setup(self, state=State()):
-        return state
+    """Mixin for configuration objects that contribute keys to a ``State``.
 
-    def show_config(self, registered_objects=None):
-        if registered_objects is None:  # root call
-            registered_objects = []
+    Used as ``genome``/``algorithm``/``problem`` base class: the leaf
+    configurations (gene types, mutation operators, problems) are
+    ``StatefulBaseClass`` instances nested inside a larger one, and
+    :meth:`show_config` walks that nesting to produce the run header the
+    ``Pipeline`` logs.
+    """
 
-        config = {}
-        for key, value in self.__dict__.items():
-            if isinstance(value, StatefulBaseClass) and value not in registered_objects:
-                registered_objects.append(value)
-                config[str(key)] = value.show_config(registered_objects)
+    def setup(self, state: State | None = None) -> State:
+        """Extend ``state`` with this object's configuration and return it.
 
-            else:
-                config[str(key)] = str(value)
-        return config
+        Args:
+            state (State | None): The incoming shared state, or ``None`` to
+                start from a fresh empty :class:`~tensorneat.common.state.State`.
 
-    # TODO: Bug need be fixed
-    # def save(self, state: Optional[State] = None, path: Optional[str] = None):
-    #     if path is None:
-    #         time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    #         path = f"./{self.__class__.__name__} {time}.pkl"
-    #     if state is not None:
-    #         self.__dict__["aux_for_state"] = state
-    #     with open(path, "wb") as f:
-    #         pickle.dump(self, f)
+        Returns:
+            State: A new container (``State`` is immutable; ``setup`` never
+            mutates its argument) holding every key this object needs at
+            build time — configuration values, evoxc RNG keys
+            (``evoxc.random.key(seed)`` splits) and any static shapes the
+            kernels will be traced against.
 
-    # def __getstate__(self):
-    #     # only pickle the picklable attributes
-    #     state = self.__dict__.copy()
-    #     non_picklable_keys = []
-    #     for key, value in state.items():
-    #         try:
-    #             pickle.dumps(value)
-    #         except Exception as e:
-    #             print(f"Cannot pickle key {key}: {e}")
-    #             non_picklable_keys.append(key)
+        Raises:
+            tensorneat.common.errors.ConfigError: If a required configuration
+                value is missing or invalid; validation happens here, on the
+                host, before any graph is traced.
+        """
+        raise NotImplementedError(
+            "return a new State carrying this object's configuration keys"
+        )
 
-    #     for key in non_picklable_keys:
-    #         state.pop(key)
+    def show_config(self, registered_objects: list | None = None) -> dict:
+        """Collect the (possibly nested) configuration for run logging.
 
-    #     return state
+        Args:
+            registered_objects (list | None): Accumulator of
+                ``StatefulBaseClass`` instances already visited. Pass ``None``
+                (the default) at the top-level call; nested
+                ``StatefulBaseClass`` attributes are visited by handing the
+                same list down, which prevents infinite recursion on shared or
+                self-referencing configuration objects.
 
-    # @classmethod
-    # def load(cls, path: str, with_state: bool = False, warning: bool = True):
-    #     with open(path, "rb") as f:
-    #         obj = pickle.load(f)
-    #     if with_state:
-    #         if "aux_for_state" not in obj.__dict__:
-    #             if warning:
-    #                 warnings.warn(
-    #                     "This object does not have state to load, return empty state",
-    #                     category=UserWarning,
-    #                 )
-    #             return obj, State()
-    #         state = obj.__dict__["aux_for_state"]
-    #         del obj.__dict__["aux_for_state"]
-    #         return obj, state
-    #     else:
-    #         if "aux_for_state" in obj.__dict__:
-    #             if warning:
-    #                 warnings.warn(
-    #                     "This object has state to load, ignore it",
-    #                     category=UserWarning,
-    #                 )
-    #             del obj.__dict__["aux_for_state"]
-    #         return obj
+        Returns:
+            dict: A JSON-friendly mapping of attribute name to value, where a
+            nested ``StatefulBaseClass`` is rendered as its own nested dict and
+            every other value as ``str(value)`` (kept from the pre-rewrite
+            library so log headers stay comparable).
+
+        Raises:
+            None: Host-only presentation code; it never raises for a value it
+            cannot render, and never validates the configuration.
+        """
+        raise NotImplementedError(
+            "walk the configuration attributes into a nested dict for logging"
+        )
