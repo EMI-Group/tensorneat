@@ -2,7 +2,7 @@
 
 ## Intent
 Framework-wide foundation layer: immutable pytree `State`, `StatefulBaseClass` mixin, jit-able index/hash/graph helpers, the ACT/AGG function registries, host-side sympy code generation, and optional evox adaptors.
-Depends only on `jax`, `numpy`, `sympy` (and `evox` only inside `evox_adaptors/`); no import of `genome`/`algorithm` except `evox_adaptors`, which imports them lazily by module path.
+Depends only on `jax`, `numpy`, `sympy` (and `evox` only inside `evox_adaptors/`); the only modules importing `genome`/`algorithm` types are the `evox_adaptors` modules, which are not reached from `common/__init__.py`.
 
 ## API Surface
 `__init__.py`: `from .tools import *`, `from .graph import *`, `from .state import State`, `from .stateful_class import StatefulBaseClass`, `from .functions import ACT, AGG, apply_activation, apply_aggregation, get_func_name`.
