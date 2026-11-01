@@ -52,8 +52,10 @@ class BaseConn(BaseGene):
         message = forward(attrs, source_values)     # (P, N, K), elementwise
 
     so one scalar message is produced per edge slot and the destination node
-    aggregates them. A gene must not rely on ``NaN * 0`` arithmetic: the NaN
-    sanitisation of the source value happens inside the family's ``forward``.
+    aggregates them. The window step hands ``forward`` already-masked source values: a dead
+    slot (or a slot whose source row has no value yet) is ``NaN`` there, and the node gene's
+    aggregation replaces every dead slot with its neutral value *before* reducing, so a
+    family may multiply straight through and need no sanitisation of its own.
 
     :attr:`labels` renames the key columns for the inherited host-only
     :meth:`~tensorneat.genome.gene.base.BaseGene.repr` /
@@ -227,19 +229,22 @@ class BaseConn(BaseGene):
                 for those rows is accepted too and is what the forward pass passes, so a
                 family reads its columns with :meth:`column_of` and skips the re-cleaning.
             source_values: Values of the source node of each slot, ``(P, N, K)``
-                float32; NaN where the source has not been computed (unreachable or
-                absent node).
+                float32; ``NaN`` where the slot is statically dead or its source has not
+                been computed (unreachable or absent node), so the family may use it as a
+                masked operand without re-testing it.
 
         Returns:
             ``(P, N, K)`` float32 messages, elementwise in ``(attrs, source_values)``;
-            dead slots carry 0 so the aggregation can neutralise them by mask.
+            a dead slot may keep its ``NaN``, because the node gene's aggregation replaces
+            every slot its ``valid_mask`` calls dead with that option's neutral value
+            before reducing.
 
         Raises:
             NotImplementedError: Abstract hook; connection families implement it.
         """
         raise NotImplementedError(
-            "elementwise message per edge slot: sanitized source value combined with "
-            "the sanitized float attributes -> (P, N, K)"
+            "elementwise message per edge slot: the masked source value combined with "
+            "the prepared float attributes -> (P, N, K)"
         )
 
     def get_historical_marker(

@@ -22,7 +22,9 @@ class DefaultConn(BaseConn):
     """Default connection gene with the same behaviour as NEAT-python.
 
     One float32 attribute column, ``weight``; the message of an edge is
-    ``weight * source_value`` with both operands NaN-sanitized first. Key columns are
+    ``weight * source_value``. The weight column is NaN-cleaned once per forward pass
+    (``prepare``) and the source value arrives already masked by the window step's liveness
+    mask (dead slots are ``NaN``, discarded by the aggregation). Key columns are
     inherited: ``(input_index, output_index)``.
 
     Attribute values of this family: ``new_identity_attrs`` yields ``weight = 1.0``
@@ -150,28 +152,32 @@ class DefaultConn(BaseConn):
         attrs: Any,
         source_values: evoxc.SymbolicTensor,
     ) -> evoxc.SymbolicTensor:
-        """Compute the NaN-safe edge message ``sanitized(source) * sanitized(weight)``.
+        """Compute the edge message ``source * cleaned(weight)`` in one multiply.
 
-        Both operands are sanitized before the product: a NaN source value (source
-        not computed, absent node) or a NaN weight (absent connection row) becomes 0,
-        so the aggregation never multiplies a zeroed cotangent by a NaN local
-        derivative during reverse-mode differentiation.
+        Only the *weight* is sanitized here, and that happens once per forward pass in
+        :meth:`~.base.BaseConn.prepare`; the source values arrive already masked by the
+        caller's liveness mask (dead and uncomputed slots are ``NaN``). Those ``NaN``
+        messages never reach a reduction: the node gene's aggregation replaces every dead
+        slot with its option's neutral value *before* reducing, so a ``NaN`` here cannot
+        poison a node (nor a reverse-mode sweep through a zeroed cotangent). Sanitising the
+        source a second time inside the gene would cost an extra ``isnan`` + ``select`` on
+        every unrolled level for exactly the slots the mask already discards.
 
         Args:
             state: Host configuration container.
             attrs: Per-slot connection attributes, ``(P, N, K, 1)`` float32, gathered
                 with the incoming-edge table, or the
                 :class:`~.base.ConnOperands` bundle of those rows, whose ``weight``
-                column is already NaN-cleaned (only the source is sanitised here then).
-            source_values: Source node values, ``(P, N, K)`` float32.
+                column is already NaN-cleaned.
+            source_values: Source node values, ``(P, N, K)`` float32, ``NaN`` where the
+                slot is dead or its source row has no value yet.
 
         Returns:
-            ``(P, N, K)`` float32 messages, ``select(isnan(source), 0, source) *
-            select(isnan(weight), 0, weight)`` per slot.
+            ``(P, N, K)`` float32 messages, ``source * weight`` per slot; ``NaN`` on the
+            slots the node gene's ``valid_mask`` discards.
         """
         prepared = attrs if isinstance(attrs, ConnOperands) else self.prepare(attrs)
-        safe_source = evoxc.select(evoxc.isnan(source_values), prepared.zero, source_values)
-        return evoxc.multiply(safe_source, prepared.columns[self.attr_index("weight")])
+        return evoxc.multiply(source_values, prepared.columns[self.attr_index("weight")])
 
     def sympy_func(
         self, state: State, conn_dict: dict, inputs: sp.Expr

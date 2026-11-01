@@ -68,7 +68,7 @@ def _slot_index(
         ``(flat_index, present)``: the ``(P * prod(block),)`` flat index with every absent
         slot redirected to row ``0`` of its own individual (the backend never sees an
         out-of-range index) and the ``(P, *block) bool`` liveness mask — block-shaped, which
-        is the shape the per-level value step ANDs against its ``isnan`` test.
+        is the shape the per-level value gather uses to fill its dead slots with ``NaN``.
     """
     pop_size = int(idx.shape[0])
     block = tuple(int(size) for size in idx.shape[1:])
@@ -154,7 +154,7 @@ def _gather_prepared(
     flat_index: evoxc.SymbolicTensor,
     present: evoxc.SymbolicTensor,
     block: tuple[int, ...],
-    fill: float | None,
+    fill: float | evoxc.SymbolicTensor | None,
 ) -> evoxc.SymbolicTensor:
     """Gather one already-indexed window out of a batch-first ``(P, R)`` table.
     The per-level half of :meth:`BaseGenome._gather_slots`: three ops (flatten the table,
@@ -168,9 +168,14 @@ def _gather_prepared(
             explicit widening op).
         block: The window shape the result is reshaped to.
         fill: Value written where the slot is absent, or ``None`` to leave the gathered value
-            in place — a value gather does not need the fill, because the slots it would
-            overwrite are exactly the ones its liveness mask marks dead and the aggregation
-            neutralises, whereas an attribute gather must fill NaN for the gene to clean.
+            in place. Both production callers pass ``NaN``: an *attribute* gather needs it so
+            the gene's ``prepare`` sees a clean "absent row" sentinel, and a *value* gather
+            needs it so the caller's liveness predicate is one ``x == x`` comparison — the
+            slots the fill overwrites are exactly the ones the schedule marked dead, and a
+            ``NaN`` there reduces to "not live" without a second mask. A rank-0 tensor is used
+            verbatim instead of a Python float (which would materialise its own ``constant``
+            op on every level); the value gather passes the per-pass NaN of
+            :class:`_StepStatics` for exactly that reason.
     Returns:
         ``(P, *block)`` tensor with ``x``'s dtype.
     """
@@ -180,7 +185,12 @@ def _gather_prepared(
     if fill is not None:
         # After the reshape, so the trailing-``1`` mask of ``_column_mask`` broadcasts without
         # an explicit widening op.
-        values = evoxc.select(present, values, enp.full((), float(fill), dtype=x.dtype))
+        scalar = (
+            fill
+            if isinstance(fill, evoxc.SymbolicTensor)
+            else enp.full((), float(fill), dtype=x.dtype)
+        )
+        values = evoxc.select(present, values, scalar)
     return values
 def _iinf(dtype: Any = evoxc.int32) -> evoxc.SymbolicTensor:
     """Rank-0 ``I_INF`` — the padding sentinel of every key array, left to broadcast.

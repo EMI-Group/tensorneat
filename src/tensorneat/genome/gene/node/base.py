@@ -162,8 +162,10 @@ class BaseNode(BaseGene):
     ) -> evoxc.SymbolicTensor:
         """Compute the value of every node row of the population in one pass.
 
-        The caller feeds one depth level at a time: ``messages`` is the already
-        gathered and NaN-sanitized incoming window of the nodes of that level.
+        The caller feeds one depth level at a time: ``messages`` is the gathered incoming
+        window of the nodes of that level, already masked by the caller (a dead slot may
+        carry ``NaN``; ``valid_mask`` is what marks it dead, and every aggregation option
+        replaces the slots of that mask with its neutral value before reducing).
 
         ``attrs`` may be the raw ``(P, N, NA)`` attribute tensor or the
         :class:`NodeOperands` bundle of :meth:`prepare`. The bundle is what the forward
@@ -180,7 +182,8 @@ class BaseNode(BaseGene):
             attrs: Node attributes, ``(P, N, NA)`` float32, one row per node slot, or the
                 :class:`NodeOperands` of :meth:`prepare` for those attributes.
             messages: One scalar message per incoming edge slot, ``(P, N, K)``
-                float32, already NaN-sanitized (NaN source -> 0).
+                float32; a dead slot may carry ``NaN`` — ``valid_mask`` marks it dead and
+                the aggregation neutralises it before the reduce.
             is_output_node: ``(P, N)`` bool, True for the rows read out as network
                 outputs, which must stay unactivated here.
             valid_mask: ``(P, N, K)`` bool, True where the slot holds a real, live
