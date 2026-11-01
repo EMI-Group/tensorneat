@@ -131,8 +131,10 @@ class CartPole(BaseProblem):
            transition (the failing step still scores, as in Gym), integrate with
            Euler, mark death on ``|x| > x_threshold or |theta| >
            theta_threshold``, then freeze the state with
-           ``enp.where(alive[:, None], next_obs, obs)`` so no ``cond`` and no
-           data-dependent trip count is needed.
+           ``enp.where(enp.expand_dims(alive, 1), next_obs, obs)`` so no
+           ``cond`` and no data-dependent trip count is needed (a traced tensor
+           has no ``__getitem__``, so the rank-1 mask is broadcast with
+           ``expand_dims``).
         5. The scan emits the rank-1 ``alive`` mask as its output; a rank-3
            stacked output would need a ``scatter`` the stablehlo exporter
            rejects.
@@ -194,7 +196,9 @@ class CartPole(BaseProblem):
             A structure holding ``gravity``, ``masscart``, ``masspole``,
             ``polemass_length`` (``masspole * length``), ``total_mass``
             (``masscart + masspole``), ``length``, ``force_mag``, ``dt``,
-            ``x_threshold`` and ``theta_threshold`` (in radians), all float32.
+            ``x_threshold``, ``theta_threshold`` (in radians) and
+            ``reset_scale``, all float32 -- the reset bounds are float32 graph
+            scalars too, so ``evoxc.random.uniform`` never sees an f64 constant.
         """
         raise NotImplementedError
 
