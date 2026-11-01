@@ -38,6 +38,8 @@ A problem is pure host-side configuration (`StatefulBaseClass`) plus plain-Pytho
 - Fitness = mean over the `repeat_times` axis of the summed reward (return in `[0, max_step]`), then `finalize_fitness`.
 - Randomness: a single `evoxc.random.uniform(key, (B, 4), low=-0.05, high=0.05)`; no key threading through the scan, no `np.random`.
 - Because episodes are frozen, an individual's return is its survival time: `max_step` is the fitness ceiling, so `fitness_target` must be `<= max_step`.
+- `CartPole(..., fitness_target=None)` validates only when a target is passed (`TensorNEATError` above `max_step`); the documented parameter order is unchanged, so `benchmarks/cases.py` and the pipeline construct it without a target.
+- NaN logits act as push-left inside the rollout (`enp.greater` is false against NaN) but poison that individual's fitness to `-inf` through an explicit `evoxc.isnan` guard (`_nan_rows` → `_any_repeat` → select NaN before `finalize_fitness`).
 
 ## Constraints
 - Compute path uses only `evoxc.numpy as enp` plus top-level `evoxc.{isnan, select, from_numpy, constant}`; there is no eager mode, so never call `np.*` on a traced value.
