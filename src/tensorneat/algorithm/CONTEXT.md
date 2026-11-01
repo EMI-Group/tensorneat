@@ -17,7 +17,7 @@ evoxc has no `.at[]`, no in-place mutation and no `cumsum`/`max(where=…)`/`sum
 
 ## BaseAlgorithm Protocol (`base.py`)
 `setup(state) -> State` registers the algorithm's tensors; it runs after the genome's and the problem's `setup` on the same threaded `State`.
-`ask(state) -> pop` hands out the population to evaluate; for NEAT `pop = (pop_nodes (P, max_nodes, node_len), pop_conns (P, max_conns, conn_len))` and it costs zero ops.
+`ask(state) -> pop` hands out the population to evaluate; for NEAT `pop` is the `genome.utils.GenomeTensors` payload (`node_keys (P, max_nodes)`, `node_attrs (P, max_nodes, NA)`, `conn_keys (P, max_conns, CK)`, `conn_attrs (P, max_conns, CA)`) and it costs zero ops.
 `transform(state, pop) -> Transformed` decodes the **whole** population into one batch-first execution schedule (axis 0 = individual); the Pipeline never maps it per genome.
 `forward(state, transformed, inputs) -> outputs` runs the decoded batch with `inputs (P, *input_shape)` and returns `(P, *output_shape)`.
 `tell(state, fitness) -> State` consumes a `(P,)` fitness array (fitness is maximised) and returns the next-generation state.
@@ -25,7 +25,8 @@ evoxc has no `.at[]`, no in-place mutation and no `cumsum`/`max(where=…)`/`sum
 `num_inputs`, `num_outputs`, `pop_size` are static Python ints; `Pipeline` asserts the first two against `problem.input_shape[-1]` / `output_shape[-1]`.
 
 ## State Layout
-The algorithm registers exactly five keys on the shared `State`: `pop_size` (static Python int, so the batch-first `genome.initialize` can size axis 0), `pop_nodes`, `pop_conns`, `generation` (0-d float32 — kept float so it flows through `last_improved`), and `species`.
+The algorithm registers exactly four keys on the shared `State`: `pop_size` (static Python int, so the batch-first `genome.initialize` can size axis 0), `pop` (one `genome.utils.GenomeTensors` payload, axis 0 = individual), `generation` (0-d float32 — kept float so it flows through `last_improved`), and `species`.
+`randkey` is never registered here: `setup` only advances it, so `Pipeline.setup` must create it first (`TensorNEATError` otherwise).
 `randkey` is created by `Pipeline.setup` with `evoxc.random.key(seed)` and consumed here; the algorithm never seeds itself, and a `(seed, config, shape)` triple reproduces a run bit-for-bit.
 `species` is a frozen dataclass `SpeciesState` (owned by `./neat`): `(species_size,)` float32 `species_keys`, `best_fitness`, `last_improved`, `member_count` (NaN = dead slot), `(pop_size,)` float32 `idx2species`, `(species_size, max_nodes, node_len)` int `center_nodes`, `(species_size, max_conns, conn_len)` int `center_conns`, and 0-d `next_species_key`.
 Dead species slots are addressed solely by the `isnan(species_keys)` mask; the center gene rows of a dead slot hold stale integers that are never read, because the integer gene payload cannot carry NaN.
@@ -61,13 +62,13 @@ No random draw happens inside a control-flow body, so keys never need to travel 
 ## Divergences from the Legacy JAX Baseline (deliberate fixes)
 1. `survive_size == 0` (a 1-member species) produced NaN probabilities and killed `random.choice`; now `high = max(survive_size, 1)` yields two identical parents (self-crossover is the identity).
 2. `species_number_calculate_by="fitness"` poisoned `min`/`sum` with the NaN `best_fitness` of dead slots; every reduction now masks dead slots first.
-3. `HyperNEATNode.forward` disagreed with the node-gene protocol (missing `valid_mask`, `aggregation` called with one argument); the corrected contract is `forward(state, attrs, ins, valid_mask, is_output_node)` batch-first with `aggregation(ins, valid_mask)`. See `./hyperneat`.
+3. `HyperNEATNode.forward` disagreed with the node-gene protocol (missing `valid_mask`, `aggregation` called with one argument); the corrected contract is `forward(state, attrs, messages, is_output_node, valid_mask)` batch-first with `aggregation(messages, valid_mask)` (`BaseNode.forward`'s positional order, which the genome calls). See `./hyperneat`.
 4. `spawn_number` relied on NaN → int32 cast semantics; dead slots are explicitly zeroed before the cast.
 5. `weight_threshold` was unvalidated while `1 - weight_threshold` divides; `__init__` now raises `TensorNEATError` for `weight_threshold ∉ [0, 1)`, `max_weight <= 0`, `species_size * min_species_size > pop_size`, a bad `species_number_calculate_by`, or a non-dividing `pop_batch_size`.
 6. Sort tie-order stays bit-compatible with legacy by using a *stable ascending* `argsort` followed by an index reversal gather (evoxc `argsort(descending=True)` breaks ties the other way).
 
 ## Dependencies (cross-node contracts this subtree relies on)
-`genome`: batch-first kernels `initialize(state, key)`, `transform(state, nodes, conns)`, `forward(state, transformed, inputs (P, …))`, `execute_crossover(state, key, w_nodes, w_conns, l_nodes, l_conns)`, `execute_mutation(state, key, nodes, conns, new_node_keys (P,), new_conn_markers (P, 3))`, `execute_distance(state, center_nodes, center_conns, pop_nodes, pop_conns) -> (P,)`.
+`genome`: batch-first kernels `initialize(state, key, pop_size) -> GenomeTensors`, `transform(state, node_keys, conn_keys)`, `forward(state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, inputs (P, …))`, `execute_crossover(state, key, winners, losers)` (winner payload first), `execute_mutation(state, key, payload, new_node_keys (P,), new_conn_markers (P, 3))`, `execute_distance(state, centre_batch, pop_batch) -> (P,)` — the exact call sites are listed in `./neat/CONTEXT.md`.
 `genome` RNG: every kernel takes **one** `evoxc.random` key and draws population-shaped randomness inside (`random.uniform(key, (P, n_attrs))`), because an evoxc key is a rank-0/2/4 scalar and cannot be indexed dynamically — this supersedes the plural `keys` wording in the package CONTEXT.
 `genome`: static attributes `num_inputs`, `num_outputs`, `max_nodes`, `max_conns`, `node_gene.length`, `conn_gene.length`, `conn_gene.uses_historical_marker`, plus key/validity helpers `node_exists`, `conn_exists`, `max_node_key(state, pop_nodes)`, `max_conn_marker(state, pop_conns)` — the algorithm never inspects the padding encoding directly.
 `genome/gene`: a payload builder that turns structural keys plus float attributes into gene rows (`BaseNode.from_attrs` / `BaseConn.from_attrs`), required by `./hyperneat/substrate` to synthesise the fixed substrate network.
