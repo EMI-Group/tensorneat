@@ -84,7 +84,7 @@ Interpretation — the numbers behave like the `O(P · (C log C + N·K·D))` for
 - **Cyclic worst case.** 100 relaxation iterations instead of 6: `node_levels` is ×15.5 the depth-5 figure (trip-count ratio 16.7) and 93–96 % of the whole run. A population without a reachable cycle never pays this — in a real run most members are acyclic and the schedule is one shared traversal per population, not per network.
 - **Lever, not implemented.** `node_levels` carries *two* max-plus relaxations in one loop body: `level` (the answer) and `reach` (only there to tell a live cycle from a long acyclic path). Skipping `reach` for a caller that can guarantee acyclicity would roughly halve the trip cost — the dominant term — but it needs a static "acyclic" flag in the Pipeline's shape signature (and therefore in the executable cache key). Not wired up.
 - `incoming_table` (through `_window_table`) and `node_levels` embed `(P, N·K+1)`/`(P, N·K)` int32 buffers as graph constants: at P=1000 that is 9 constants above evoxc's 1 MiB threshold, ≈14.4 MB total (warned and ignored). P ≤ 500 stays below the threshold (800 KB). A build-time cost, not a per-run one.
-Reproduction (build **once**, then time `evoxc.run` only — `run_defn` per iteration would time the build; the synthetic `tensorneat` package is needed only while `src/tensorneat/__init__.py` still imports the stale sibling modules):
+Reproduction (build **once**, then time `evoxc.run` only — `run_defn` per iteration would time the build; the synthetic `tensorneat` package lets the snippet run from `src/` without installing the package):
 
 ```
 PYTHONPATH=src:test .venv/bin/python - <<'PY'
