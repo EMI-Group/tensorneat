@@ -1,117 +1,145 @@
-from typing import Callable, Union, List, Tuple
-from jax import vmap, Array, numpy as jnp
+"""Function fitting against a user-supplied function, sampled or gridded."""
+
+from typing import Any, Callable
+
 import numpy as np
 
 from .func_fit import FuncFit
+from ...common.errors import TensorNEATError
+
+__all__ = ["CustomFuncFit", "cartesian_product"]
 
 
 class CustomFuncFit(FuncFit):
+    """Fit a genome to an arbitrary Python function over a box.
+
+    The dataset is generated host-side at construction time and then baked into
+    the graph, so it is a compile-time constant: keep ``S * I`` under roughly
+    250k floats, since evoxc warns above ~1 MiB of constant payload.
+    """
 
     def __init__(
         self,
         func: Callable,
-        low_bounds: Union[List, Tuple, Array],
-        upper_bounds: Union[List, Tuple, Array],
+        low_bounds: Any,
+        upper_bounds: Any,
         method: str = "sample",
         num_samples: int = 100,
-        step_size: Array = None,
-        *args,
-        **kwargs,
-    ):
+        step_size: Any = None,
+        seed: int | None = None,
+        error_method: str = "mse",
+    ) -> None:
+        """Generate the dataset for ``func`` and configure the loss.
 
-        if isinstance(low_bounds, list) or isinstance(low_bounds, tuple):
-            low_bounds = np.array(low_bounds, dtype=np.float32)
-        if isinstance(upper_bounds, list) or isinstance(upper_bounds, tuple):
-            upper_bounds = np.array(upper_bounds, dtype=np.float32)
+        ``func`` maps a 1-D point of shape ``(I,)`` to a scalar or an array of
+        shape ``(O,)``; targets are built host-side with
+        ``np.apply_along_axis(func, -1, inputs)``.
 
-        try:
-            out = func(low_bounds)
-        except Exception as e:
-            raise ValueError(f"func(low_bounds) raise an exception: {e}")
-        assert low_bounds.shape == upper_bounds.shape
+        Sampling modes:
 
-        assert method in {"sample", "grid"}
+        - ``method="sample"`` draws ``num_samples`` points per axis from the box
+          ``[low_bounds, upper_bounds]`` using ``np.random.default_rng(seed)``.
+          The generator is host-side only: the legacy version mutated the global
+          ``np.random`` state, which made runs irreproducible without also
+          seeding the process globally.
+        - ``method="grid"`` builds the cartesian product of
+          ``np.arange(low_bounds[i], upper_bounds[i], step_size[i])`` over every
+          axis, so ``step_size`` must have the same shape as the bounds and be
+          strictly positive.
 
-        self.func = func
-        self.low_bounds = low_bounds
-        self.upper_bounds = upper_bounds
+        Args:
+            func: The target function, ``(I,) -> scalar | (O,)``.
+            low_bounds: Lower corner of the box, one entry per input.
+            upper_bounds: Upper corner of the box, same shape as ``low_bounds``.
+            method: ``"sample"`` or ``"grid"``.
+            num_samples: Number of samples per axis for ``method="sample"``.
+            step_size: Per-axis grid step for ``method="grid"``; ignored
+                otherwise.
+            seed: Seed of the host-side ``np.random.default_rng`` for
+                ``method="sample"``; ``None`` means a fresh entropy source.
+            error_method: One of ``"mse"``, ``"rmse"``, ``"mae"``, ``"mape"``;
+                forwarded to ``FuncFit``.
 
-        self.method = method
-        self.num_samples = num_samples
-        self.step_size = step_size
+        Raises:
+            TensorNEATError: If ``method`` is not ``"sample"``/``"grid"``, if
+                ``num_samples <= 0``, if ``step_size`` is missing, does not
+                match the bounds' shape or is not strictly positive, if
+                ``low_bounds.shape != upper_bounds.shape``, or if
+                ``func(low_bounds)`` raises.
+        """
+        raise NotImplementedError
 
-        self.generate_dataset()
+    def generate_dataset(self) -> None:
+        """Build the ``(S, I)`` inputs and ``(S, O)`` targets on the host.
 
-        super().__init__(*args, **kwargs)
+        For ``method="sample"`` the inputs are ``num_samples`` rows drawn
+        uniformly per axis from ``np.random.default_rng(seed)``, so ``S`` equals
+        ``num_samples``. For ``method="grid"`` the inputs are the cartesian
+        product of the per-axis ``np.arange`` grids, so ``S`` is the product of
+        the per-axis grid lengths.
 
-    def generate_dataset(self):
+        Either way the targets are ``np.apply_along_axis(func, -1, inputs)``,
+        producing a scalar per row promoted to ``(S, 1)`` when ``func`` returns
+        a scalar.
 
-        if self.method == "sample":
-            assert (
-                self.num_samples > 0
-            ), f"num_samples must be positive, got {self.num_samples}"
-
-            inputs = np.zeros(
-                (self.num_samples, self.low_bounds.shape[0]), dtype=np.float32
-            )
-            for i in range(self.low_bounds.shape[0]):
-                inputs[:, i] = np.random.uniform(
-                    low=self.low_bounds[i],
-                    high=self.upper_bounds[i],
-                    size=(self.num_samples,),
-                )
-        elif self.method == "grid":
-            assert (
-                self.step_size is not None
-            ), "step_size must be provided when method is 'grid'"
-            assert (
-                self.step_size.shape == self.low_bounds.shape
-            ), "step_size must have the same shape as low_bounds"
-            assert np.all(self.step_size > 0), "step_size must be positive"
-
-            inputs = np.zeros((1, 1))
-            for i in range(self.low_bounds.shape[0]):
-                new_col = np.arange(
-                    self.low_bounds[i], self.upper_bounds[i], self.step_size[i]
-                )
-                inputs = cartesian_product(inputs, new_col[:, None])
-            inputs = inputs[:, 1:]
-        else:
-            raise ValueError(f"Unknown method: {self.method}")
-
-        outputs = vmap(self.func)(inputs)
-
-        self.data_inputs = jnp.array(inputs)
-        self.data_outputs = jnp.array(outputs)
+        Returns:
+            ``None``; the arrays are stored on the instance for ``inputs`` and
+            ``targets``.
+        """
+        raise NotImplementedError
 
     @property
-    def inputs(self):
-        return self.data_inputs
+    def inputs(self) -> np.ndarray:
+        """The generated inputs of shape ``(S, I)``.
+
+        Returns:
+            Float32 array with one row per sample.
+        """
+        raise NotImplementedError
 
     @property
-    def targets(self):
-        return self.data_outputs
+    def targets(self) -> np.ndarray:
+        """The generated targets of shape ``(S, O)``.
+
+        Returns:
+            Float32 array with one row per sample.
+        """
+        raise NotImplementedError
 
     @property
-    def input_shape(self):
-        return self.data_inputs.shape
+    def input_shape(self) -> tuple[int, ...]:
+        """Per-sample input shape ``(I,)``.
+
+        Returns:
+            The number of bounds, without the sample axis.
+        """
+        raise NotImplementedError
 
     @property
-    def output_shape(self):
-        return self.data_outputs.shape
+    def output_shape(self) -> tuple[int, ...]:
+        """Per-sample output shape ``(O,)``.
+
+        Returns:
+            The shape ``func`` returns for one point, without the sample axis.
+        """
+        raise NotImplementedError
 
 
-def cartesian_product(arr1, arr2):
-    assert (
-        arr1.ndim == arr2.ndim
-    ), "arr1 and arr2 must have the same number of dimensions"
-    assert arr1.ndim <= 2, "arr1 and arr2 must have at most 2 dimensions"
+def cartesian_product(arr1: np.ndarray, arr2: np.ndarray) -> np.ndarray:
+    """Column-wise cartesian product of two ``(n, k)`` arrays.
 
-    len1 = arr1.shape[0]
-    len2 = arr2.shape[0]
+    Rows of ``arr1`` are repeated so that each of them is paired with every row
+    of ``arr2``, then the two column blocks are concatenated -- the same
+    contract as the legacy helper, used to grow the grid one axis at a time.
 
-    repeated_arr1 = np.repeat(arr1, len2, axis=0)
-    tiled_arr2 = np.tile(arr2, (len1, 1))
+    Args:
+        arr1: Array of shape ``(n1, k1)``.
+        arr2: Array of shape ``(n2, k2)`` with ``arr1.ndim == arr2.ndim``.
 
-    new_arr = np.concatenate((repeated_arr1, tiled_arr2), axis=1)
-    return new_arr
+    Returns:
+        Array of shape ``(n1 * n2, k1 + k2)`` holding every pair of rows.
+
+    Raises:
+        AssertionError: If the inputs disagree in rank or exceed rank 2.
+    """
+    raise NotImplementedError
