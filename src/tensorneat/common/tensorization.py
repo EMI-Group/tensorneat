@@ -861,10 +861,11 @@ def validate_schedule(transformed):
             invariant, in this order — a shape or dtype that does not match the
             documented signature, ``in_conn``/``in_src`` disagreeing on a
             padded position, ``in_valid`` disagreeing with
-            ``in_conn != I_INF``, ``topo_key`` not being ``I_INF`` exactly where
-            ``node_level`` is, a negative ``edge_overflow``, or an
-            ``input_slot``/``output_slot`` that points outside ``[0, N)`` and
-            is not ``I_INF``.
+            ``in_conn != I_INF``, ``topo_key``/``node_level`` disagreeing (an
+            ``I_INF`` level without an ``I_INF`` key, a live level without a
+            live key, or a live key that is not ``node_level * N + slot``), a
+            negative ``edge_overflow``, or an ``input_slot``/``output_slot``
+            that points outside ``[0, N)`` and is not ``I_INF``.
 
     Notes:
         Host-only and deliberately not a graph function: it is the oracle the
@@ -921,9 +922,28 @@ def validate_schedule(transformed):
             "validate_schedule: in_valid must be exactly in_conn != I_INF "
             "(a padded window slot disagrees)"
         )
-    if not np.all(topo_key[node_level == I_INF] == I_INF):
+    dead_level = node_level == I_INF
+    if not np.all(topo_key[dead_level] == I_INF):
         raise ConfigError(
             "validate_schedule: an I_INF node_level must pair with an I_INF topo_key"
+        )
+    live_level = ~dead_level
+    if np.any(topo_key[live_level] == I_INF):
+        raise ConfigError(
+            "validate_schedule: a finite node_level must pair with a finite topo_key "
+            "(topo_key is I_INF on a live node)"
+        )
+    expected_topo = node_level.astype(np.int64) * num_nodes + np.arange(
+        num_nodes, dtype=np.int64
+    )[None, :]
+    mismatch = live_level & (topo_key != expected_topo)
+    if np.any(mismatch):
+        member, slot = (int(index) for index in np.argwhere(mismatch)[0])
+        raise ConfigError(
+            "validate_schedule: topo_key must equal node_level * N + slot on every "
+            f"live node (N = {num_nodes}); at (member {member}, slot {slot}) "
+            f"node_level is {int(node_level[member, slot])} and topo_key is "
+            f"{int(topo_key[member, slot])}"
         )
     if np.any(edge_overflow < 0):
         raise ConfigError(
