@@ -1,67 +1,71 @@
-# Intent
+# problem — task / fitness layer
 
-Task/fitness definitions for TensorNEAT: a problem wraps an environment or dataset and turns a transformed genome ("params") into one scalar fitness that the NEAT algorithm maximizes.
-Every problem is a `StatefulBaseClass` (`src/tensorneat/common/stateful_class.py`) so it can register immutable values into the shared `State` pytree.
-Two families: function fitting (`func_fit/`, dataset known at construction) and reinforcement learning (`rl/`, environment stepped inside a JAX loop).
+## Intent
+Turn a batch-first transformed genome into one scalar fitness per individual, entirely inside an evoxc trace.
+Two families: supervised function fitting (`func_fit/`, dataset fixed at construction) and reinforcement learning (`rl/`, a batched CartPole rollout `scan`ned over timesteps).
+Nothing here imports a simulator, `jax` or `torch`: problems own the *algebra* (tiling, reduction, dynamics), the backend owns execution.
+A problem is pure host-side configuration (`StatefulBaseClass`) plus plain-Python kernel helpers that are inlined into the caller's graph.
 
-# API Surface (`base.py: BaseProblem`)
+## Protocol (`base.py`)
+- `evaluate(self, state, keys, act_fn, transformed) -> fitness (P,)` — fitness is **maximized**; the body runs inside an active trace.
+- `keys` is **one** evoxc key (rank-0 int64 from `evoxc.random.key(seed)`), never a `(P,)` batch: evoxc has no batched key type and random ops are not vmappable, so a population draws a whole `(P, ...)` block from one key.
+- `act_fn(batch, *input_shape) -> (batch, *output_shape)` with population/batch on axis 0; `batch` may be `P * S` (func fit tiles the dataset) or `P * R` (rollout repeats), not necessarily `P`.
+- `transformed` is the batch-first execution schedule from `Genome.transform`; the only thing a problem may read from it is `static_batch_size(transformed)` (schema-agnostic: the static leading dim of its leaves), because problems cannot otherwise know `P`.
+- `input_shape` / `output_shape` are **per-sample** shapes (`XOR` → `(2,)` / `(1,)`), so `input_shape[-1]` equals `algorithm.num_inputs`; legacy problems returned dataset-shaped tuples — that convention is gone.
+- `setup(self, state=State()) -> State` is inherited from `StatefulBaseClass`; no shipped problem registers keys today, `state` exists for protocol uniformity (and for user problems that need normalization stats).
+- `show(self, state, key, act_fn, transformed)` is **host-side** (never called from a trace): it evaluates a batch of one and prints a human-facing report.
+- `show_details(self, state, key, act_fn, transformed)` is a host-side no-op hook called by `Pipeline.auto_run` when `show_problem_details=True`.
+- `finalize_fitness(fitness)` maps NaN → `-inf` and is applied by every problem, so a network that poisons itself with NaN can never win selection.
+- The legacy `jitable` flag is gone: a problem is always traced, and whether a kernel compiles is the backend's business (`evoxc.BackendError` propagates unchanged, never a silent host fallback).
 
-- `jitable` class attribute (default `None`) — must be set to `True` by every subclass; `Pipeline.__init__` asserts `problem.jitable` (`pipeline.py:33`), so all shipped problems set `jitable = True`.
-- `evaluate(self, state, randkey, act_func, params)` — return a scalar fitness, maximized; implement in every subclass (`Functions`/`RLEnv` do).
-- `act_func` is `algorithm.forward`, i.e. `Genome.forward(state, transformed_params, inputs) -> outputs` (`genome/base.py:107`, `genome/default.py:68`); it is passed as a static (non-vmapped) argument.
-- Pipeline call site: `jax.vmap(problem.evaluate, in_axes=(None, 0, None, 0))(state, keys, self.algorithm.forward, pop_transformed)` (`pipeline.py:119`) — the param-pytree and per-individual randkey are the vmapped axes.
-- `setup(self, state=State()) -> State` — inherited no-op from `StatefulBaseClass.setup`; override to `state.register(...)`; it runs after `algorithm.setup` (`pipeline.py:86-87`) so `state.randkey` is available.
-- `input_shape` / `output_shape` properties — `input_shape[-1]` must equal `algorithm.num_inputs` (asserted in `Pipeline.__init__`).
-- `show(self, state, randkey, act_func, params, *args, **kwargs)` — non-jitted, human-facing visualization/printout.
-- `show_details(self, state, randkey, act_func, pop_params, *args, **kwargs)` — inherited no-op; called from `Pipeline.auto_run` only when `show_problem_details=True`.
-- `State` is an immutable registered pytree (`common/state.py`): use `register`/`update`/`remove`, attribute assignment raises `AttributeError("State is immutable")`.
+## Function fitting algebra (`func_fit/`)
+- Dataset: `inputs (S, I)` and `targets (S, O)` as host numpy arrays; they are genuinely static, so they enter the graph as `evoxc.constant(evoxc.from_numpy(...))` baked at trace time (no `State` threading, no per-call upload).
+- A baked dataset travels inside the compiled artifact, so keep `S` modest: beyond ~1 MiB of payload evoxc warns about the constant, i.e. roughly `S * I > 250k` floats.
+- Evaluation without vmap-over-samples: `broadcast_to(inputs, (P, S, I))` then `reshape` to `(P*S, I)`; row `p*S + s` belongs to individual `p`, then **one** `act_fn` call over the whole tiled batch, then `reshape` back to `(P, S, O)`.
+- Error tensor: `err = pred - expand_dims(targets, 0)` broadcast over the population axis.
+- Loss (per individual, reduced over sample *and* output axes, exactly like the legacy `jnp.mean` over all elements): `mse = mean(err**2)`, `rmse = sqrt(mse)`, `mae = mean(|err|)`, `mape = mean(|err / targets|)` — `mape` with a zero target yields inf, which is legacy behaviour and is kept.
+- Fitness: `finalize_fitness(-loss)`; NaN predictions (an unconnected/dead topology) give a NaN loss and therefore `-inf`.
+- `XOR` (S=4, I=2), `XOR3d` (S=8, I=3) are literals; `CustomFuncFit` samples the box (`method="sample"`, `np.random.default_rng(seed)`) or a cartesian grid (`method="grid"`, `step_size`), and builds targets host-side with `np.apply_along_axis(func, -1, inputs)`.
+- `CustomFuncFit` samples from a seeded `Generator`, so a run is reproducible without touching the global `np.random` state (the legacy global-seed coupling is gone).
 
-# Shipped Subclasses
+## CartPole algebra (`rl/cartpole.py`)
+- Classic Gym `CartPole-v1` physics with Euler integration: `dt=0.02`, `g=9.8`, `masscart=1.0`, `masspole=0.1`, half-pole `length=0.5`, `force_mag=10`, dead when `|x| > 2.4` or `|theta| > 12deg` (`= 0.2095 rad`), reset `U(-0.05, 0.05)^4`.
+- `input_shape = (4,)` = `(x, x_dot, theta, theta_dot)`; `output_shape = (2,)` = two continuous logits, action = "push right" iff `out[1] > out[0]` (a tie pushes left, matching `argmax` index 0) computed with `enp.split` + `enp.greater`, so no integer/bool control flow and no `argmax` dtype handling.
+- A genome used with `CartPole` must emit two logits: do **not** set an `argmax`-style `output_transform` (the problem owns the discrete decision).
+- One `evoxc.scan` over `max_step=500` timesteps: `xs = enp.zeros((max_step, 1))`, carry `(obs (B, 4), alive (B,))`, `B = P * repeat_times`, individual-major.
+- Step body: `reward_t = alive` (the failing step still scores, matching Gym returns), `alive = alive & ~( |x'| > 2.4 | |theta'| > 12deg )`, state frozen after death via `enp.where(alive[:, None], next_obs, obs)` — no `cond`, no data-dependent trip count, every carried dtype/shape constant across iterations.
+- Fitness = mean over the `repeat_times` axis of the summed reward (return in `[0, max_step]`), then `finalize_fitness`.
+- Randomness: a single `evoxc.random.uniform(key, (B, 4), low=-0.05, high=0.05)`; no key threading through the scan, no `np.random`.
+- Because episodes are frozen, an individual's return is its survival time: `max_step` is the fitness ceiling, so `fitness_target` must be `<= max_step`.
 
-- `func_fit/func_fit.py: FuncFit(BaseProblem)` — abstract dataset problem; `evaluate` does `vmap(act_func, in_axes=(None, None, 0))` over `self.inputs`, computes `mse|rmse|mae|mape` loss and returns `-loss`; abstract `inputs`, `targets`, `input_shape`, `output_shape`.
-- `func_fit/custom.py: CustomFuncFit(FuncFit)` — builds a dataset from a user `func` over `low_bounds`/`upper_bounds` (`method="sample"` with `num_samples`, or `method="grid"` with `step_size`); helpers `generate_dataset`, `cartesian_product`.
-- `func_fit/xor.py: XOR(FuncFit)` — 4 rows `[[0,0],[0,1],[1,0],[1,1]]`, targets `[[0],[1],[1],[0]]`, shapes `(4,2)/(4,1)`.
-- `func_fit/xor3d.py: XOR3d(FuncFit)` — 8 rows of 3-bit inputs, parity targets, shapes `(8,3)/(8,1)`.
-- `rl/rl_jit.py: RLEnv(BaseProblem)` — jitted rollout engine; all RL subclasses implement only `env_step(randkey, env_state, action)` and `env_reset(randkey)`; `evaluate` averages `repeat_times` episodes via `vmap(self._evaluate_once, ...)`.
-- `rl/gymnax.py: GymNaxEnv(RLEnv)` — `env_name` must be in `gymnax.registered_envs`; wraps `env.step(key, state, action, env_params)` / `env.reset(key, env_params)`; `show` raises `NotImplementedError`.
-- `rl/brax.py: BraxEnv(RLEnv)` — `envs.create(env_name, backend="generalized")`; sizes from `env.observation_size`/`env.action_size`; `show` renders a trajectory to rgb_array/gif/mp4.
-- `rl/mujoco_playground.py: MujocoEnv(RLEnv)` — `registry.load(env_name=env_name)` (default `"SwimmerSwimmer6"`); unwraps dict observations by the `"state"` key; `show` supports gif/mp4 only.
+## Constraints
+- Compute path uses only `evoxc.numpy as enp` plus top-level `evoxc.{isnan, select, from_numpy, constant}`; there is no eager mode, so never call `np.*` on a traced value.
+- `enp` gaps to remember: no `isnan`/`isfinite` (`evoxc.isnan`), no `tile`/`take`/`take_along_axis`/`einsum`/`floor`/`isfinite`; compose from `broadcast_to`, `reshape`, `split`, `concatenate`, `where`, `select`.
+- `enp.zeros/ones/full/empty` are **graph** constants (the concrete creators of the same name live at top level `evoxc.*`); create them inside the traced function, never at module scope.
+- Scalar float literals become f64 constants on the stablehlo/iree path, so every arithmetic constant in a kernel is built with `enp.full((), v)` to stay float32 and to keep numpy/iree numerically aligned.
+- Static-shape hygiene for compiler backends: use non-negative axes in `concatenate`/`split` (`axis=1`, not `axis=-1`) and keep `scan` outputs rank-1 — a rank-3 stacked output needs a rank-3 `scatter` that the v1 stablehlo exporter rejects.
+- No `@evoxc.defn` may call another `@evoxc.defn`, and a Python callable is not a static value: `evaluate`/`show` are plain (undecorated) helpers inlined into `Pipeline.step`'s graph, and `act_fn` reaches them by closure.
+- No python control flow over traced values: horizon, dataset size and population are static config; the only loop in this node is CartPole's `scan`.
+- Errors: constructor/config validation raises `tensorneat.common.errors.TensorNEATError`; shape/dtype/backend errors from evoxc are never caught or re-wrapped.
+- Files ≤ ~1000 lines; the tiling + reduction lives once in `func_fit/func_fit.py`, one file per concrete problem.
 
-# Constraints and Conventions
+## Test Strategy
+- `test/unit/problem/` runs on the numpy backend with no optional dependency: `test_func_fit.py` (a dummy `act_fn` such as `lambda x: x[..., :1]` or a constant-output one; assert the all-zero predictor's XOR fitness equals `-0.5`, a NaN predictor gives `-inf`, tiling row order `p*S + s`, and each `error_method`), `test_cartpole.py` (a host numpy reference of the same Euler dynamics; equal returns for `max_step` 20/50, `|theta| >` limit death, frozen state after death, determinism for one key and divergence for another), `test_problem_api.py` (shapes, `TensorNEATError` on bad config, `static_batch_size` on a fake schedule).
+- `test/parity/problem/` (needs the `bench` extra) compares the new func-fit kernel against `benchmarks/legacy_jax/tensorneat_legacy/problem/func_fit` for `XOR`, `XOR3d` and `CustomFuncFit(method="grid")` under a fixed random network, float32, `rtol≈1e-5`.
+- There is no CartPole parity oracle (the legacy RL problems are deleted), so `test/unit/problem/test_cartpole.py`'s host numpy reference *is* the oracle.
+- `test/integration/` owns end-to-end runs (XOR through the Pipeline); a CartPole smoke run uses `max_step=20`, a small population and two generations.
 
-- `evaluate` (and everything it calls) executes inside `jax.jit(Pipeline.step)` and inside `lax.while_loop`: no Python control flow on traced values, no printing, no `np.*` conversion, no in-place mutation — use `.at[i].set(v)` and functional returns.
-- Fitness is maximized; function fitting returns `-loss`, RL returns mean episodic reward; the pipeline maps `NaN` fitness to `-inf` (`pipeline.py:150`).
-- `evaluate` must be vmappable over both the randkey axis and the param-pytree axis, so it must not carry Python-level batching state between calls.
-- Problems are pure containers of config: environment handles are created once in `__init__` and closed over by the jitted functions.
-- `setup` must return a new `State` (`state.register(...)`), never mutate the incoming one.
-- Shape convention is inconsistent by family: `FuncFit.input_shape/output_shape` include the leading batch dimension (e.g. `(4, 2)`), while `RLEnv` shapes are the per-step observation/action shape (e.g. `(4,)`).
+## Notes for Agents
+- CartPole cost is interpreter-bound, not batch-bound: a measured 500-step scan with a ~30-op body takes ~165 ms per `evaluate` at `P=100` and ~300 ms at `P=1000` on the numpy reference interpreter, but ~30 ms at `P=100` when built with `backend="iree"` (llvm-cpu); a real genome forward is heavier per step than the measured toy linear policy.
+- Practical guidance for RL runs: `backend="iree"` for anything beyond smoke tests, or a smaller `max_step` on numpy.
+- TVM cannot compile this node's rollouts at all (it rejects `if`/`while`/gather/scatter), so `CartPole` is numpy / iree / xla only — a TVM build must fail loudly, never fall back.
 
-# Dependencies
-
-- Hot path (performance critical): pure JAX — `jax.vmap`, `jax.lax.while_loop` over timesteps, `jax.random.split` (`rl/rl_jit.py:132-177`).
-- Bookkeeping (host side, un-jitted): dataset construction with NumPy (`func_fit/custom.py`), observation-normalization sampling with one `jax.jit(vmap(...))` in `RLEnv.setup`, printed logs.
-- Optional leaf deps, all lazily imported inside functions (never at module import): `gymnax` in `rl/gymnax.py:6`, `brax` in `rl/brax.py:9` and `brax.io.image` in `rl/brax.py:48`/`rl/mujoco_playground.py:65`, `mujoco_playground` in `rl/mujoco_playground.py:10`, `imageio` inside both `show` methods.
-- Only `import jax` / `jax.numpy` are top-level in this package, so importing `tensorneat.problem` needs no simulator installed; constructing `GymNaxEnv`/`BraxEnv`/`MujocoEnv` does.
-- `flax`, `optax`, `jaxopt` are declared in `pyproject.toml` but are not imported anywhere under `src/tensorneat/`.
-
-# Config Knobs (`RLEnv.__init__`)
-
-- `max_step=1000` — episode horizon; also the padded length of the arrays returned when `record_episode=True`.
-- `repeat_times=1` — number of independent episodes averaged in `evaluate` (stochasticity reduction, NOT action repeat / frame skip).
-- `action_policy=None` — callable `(randkey, forward_func, obs) -> action`; when `None`, the raw network output is used as the action.
-- `obs_normalization=False` — when `True` requires `sample_policy=(randkey, obs) -> action` and `sample_episodes>0`; `setup` runs random episodes, registers `problem_obs_mean`/`problem_obs_std` into `State`, and `norm_obs(state, obs)` (`rl/rl_jit.py:208`) applies `(obs-mean)/(std+1e-6)` inside the rollout.
-- Env parameters come from the library, not from this package: `gymnax.make(env_name)` returns `(env, env_params)`, brax/mujoco-playground use `envs.create` / `registry.load` defaults; there is no local env registry.
-
-# Known Issues / Gotchas
-
-- `RLEnv._evaluate_once` uses `jax.lax.while_loop` (cond `~done & (count < max_step)`), not `lax.scan`; episode recording pre-fills arrays with `NaN` so unfinished steps stay distinguishable.
-- Pytree observation spaces are unsupported in `MujocoEnv`: any obs dict lacking a `"state"` key raises `ImportError` (raised) from `env_step`/`env_reset`.
-- `record_episode` is a private argument of `_evaluate_once`, not a constructor flag; the `record_episode=True` examples in `test/test_record_episode.*` use an older `problem.rl_env` import path and no longer match this API.
-- `BraxEnv.show` / `MujocoEnv.show` pass the same un-split `randkey` into every `jit_step` call, so stochastic envs see identical randomness per step.
-- `CustomFuncFit.generate_dataset` uses the global `np.random` (not a JAX key), so its dataset is only reproducible because `Pipeline.__init__` calls `np.random.seed(self.seed)`.
-- `XOR`/`XOR3d` return NumPy arrays from `inputs`/`targets`, which works because they are closed-over constants under `vmap`/`jit`.
-
-# Routing Table
-
-- `./src/tensorneat/problem/func_fit` — supervised function-fitting problems (`FuncFit`, `CustomFuncFit`, `XOR`, `XOR3d`).
-- `./src/tensorneat/problem/rl` — RL rollout engine and simulator adapters (`RLEnv`, `GymNaxEnv`, `BraxEnv`, `MujocoEnv`).
+## Routing Table
+| Path | Responsibility |
+|---|---|
+| `./base.py` | `BaseProblem` protocol, `static_batch_size(transformed)`, `finalize_fitness(fitness)`. |
+| `./func_fit` | Supervised function fitting: `FuncFit` tiling + loss reduction, `XOR`, `XOR3d`, `CustomFuncFit`. |
+| `./rl` | Batched `CartPole` rollout (`scan` over timesteps) and the recipe for user-defined evoxc environments. |
+| `../common/errors.py` | `TensorNEATError`, the single config-validation exception (sibling — read-only, escalate writes to parent). |
+| `../genome/base.py` | Produces the batch-first `transformed` schedule this node consumes and the `forward` kernel used as `act_fn` (sibling — read-only). |
+| `../../test/unit/problem` | Unit suites for this node (sibling — read-only, escalate writes to parent). |
