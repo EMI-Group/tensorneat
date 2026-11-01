@@ -111,7 +111,9 @@ The legacy JAX baseline is 51 / 109 / 157 ms per generation, so the cycle is 6�
 ## Known Issues
 `next_species_key` must stay strictly greater than every live key; `setup` seeds it at `1.0` (slot 0 uses `0.0`) and each created species increments it, so the invariant holds as long as the counter is never rebound by hand — a colliding counter silently merges two species' `member_count`.
 `test/unit/algorithm/test_spawn.py` encodes the brief's `loc(p) = #{i : spawn[i] > 0 and E[i] <= p} - 1`; that count is wrong for a live zero-spawn species in the middle of the table, so the oracle needs the "last qualifying block" form to agree with `block_layout` (cross-node item, `test/` is not writable from here).
-`test/unit/algorithm/**` cannot run yet: the sibling skeletons break `import tensorneat` (`common/tensorization.py` has no `build_schedule` while `genome/base.py` imports it, and `common/functions` has no `get_func_name` while `genome/gene/node/bias.py` imports it). The kernels here were verified standalone on the numpy backend instead.
+`test/unit/algorithm/**` bodies are hard-coded `pytest.skip`, so the suite verifies nothing even against a working tree; this node is currently verified by driving `Pipeline` end-to-end on the numpy backend with the real `DefaultGenome`/`XOR` (pop 8/100/500/1000, `rank` and `fitness` spawn modes, `max_stagnation` kills, `OriginConn`'s `historical_marker` branch, `pop_batch_size` chunking, `RecurrentGenome`, XOR3d) plus bit-identical repeat runs.
+`speciate` calls `distance_fn` once per species slot in each of its two scans (`2 × species_size` whole-population passes per generation) and pays that even for dead slots and for iterations whose masks turn every write into a no-op; at `species_size=20` this is ~77 % of `tell`.
+`_new_gene_keys` is per-individual by contract (see `## Gene Keys & Padding`), so the genome must not assume keys are globally unique across the population.
 
 ## Constraints
 No `jax`/`torch`/`numpy.random` import; `import tensorneat` must stay free of them (release gate).
