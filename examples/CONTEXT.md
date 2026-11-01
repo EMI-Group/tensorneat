@@ -3,7 +3,8 @@
 ## Intent
 One small, copy-pasteable script per supported problem family, written against the public `tensorneat` API only.
 Every pipeline script is the same four lines of orchestration: build `Pipeline(algorithm, problem, ...)`, `setup()`, `auto_run()`, `show()`.
-Budgets are deliberately tiny (pop 1000 or less, ≤ 150 generations, `backend="numpy"`), so each run finishes in seconds to well under a minute on CPU and needs no optional dependency.
+Budgets are deliberately tiny and marked `# Demo budget:` in the code (pop 200–500, 20–50 generations, `backend="numpy"`), so each run finishes in seconds to well under a minute on CPU and needs no optional dependency.
+A real run raises `pop_size` into the thousands and the generation limit into the hundreds; nothing else changes.
 Nothing here imports `jax`, `torch`, `brax`, `gymnax` or `mujoco`; the simulators and the EvoX 1.x adaptor those examples used no longer exist.
 
 ## API Surface (how to run)
