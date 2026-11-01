@@ -1,93 +1,114 @@
-# Intent
-Pure-JAX NEAT (NeuroEvolution of Augmenting Topologies) implementation: population-level genetic operators plus fitness-based speciation, written as pure functions over the immutable `State` pytree so the whole ask → transform → evaluate → tell cycle compiles as ONE `jax.jit`.
-`NEAT` (`neat.py`) is the algorithm entry point used by `tensorneat.pipeline.Pipeline`; `SpeciesController` (`species.py`) owns all speciation, stagnation and reproduction bookkeeping.
-Everything is functional: no in-place mutation, no Python loops over the population (vmap/scan instead), no host-side branching on traced values (`jnp.where` / `jax.lax.cond` instead).
+# NEAT (`tensorneat.algorithm.neat`) — population cycle + species bookkeeping
 
-# API Surface
+## Intent
+Everything in a NEAT generation that is neither network mathematics (genome) nor task evaluation (problem): the population tensors, the generation counter, speciation, stagnation, spawn allocation, parent pairing, and the crossover/mutation dispatch.
+`NEAT` (`neat.py`) is the algorithm the pipeline drives; `SpeciesController` + `SpeciesState` (`species.py`) own the species algebra.
+Every kernel here is batch-first over `P = pop_size` and compiled by `pipeline.py` into the single per-generation evoxc graph, so no function may branch on a traced value or read the host.
+The layer is deliberately cheap: `O(species_size × pop_size)` gene-row distance work in `speciate`, `O(pop_size)` selection/crossover/mutation, and never a `max_nodes × max_nodes` tensor.
 
-## `NEAT(BaseAlgorithm)` — neat.py
-`BaseAlgorithm` (`../base.py`) is a `StatefulBaseClass` declaring only `NotImplementedError` stubs for `ask/tell/transform/forward/show_details/num_inputs/num_outputs`.
+## API Surface
+`__init__.py` re-exports `NEAT`, `SpeciesController`, `SpeciesState`.
 
-```python
-NEAT(
-    genome: BaseGenome,
-    pop_size: int,
-    species_size: int = 10,
-    max_stagnation: int = 15,
-    species_elitism: int = 2,
-    spawn_number_change_rate: float = 0.5,
-    genome_elitism: int = 2,
-    survival_threshold: float = 0.1,
-    min_species_size: int = 1,
-    compatibility_threshold: float = 2.0,
-    species_fitness_func: Callable = jnp.max,
-    species_number_calculate_by: str = "rank",   # "rank" | "fitness"
-    pop_batch_size: int = None,
-)
-```
-- `__init__` stores `self.genome`, `self.pop_size`, `self.pop_batch_size`, builds `self.species_controller = SpeciesController(...)` (all 11 species kwargs passed positionally).
-- Asserts `species_number_calculate_by in ["rank", "fitness"]` and `pop_size % pop_batch_size == 0` when `pop_batch_size` is set.
-- `pop_batch_size` docstring (issue #41): splits population-level vmap work into `lax.scan` batches to cut GPU peak memory from O(pop) to O(pop_batch_size).
-- `setup(self, state=State())` → registers `randkey` untouched from genome setup, splits a key, `vmap(self.genome.initialize, in_axes=(None, 0))` over `pop_size` keys, registers `pop_nodes`, `pop_conns`, `generation=jnp.float32(0)`, then `species_controller.setup(state, pop_nodes[0], pop_conns[0])` (species 0 seeded with individual 0 as center).
-- `ask(self, state)` → `return state.pop_nodes, state.pop_conns` (a 2-tuple, no copy, no randomness).
-- `tell(self, state, fitness)` → increments `generation`, calls `species_controller.update_species` (returns `winner`, `loser`, `elite_mask`), then `_create_next_generation`, then `species_controller.speciate(state, self.genome.execute_distance)`; returns new state.
-- `transform(self, state, individual)` → unpacks `(nodes, conns)` and delegates to `self.genome.transform`.
-- `forward(self, state, transformed, inputs)` → delegates to `self.genome.forward`.
-- `show_details(self, state, fitness)` → host-side only (`jax.device_get` + numpy); prints max/min/mean node & conn counts (counted as non-NaN first columns) and the list of non-zero species sizes.
-- Properties: `num_inputs`, `num_outputs` (both forwarded from `self.genome`); public attributes `genome`, `pop_size`, `pop_batch_size`, `species_controller`.
-- `_create_next_generation(self, state, winner, loser, elite_mask)` — allocates `new_node_keys = arange(pop_size) + (max node key + 1)` using `jnp.max(..., where=~isnan, initial=0)`; allocates `new_conn_markers` of shape `(pop_size, 3)` likewise only if `"historical_marker" in self.genome.conn_gene.fixed_attrs`, else `jnp.full((pop_size, 3), 0)`; splits randkeys into crossover keys and mutation keys; `vmap(self.genome.execute_crossover, in_axes=(None,0,0,0,0,0))` over gathered winner/loser parents; `vmap(self.genome.execute_mutation, in_axes=(None,0,0,0,0,0))` through `_vmap_or_scan`; then elitism: `jnp.where(elite_mask[:, None, None], n_nodes, m_n_nodes)` keeps elite children unmutated.
-- `_vmap_or_scan(self, vmap_fn, args)` — if `pop_batch_size` is None/≥ pop_size runs `vmap_fn(args)`; otherwise reshapes args to `(n_batches, bs, ...)` with `jax.tree_util.tree_map`, runs `jax.lax.scan` with `carry=None`, and reshapes results back.
+`NEAT(BaseAlgorithm)` — `neat.py`:
+`__init__(genome, pop_size, species_size=10, max_stagnation=15, species_elitism=2, spawn_number_change_rate=0.5, genome_elitism=2, survival_threshold=0.1, min_species_size=1, compatibility_threshold=2.0, species_fitness_func=evoxc.max, species_number_calculate_by="rank", pop_batch_size=None)` — constructor kwargs are API-compatible with the pre-rewrite library.
+`setup(state) -> State` registers `pop_size` (static int), `pop_nodes (P, max_nodes, node_len)`, `pop_conns (P, max_conns, conn_len)`, `generation` (0-d float32) and `state.species`, then advances `randkey`.
+`ask(state) -> (pop_nodes, pop_conns)`; `transform(state, pop)`/`forward(state, transformed, inputs)` delegate to the genome; `tell(state, fitness) -> State` runs the nine-step algebra below.
+`show_details(state, fitness) -> None` is the only host-side member; `num_inputs`/`num_outputs`/`pop_size` are read-only properties (`pop_size` is backed by `_pop_size` because the base class property has no setter).
+Private members: `_sanitize_fitness` (module function), `_create_next_generation`, `_new_gene_keys`, `_batched`.
 
-## `SpeciesController(StatefulBaseClass)` — species.py
-- `__init__(pop_size, species_size, max_stagnation, species_elitism, spawn_number_change_rate, genome_elitism, survival_threshold, min_species_size, compatibility_threshold, species_fitness_func, species_number_calculate_by)`; stores `self.species_arange = np.arange(species_size)` (host numpy constant used as the vmap/loop index source).
-- `setup(self, state, first_nodes, first_conns)` → registers a nested `State` under key `species` with keys `species_keys`, `best_fitness`, `last_improved`, `member_count` (each `(species_size,)` float, NaN = empty slot), `idx2species` (`(pop_size,)` float), `center_nodes`/`center_conns` (`(species_size, *gene_shape)`, NaN-padded), `next_species_key=jnp.float32(1)`; slot 0 is seeded as a live species holding all `pop_size` members with `best_fitness=-inf`, `last_improved=0`.
-- `update_species(self, state, fitness)` → per-species fitness (`_update_species_fitness`), stagnation (`_stagnation`), descending sort of all species arrays by `jnp.argsort(species_fitness)[::-1]`, spawn-number allocation (`_cal_spawn_numbers_by_rank` or `_cal_spawn_numbers_by_fitness`, chosen by a Python `if` on the static string), then `_create_crossover_pair`; returns `(state_with_new_randkey_and_species, winner, loser, elite_mask)`.
-- `_update_species_fitness(self, species_state, fitness)` → `vmap` over `species_arange`; per slot masks `fitness` with `idx2species == species_keys[idx]` (`-inf` elsewhere) and applies `self.species_fitness_func` (default `jnp.max`).
-- `_stagnation(self, species_state, species_fitness, generation)` → `vmap` over species with `jax.lax.cond` to update `best_fitness`/`last_improved`; flags stagnation when fitness did not improve for `> max_stagnation` generations; `rank_elements(species_fitness) < species_elitism` species are exempt; stagnated slots get NaN keys/counts/centers and `species_fitness = -inf` (deliberately -inf, not NaN, so the later descending argsort keeps them last).
-- `_cal_spawn_numbers_by_rank(species_state)` → linear ranking over valid (non-NaN) species: `rank_score = valid_species_num - arange`, `denominator = (n+1)*n/2`, `target = floor(rate * pop_size)`, then damped `previous_size + (target - previous_size) * spawn_number_change_rate`, floored at `min_species_size`, cast to `jnp.int32` (NaN → 0), and the residual `pop_size - sum` is added to species 0.
-- `_cal_spawn_numbers_by_fitness(species_state)` → same damping/clamping/fix-up path but rates from `best_fitness - min(best_fitness) + 1` normalized over non-NaN entries.
-- `_create_crossover_pair(self, species_state, randkey, spawn_number, fitness)` → per species `vmap`: member mask from `idx2species`, `survive_size = floor(survival_threshold * members_num)`, `select_pro = (p_idx < survive_size) / survive_size`, `jax.random.choice(..., shape=(2, pop_size), replace=True, p=select_pro)` for father/mother; the first `genome_elitism` slots are forced to the best member and marked in `elite_mask`; second `vmap` maps each population slot to its species via `jnp.argmax(idx < jnp.cumsum(spawn_number))`; winner/loser chosen by `fitness[father] >= fitness[mother]`.
-- `speciate(self, state, genome_distance_func)` → builds `o2p_distance_func = vmap(genome_distance_func, in_axes=(None, None, None, 0, 0))` (one-to-population compatibility distance) and then runs two `jax.lax.while_loop`s: (1) re-elect center genomes — phase 1 assigns each existing species a new center as the nearest still-unassigned genome (`argmin_with_mask`); (2) assign genomes to species — `jax.lax.while_loop` with `jax.lax.cond` per slot dispatching to `create_new_species` (via `fetch_first`, consumes `next_species_key`, then `speciate_by_threshold`) or `update_exist_specie`; leftovers when the species cap is hit are dumped into the last species key; new species get `best_fitness=-inf`, `last_improved=state.generation`; finally `member_count` is recomputed by `vmap`-ed `jnp.sum(idx2species == key)`.
+`SpeciesController(StatefulBaseClass)` — `species.py`:
+`setup(state, first_nodes, first_conns) -> State`, `update_species(state, fitness) -> (State, winner (P,), loser (P,), elite_mask (P,))`, `speciate(state, distance_fn) -> State`.
+Private: `_species_fitness`, `_stagnation`, `_cal_spawn_numbers_by_rank`, `_cal_spawn_numbers_by_fitness`, `_pair_parents`, `_block_layout`, static `_sort_desc_legacy`, static `_prefix_sum_exclusive`.
 
-# JAX Dependency Map (most important)
-- No function in this subtree carries `@jax.jit`, `jax.jit(...)` or `partial(jax.jit, ...)`, and there are no `static_argnames` / `donate_argnums` here.
-- Compilation comes from OUTSIDE: `Pipeline.auto_run` does `jax.jit(self.step).lower(state).compile()` where `step` calls `algorithm.ask/transform/tell`; `Pipeline.analysis` separately jits `vmap(algorithm.transform)` when `show_problem_details` is on. So every traced function below must be jit-compatible.
-- Jitted helpers consumed here live in `tensorneat/common/tools.py`: `fetch_first` (`@jit`), `rank_elements` (`@partial(jit, static_argnames=["reverse"])`), while `argmin_with_mask` is plain Python composed of `jnp.where`/`jnp.argmin` (no decorator).
-- `neat.py::setup` — `jax.random.split`, `jax.vmap`, `jnp.float32`; Python-level `state.register`. Runs once, outside the training loop.
-- `neat.py::ask` — no JAX ops at all (pure attribute access), always traced-inline.
-- `neat.py::tell` — Python call graph only; arithmetic on `state.generation` (+1) is traced jnp math.
-- `neat.py::transform` / `::forward` — thin delegations to the genome (all real XLA work is in `tensorneat/genome/`).
-- `neat.py::_create_next_generation` — `jnp.max` with `where=`/`initial=`, `jnp.isnan`, `jnp.arange`, `jnp.full`, `jnp.where`, `jax.random.split`, Python `if "historical_marker" in self.genome.conn_gene.fixed_attrs` (static, resolved at trace time), gather indexing `state.pop_nodes[winner]`, and `jax.vmap` over `execute_crossover`/`execute_mutation`.
-- `neat.py::_vmap_or_scan` — `jax.tree_util.tree_map`, `jax.lax.scan` with `carry=None`; the Python `if bs is None or bs >= pop_size` branch is static (shape changes require recompilation).
-- `neat.py::show_details` — `jax.device_get` + `numpy`, `print`: host-side, must stay outside jit (called from `Pipeline.analysis` after `compiled_step`).
-- `species.py::setup` — `jnp.full`, `jnp.zeros`, functional `.at[...].set`; no randomness.
-- `species.py::update_species` — `jnp.argsort(...)[::-1]` (fancy-index reorder of every species array), `jax.random.split`, Python `if/elif` on `species_number_calculate_by` (static).
-- `species.py::_update_species_fitness` — `jnp.where`, `jnp.isnan`-free, `jax.vmap` over a host `numpy` index array.
-- `species.py::_stagnation` — `jax.vmap` + `jax.lax.cond` (traced `if`), `jnp.where`, `rank_elements` (jitted helper), `jnp.full_like`.
-- `species.py::_cal_spawn_numbers_by_rank` / `_by_fitness` — `jnp.isnan`, `jnp.sum`, `jnp.floor`, `jnp.where`, `.astype(jnp.int32)`, `.at[0].add(error)`, `jnp.min`/`jnp.sum(..., where=)`.
-- `species.py::_create_crossover_pair` — `jax.vmap` (nested: per species and per population slot), `jax.random.split`, `jax.random.choice` with `p=`, `jnp.argsort`, `jnp.floor`, `jnp.cumsum`, `jnp.argmax`, `jnp.where`.
-- `species.py::speciate` — two `jax.lax.while_loop`s with data-dependent trip counts (bounded by `species_size`), `jax.lax.cond`, `jax.vmap` of the genome distance function, `jnp.isnan`/`jnp.any`/`jnp.where`, `argmin_with_mask`, `fetch_first`.
-- Bottom line: the entire generation bookkeeping (speciation, species sorting, stagnation, survival/spawn allocation, parent selection, mutation/crossover dispatch) is compiled; only `show_details` and the `species_arange` construction are host-side Python.
+`SpeciesState` — frozen dataclass, one leaf per field, stored under `state.species`:
+`species_keys (S,) f32` (NaN = dead slot), `best_fitness (S,) f32`, `last_improved (S,) f32`, `member_count (S,) f32`, `idx2species (P,) f32` (NaN = unassigned, only inside `speciate`), `center_nodes (S, max_nodes, node_len) int`, `center_conns (S, max_conns, conn_len) int`, `next_species_key` (0-d f32).
+`S = species_size`, `P = pop_size`. Every scalar field is float32 so NaN can encode a dead slot and so `generation` writes into `last_improved` without a dtype change inside a scan carry.
 
-# Gradients
-- Nothing in this subtree references `grad`, `value_and_grad` or `optax`: `NEAT.ask` returns only `(pop_nodes, pop_conns)` and `NEAT.tell` accepts only `fitness` — fitness-based evolution with no gradient channel.
-- Gradient capability lives one level down in `tensorneat/genome/base.py::BaseGenome.grad(state, nodes, conns, inputs, loss_fn)` → `jax.value_and_grad(_inner, argnums=(0, 1))` with NaN entries zeroed (`jnp.where(jnp.isnan(nodes), 0.0, grad_nodes)`), returning `(loss, (grad_nodes, grad_conns))`; callers apply it themselves (see `examples/func_fit/xor_grad.py`, which vmaps it over the population and does plain SGD).
-- `optax >= 0.2.2` is a declared dependency in `pyproject.toml` but is not imported anywhere under `src/tensorneat`.
+## Generation Algebra (`NEAT.tell`)
+1. Sanitise fitness: `finite = ~isnan(f - f)`, `clean = select(finite, f, -inf)` — exact for NaN and both infinities without an `isfinite` op.
+2. `generation += 1` before the species update (legacy order): stagnation is judged against the generation that produced the fitness being consumed.
+3. `SpeciesController.update_species` → species fitness, stagnation, species sort, spawn allocation, parent pairs.
+4. `_new_gene_keys` → per-genome unique `new_node_keys (P,)` and `new_conn_markers (P, 3)`.
+5. Crossover: `gather(pop, winner, axis=0)` / `gather(pop, loser, axis=0)`, then batch-first `genome.execute_crossover(state, key, w_nodes, w_conns, l_nodes, l_conns)`; argument order is part of the contract (winner first).
+6. Mutation: batch-first `genome.execute_mutation(state, key, nodes, conns, new_node_keys, new_conn_markers)`, scan-chunked by `pop_batch_size`.
+7. Elitism: `select(elite_mask[:, None, None], crossover_children, mutated_children)`.
+8. `SpeciesController.speciate(state, genome.execute_distance)` rebuilds membership for the new population.
+9. Commit `pop_nodes`, `pop_conns`, `randkey`, `generation`, `species`.
 
-# Constraints & Conventions
-- `State` (`tensorneat/common/state.py`) is an immutable, `register_pytree_node_class`-registered pytree: `__setattr__` raises `AttributeError("State is immutable")`, children = values, aux_data = literal string keys.
-- `state.register(**kwargs)` REJECTS existing keys (`ValueError`), `state.update(**kwargs)` REJECTS unknown keys — every key must be introduced by `register` before `update` can touch it; `remove(*keys)` exists too.
-- Keys live as string literals: algorithm state `randkey`, `pop_nodes`, `pop_conns`, `generation`; nested `state.species.<name>` for the 8 species fields. Reads go through `__getattr__` (`state.pop_nodes`).
-- `SpeciesController` extends `StatefulBaseClass` (`tensorneat/common/stateful_class.py`), whose `setup(state=State())`/`show_config` are the only shared behavior; controller attributes are plain Python (config), not state.
-- NaN is the universal "empty/invalid" sentinel: padded nodes/conns rows, dead species slots, and unassigned `idx2species`; for int32 arrays NaN is impossible so `I_INF = np.iinfo(jnp.int32).max` (`tensorneat/common/tools.py`) is used, e.g. as `fetch_first` default.
-- Population shapes: `pop_nodes (pop_size, max_nodes, node_gene.length)`, `pop_conns (pop_size, max_conns, conn_gene.length)`; column 0 holds node keys / connection historical markers; the arrays are fixed-size and NaN-padded.
-- `generation` is `jnp.float32` (not int) so it can flow through float-typed species bookkeeping (`last_improved`, `next_species_key` likewise float).
-- No in-place mutation anywhere: only `x.at[idx].set/add(...)` functional updates and rebuilt `State`s.
-- Control flow on traced values must be `jnp.where` or `jax.lax.cond`; loops over species are `vmap(species_arange)`/`lax.while_loop` with dynamic conditions — never `for i in range(pop_size)`.
-- `spawn_number` is always reconciled to sum exactly to `pop_size` by adding the residual to species 0, and cast to `jnp.int32` (NaN → 0).
-- Species are kept sorted best-first after `update_species`, which is what lets `_cal_spawn_numbers_by_rank` use `species_arange` itself as the rank.
-- Elite individuals bypass mutation: `elite_mask` (first `genome_elitism` slots of each species) selects the unmutated crossover children via `jnp.where(elite_mask[:, None, None], ...)`.
-- Coupling to the genome package: `self.genome.initialize / execute_crossover / execute_mutation / execute_distance / transform / forward` (all vmappable, `in_axes=(None, 0, ...)` with `state` as a broadcast first arg), plus `genome.conn_gene.fixed_attrs` (presence of `"historical_marker"` decides whether new conn markers are allocated), `genome.node_gene.length`, `genome.max_nodes`/`max_conns`.
-- `new_conn_markers` has a hard-coded width of 3: one mutation call may add at most 3 connections.
-- Known edge case: in `_create_crossover_pair`, `select_pro = (p_idx < survive_size) / survive_size` divides by zero for a species whose `floor(survival_threshold * members_num) == 0` (e.g. a 1-member species), yielding NaN selection probabilities for `jax.random.choice`.
-- No `donate_argnums`/`jit` here means state buffers are not donated — every generation allocates new `pop_nodes`/`pop_conns`.
+## Species Algebra
+Membership is one primitive reused everywhere: `M[i, p] = idx2species[p] == species_keys[i]`, shape `(S, P)`; NaN compares False, so dead slots and unassigned rows never match.
+Species fitness: `select(M[i], fitness, -inf)` then `species_fitness_func(..., axes=1)` — masking before the reduce keeps a member-less slot at `-inf` instead of NaN.
+Stagnation: `improved = f_s > best_fitness`; `stagnant = (f_s <= best_fitness) & (generation - last_improved > max_stagnation)`, disabled when `rank_elements(f_s) < species_elitism`; a killed slot writes NaN into `species_keys`/`best_fitness`/`last_improved`/`member_count` and `-inf` into its species fitness (so the descending sort pushes it last).
+Sort: `perm = _sort_desc_legacy(f_s)` — stable ascending `argsort` plus the reversal permutation `n - 1 - enp.arange(n)` — then one `gather` per `(S, …)` field; after the sort the slot index *is* the fitness rank.
+Spawn (rank mode): `n = sum(valid)`, `rank_score = n - arange(S)`, `denominator = (n+1)*n/2`, `target = floor(rank_score/denominator * pop_size)`.
+Spawn (fitness mode): `f' = f_live - min_live(f_live) + 1`, `rate = f' / sum_live(f')`, `target = floor(rate * pop_size)` — every reduction masks dead slots first.
+Spawn (both modes): `damped = member_count + (target - member_count) * spawn_number_change_rate`, floored at `min_species_size`, dead/NaN slots forced to `0.0`, cast to int32, then `spawn[0] += pop_size - sum(spawn)` via a single `scatter` so `sum(spawn) == pop_size` exactly.
+Parent pairing: members ranked by fitness descending (masked with `-inf` first), `survive_size = floor(survival_threshold * member_count)`, `high = max(survive_size, 1)`, one `evoxc.random.randint(key, (S, 2, P), low=0, high=high[:, None])` draw for father **and** mother, `gather(sorted_members, slots, axis=1)`, elites (`p_idx < genome_elitism`) pinned to `sorted_members[:, 0]`.
+Block flattening: with exclusive prefix `E` of `spawn`, `loc(p) = #{i : spawn[i] > 0 and E[i] <= p} - 1` and `idx_in_block(p) = p - E[loc(p)]`; parents are then one gather at `flat = loc * pop_size + idx_in_block` into the row-major `(S, P)` parent arrays.
+Winner/loser: `first` wins ties (`fitness[first] >= fitness[second]`), matching the legacy comparison.
+Speciation, scan 1 (centre reservation): per live slot `i`, `d = distance_fn(state, center_nodes[i], center_conns[i], pop_nodes, pop_conns)`, `closest = argmin(select(isnan(idx2species), d, +inf))`, then assign `idx2species[closest] = species_keys[i]`, `center_[nodes|conns][i] = pop[closest]`, `o2c[closest] = 0`; a dead slot writes nothing.
+Speciation, scan 2 (member assignment): a live slot assigns every genome with `d < compatibility_threshold` and `(unassigned | d < o2c)`; a dead slot creates a species keyed `next_species_key` seeded by `fetch_first(isnan(idx2species))`, then assigns against the new centre; an iteration with nothing unassigned writes nothing.
+Speciation post-pass: leftovers adopt the last species key, slots created this generation get `best_fitness = -inf` / `last_improved = generation`, and `member_count` is one masked compare-sum over `(S, P)`.
+
+## Scan Patterns (why fixed-length scans are exact)
+`evoxc` de-sugars `scan` into `while` + `gather`/`scatter`, so a trip count must be static and the carry must keep identical dtypes and shapes: both speciation phases are `scan(f, carry, enp.arange(species_size))` with per-slot masks, never a data-dependent `while_loop`.
+The legacy early-exit conditions survive as masks: scan 1 stops writing at the first dead slot, scan 2 stops writing once nothing is unassigned, and because every write is a mask-then-single-`scatter`, the extra iterations are provably no-ops.
+`scan` requires `xs` with a rank ≥ 1 leaf and a `y` output with ≥ 1 symbolic leaf, so the index vector is the `xs` and the updated `idx2species` is reported as `y` (unused downstream).
+No random draw happens inside any scan body — keys never have to travel through a carry.
+Scan carries are kept narrow and packed (e.g. `idx2species` and `o2c` as one `(2, P)` tensor, `species_keys` plus `next_species_key` as one `(S+1,)` tensor) because wide carries with `select` are a known iree codegen hazard.
+
+## Gene Keys & Padding
+`new_node_keys = max_node_key(state, pop_nodes) + 1 + enp.arange(P)`; `new_conn_markers = max_conn_marker(state, pop_conns) + 1 + enp.arange(P * 3).reshape(P, 3)`, or `enp.zeros((P, 3))` when `conn_gene.uses_historical_marker` is False.
+The width `3` is a genome-level convention: one mutation call may add at most three connections per genome.
+Validity is never inferred from packaging: this subtree calls `node_exists`, `conn_exists`, `max_node_key`, `max_conn_marker` on the genome.
+Dead species slots are recognised by `isnan(species_keys)` alone; their centre rows hold stale integers because int32 cannot carry NaN, and no kernel reads a centre gated by that mask.
+
+## Divergences from the Pre-Rewrite Baseline (deliberate fixes)
+1. Zero-survivor division: the old `(p_idx < survive_size) / survive_size` probability vector divided by zero for a one-member species; `randint` with `high = max(survive_size, 1)` yields two identical parents instead (self-crossover is the identity).
+2. NaN-poisoned reductions: `"fitness"`-mode `min`/`sum` in the old code mixed in the NaN `best_fitness` of dead slots; every reduction now masks dead slots with `select` first.
+3. NaN → int32 cast for `spawn_number`: dead and NaN slots are explicitly written to `0.0` before the cast instead of relying on cast semantics.
+4. `species_number_calculate_by`/`weight_threshold`-style configuration errors raise `TensorNEATError` instead of `assert`/`ValueError`.
+5. Sort tie order is reproduced exactly by a stable ascending `argsort` plus a reversal gather, because `argsort(descending=True)` breaks ties in the opposite direction.
+6. Random streams differ from the baseline by construction: one key per population kernel (drawing `(P, …)` randomness internally) instead of one key per genome, so parity tests compare kernels with fixed inputs and structural outcomes, not RNG bit-patterns.
+
+## Randomness Budget
+Exactly two `evoxc.random` splits per generation: `selection_key, rest = split(state.randkey)` then `cross_key, mut_key, next_randkey = split_n(rest, 3)` — three consumed subkeys in the order parent selection, crossover, mutation, with `next_randkey` carried in `state.randkey`.
+`pop_batch_size` chunking pre-splits the kernel key with `split_n(key, n_batches)` and passes the stacked `(n_batches,)` int64 array as the scan `xs`, so each step receives a valid rank-0 key.
+There is no `choice`, no `fold_in` and no probability vector; uniform parent ranks come from `randint` with a broadcast symbolic `high`.
+Keys are rank-0 scalars, so a batched kernel takes one key and draws its own population-shaped randomness.
+
+## Dependencies (cross-node contracts)
+`genome` (batch-first, one rank-0 key each): `setup(state)`, `initialize(state, key) -> (pop_nodes (P, max_nodes, node_len), pop_conns (P, max_conns, conn_len))` reading `P` from `state.pop_size`, `transform(state, nodes, conns)`, `forward(state, transformed, inputs)`, `execute_crossover(state, key, w_nodes, w_conns, l_nodes, l_conns)`, `execute_mutation(state, key, nodes, conns, new_node_keys (P,), new_conn_markers (P, 3))`, `execute_distance(state, center_nodes_i, center_conns_i, pop_nodes, pop_conns) -> (P,)`.
+`genome` statics: `num_inputs`, `num_outputs`, `max_nodes`, `max_conns`, `node_gene.length`, `conn_gene.length`, `conn_gene.uses_historical_marker`; helpers `node_exists`, `conn_exists`, `max_node_key`, `max_conn_marker`.
+`common`: `State` (immutable, evoxc-flattenable), `StatefulBaseClass`, `errors.TensorNEATError`, `tools.{rank_elements, fetch_first, argmin_with_mask, to_numpy}`.
+`pipeline`: creates `randkey`, calls `setup`, drives `ask → transform → forward/evaluate → tell`, calls `show_details` on host-readable values.
+`problem`: `evaluate(state, keys, act_fn, transformed)` with `act_fn` = `algorithm.forward` partially applied; the problem owns dataset tiling.
+
+## Constraints
+No `jax`/`torch` import; `import tensorneat` must stay free of them (release gate).
+No branching, `bool()`, `len()` or host reads on traced values — static Python `if`/`for` over constructor configuration is fine and unrolls at trace time.
+No `.at[]`, no `cumsum` on the compute path (prefix sums are triangular `dot`), no `where=`/`initial=`/`any`/`all`/`take`/`searchsorted`/`repeat`, no `vmap` over anything region-bearing, no `fori_loop`/`switch`.
+Shapes are static: `P`, `S`, `max_nodes`, `max_conns` are fixed at build time; a change forces a rebuild by the pipeline.
+Errors: configuration validation raises `common.errors.TensorNEATError` with a named message; trace/shape/backend errors propagate unchanged and are never re-wrapped or silently fallen back.
+State keys touched: `randkey`, `pop_size`, `pop_nodes`, `pop_conns`, `generation`, `species`, plus the genome/problem keys documented above — nothing else.
+Files stay under ~1000 lines: `neat.py` is the population cycle, `species.py` the species algebra; shared math lives in `common/`.
+
+## Known Risks
+`evoxc.random.randint` needs a symbolic `high` that stays ≥ 1 at runtime — guaranteed here by `max(survive_size, 1)`, which also removes the legacy NaN case.
+`evoxc.scatter` is replacement-only, so every "accumulate" update is restructured as reduce-then-scatter-once (spawn residual, stale-write elimination in the speciation scans).
+Wide `while`/`scan` carries plus `select` can crash iree codegen (`AffinityAnalysis`), hence the packed-carry convention; the numpy reference backend is unaffected.
+Reading a dead slot's centre rows would return stale integers, not NaN — always gate centre reads behind `isnan(species_keys)`.
+Chunked (`pop_batch_size`) and unchunked runs draw different random streams; `pop_batch_size` is part of the reproducibility config.
+
+## Test Strategy
+Tests live in the sibling `test/` tree (read-only from here): `test/unit/algorithm/neat/` covers the spawn/selection/stagnation algebra and the block layout on fixed keys with the numpy backend.
+`test/parity/algorithm/neat/` compares against `benchmarks/legacy_jax` on fixed gene payloads — identical selection/speciation outcomes for the deterministic steps, and only the divergences listed above allowed elsewhere.
+`test/integration/` evolves XOR to its fitness target with a fixed seed and asserts run-to-run determinism for a `(seed, config, shape)` triple.
+Every kernel here must be a pure function of `(state, key)`: no dict-order dependence, no host RNG, no float→int conversion without an explicit mask.
+
+## Routing Table
+| Path | Responsibility |
+| --- | --- |
+| `./neat.py` | `NEAT`: population cycle (`setup`/`ask`/`transform`/`forward`/`tell`), fitness sanitising, next-generation creation, `pop_batch_size` scan chunking, host-side `show_details`. |
+| `./species.py` | `SpeciesState` (frozen dataclass) and `SpeciesController`: species fitness, stagnation, descending sort, spawn allocation, parent pairing, block layout, fixed-length speciation scans, shared sort/prefix-sum utilities. |
+| `./__init__.py` | Re-exports `NEAT`, `SpeciesController`, `SpeciesState`. |
