@@ -10,6 +10,7 @@ never touches numpy, jax, evoxc or tensorneat.
 from __future__ import annotations
 
 import math
+import shlex
 from pathlib import Path
 
 from harness.protocol import (
@@ -147,11 +148,12 @@ def _plain(value) -> str:
     return str(int(number)) if number.is_integer() else f"{number:g}"
 
 
-def _flag(value) -> str:
-    """Boolean -> ``yes``/``no``; anything missing -> ``n/a``."""
-    if value is None:
+def _run_flag(declared, ran, case: str, impl: str) -> str:
+    """``yes`` when the implementation ran, ``not run`` when it could but was not asked,
+    ``n/a`` when the case cannot run that implementation at all."""
+    if impl not in declared:
         return "n/a"
-    return "yes" if value else "no"
+    return "yes" if (case, impl) in ran else "not run"
 
 
 def _verdict_cell(value) -> str:
@@ -209,9 +211,56 @@ def _protocol_meta(doc: dict) -> dict:
     return _meta(doc).get("protocol") or {}
 
 
+def _repo_root(path: Path) -> Path | None:
+    """The checkout root above ``path``: the directory that holds ``benchmarks/``.
+
+    The marker files are the strongest signal, but a path recorded on the machine that ran
+    the benchmark already names the root structurally (``<root>/benchmarks/results/x.json``),
+    so a ``benchmarks`` path component identifies it even when the tree is not readable.
+    Returns ``None`` for a path outside any checkout — which is what makes
+    :func:`_display_path` fall back to the basename.
+    """
+    for parent in path.parents:
+        if (parent / "benchmarks").is_dir() and (parent / "pyproject.toml").is_file():
+            return parent
+        if parent.name == "benchmarks":
+            return parent.parent
+    return None
+
+
+def _repo_relative(value) -> str | None:
+    """``value`` relative to the checkout root when it is an absolute path inside it.
+
+    Relative paths are returned normalised, a path outside the checkout as ``None``.
+    """
+    path = Path(str(value))
+    if not path.is_absolute():
+        return path.as_posix()
+    root = _repo_root(path)
+    if root is None:
+        return None
+    return path.relative_to(root).as_posix()
+
+
+def _display_path(value, fallback: str) -> str:
+    """A path as it belongs in the committed report: repo-relative, else just the basename.
+
+    A worktree path such as ``/root/.../benchmarks/results/latest.json`` must never leak
+    into ``RESULTS.md``: whoever reads it needs a path relative to the repo they cloned.
+    """
+    text = _text(value, fallback)
+    relative = _repo_relative(text)
+    return relative if relative is not None else Path(text).name
+
+
 def _json_path(doc: dict) -> str:
     """Path of the JSON the report was rendered from."""
-    return _text(_meta(doc).get("json_path"), "benchmarks/results/latest.json")
+    return _display_path(_meta(doc).get("json_path"), "benchmarks/results/latest.json")
+
+
+def _out_path(doc: dict) -> str:
+    """Path of the report itself, rendered with the same relativisation."""
+    return _display_path(_meta(doc).get("out_path"), "benchmarks/RESULTS.md")
 
 
 def _timestamp(doc: dict) -> str:
@@ -329,36 +378,54 @@ def _protocol_section(doc: dict) -> str:
     return "## Protocol\n\n" + _table(["Parameter", "Value"], rows) + "\n\n" + paragraph
 
 
+def _timed_generations(doc: dict, entry: dict) -> str:
+    """Timed generation budget of this run, falling back to the case's declared limit."""
+    generations = _protocol_meta(doc).get("generations")
+    if isinstance(generations, int) and not isinstance(generations, bool):
+        return _plain(generations)
+    return _plain(entry.get("generation_limit"))
+
+
 def _case_matrix_section(doc: dict) -> str:
-    """The case matrix, plus family/notes for each case."""
+    """The case matrix as one table: workload, budget and which implementations ran."""
     matrix = _meta(doc).get("case_matrix") or []
     if not matrix:
         return "## Case matrix\n\nno cases recorded"
-    rows, notes = [], []
+    ran = {
+        (_text(run.get("case"), ""), _text(run.get("impl"), ""))
+        for run in doc.get("runs") or []
+    }
+    rows = []
     for entry in matrix:
+        name = _text(entry.get("name"))
         impls = [str(impl) for impl in (entry.get("impls") or [])]
         rows.append(
             [
-                _text(entry.get("name")),
+                name,
+                _text(entry.get("family")),
                 _text(entry.get("problem")),
                 _plain(entry.get("pop_size")),
-                _plain(entry.get("generation_limit")),
+                _timed_generations(doc, entry),
                 _plain(entry.get("fitness_target")),
-                _flag("old" in impls),
-                _flag("new" in impls),
-            ]
-        )
-        notes.append(
-            [
-                _text(entry.get("name")),
-                _text(entry.get("family")),
+                _run_flag(impls, ran, name, "old"),
+                _run_flag(impls, ran, name, "new"),
                 _cell(entry.get("notes"), "—"),
             ]
         )
     body = _table(
-        ["Case", "Problem", "Pop", "Generations", "Fitness target", "Old", "New"], rows
+        [
+            "Case",
+            "Family",
+            "Problem",
+            "Pop",
+            "Timed generations",
+            "Fitness target",
+            "Old",
+            "New",
+            "Notes",
+        ],
+        rows,
     )
-    body += "\n\n" + _table(["Case", "Family", "Notes"], notes)
     return "## Case matrix\n\n" + body
 
 
@@ -535,11 +602,28 @@ def _comparison_section(doc: dict) -> str:
     return "## Old vs new\n\n" + table + "\n\n" + note
 
 
+NO_VERDICT_PREFIXES = ("timing: no verdict for ", "quality: no verdict for ")
+"""Per-case "no verdict" reasons that repeat the failing rows already listed above them."""
+
+
+def _verdict_reasons(verdict: dict) -> list[str]:
+    """Verdict reasons without the per-case "no verdict" restatement.
+
+    The error rows, the ``Sub-verdicts`` summary and the closing ``N run(s) not ok`` line
+    already say that a comparison could not be judged, so one line per case adds noise.
+    """
+    return [
+        str(reason)
+        for reason in (verdict.get("reasons") or [])
+        if not str(reason).startswith(NO_VERDICT_PREFIXES)
+    ]
+
+
 def _verdict_section(doc: dict) -> str:
     """Overall verdict, its reasons and the two sub-verdicts."""
     verdict = doc.get("verdict") or {}
     status = _text(verdict.get("status"), "INCOMPLETE")
-    reasons = [str(reason) for reason in (verdict.get("reasons") or [])]
+    reasons = _verdict_reasons(verdict)
     lines = ["## Verdict", "", f"**{status}**", ""]
     if reasons:
         lines.extend(f"- {_cell(reason)}" for reason in reasons)
@@ -711,11 +795,40 @@ def _not_compared_section() -> str:
     )
 
 
+def _command_tokens(command) -> list[str]:
+    """``meta["command"]`` split back into argv tokens (empty for a missing command)."""
+    text = str(command or "").strip()
+    if not text:
+        return []
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+
+def _reproduce_command(doc: dict) -> tuple[str, str]:
+    """``(portable command, interpreter used)`` for the reproduce block.
+
+    The recorded command starts with the absolute interpreter path of the machine that
+    produced the run, which must not become the documented way to reproduce it: the
+    first command is the portable ``python benchmarks/run_benchmark.py <flags...>`` and
+    the interpreter that actually ran is stated on its own line.
+    """
+    tokens = _command_tokens(_meta(doc).get("command"))
+    if not tokens:
+        return "python benchmarks/run_benchmark.py", "n/a"
+    interpreter = _repo_relative(tokens[0]) or tokens[0]
+    arguments = [_repo_relative(token) or token for token in tokens[1:]]
+    if not arguments:
+        arguments = ["benchmarks/run_benchmark.py"]
+    return shlex.join(["python", *arguments]), interpreter
+
+
 def _reproduce_section(doc: dict) -> str:
-    """Exact command line plus the settings it used."""
+    """Portable command line, the interpreter that produced the run, and its settings."""
     meta = _meta(doc)
     proto = _protocol_meta(doc)
-    command = _text(meta.get("command"), "python benchmarks/run_benchmark.py")
+    command, interpreter = _reproduce_command(doc)
     cases = ", ".join(_text(name) for name in (meta.get("cases") or []))
     backends = ", ".join(_text(name) for name in (meta.get("backends") or []))
     threads = proto.get("threads")
@@ -740,12 +853,21 @@ def _reproduce_section(doc: dict) -> str:
         f"threads: {thread_text}. Backend(s) of the new side: {backends or 'n/a'}; the old side "
         "always ran on JAX, once per case."
     )
-    return "## How to reproduce\n\n" + block + "\n\n" + note
+    return (
+        "## How to reproduce\n\n"
+        + block
+        + "\n\n"
+        + f"Interpreter used: {interpreter}\n\n"
+        + note
+    )
 
 
 def _footer(doc: dict) -> str:
     """Closing line: provenance and the do-not-edit reminder."""
-    return f"Generated from `{_json_path(doc)}` at {_timestamp(doc)} — do not hand-edit."
+    return (
+        f"Generated from `{_json_path(doc)}` into `{_out_path(doc)}` at "
+        f"{_timestamp(doc)} — do not hand-edit."
+    )
 
 
 # --- Entry points -------------------------------------------------------------------------
