@@ -17,7 +17,9 @@ order and the ``o0``/``h1``/``i2`` node-symbol naming are unchanged, so
 existing tutorials and stored expressions keep working.
 """
 
-import sympy as sp  # noqa: F401  (host-only; imported for the signatures' sake)
+import re
+
+import sympy as sp  # host-only; never imported from a traced kernel
 
 
 def analysis_nodes_exprs(nodes_exprs):
@@ -38,9 +40,19 @@ def analysis_nodes_exprs(nodes_exprs):
         None: Host-only; a key that starts with none of those prefixes is
         simply not counted (it is neither a node nor a normalization symbol).
     """
-    raise NotImplementedError(
-        "count input/hidden/output symbols and collect the norm* substitutions"
-    )
+    input_cnt, hidden_cnt, output_cnt = 0, 0, 0
+    norm_symbols = {}
+    for key in nodes_exprs.keys():
+        name = str(key)
+        if name.startswith("i"):
+            input_cnt += 1
+        elif name.startswith("h"):
+            hidden_cnt += 1
+        elif name.startswith("o"):
+            output_cnt += 1
+        elif name.startswith("norm"):
+            norm_symbols[key] = nodes_exprs[key]
+    return input_cnt, hidden_cnt, output_cnt, norm_symbols
 
 
 def round_expr(expr, precision=2):
@@ -59,9 +71,7 @@ def round_expr(expr, precision=2):
         TypeError: Propagated unchanged if ``expr`` is not a sympy object
             (``sp.Expr.atoms`` missing).
     """
-    raise NotImplementedError(
-        "replace every sp.Number atom with its rounded value"
-    )
+    return expr.xreplace({n: round(n, precision) for n in expr.atoms(sp.Number)})
 
 
 def replace_variable_names(expression, mode):
@@ -84,9 +94,25 @@ def replace_variable_names(expression, mode):
             raised here so a mistake in a notebook cannot be silently absorbed
             by an optimized Python run).
     """
-    raise NotImplementedError(
-        "regex-rewrite o/h/i node symbols for python or latex emission"
-    )
+    if mode not in ("python", "latex"):
+        raise ValueError(f"mode must be 'python' or 'latex', got {mode!r}")
+
+    expression_str = str(expression)
+    if mode == "python":
+        expression_str = re.sub(r"\bo(\d+)\b", r"o[\1]", expression_str)
+        expression_str = re.sub(r"\bh(\d+)\b", r"h[\1]", expression_str)
+        expression_str = re.sub(r"\bi(\d+)\b", r"i[\1]", expression_str)
+    else:  # latex mode
+        expression_str = re.sub(
+            r"\bo(\d+)\b", lambda match: f"o_{{{match.group(1)}}}", expression_str
+        )
+        expression_str = re.sub(
+            r"\bh(\d+)\b", lambda match: f"h_{{{match.group(1)}}}", expression_str
+        )
+        expression_str = re.sub(
+            r"\bi(\d+)\b", lambda match: f"i_{{{match.group(1)}}}", expression_str
+        )
+    return expression_str
 
 
 def to_latex_code(
@@ -124,9 +150,24 @@ def to_latex_code(
     Raises:
         None: Host-only presentation code.
     """
-    raise NotImplementedError(
-        "emit a LaTeX align block of the useful node expressions in topo order"
+    input_cnt, _hidden_cnt, _output_cnt, norm_symbols = analysis_nodes_exprs(
+        nodes_exprs
     )
+    res = "\\begin{align}\n"
+
+    for i in topo_order[input_cnt:]:
+        # Skip nodes that do not contribute to an output: a useless node's
+        # expression may be NaN and would break ``sp.latex``.
+        if i not in useful_nodes:
+            continue
+        symbol = symbols[i]
+        expr = nodes_exprs[symbol].subs(args_symbols).subs(norm_symbols)
+        rounded_expr = round_expr(expr, 2)
+        latex_expr = f"{symbol} &= {sp.latex(rounded_expr)}\\newline\n"
+        latex_expr = replace_variable_names(latex_expr, "latex")
+        res += latex_expr
+    res += "\\end{align}\n"
+    return res
 
 
 def to_python_code(
@@ -165,6 +206,23 @@ def to_python_code(
     Raises:
         None: Host-only presentation code.
     """
-    raise NotImplementedError(
-        "emit runnable numpy source lines for the useful node expressions"
+    input_cnt, hidden_cnt, output_cnt, norm_symbols = analysis_nodes_exprs(
+        nodes_exprs
     )
+    res = ""
+    if hidden_cnt > 0:
+        res += f"h = np.zeros({hidden_cnt})\n"
+    res += f"o = np.zeros({output_cnt})\n"
+
+    for i in topo_order[input_cnt:]:
+        # Skip nodes that do not contribute to an output: a useless node's
+        # expression may be NaN and would break the emitted source.
+        if i not in useful_nodes:
+            continue
+        symbol = symbols[i]
+        expr = nodes_exprs[symbol].subs(args_symbols).subs(norm_symbols)
+        rounded_expr = round_expr(expr, 6)
+        str_expr = f"{symbol} = {rounded_expr}"
+        res += replace_variable_names(str_expr, "python") + "\n"
+
+    return res
