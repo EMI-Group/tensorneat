@@ -2,11 +2,11 @@
 ## Intent
 Keep the measurements that justify the rewrite's *design* (edge-proportional, depth-parallel forward) separate from the end-to-end benchmark, with their conditions spelled out so nobody has to trust a number without a method.
 `FORMULATION.md` is the record: it cites the frozen legacy per-node forward cost, the depth-unrolled prototype cost, and the one-off build cost per unrolled depth.
-`forward_micro.py` is the runnable micro-benchmark behind those numbers — it measures formulations, not libraries: the legacy side needs `jax` + `benchmarks/legacy_jax` on the path, the numpy prototype needs only `numpy`.
+`forward_micro.py` is the runnable micro-benchmark behind those numbers — it measures formulations, not libraries: the legacy side needs `jax` + `benchmarks/legacy_jax` on the path, the numpy prototype needs only `numpy` and never imports `jax` (the version is read from the installed metadata).
 ## API Surface
-`python benchmarks/spikes/forward_micro.py --mode {legacy,unrolled,all} [--pop 1000] [--max-nodes 50] [--max-conns 150] [--depth 8] [--levels 4,8,16]`.
+`python benchmarks/spikes/forward_micro.py --mode {legacy,unrolled,all} [--pop 1000] [--max-nodes 50] [--max-conns 150] [--depth 8] [--levels 4,8,16] [--window 0] [--iters 20] [--build-iters 5] [--seed 0]`.
 - `legacy` — times `tensorneat_legacy` `DefaultGenome` `vmap`'d transform+forward for a synthetic population (per-node `u_conns` formulation, build cost reported separately).
-- `unrolled` — times a self-contained numpy prototype of the depth-parallel formulation: per-level gather over real edges plus window reduce, Python-unrolled by depth, with its own build cost.
+- `unrolled` — times two forms of a self-contained numpy prototype of the depth-parallel formulation, both Python-unrolled by depth: a `(P, max_nodes, window)` gather + window reduce per level, and a real-edge gather + `np.add.reduceat` segment sum per level; each form reports its own one-off build cost and the two are asserted to compute the same outputs.
 - `all` — both, plus the ratio table that the design argument rests on.
 Output is a plain table plus the exact command lines and environment, so a number quoted in `FORMULATION.md` can be re-derived.
 ## Constraints
