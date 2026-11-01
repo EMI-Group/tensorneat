@@ -27,6 +27,7 @@ Nothing here imports `jax`, `torch`, `brax`, `gymnax` or `mujoco`; the simulator
 - Construction-level configuration only; there is no eager compute mode, so a script never touches a traced tensor.
 - `algorithm.num_inputs`/`num_outputs` come from the genome and must match `problem.input_shape`/`output_shape` (the `Pipeline` asserts it).
 - Host-only introspection (`network_dict`, `repr`, `sympy_func`, `visualize`) never feeds back into a graph, and needs a one-individual (`P == 1`) payload.
+- `max_in_degree` is a genome static: a recurrent genome accumulates many incoming edges per node, so its example sizes the window at 16; too small a window aborts the run with "the execution schedule dropped N connection(s)".
 - No argparse, no helper packages, no unused imports; a script stays ≲ 110 lines and is a single readable top-level run.
 
 ## Test Strategy
