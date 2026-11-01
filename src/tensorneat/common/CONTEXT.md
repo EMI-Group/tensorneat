@@ -227,6 +227,7 @@ It is deliberately not re-exported by `common.__init__` (its only consumer is `G
 ## Constraints
 - No `jax`/`torch`/`numpy.random` in graph code; randomness is `evoxc.random` stateless keys (`key(seed)`, `split`, `randint(key, shape, low, high)`, `uniform`, `normal`, `permutation`).
 - Files ≤ ~1000 lines; shared math lives here, never duplicated in `genome`/`algorithm`.
+- `tensorization.py` sits at ~1000 lines on purpose: it is one responsibility (derive the schedule) with a long derivation docstring per step, and splitting it would separate the recipe from the kernels that implement it.
 - Inside this node one rule has one owner: `tools` owns the positive-static validator (`_positive_static`, used by `batch_offsets` and by every static in `tensorization`), the rank-0 scalar-constant builder (`_scalar_constant`) and the host-side array accessor (`to_numpy`, which `tensorization._host_array` converts through); those three are imported, never re-written. `host_graph` keeps its own `_I_INF` literal on purpose — `tools` pulls in `evoxc` and that module is deliberately backend-free.
 - Nothing in this node imports from `genome`, `algorithm`, `problem`, `pipeline`, `benchmarks`, or `test`.
 - Every public function carries a napoleon docstring stating shapes, dtypes, sentinels, and the invariances it relies on.
