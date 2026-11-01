@@ -38,7 +38,7 @@ SELECTIONS = ("old", "new", "both")
 """Valid values of ``--impl``."""
 
 STDERR_TAIL_LINES = 15
-"""How many trailing stderr lines are kept in a failed run's ``error`` field."""
+"""How many trailing stderr lines are summarised into a failed run's ``error`` field."""
 
 
 # --- Lazy imports of the numpy-touching half of the harness -------------------------------
@@ -304,12 +304,6 @@ def _tail(text, lines: int = STDERR_TAIL_LINES) -> str:
     return "\n".join(chunks[-lines:])
 
 
-def _first_line(text) -> str:
-    """First non-empty line of an error message, truncated for the progress line."""
-    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
-    return lines[0][:200] if lines else "(no error message)"
-
-
 def _load_record(path) -> dict | None:
     """Read a worker JSON record, or ``None`` when it is missing or not a JSON object."""
     try:
@@ -330,7 +324,7 @@ def _error_record(run: dict, args: argparse.Namespace, case_by_name: dict, messa
         "repeat": run["repeat"],
         "seed": run["seed"],
         "status": protocol.STATUS_ERROR,
-        "error": message,
+        "error": protocol.short_error(message) or protocol.NO_ERROR_TEXT,
         "case_config": case.as_dict() if case is not None else {},
         "env": protocol.env_report(),
         "protocol": {
@@ -377,15 +371,15 @@ def execute_run(
         if isinstance(stderr, bytes):
             stderr = stderr.decode("utf-8", "replace")
         message = f"timeout after {args.timeout}s"
-        tail = _tail(stderr)
+        tail = protocol.short_error(_tail(stderr))
         if tail:
-            message = f"{message}\n{tail}"
+            message = f"{message}: {tail}"
         print(f"ERROR: timeout after {args.timeout}s", flush=True)
         return _error_record(run, args, case_by_name, message)
 
     record = _load_record(out_path)
     if proc.returncode != 0:
-        tail = _tail(proc.stderr) or _tail(proc.stdout)
+        tail = protocol.short_error(_tail(proc.stderr) or _tail(proc.stdout))
         if record is not None and record.get("status") == protocol.STATUS_ERROR:
             record = protocol.RunResult.from_dict(record).to_dict()
             if not record.get("error"):
@@ -397,7 +391,8 @@ def execute_run(
                 case_by_name,
                 tail or f"worker exited with code {proc.returncode} and wrote no run record",
             )
-        print(f"ERROR: {_first_line(record.get('error'))}", flush=True)
+        summary = protocol.short_error(record.get("error")) or protocol.NO_ERROR_TEXT
+        print(f"ERROR: {summary}", flush=True)
         return record
 
     if record is None:
@@ -407,7 +402,8 @@ def execute_run(
 
     record = protocol.RunResult.from_dict(record).to_dict()
     if record.get("status") != protocol.STATUS_OK:
-        print(f"ERROR: {_first_line(record.get('error'))}", flush=True)
+        summary = protocol.short_error(record.get("error")) or protocol.NO_ERROR_TEXT
+        print(f"ERROR: {summary}", flush=True)
         return record
     milliseconds = record.get("ms_per_generation")
     if isinstance(milliseconds, (int, float)):
