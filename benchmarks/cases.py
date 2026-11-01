@@ -44,6 +44,16 @@ met by every initial population, so the report's "gens to target" column read 1
 for every xor3d run and carried no information.
 """
 
+_PAGIE_FITNESS_TARGET: float = -0.01
+"""``-mse`` target of the Pagie case: mse <= 0.01, i.e. a genuinely fitted surface.
+
+The measured legacy baseline settles around ``-0.005``, so ``-0.01`` is a
+non-trivial threshold the initial population does not already meet. The former
+``-0.05`` was reached by the legacy population's *first* generation (about
+``-0.0490``), so the report's "gens to target" column read 1 and carried no
+information.
+"""
+
 
 def _pagie_as_jax(point: Any) -> Any:
     """Pagie polynomial ``1/(1+x**-4) + 1/(1+y**-4)`` as a traced ``(1,)`` array.
@@ -407,7 +417,7 @@ _CASES_IN_ORDER: tuple[Case, ...] = (
         impls=("old", "new"),
         pop_size=500,
         generation_limit=150,
-        fitness_target=-0.05,
+        fitness_target=_PAGIE_FITNESS_TARGET,
         notes=(
             "per-impl divergence: the legacy side seeds the global numpy RNG "
             "and vmaps a jax-typed func; the new side samples from "
