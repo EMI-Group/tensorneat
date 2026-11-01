@@ -2,7 +2,7 @@
 
 ## Intent
 Turn a NEAT individual into fixed-shape `int32`/`float32` evoxc tensors, and evaluate a whole population of differently-shaped networks in one batch-first kernel.
-This node owns exactly four things: (1) the **gene payload** (key columns in `int32`, attribute columns in `float32`, padded rows), (2) the **genetic operators** (mutation / crossover / distance) as batched kernels, (3) the **forward algebra** over a precomputed execution schedule plus the exact gradient path beside it (`grad.py`), and (4) host-only introspection (`network_dict`, `sympy_func`, `visualize`, `repr`, `hash`).
+This node owns exactly four things: (1) the **gene payload** (key columns in `int32`, attribute columns in `float32`, padded rows), (2) the **genetic operators** (mutation / crossover / distance) as batched kernels, (3) the **forward algebra** over a precomputed execution schedule plus the exact gradient path beside it (`grad.py`), and (4) host-only introspection (`network_dict`, `sympy_func`, `visualize`, `repr`, `get_input_idx`/`get_output_idx`) beside the in-graph `hash`.
 It does not own the schedule derivation (`../common/tensorization.py`) nor `ACT`/`AGG` (`../common/functions/`); it consumes both.
 
 ## Gene payload (binding)
@@ -26,13 +26,14 @@ A key outside `[0, S)` is *silently unmatched* by the schedule's dense key table
 The shared window step is `_hit_conn_attrs` + `_node_step` + `_output_values`, and `_gather_slots` is the flat-index gather both use (`evoxc.gather` has `np.take` semantics, so the index must be batch-wide and one-dimensional).
 `_hit_conn_attrs` returns a `_StepStatics` bundle — gathered+NaN-cleaned conn attributes (`ConnOperands`), the flat value-window index, the present-slot mask, the output-row mask, and the `NodeOperands` built on the first step — because node and conn attributes are constant during a forward pass, so every loop-invariant operand is derived once and a level pays only the value-dependent ops.
 - `initialize(state, key, pop_size) -> GenomeTensors` — `key` is a rank-0 `evoxc.random` key and randomness is drawn once per tensor with the batched output shape, so individual `i` gets an independent stream from one call.
-- `transform(state, node_keys, conn_keys) -> Transformed` — schedule derivation, delegated to `../common/tensorization.py`; pure tensor ops, no host round-trip.
+- `transform(state, *arrays) -> Transformed` — schedule derivation, delegated to `../common/tensorization.py`; pure tensor ops, no host round-trip; accepts a `GenomeTensors`, `(node_keys, conn_keys)` or the full four-array payload (attributes ignored).
 - `forward(state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, inputs) -> (P, num_outputs)` — trace-time kernel.
 - `grad(state, transformed, node_*, conn_*, inputs, loss_fn) -> evoxc.Graph` — **graph factory** (like `evoxc.grad`), not a trace-time kernel: it traces its own graph and returns it for the Pipeline to cache/compile/run, and its body is `grad.build_grad(self, ...)`.
 - `execute_mutation(state, key, genome, new_node_keys (P,), new_conn_keys (P,3)) -> GenomeTensors`
 - `execute_crossover(state, key, genome1, genome2) -> GenomeTensors`
 - `execute_distance(state, genome1, genome2) -> (P,)` — pairwise, batched over pairs; the algorithm forms the pairs.
-- Host-only (NumPy in, Python out, never traced): `network_dict`, `sympy_func`, `visualize`, `repr`, `hash`, `get_input_idx`, `get_output_idx` — the non-`sympy_func`/`visualize` ones live in `host.py::BaseGenomeHost`, so each takes **one** individual: `_individual` raises `TensorNEATError` telling the caller to slice first, e.g. `GenomeTensors(*(a[i:i+1] for a in payload))` (there is no `payload.of(i)`).
+- Host-only, NumPy in / Python out, never traced: `network_dict(state, genome, whether_re_cound_idx=True)`, `repr(state, genome, precision=2)`, `get_input_idx()`, `get_output_idx()` (and the family-implemented `sympy_func(state, network, ...)` / `visualize(network, ...)`), which live in `host.py::BaseGenomeHost`; each payload-taking one needs a `GenomeTensors` holding **one** individual as a `P == 1` batch, because `_split_payload` rejects a `(N,)` row and `_individual` then raises `ConfigError` (a `TensorNEATError`) telling the caller to slice first: `GenomeTensors(*(array[p : p + 1] for array in payload))` (there is no `payload.of(i)`).
+- `hash(genome) -> (P,) uint32` is **not** host-only despite living in `host.py`: it is an in-graph kernel over the whole population (`evoxc` ops require an active trace, so an eager call raises `TraceError`).
 `GenomeTensors` is a namedtuple-like pytree of exactly the four payload arrays; every kernel takes and returns it by field, never by column offsets.
 Structural mutation keys (`new_node_keys`, `new_conn_keys`) are **allocated by the caller** (globally unique across the population) and passed in as int32 tensors — they are not RNG draws.
 

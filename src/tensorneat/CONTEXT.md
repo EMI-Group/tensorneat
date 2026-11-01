@@ -28,11 +28,16 @@ Host-only helpers (`network_dict`, `sympy_func`, `visualize`, `repr`, `hash`) st
 7. **`CartPole`** validates `fitness_target <= max_step` at construction and demotes NaN logits to `-inf` fitness (an explicit `evoxc.isnan` guard, not an implicit NaN comparison).
 
 ## Public API Surface
-`tensorneat.Pipeline`, `tensorneat.algorithm.{NEAT,HyperNEAT,HyperNEATFeedForward}`, `tensorneat.genome.{DefaultGenome,RecurrentGenome,DefaultNode,BiasNode,OriginNode,DefaultConn,OriginConn,...}`, `tensorneat.problem.{XOR,XOR3d,CustomFuncFit,FuncFit,CartPole}`, `tensorneat.common.{ACT,AGG,State,TensorNEATError}`.
-`pipeline.py` exposes `Pipeline(algorithm, problem, seed=42, fitness_target=1, generation_limit=1000, backend="numpy", device=None, compile_options=None, is_save=False, save_dir=None, is_detailed=True, show_problem_details=False, pop_batch_size=None)` with `setup`, `step`, `auto_run`, `show`.
-`Pipeline.step` is the single compile site: one evoxc graph per shape signature `(P, max_nodes, max_conns, max_in_degree, key_span)` covering ask → transform → evaluate → tell; `auto_run` caches the executable per shape, rebuilds when `overflow` occurs, and loops on the host for logging / checkpointing / early stop.
-Fitness is maximized; NaN or infinite fitness is mapped to `-inf` before selection so broken topologies cannot win.
+`tensorneat.Pipeline` and `tensorneat.{algorithm,genome,problem,common}`; `__init__.py:1` `__all__` lists the four subpackages only (Pipeline is imported but absent from `__all__`).
+`tensorneat.algorithm` exports only `BaseAlgorithm`, `NEAT`, `HyperNEAT` (`algorithm/__init__.py:10`) — `HyperNEATFeedForward` must be imported from `tensorneat.algorithm.hyperneat`, which also exports `HyperNEATNode`, `HyperNEATConn`, `SubstrateSchedule`, `BaseSubstrate`, `DefaultSubstrate`, `FullSubstrate`, `MLPSubstrate`.
+`tensorneat.genome.{DefaultGenome,RecurrentGenome,BaseGenome,GenomeTensors,DefaultNode,BiasNode,OriginNode,DefaultConn,OriginConn,...}`; `tensorneat.problem.{BaseProblem,FuncFit,XOR,XOR3d,CustomFuncFit,CartPole}`; `tensorneat.common.{ACT,AGG,State,TensorNEATError}`.
+`pipeline.py` as committed exposes `Pipeline(algorithm, problem, seed=42, fitness_target=1, generation_limit=1000, is_save=False, save_dir=None, show_problem_details=False, using_multidevice=False, pop_batch_size=None)` — no `backend`/`device`/`compile_options`/`is_detailed`.
 There is no `problem.jitable` flag any more: whether a graph compiles is the backend's business and `evoxc.BackendError` propagates.
+
+## Known Issues
+`src/tensorneat/pipeline.py` is still the pre-rewrite JAX implementation (`pipeline.py:5 import jax`) built on `(nodes, conns)` pytrees, `jax.vmap`/`jax.jit` and `state.randkey`.
+It asserts `problem.jitable` (`pipeline.py:33`), which `problem/` no longer defines, so every `Pipeline` path raises `AttributeError`; and `__init__.py` imports it, so `import tensorneat` pulls in JAX and the release gate fails.
+Nothing in `pipeline.py` matches the evoxc compile-site contract; the runnable in-tree patterns are the tests (`test/support/runner.py`) and the benchmark adapters (`benchmarks/harness/adapters/new.py`).
 
 ## Constraints
 - `import tensorneat` must not import `jax`, `torch`, `brax`, `gymnax`, `mujoco` (release-gate test); optional backends are pulled in only by `evoxc.build(backend=...)`.
