@@ -2,55 +2,64 @@
 
 ## Intent
 Prove that each problem under `../../../src/tensorneat/problem/` computes the fitness its docstring promises, on the numpy backend, with no optional dependency and no genome.
-A problem is host-side configuration plus plain kernel helpers, so a test needs no `DefaultGenome`, no `transform` and no `forward`: every case drives the real `evaluate` with a *genome-free* `act_fn` (a plain Python closure over `evoxc.numpy` ops, inlined into the graph by the shared runner) and asserts on the returned `(P,)` fitness.
-The assertions are closed forms and hand-written numpy references, never the implementation's intermediate state.
-Every test that depends on source code that is still a design skeleton carries a real signature and docstring and a body of `pytest.skip("not implemented: <clause> (owner: <module>.<symbol>)")`, so the module is collectable and the skip text names the owner.
+A problem is host-side configuration plus plain kernel helpers, so every case drives the real `evaluate`/`show` (or a documented in-trace helper) with a *genome-free* `act_fn` — a plain Python closure over `evoxc.numpy` ops, inlined into the graph by the shared runner — and asserts on the returned `(P,)` fitness or on the helper's values.
+Assertions are closed forms, the independent numpy references of `../support/oracle.py`, or identities; never the implementation's intermediate state.
 
 ## Layout
-`test_func_fit.py` — `FuncFit`'s tiling (`row p*S + s` is sample `s` of individual `p`, discriminating against the sample-major layout), the four reductions (`mse`/`rmse`/`mae`/`mape`) against closed forms and `support.oracle.func_fit_loss`, the both-axes reduction with `O = 2`, `mape` with a zero target ⇒ `-inf` fitness, a NaN predictor ⇒ `-inf` fitness, the `XOR`/`XOR3d` dataset literals, `CustomFuncFit`'s grid and seeded-sample datasets, `cartesian_product`, and the configuration errors (`error_method`, box/step/sample validation).
-`test_cartpole.py` — `evaluate` against `support.oracle.cartpole_rollout` for constant policies at `max_step` 20 and 50, the analytic push-right survival count (9), death as a strict inequality at `|x| > 2.4` / `|theta| > 12deg` in radians, the frozen-state rule (an episode that dies at `k` scores `k` at any horizon ≥ `k`), `repeat_times`' individual-major `(P, R)` averaging, determinism per key and divergence across keys, the integral `[0, max_step]` return range, NaN logits, the logit→force rule (ties push left) and the constructor's domain validation.
-`test_problem_api.py` — per-sample `input_shape`/`output_shape` (and `(S,) + shape` consistency with the dataset), the arity pairing with `algorithm.NEAT.num_inputs`/`num_outputs`, `setup(state)` adding no keys, `static_batch_size` on a fake schedule (leading dimension, disagreeing leaves, no leading dimension), `finalize_fitness` (NaN ⇒ `-inf`, `+inf` untouched), host-side `show`/`show_details`, and the absent legacy `jitable` flag.
-`conftest.py` — the lazily resolved inputs (`problem`, `common`, `algorithm`, `payloads`, `oracle`, `runner`, `evoxc`, `enp`), the host `state`, the fake execution schedule and its factory, and the two graph runners (`run_evaluate`, `run_in_graph`).
+`test_func_fit.py` — 18 cases from 13 tests: the individual-major tiling (`row p*S + s` is sample `s` of individual `p`, discriminated against the sample-major layout by a row-index predictor), the four reductions (`mse`/`rmse`/`mae`/`mape`) against closed forms and `support.oracle.func_fit_loss`, the both-axes reduction with `O = 2`, `mape` with a zero target ⇒ `-inf`, a NaN predictor ⇒ `-inf` (whole population and mixed populations), the `XOR`/`XOR3d` dataset literals re-derived from their definition, `CustomFuncFit`'s grid and seeded-sample datasets, `cartesian_product`, and the configuration errors.
+`test_cartpole.py` — 26 cases from 11 tests: `evaluate` against `support.oracle.cartpole_rollout` (host-numpy Euler) for constant policies at `max_step` 20 and 50, the analytic 9-step survival, the logit→force rule (ties push left), death as a strict inequality at `|x| > 2.4` / `|theta| > 12deg` in radians, the frozen-state rule (an episode that dies at `k` scores `k` at every horizon ≥ `k`), `repeat_times`' individual-major `(P, R)` averaging, determinism per key and divergence across keys, the integral `[0, max_step]` return range, NaN-logit poisoning, the logit→force rule, and the constructor's domain validation.
+`test_problem_api.py` — 18 cases from 10 tests: per-sample `input_shape`/`output_shape` (and `(S,) + shape` consistency with the dataset), arity pairing with `algorithm.NEAT.num_inputs`/`num_outputs`, `setup(state)` adding no keys, `static_batch_size`'s leading dimension and its four rejections, `finalize_fitness`'s exact six-entry mapping, host-side `show`, the `show_details` no-op, and the absent legacy `jitable` flag.
+`conftest.py` — the resolved inputs (`problem`, `common`, `algorithm`, `payloads`, `oracle`, `runner`, `evoxc`, `enp`), the host `state`, the fake execution schedule and its factory, and the two graph runners (`run_evaluate`, `run_in_graph`).
+`__init__.py` — namespace marker; the directory must stay an importable package (pytest's prepend import mode names a module by its basename).
+62 collected cases, 0 skips, 0 xfail, ~2 s wall on the numpy backend; the whole directory belongs to the default gate `pytest -m "not parity and not slow"`.
 
 ## Oracles used (never the kernel under test)
-`support.oracle.func_fit_loss` (the reduction over the sample **and** output axes) and `support.oracle.cartpole_rollout` + `cartpole_params` (the only CartPole oracle, since the legacy RL problems are gone).
-Closed forms where one is cheap: `mse = 0.25`, `rmse = mae = 0.5` for a constant `0.5` predictor on XOR; `mape = 1` for a zero predictor on a strictly positive dataset; the `k = 9` survival count of a constant policy from rest; `finalize_fitness`'s six-entry mapping.
+`support.oracle.func_fit_loss` (the reduction over the sample *and* output axes) and `support.oracle.cartpole_rollout` + `cartpole_params` (the only CartPole oracle, since the legacy RL problems are gone).
+Closed forms where one is cheap: `mse = 0.25`, `rmse = mae = 0.5` for a constant `0.5` predictor on XOR; `-2.5` for the row-index predictor's first individual; `mape = 1` for a zero predictor on a strictly positive dataset; the `k = 9` survival count of a constant policy from rest; `finalize_fitness`'s `[nan, -1.5, 0, 3, +inf] -> [-inf, -1.5, 0, 3, +inf]`.
 Identities where no absolute value exists: `inputs.shape == (S,) + input_shape`, and the `B = P * repeat_times` identity in `test_repeat_times_averages_individual_major_rows`.
 
 ## How the suite runs the code
 `evaluate` is a plain helper inlined into the caller's graph, so `run_evaluate` closes over the problem, the `State` and the `act_fn` and passes only tensors: `run_defn(lambda *arrays: problem.evaluate(state, evoxc.random.key(key_seed), act_fn, FakeSchedule(*arrays)), *fields)`.
 The schedule is passed **field by field** and rebuilt inside the trace — the shared runner treats only top-level arrays as data, so a namedtuple argument would be baked as a static whose fields are numpy arrays.
 The key is rebuilt from an integer `key_seed` inside the trace: a rank-0 `evoxc` key has no `__array__`, and a stateless key is a compile-time constant anyway.
-`run_in_graph` is the escape hatch for the in-trace helpers that are not the whole protocol (`finalize_fitness`, `static_batch_size`, `CartPole._terminated`/`_force_from_logits` with `_constants()`).
+`run_in_graph` is the escape hatch for the in-trace helpers that are not the whole protocol (`finalize_fitness`, `static_batch_size`, CartPole's `_force_from_logits`/`_terminated` with `_constants()`).
+`static_batch_size` is also correct on a host numpy schedule, which is how its rejection paths are reached without a trace; the error also escapes `evoxc.build` unchanged when raised inside one, and both routes are asserted.
+`act_fn` closures are pure `enp` — a traced tensor has no `__getitem__` and there is no eager mode — and the fake schedule is the only thing a problem may read from `transformed`.
 
 ## The fake schedule
 A problem may read exactly one thing from `transformed`: `static_batch_size(transformed)`, the static leading dimension of its leaves.
 `conftest.FakeSchedule` is therefore a two-leaf namedtuple (`weights (P, k) float32`, `scores (P,) int32`) with deliberately un-schedule-like field names, so a problem test cannot accidentally depend on the genome's schema and a problem failure stays distinguishable from a genome failure.
-Degenerate schedules (leaves that disagree about `P`, rank-0 leaves) are built inline from the `schedule_type` fixture, where the shape under test is visible in the test body.
+Degenerate schedules (leaves that disagree about `P`, rank-0 leaves, an empty schedule, a non-tensor leaf) are built inline where the shape under test is visible in the test body.
 
 ## Making CartPole comparable to a host oracle
 `reset_scale = 0.0` is a legal configuration (only a negative scale is rejected) and makes every initial state exactly `(0, 0, 0, 0)`, so the numpy oracle can be fed the same `obs0` the graph draws; with the default `reset_scale` the draw comes from `evoxc.random` and is not reproducible host-side, so those tests assert relations between runs (determinism, divergence, averaging strictness) instead of absolute values.
+A constant policy survives exactly 9 steps from rest in *both* directions (the dynamics are symmetric under `(x, theta, force) -> (-x, -theta, -force)`), so the `repeat_times` layout test cannot distinguish rows by direction: `_split_row_policy` uses rows that push constantly (9) and rows that balance the pole for the full horizon (20 at `max_step = 20`).
 `B = P * repeat_times` depends only on the product, so `P = 4, R = 1` and `P = 2, R = 2` draw the same four initial states from the same key — that identity pins the individual-major `(P, R)` layout without any analytic return value.
-Both constant policies survive exactly 9 steps from rest (the dynamics are symmetric under `(x, theta, force) -> (-x, -theta, -force)`), so a policy meant to differ from another must differ in more than its sign; the logit/force *sign* is checked on `_force_from_logits` rather than through a return.
 
-## Known doc/source divergences this suite pins or survives
-CartPole's fitness is a mean of 0/1 rewards, so it can never be `NaN`: a NaN-logit policy compares `False` (`enp.greater`), acts as "push left", and gets a **finite** fitness — unlike func-fit's "NaN prediction ⇒ `-inf`" rule. `test_nan_logits_fall_back_to_push_left_and_keep_the_fitness_finite` pins that behaviour and must be flipped if `src` adds an explicit NaN guard.
-`max_step` is a hard fitness ceiling, so the docstring's "`fitness_target` must be `<= max_step`" is a caller-side rule with no validator in `src` today (`Pipeline` only compares `max(fitnesses)`); the suite asserts the reachable `[0, max_step]` range instead.
-`../../../src/tensorneat/problem/rl/CONTEXT.md` names a module-level `cartpole_step(obs, force, constants)` helper that `cartpole.py` does not have (it is `CartPole._euler_step`); tests use the documented methods.
+## Behaviour this suite pins (gotchas worth knowing before editing it)
+`mape` divides by the target: a non-zero prediction on a zero target is `+inf` loss, while a *zero* prediction on a zero target is `0/0 = NaN`; both reach `-inf` fitness through different arithmetic, and each is asserted separately.
+CartPole demotes NaN logits to `-inf` fitness through the explicit `evoxc.isnan` guard (`_nan_rows` → `_any_repeat` → select NaN before `finalize_fitness`), while the decision site still reads NaN as "push left"; one poisoned repeat demotes the whole individual.
+CartPole's fitness is a mean of 0/1 rewards, so it is always finite outside the NaN case and lies in `[0, max_step]`; `max_step` is a hard ceiling and `fitness_target > max_step` is rejected at construction.
+`CustomFuncFit(method="grid")` builds the per-axis `np.arange(low, high, step)` and takes their row-major cartesian product with the first axis slowest, so `S` is the product of the grid lengths and is unrelated to `num_samples`.
+`CustomFuncFit` validates `func(low_bounds)` and the box/method/step configuration before it reaches `FuncFit.__init__`, so a bad box wins over a bad `error_method`.
+`cartesian_product` is not re-exported by `tensorneat.problem` or `tensorneat.problem.func_fit`; it is reached as `problem.func_fit.custom.cartesian_product`.
+`algorithm.NEAT` rejects `pop_size < species_size * min_species_size` (default `10 * 1`), so the arity cross-check builds it at `pop_size = 10`; a smaller population raises `TensorNEATError` before the arity can be read.
+`setup(state)` returns the same `State` and registers no keys; `setup(None)` starts from the same empty key set.
 
 ## Conventions
-Nothing imports `tensorneat` or `support` at module scope: `import tensorneat` still raises `NotImplementedError` (a `State()` default argument in a design skeleton), so every input is a `scope="module"` fixture resolved through `support.lazy.require`, and a fixture body that calls an unfinished `src` constructor converts that same error into a skip.
+Nothing imports `tensorneat`, `support` or `evoxc` at module scope: `../conftest.py` prepends `src/`, `benchmarks/legacy_jax` and `test/` to `sys.path` at collection time, so every input is a `scope="module"` fixture that imports inside its body.
+Those imports are plain statements — the suite must never convert a broken or regressed module into a skip, so a green run here really executed every kernel it claims to (the earlier `support.lazy.require` indirection is gone from this node).
 Every graph runs through `support.runner` only, through the fixtures in `conftest.py`, never a module-scope import.
-`act_fn` closures are pure `enp` (a traced tensor has no `__getitem__` and there is no eager mode), and the fake schedule is the only thing a problem is allowed to read from `transformed`.
-Shapes stay small (`pop <= 4`, `max_step <= 50`, `S <= 8`) and the backend is always `"numpy"`; no `jax`/`torch`, no network, no GPU, no display.
+Shapes stay small (`pop <= 8`, `max_step <= 50`, `S <= 8`) and the backend is always `"numpy"`; no `jax`/`torch`, no network, no GPU, no display.
 
 ## Constraints
 A test may not edit `../../../src`, `../../../benchmarks` or `pyproject.toml`; a defect or a doc conflict found here goes into the report to the parent.
-Files stay under ~1000 lines, one module per source module area, named `test_<module>.py`.
+A src defect is never hidden: keep the real assertion and mark the test `@pytest.mark.xfail(strict=True, reason="src defect: …")`. No such xfail exists today.
+Files stay under ~1000 lines: `test_func_fit.py` 811, `test_cartpole.py` 786, `test_problem_api.py` 482, `conftest.py` 348.
 Suite output must be deterministic — CartPole randomness is driven by explicit integer `key_seed`s and `CustomFuncFit` by explicit `seed`s, never by the global numpy state.
-`pytest.mark.slow` is not used here: every case is under 50 rollout steps on populations of at most four individuals, so the whole directory belongs to the default gate `pytest -m "not parity and not slow"`.
+`pytest.mark.slow` and `pytest.mark.parity` are not used here: every case is under 50 rollout steps on populations of at most eight individuals.
 
 ## Routing Table
 No subdirectories — this node is a leaf.
-Read-only inputs: `../../../src/tensorneat/problem/` (code under test), `../../../src/tensorneat/common/` (`State`, `TensorNEATError`), `../../support/` (runner, oracle, payloads).
+Read-only inputs: `../../../src/tensorneat/problem/` (code under test), `../../../src/tensorneat/common/` (`State`, `TensorNEATError`), `../../../src/tensorneat/algorithm/` (the arity cross-check), `../support/` (runner, oracle, payloads).
 Sibling suites: `../common`, `../genome`, `../algorithm`, `../../parity`, `../../integration`.
