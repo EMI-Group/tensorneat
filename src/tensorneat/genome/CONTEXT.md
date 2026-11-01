@@ -1,70 +1,108 @@
-# Genome (`src/tensorneat/genome`)
+# genome — gene payloads, genetic operators, and the network forward/grad algebra
 
 ## Intent
-Expose the variable-topology neural network of a NEAT individual as a pair of *fixed-shape, NaN-padded, fully jittable* JAX arrays, so an entire population can be `jit`/`vmap`ed.
-`BaseGenome` owns configuration + algorithms-independent plumbing; `DefaultGenome` (`network_type="feedforward"`) and `RecurrentGenome` (`network_type="recurrent"`) are the two concrete network types.
-There is no per-gene python object at runtime: a genome instance is just `nodes` + `conns` arrays plus the gene/operator objects.
+Turn a NEAT individual into fixed-shape `int32`/`float32` evoxc tensors, and evaluate a whole population of differently-shaped networks in one batch-first kernel.
+This node owns exactly four things: (1) the **gene payload** (key columns in `int32`, attribute columns in `float32`, padded rows), (2) the **genetic operators** (mutation / crossover / distance) as batched kernels, (3) the **forward algebra** over a precomputed execution schedule, and (4) host-only introspection (`network_dict`, `sympy_func`, `visualize`, `repr`, `hash`).
+It does not own the schedule derivation (`../common/tensorization.py`) nor `ACT`/`AGG` (`../common/functions/`); it consumes both.
 
-## API Surface
-`__init__.py` re-exports `gene.*`, `operations.*`, `BaseGenome`, `DefaultGenome`, `RecurrentGenome`.
-`BaseGenome.__init__(num_inputs, num_outputs, max_nodes=..., max_conns=..., node_gene, conn_gene, mutation, crossover, distance, output_transform=None, input_transform=None, init_hidden_layers=())`.
-`setup(state=State())` → `State` (chains `setup` of node_gene, conn_gene, mutation, crossover, distance; all stateless in the default implementation).
-`transform(state, nodes, conns)` → `transformed` tuple, computed once per individual before evaluation.
-`forward(state, transformed, inputs)` → `(num_outputs,)`; batch by `jax.vmap(self.forward, in_axes=(None, None, 0))`.
-`grad(state, nodes, conns, inputs, loss_fn)` → `(loss, (grad_nodes, grad_conns))` via `jax.value_and_grad(argnums=(0,1))`, NaN-masked to 0 outside valid rows; `inputs.ndim==2` triggers a `vmap` over the batch.
-`initialize(state, randkey)` → `(nodes, conns)` of the dense `num_inputs → init_hidden_layers → num_outputs` network.
-`hash(nodes, conns)` → single `uint32` (per-row `common.tools.hash_array`, concatenated, hashed again).
-`network_dict(state, nodes, conns, whether_re_cound_idx=True)` → python dict with `nodes`/`conns` dicts keyed by node key / `(in, out)`; DefaultGenome adds `topo_order`, `topo_layers`, `useful_nodes`.
-`repr(state, nodes, conns, precision=2)`, `execute_mutation/execute_crossover/execute_distance(...)` (thin delegations to the operator objects), `get_input_idx()`/`get_output_idx()`.
-`DefaultGenome.sympy_func(state, network, sympy_input_transform=None, sympy_output_transform=None, backend="jax")` → `(symbols, args_symbols, input_symbols, nodes_exprs, output_exprs, forward_func, topo_order, useful_nodes)`.
-`DefaultGenome.visualize(network, rotate=0, reverse_node_order=False, ...)` writes an SVG with networkx + matplotlib (host only).
+## Gene payload (binding)
+Two arrays per gene type, batch-first, static shapes, no NaN in integers:
+- `node_keys (P, max_nodes) int32` — node key per row; `I_INF` marks an absent row.
+- `node_attrs (P, max_nodes, node_gene.attr_width) float32` — custom attrs; rows for absent nodes are NaN.
+- `conn_keys (P, max_conns, conn_gene.key_width) int32` — `(in_key, out_key)` plus `historical_marker` when the conn gene declares it; `I_INF` marks an absent row.
+- `conn_attrs (P, max_conns, conn_gene.attr_width) float32` — e.g. `weight`; absent rows are NaN.
+`fixed_attrs` (key columns) are integers and stay integers; `custom_attrs` are floats and stay floats.
+There is **no bitcast** float↔int in evoxc, so a single mixed-dtype row is impossible: the payload is split into a key array and an attr array, and this split is why genetic operators are integer-index twiddling over `*_keys` while only `*_attrs` does float arithmetic.
+Key/row invariant: `initialize` writes nodes in key order, so input keys are rows `0..num_inputs-1` and output keys are rows `max_nodes-num_outputs..max_nodes-1`; those rows are never deleted or moved, so `get_input_idx()`/`get_output_idx()` are usable as *row indices*.
+Hidden node keys are arbitrary and may move rows; always compare keys (`node_keys`), never row positions, for graph identity.
+Padding sentinels never mix: `I_INF` (`int32` max) for "no index", float NaN for "no value" and for "unconnected node value".
 
-## Array Conventions
-`nodes`: `(max_nodes, node_gene.length)` float32; col 0 = node key; unused rows are entirely NaN.
-`conns`: `(max_conns, conn_gene.length)` float32; cols 0/1 = input/output node keys; col 2 = `historical_marker` only when `conn_gene.fixed_attrs` contains it; remaining cols = custom attrs.
-`u_conns` from `utils.unflatten_conns(nodes, conns)`: `(max_nodes, max_nodes)` int32, `u_conns[src_row, dst_row]` = row index into `conns`, or `I_INF` when the connection is absent.
-`cal_seqs` from `common.graph.topological_sort(nodes, conn_exist)`: `(max_nodes,)` int32, topological order of node **row** indices, remaining slots `I_INF`.
-`vals`/`ini_vals`: `(max_nodes,)` float32, NaN means "not computed yet".
-Row index equals node key for input rows `0..num_inputs-1` and output rows: `initialize` writes nodes in key order and input/output nodes are never deleted or moved.
-Hidden nodes may live in any row (a freed row can be reused with a different key), so code compares keys via `nodes[i, 0]`, never row position.
+## Genome API (batch-first, population on axis 0)
+`BaseGenome` holds host-side configuration (`num_inputs`, `num_outputs`, `max_nodes`, `max_conns`, `max_in_degree`, `max_depth`, transforms, `init_hidden_layers`) and the gene/operator objects; nothing on the compute path reads `State`.
+- `initialize(state, key, pop_size) -> GenomeTensors` — `key` is a rank-0 `evoxc.random` key and randomness is drawn once per tensor with the batched output shape, so individual `i` gets an independent stream from one call.
+- `transform(state, node_keys, conn_keys) -> Transformed` — schedule derivation, delegated to `../common/tensorization.py`; pure tensor ops, no host round-trip.
+- `forward(state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, inputs) -> (P, num_outputs)` — trace-time kernel.
+- `grad(state, transformed, node_*, conn_*, inputs, loss_fn) -> evoxc.Graph` — **graph factory** (like `evoxc.grad`), not a trace-time kernel: it traces its own graph and returns it for the Pipeline to cache/compile/run.
+- `execute_mutation(state, key, genome, new_node_keys (P,), new_conn_keys (P,3)) -> GenomeTensors`
+- `execute_crossover(state, key, genome1, genome2) -> GenomeTensors`
+- `execute_distance(state, genome1, genome2) -> (P,)` — pairwise, batched over pairs; the algorithm forms the pairs.
+- Host-only (NumPy in, Python out, never traced): `network_dict`, `sympy_func`, `visualize`, `repr`, `hash`, `get_input_idx`, `get_output_idx`.
+`GenomeTensors` is a namedtuple-like pytree of exactly the four payload arrays; every kernel takes and returns it by field, never by column offsets.
+Structural mutation keys (`new_node_keys`, `new_conn_keys`) are **allocated by the caller** (globally unique across the population) and passed in as int32 tensors — they are not RNG draws.
 
-## Forward Pass (feedforward, `default.py`)
-`transform` returns `(cal_seqs, nodes, conns, u_conns)`; nothing is precomputed per node, so `forward` can be `vmap`ed over the population after a single vectorized `transform`.
-`forward` builds `ini_vals` = NaNs with `ini_vals[input_idx] = input_transform(inputs)`, extracts `nodes_attrs (max_nodes, len(node_gene.custom_attrs))` and `conns_attrs (max_conns, len(conn_gene.custom_attrs))` with `vmap(utils.extract_gene_attrs)`.
-`jax.lax.fori_loop(0, max_nodes, body_func, ini_vals)` runs a *fixed* `max_nodes` iterations; iteration `idx` handles node row `i = cal_seqs[idx]`, and `i == I_INF` is a no-op (`lax.cond`).
-For a real, non-input node: `conn_indices = u_conns[:, i]` (all incoming conn row indices), `valid_mask = (conn_indices != I_INF) & ~isnan(vals)`, `hit_attrs = attach_with_inf(conns_attrs, conn_indices)`, `ins = vmap(conn_gene.forward, (None,0,0))(state, hit_attrs, vals)` (one weighted contribution per source row, NaN/absent sources contribute 0).
-`node_gene.forward(state, nodes_attrs[i], ins, is_output_node=isin(nodes[i,0], output_idx), valid_mask=valid_mask)` aggregates over the source axis (masked), applies `bias + response*z` and the activation unless the node is an output; `lax.cond(any(valid_mask))` decides whether to write, so undecomposable nodes keep NaN and poison their descendants.
-Output nodes are never activated by the node gene; activation of the final output is the user's `output_transform` (`forward` returns `vals[output_idx]`, or `output_transform(vals[output_idx])`).
-`jnp.isin(i, self.input_idx)` short-circuits input nodes (they were seeded in `ini_vals`); `output_idx`/`input_idx` are keys used as row indices, valid by the row/key invariant above.
+## Execution schedule (`Transformed`, owned by `../common/tensorization.py`)
+Per-population, batch-first, static shapes; field names are a binding contract with `common`:
+- `in_src (P, max_nodes, K) int32` — flat index into `reshape(values, (P*max_nodes,))` of the source row of the k-th incoming edge of each node row; in range (0) where the slot is empty.
+- `in_conn (P, max_nodes, K) int32` — flat index into `reshape(conn_attrs, (P*max_conns,))` of the same slot.
+- `in_valid (P, max_nodes, K) bool` — True where that slot holds a real connection.
+- `node_level (P, max_nodes) int32` — depth (longest path from an input node; inputs are 0), `I_INF` for absent rows; zeros in the recurrent variant.
+- `node_exists (P, max_nodes) bool`, `overflow (P,) bool` — row validity, and "some node's in-degree exceeded `K`".
+- static metadata `K`, `max_nodes`, `max_conns` as Python ints.
+`K` is the genome's `max_in_degree`; slots are filled in increasing connection-row order so a node's window ordering is canonical and stable across runs.
 
-## Forward Pass (recurrent, `recurrent.py`)
-`transform` returns `(nodes, conns, u_conns)` — no `cal_seqs`, because cycles are allowed.
-`forward` runs `jax.lax.fori_loop(0, activate_time, ...)` (ctor arg, default 10) ticks of a synchronous (Jacobi) update: every existing node is recomputed from the previous tick's values, then `jnp.where(node_exists & any(valid_mask, axis=1), new_values, values)`.
-`expand_conns_attrs = attach_with_inf(conns_attrs, u_conns)` gathers the weight of every `(src, dst)` pair, `conn_exists = (u_conns != I_INF).T` so masks are `(dst, src)`, and `node_ins.T` puts the destination axis first before `vmap(node_gene.forward)`.
-Inputs are re-injected every tick (`values.at[input_idx].set(inputs)`), so the input node gene is bypassed exactly as in the feedforward path.
-`RecurrentGenome` does **not** apply `self.input_transform` (only `DefaultGenome.forward` does), and never builds `cal_seqs`.
+## Forward algebra (feedforward)
+`values (P, max_nodes) float32`, all NaN except the input rows, which hold `input_transform(inputs)`.
+Unroll depth in **Python** (`for l in range(1, max_depth+1)`) — never `scan`/`while_loop`/`cond`, which evoxc cannot batch or differentiate.
+Per level:
+1. `xv = gather(values_flat, in_src_flat) -> (P, max_nodes, K)`; `live = in_valid & ~isnan(xv)`; `xs = select(live, xv, 0)` — the NaN→0 sanitization is mandatory before any differentiable op, because a zeroed cotangent multiplied by a NaN local derivative still yields NaN.
+2. `hit_attrs = gather(conn_attrs_flat, in_conn_flat)` is computed **once per generation** (attributes are constant during a forward pass); `msg = conn_gene.forward(hit_attrs, xs) -> (P, max_nodes, K)`, one scalar message per edge slot.
+3. `agg = apply_aggregation(agg_index, msg, live, aggregation_options) -> (P, max_nodes)` — each option reduces the last axis after replacing dead slots with that option's neutral (`0`, `1`, `±inf`), so every branch is NaN-free; options are selected with `select` chains because `select` is the only batched selection op (`cond` is a region op).
+4. `z = bias + response * agg` (node gene `combine`); `z = act(z)` unless the node is an output node — output nodes are never activated by the node gene, the final activation belongs to `output_transform`.
+5. `update = (node_level == l) & node_exists & (valid_count > 0)`; `values = select(update, z, values)`. A node with no live incoming edge keeps NaN, and its descendants lose their only live source and stay NaN — this reproduces the legacy NaN poisoning exactly.
+Read out `gather(values, output_idx, axis=1) -> (P, num_outputs)`, then `output_transform`.
+Cost is `O(depth × max_nodes × K)` with only elementwise/reduce/gather ops: work scales with real depth and real in-degree, never `max_nodes²`.
+
+## Forward algebra (recurrent)
+Same window machinery, no levels: unroll `activate_time` ticks in Python.
+Each tick: re-inject `input_transform`-free inputs into the input rows, compute every node from the previous tick's values (Jacobi/synchronous), then `values = select(node_exists & valid_count > 0, z, values)`.
+`input_transform` is **not** applied by `RecurrentGenome` (legacy parity; HyperNEAT uses it as a CPPN).
+
+## Gradient algebra
+No control-flow (region) op exists in the forward, so reverse-mode works; but three evoxc rules shape the API:
+- `evoxc.grad` requires a **single scalar output**, so the loss is scalarized as `sum(loss_fn(outputs))`; per-individual gradients are unaffected because the population axis is independent.
+- Only float inputs are differentiable: `node_attrs` and `conn_attrs` are the differentiated arguments; keys and the schedule are non-differentiated int inputs (an int32 *differentiated* argument is a hard `TransformError`).
+- `sort`/`argsort` have no AD rule, so the schedule derivation must **not** be inside the differentiated graph — this is why `grad` takes an already-derived `transformed` and returns its own graph.
+Gradients are cleaned with `select(isnan(g), 0, g)` and by masking absent rows, so padding never carries NaN.
+
+## Static invariants (performance knobs, never silent)
+- `max_in_degree` (`K`, default `max(initial in-degree, 4)`): enforced by `execute_mutation`, which refuses an added connection that would push a node past `K`; `initialize` rejects an `init_hidden_layers` layout that needs more.
+- `max_depth` (`D`, default 16): a network deeper than `D` leaves the unreachable nodes NaN (they cannot win) and raises `overflow` for host-side diagnostics.
+- `activate_time` (default 10) is the recurrent tick count.
+`Transformed.overflow` is the only host-visible diagnostic; nothing silently drops a connection or a node.
 
 ## Constraints
-Everything on the evaluation path must be jit-safe: no python branching on traced values, no `device_get`, no python containers; use `lax.cond`/`lax.fori_loop`/`lax.switch`/`jnp.where`.
-Pure-python (host-side, not jittable) helpers: `utils.re_cound_idx`, `utils.valid_cnt`, `repr`, `network_dict`, `sympy_func` (sympy + `lambdify`), `visualize` (networkx/matplotlib).
-`transform` on a cyclic graph silently truncates `cal_seqs` (the `topological_sort` `while_loop` stops when no node has in-degree 0), so cycles belong to `RecurrentGenome` only.
-`network_dict` on a cyclic graph calls `topological_sort_python`, which raises `ValueError("Graph has at least one cycle...")`.
-`unflatten_conns` looks up conn endpoints by exact key match (`_batch_key_to_index`, argsort + searchsorted, O(C log N)); NaN endpoints map to `I_INF`, and absent pairs keep `I_INF` (int32 sentinel — NaN cannot be used in int32 arrays).
-`attach_with_inf(arr, idx)` expands `idx` to `arr.ndim + idx.ndim - 1` dims and gathers `arr[idx]`, so gathered values keep a trailing custom-attr axis (length 1 for `DefaultConn`); aggregations therefore reduce over axis 0 (the source axis), not over the attr axis.
-`BaseGenome.sympy_func()`/`visualize()` are declared with no arguments while the subclasses implement `(state, network, ...)` / `(network, ...)`; call the concrete class API.
-`initialize` raises `ValueError` when `max_nodes`/`max_conns` cannot hold the initial dense network, and rejects `input_transform`/`output_transform` that fail on a zero vector.
-`grad` NaN-masks the gradients (`jnp.where(isnan(nodes), 0, grad)`), so padded rows never accumulate NaN but valid rows connected to them can still legitimately be NaN-free only if the network is connected.
+- No `jax`/`torch` import anywhere in this node; all tensor math is evoxc ops (`enp`, `evoxc.gather/scatter/select/reduce_*/dot`, `evoxc.random`).
+- No eager NumPy on the compute path; the host helpers (`network_dict`, `sympy_func`, `visualize`, `repr`, `hash`) convert inputs with `Tensor.numpy()` and never feed results back into a graph.
+- Every kernel is already batched: there is no per-individual Python loop, no `vmap`/`vectorize` over these kernels, and no `scan`/`while_loop`/`cond`.
+- Shapes are static at trace time: `pop_size`, `max_nodes`, `max_conns`, `K`, `D` are Python ints; a change forces a rebuild (the Pipeline caches per shape signature).
+- Integer arithmetic: an `int32` tensor plus a Python literal promotes to `int64` in evoxc, so index math stays in int32 tensors.
+- Errors: configuration violations raise `../common/errors.TensorNEATError`; tensor/backend errors from evoxc propagate unchanged — never caught and re-wrapped.
+- Files ≤ ~1000 lines; shared machinery (one window-reduce node step) lives in `base.py` and is parameterized by the update mask, never duplicated between `default.py` and `recurrent.py`.
+
+## Deviations from the pre-rewrite library (intentional)
+- `activation == -1` means **identity** everywhere; the legacy `lax.switch(-1, ...)` clamped to the last option, so `BiasNode` split nodes silently used the wrong activation.
+- Activation/aggregation options are evaluated for **all** configured options and selected with `select`, so a non-total option (division by zero, `log`/`sqrt` of a possibly negative value) can poison gradients even where it is not selected; single-option configurations emit no selection op at all.
+- Random draws differ from the JAX build by construction (`evoxc.random` vs `jax.random`), so parity with `benchmarks/legacy_jax` is asserted on kernels for given genomes (forward, grad, distance), not on RNG-dependent operator output.
+
+## Test Strategy
+`test/unit/genome/` — numpy backend, no optional dependency: payload layouts and padding sentinels, `initialize` row/key invariant, forward on hand-built XOR networks (including unconnected-node NaN poisoning), `-1` activation identity, in-degree overflow handling, mutation/crossover/distance invariants (counts, key uniqueness, capacity).
+`test/parity/genome/` — kernels vs the frozen `benchmarks/legacy_jax` implementation on identical genomes: forward values (`allclose`) and NaN patterns, `grad` vs `jax.grad` on float attributes, and `execute_distance` (deterministic, so it must match exactly).
+`test/integration/` — evolve XOR to target with the numpy backend and assert determinism for a fixed seed; the release-gate test asserts no `jax`/`torch` import.
 
 ## Routing Table
 | Path | Responsibility |
-| --- | --- |
-| `./gene/` | `BaseGene`/`BaseNode`/`BaseConn` + `DefaultNode`, `BiasNode`, `OriginNode`, `DefaultConn`, `OriginConn`: attr layout, `forward`, `sympy_func`, gene-level distance/crossover. |
-| `./gene/node/` | Node gene variants and their activation/aggregation handling. |
-| `./gene/conn/` | Connection gene variants (weight, optional `historical_marker`). |
-| `./operations/` | `BaseMutation`/`DefaultMutation` (+ unexported `RecurrentMutation`), `BaseCrossover`/`DefaultCrossover`, `BaseDistance`/`DefaultDistance`. |
-| `./operations/mutation/` | Structural + value mutations, add-node/add-conn, cycle checking. |
-| `./operations/crossover/` | Historical-marker-based gene alignment. |
-| `./operations/distance/` | Compatibility distance (excess/disjoint + weight difference). |
+|---|---|
+| `./gene/` | `BaseGene` attr-table machinery plus node/conn gene families. |
+| `./gene/node/` | `BaseNode`, `DefaultNode`, `BiasNode`, `OriginNode`: key/attr layout, `combine`, activation choice, identity/zero attrs. |
+| `./gene/conn/` | `BaseConn`, `DefaultConn`, `OriginConn`: per-edge message, optional `historical_marker`. |
+| `./operations/` | Batched mutation / crossover / distance contracts and the in-degree invariant. |
+| `./operations/mutation/` | Structural (add/delete node, add/delete conn) and value mutation, `DefaultMutation` and `RecurrentMutation`. |
+| `./operations/crossover/` | Key-alignment crossover (`DefaultCrossover`). |
+| `./operations/distance/` | Compatibility distance (disjoint/excess + attribute distance). |
+| `./base.py` | `BaseGenome`: configuration, `initialize`, the shared window-reduce node step, `grad` factory, host-only helpers. |
+| `./default.py` | `DefaultGenome`: depth-unrolled level-synchronous forward. |
+| `./recurrent.py` | `RecurrentGenome`: tick-unrolled Jacobi forward. |
+| `./utils.py` | Batched genome-array editing helpers (`add_node`, `add_conn`, `delete_*`, `first_free_row`, `fetch_random_index`) and host-only display helpers. |
 
-Out of node but required by this module: `../common/graph.py` (`topological_sort`, `topological_sort_python`, `find_useful_nodes`, `check_cycles`), `../common/tools.py` (`I_INF`, `attach_with_inf`, `fetch_first`, `fetch_random`, `hash_array`, `mutate_float`, `mutate_int`), `../common/functions/` (`ACT`, `AGG`, `apply_activation`, `apply_aggregation`), `../common/state.py`+`stateful_class.py` (`State`, `StatefulBaseClass`).
-Consumers: `../algorithm/neat/neat.py` (`transform`/`forward` wrappers, `network_type`-dependent historical markers), `../algorithm/hyperneat/hyperneat.py` (uses `RecurrentGenome` as the CPPN), `../pipeline.py`, `../common/evox_adaptors/algorithm_adaptor.py`.
+Out of node but required: `../common/tensorization.py` (`build_schedule` → `Transformed`), `../common/functions/` (`ACT`/`AGG`, `apply_activation`, `apply_aggregation` with `-1` = identity), `../common/tools.py` (`I_INF`), `../common/state.py` (`State`), `../common/errors.py` (`TensorNEATError`).
+Consumers: `../algorithm/neat/` (`ask`/`transform`/`forward`/`tell`), `../algorithm/hyperneat/` (`RecurrentGenome` as CPPN), `../pipeline.py` (compile site, per-shape executable cache).
