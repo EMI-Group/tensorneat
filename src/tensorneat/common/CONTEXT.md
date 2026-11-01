@@ -59,11 +59,53 @@ Derivation recipe (validated against a numpy oracle, keep the shape of it):
 4. `cc[i]` = number of edges with `dst <= i`: one stable `argsort` of the combined `(edge dsts * 2, node slots * 2 + 1)` array, one flat scatter for its inverse; `cc[i] = inv[C + i] - i`.
 5. `start[i] = cc[i-1]` (0 for `i = 0`), `col = rank - start[dst]`.
 6. `in_conn`/`in_src` = flat scatter of conn ids/src into `(P, N*K + 1)` at `dst*K + col`; edges with `col >= K` (or invalid) go to the dump slot; `edge_overflow = reduce_sum(col >= K & edge_valid)`; `in_valid = in_conn != I_INF`.
-7. `node_level` = `while_loop` longest-path relaxation over the `(P, N, K)` table, inputs pinned to 0, capped at `N` iterations; unresolved present nodes are cyclic.
+7. `node_level` = `while_loop` longest-path relaxation over the `(P, N, K)` table, inputs pinned to 0, capped at `2N` iterations (a snapshot at `N` distinguishes a live cycle from a long acyclic path); unresolved present nodes are cyclic.
 8. `topo_key`, `input_slot`, `output_slot` are then free.
 
 Cost: `O(P * (S + C log C + N*K*D))` with `D` = max depth, i.e. edge-proportional except for the `N*K` padding and the one-off `key_span` table; **no `cumsum`, no scatter-with-reduce, no `max_nodes**2` matrix**.
 `transform` runs once per generation, so its cost is amortized over the whole generation.
+
+## Measured cost
+`derive_schedule` on the numpy reference backend, `N=50 C=200 K=8 S=64`, one build per shape then 15 timed runs (median / min, ms), single-threaded CPU (`x86_64`, Linux, CPython 3.14, numpy 2.5.4, evoxc 0.1.0 from `/root/evoxc`):
+
+| population | P=100 | P=500 | P=1000 |
+|---|---|---|---|
+| random, cyclic (worst case: the `2N` relaxation cap is hit) | 79.8 / 77.5 | 286.7 / 279.4 | 535.4 / 525.7 |
+| feedforward, acyclic (leaves the loop after `depth` iterations) | 21.0 / 20.7 | 75.6 / 74.8 | 140.0 / 138.2 |
+
+The cyclic row is the worst case; a real generation's population is mostly acyclic, and the schedule is one shared traversal per population, not per network.
+`incoming_table` and `node_levels` embed `(P, N*K+1)` int32 buffers as graph constants, so a build at `P=1000` crosses evoxc's 1 MiB large-constant threshold (1.6 MB, warned and ignored) — a build-time cost, not a per-run one.
+Reproduction (the synthetic `tensorneat` package is needed only while `src/tensorneat/__init__.py` still imports the pre-merge `genome`/`pipeline` files):
+
+```
+PYTHONPATH=src:test .venv/bin/python - <<'PY'
+import sys, types, time, statistics, warnings
+sys.path.insert(0, "src")
+pkg = types.ModuleType("tensorneat"); pkg.__path__ = ["src/tensorneat"]; sys.modules["tensorneat"] = pkg
+import numpy as np, evoxc
+from tensorneat.common import tensorization, tools
+from support.runner import build_defn, tensor
+N, C, K, S = 50, 200, 8, 64
+for P in (100, 500, 1000):
+    rng = np.random.default_rng(1000 + P)
+    nk = np.full((P, N), tools.I_INF, np.int32); nk[:, :N - 4] = np.arange(N - 4, dtype=np.int32)
+    ci = np.full((P, C), tools.I_INF, np.int32); co = np.full((P, C), tools.I_INF, np.int32)
+    for p in range(P):
+        present = nk[p][nk[p] != tools.I_INF]
+        ci[p] = rng.choice(present, size=C); co[p] = rng.choice(present, size=C)
+    args = (nk, ci, co, np.arange(2, dtype=np.int32),
+            np.arange(N - 6, N - 4, dtype=np.int32), P, N, C, K, S)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        exe = build_defn(tensorization.derive_schedule, *args)
+    run_args = tuple(tensor(a) if isinstance(a, np.ndarray) else a for a in args)
+    evoxc.run(exe, *run_args)
+    ts = []
+    for _ in range(15):
+        t0 = time.perf_counter(); evoxc.run(exe, *run_args); ts.append((time.perf_counter() - t0) * 1000)
+    print(P, round(statistics.median(ts), 1), "ms")
+PY
+```
 
 ## Forward-side contract (consumed by `genome`)
 Per level `l = 0 .. reduce_max(node_level)`:
@@ -84,7 +126,7 @@ Kernels must never index outside `[0, size)` — evoxc's numpy backend **raises*
 `TensorNEATError(Exception)` root; subclasses `ConfigError`, `ShapeBoundError` (a static schedule bound was exceeded: `max_in_degree`, `key_span`, `max_conns`), `GraphError` (cycle where feedforward is required, missing input/output node), `BackendMismatchError`. Backend/shape errors from evoxc are **never** re-wrapped; only validation raises these.
 
 ### `tools.py`
-Sentinels `I_INF`, `KEY_MAX`; `batch_offsets(p, r)`, `flat_gather(x, idx)`, `masked_flat_gather(x, idx, mask=None, fill=nan)`, `flat_scatter(x, idx, upd)`, `masked_flat_scatter(x, idx, upd, mask)` (dump-slot routing); `fetch_first`, `fetch_random`, `rank_elements`, `argmin_with_mask`; mutation kernels `mutate_float`, `mutate_int(key, val, options, replace_rate)` (no `random.choice` in evoxc: `gather(options, randint)`); `to_numpy(tensor)` — the host-side array accessor every logging/checkpoint path uses; `hash_rows` — **host-only** row hash for `genome.hash()` (numpy `view(np.uint32)`), never called inside a graph.
+Sentinels `I_INF`, `KEY_MAX`; `batch_offsets(p, r)`, `flat_gather(x, idx)`, `masked_flat_gather(x, idx, mask=None, fill=nan)`, `flat_scatter(x, idx, upd)`, `masked_flat_scatter(x, idx, upd, mask)` (dump-slot routing); `fetch_first`, `fetch_random`, `rank_elements`, `argmin_with_mask`; mutation kernels `mutate_float`, `mutate_int(key, val, options, replace_rate)` (no `random.choice` in evoxc: `gather(options, randint)`); `to_numpy(tensor)` — the host-side array accessor every logging/checkpoint path uses, re-exported by `common.__init__`; `hash_rows` — **host-only** row hash for `genome.hash()` (numpy `view(np.uint32)`), never called inside a graph.
 
 ### `tensorization.py`
 `Transformed` `NamedTuple`; `derive_schedule` (`@evoxc.defn`); the internal steps as plain helper functions (`key_slot_table`, `slot_lookup`, `edge_group_rank`, `cum_in_degree`, `incoming_table`, `node_levels`) so they are individually testable; `validate_schedule(transformed)` host-side invariant checker used by tests.
@@ -98,6 +140,7 @@ Host-only, pure Python (stdlib + `errors.GraphError`), never traced: `decode_gra
 
 ### `sympy_tools.py`
 Host-only (`sympy`, `numpy`, regex): `analysis_nodes_exprs`, `round_expr`, `replace_variable_names`, `to_latex_code`, `to_python_code` — the 8-tuple contract of `Genome.sympy_func` is unchanged from the pre-rewrite library.
+It is deliberately not re-exported by `common.__init__` (its only consumer is `Genome.sympy_func`, which imports `..common.sympy_tools` directly), so the package surface stays what the contract lists.
 
 ## evoxc idioms and gotchas (validated on this box)
 - `@evoxc.defn` + `evoxc.build(fn, *TensorSpec, backend=..., device=...)`; the numpy reference interpreter is the default and is enough for `test/unit`.
@@ -129,4 +172,6 @@ Host-only (`sympy`, `numpy`, regex): `analysis_nodes_exprs`, `round_expr`, `repl
 
 ## Notes for Agents
 - `test/unit/common/*` currently holds one `pytest.skip("not implemented: …, owner: common/…")` per test body: the acceptance suite is a prose specification, not runnable assertions, and it is owned outside this node. Verify changes here with an equivalence script against a numpy reference (see `test/support/oracle.py` for the schedule, `test/support/functions_ref.py` for ACT/AGG) kept out of the repo, or by running the test bodies once their owner fills them in.
+- `import tensorneat` does not work yet: `src/tensorneat/genome/base.py` imports the removed name `build_schedule`, and `src/tensorneat/pipeline.py` is still the JAX implementation. Both are sibling nodes' files, so until they land `tensorneat.common` is imported through a synthetic package — `pkg = types.ModuleType("tensorneat"); pkg.__path__ = ["src/tensorneat"]; sys.modules["tensorneat"] = pkg` — exactly as the measured-cost snippet does; the submodules themselves are framework-free (no `jax`/`torch`/`brax`/`gymnax`/`mujoco` enters `sys.modules`).
+- `test/support/oracle.py::schedule` is stale against the merged `Transformed`: it builds the node's pre-merge field set (`level=...`, no `node_exists`/`in_valid`), so a comparison script has to substitute a compatible output container for the oracle (the oracle's algorithm itself is unchanged and agrees field by field).
 - `evoxc` in a bare checkout: `uv venv .venv && uv pip install --python .venv/bin/python numpy sympy networkx matplotlib pytest /root/evoxc`; `pytest` finds `src/` and `test/support` through `test/conftest.py`, so a run is `PYTHONPATH=src:.venv/… pytest test/unit/common`.

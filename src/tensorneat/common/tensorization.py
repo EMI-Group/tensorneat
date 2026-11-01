@@ -72,21 +72,22 @@ class Transformed(NamedTuple):
     in the integer fields; ``NaN`` never appears here (these are integer/bool
     arrays), it lives in the gene payload instead.
 
-    The fields are exactly the eleven below, in this order; ``level`` and
+    The fields are exactly the twelve below, in this order; ``level`` and
     ``overflow`` are read-only compatibility properties (see the end of the
     class), never fields.
 
     Invariances consumers may rely on:
 
-    * ``in_conn`` and ``in_src`` are ``I_INF`` in exactly the same positions,
-      and a node's columns ``0..d-1`` are dense whenever its in-degree is
-      ``d``; columns ``d..K-1`` are padding.
+    * ``in_conn``, ``in_src`` and ``in_valid`` mark the same positions
+      (``in_valid == (in_conn != I_INF)``), and a node's columns ``0..d-1`` are
+      dense whenever its in-degree is ``d``; columns ``d..K-1`` are padding.
     * for every ``(p, c)`` with ``edge_valid[p, c]``, exactly one
       ``(p, i, k)`` satisfies ``in_conn[p, i, k] == c`` and
       ``in_src[p, i, k] == src[p, c]`` — except edges whose in-group rank
       reached ``K``, which are counted in ``edge_overflow``.
     * ``in_conn[p, i, 0] == I_INF`` means "node ``i`` has no incoming edge"
-      (an input node, or an isolated node).
+      (an input node, or an isolated node), i.e. ``in_valid[p, i, 0]`` is
+      ``False``.
     * ``node_level[p, i]`` is ``I_INF`` iff node ``i`` is absent
       (``~node_exists[p, i]``), unreachable from the inputs, or on / downstream
       of a live cycle; ``reduce_max(node_level)`` bounds the execution loop.
@@ -108,6 +109,8 @@ class Transformed(NamedTuple):
     in_conn: Any
     #: (P, N, K) int32 — source slot of that same incoming edge; I_INF in the same positions as in_conn.
     in_src: Any
+    #: (P, N, K) bool — that window slot holds a live edge, i.e. ``in_conn != I_INF``.
+    in_valid: Any
     #: (P, N) int32 — longest-path level (inputs = 0); I_INF = absent, unreachable or cyclic.
     node_level: Any
     #: (P, N) bool — the node row is present (its key column is not the padding sentinel).
@@ -298,7 +301,8 @@ def derive_schedule(
            array and one flat scatter for the inverse permutation (this is the
            ``cumsum``-free counting trick).
         5. :func:`incoming_table` — ``in_conn``/``in_src``/``edge_overflow``
-           from ``col = rank - start[dst]``.
+           from ``col = rank - start[dst]``; ``in_valid`` is then the free
+           ``in_conn != I_INF`` mask.
         6. :func:`node_levels` — longest-path relaxation in a ``while_loop``,
            inputs pinned to level 0, cycles reported as ``I_INF``.
         7. ``node_exists``, ``topo_key``, ``input_slot`` and ``output_slot``
@@ -354,6 +358,7 @@ def derive_schedule(
     in_conn, in_src, edge_overflow = incoming_table(
         rank, cc, dst, src, edge_valid, max_nodes, max_in_degree
     )
+    in_valid = enp.not_equal(in_conn, _iinf_like(in_conn))
     node_level = node_levels(in_conn, in_src, input_slot, max_nodes)
     node_exists = _key_present(node_keys)
     slots = _node_slots(pop_size, max_nodes)
@@ -369,6 +374,7 @@ def derive_schedule(
         edge_valid=edge_valid,
         in_conn=in_conn,
         in_src=in_src,
+        in_valid=in_valid,
         node_level=node_level,
         node_exists=node_exists,
         topo_key=topo_key,
@@ -407,9 +413,9 @@ def key_slot_table(node_keys, key_span):
         One :func:`~tensorneat.common.tools.masked_flat_scatter` of the slot
         indices, masked by "the key is real and inside ``[0, S)``". A key
         outside that range cannot be refused in-graph (values are traced), so
-        it lands in the dump slot and later reads as a miss; keys above
-        ``2**24`` (``tools.KEY_MAX``) are not integer-exact in ``float32`` and
-        are therefore never addressed.
+        it lands in the dump slot and later reads as a miss; under the float
+        key spelling a key at or above ``2**24`` (``tools.KEY_MAX``) is also
+        treated as absent, because it is no longer integer-exact in ``float32``.
     """
     key_span = _positive_int(key_span, "key_span")
     pop_size, max_nodes = node_keys.shape
@@ -841,8 +847,9 @@ def validate_schedule(transformed):
         tensorneat.common.errors.ConfigError: Describing the *first* violated
             invariant, in this order — a shape or dtype that does not match the
             documented signature, ``in_conn``/``in_src`` disagreeing on a
-            padded position, a ``node_level`` of ``I_INF`` with a non-``I_INF``
-            ``topo_key``, a negative ``edge_overflow``, or an
+            padded position, ``in_valid`` disagreeing with
+            ``in_conn != I_INF``, ``topo_key`` not being ``I_INF`` exactly where
+            ``node_level`` is, a negative ``edge_overflow``, or an
             ``input_slot``/``output_slot`` that points outside ``[0, N)`` and
             is not ``I_INF``.
 
@@ -858,6 +865,7 @@ def validate_schedule(transformed):
     edge_valid = _host_bool(transformed.edge_valid, "edge_valid", 2)
     in_conn = _host_int(transformed.in_conn, "in_conn", 3)
     in_src = _host_int(transformed.in_src, "in_src", 3)
+    in_valid = _host_bool(transformed.in_valid, "in_valid", 3)
     node_level = _host_int(transformed.node_level, "node_level", 2)
     node_exists = _host_bool(transformed.node_exists, "node_exists", 2)
     topo_key = _host_int(transformed.topo_key, "topo_key", 2)
@@ -872,6 +880,7 @@ def validate_schedule(transformed):
         ("edge_valid", edge_valid, (pop_size, num_conns)),
         ("in_conn", in_conn, (pop_size, num_nodes, width)),
         ("in_src", in_src, (pop_size, num_nodes, width)),
+        ("in_valid", in_valid, (pop_size, num_nodes, width)),
         ("node_level", node_level, (pop_size, num_nodes)),
         ("node_exists", node_exists, (pop_size, num_nodes)),
         ("topo_key", topo_key, (pop_size, num_nodes)),
@@ -893,6 +902,11 @@ def validate_schedule(transformed):
         raise ConfigError(
             "validate_schedule: in_conn and in_src must be I_INF in exactly the same "
             "positions (a padded window slot disagrees)"
+        )
+    if not np.array_equal(in_valid, ~padded):
+        raise ConfigError(
+            "validate_schedule: in_valid must be exactly in_conn != I_INF "
+            "(a padded window slot disagrees)"
         )
     if not np.all(topo_key[node_level == I_INF] == I_INF):
         raise ConfigError(

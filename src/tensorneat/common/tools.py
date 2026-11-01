@@ -53,10 +53,11 @@ from .errors import ConfigError
 #: real index — every consumer must test for it before indexing.
 I_INF: int = int(np.iinfo(np.int32).max)
 
-#: Exclusive upper bound of gene keys: keys are integer-valued ``float32`` in
-#: ``[0, KEY_MAX)`` so that *exact* equality (and therefore key matching)
-#: survives float32 representation. ``KEY_MAX = 2**24`` is the first integer
-#: that float32 can no longer distinguish from its neighbour.
+#: Exclusive upper bound of gene keys. Canonical payload keys are ``int32`` in
+#: ``[0, KEY_MAX)``; the pre-rewrite/parity spelling keeps the same integer
+#: values in ``float32``, where ``KEY_MAX = 2**24`` is the first integer the
+#: format can no longer distinguish from its neighbour. Staying below it makes
+#: key equality exact under either spelling.
 KEY_MAX: int = 1 << 24
 
 
@@ -378,8 +379,10 @@ def masked_flat_scatter(x, idx, updates, mask):
 
     Notes:
         Also used to build the dense key→slot table
-        (:func:`tensorization.key_slot_table`), where absent (``NaN``) node
-        rows are the masked ones.
+        (:func:`tensorization.key_slot_table`), where the masked positions are
+        the node rows whose key is absent (``I_INF``) or outside
+        ``[0, key_span)`` — the caller's ``in_range`` mask, never an ``isnan``
+        test, because canonical keys are ``int32``.
     """
     pop_size, width = x.shape
     dump_column = width - 1
@@ -620,8 +623,9 @@ def hash_rows(rows):
     """Hash each row of a gene array to a single ``uint32`` — **host only**.
 
     Args:
-        rows: ``(N, L)`` numpy array of gene rows (float32 gene payload or
-            int-valued columns). Host memory, not a traced tensor.
+        rows: ``(N, L)`` numpy array of gene rows — ``int32`` key columns,
+            ``float32`` attribute columns, or a whole mixed row array kept
+            integer-valued — in host memory, not a traced tensor.
 
     Returns:
         ``(N,)`` ``numpy.uint32`` array; equal rows give equal hashes, unequal

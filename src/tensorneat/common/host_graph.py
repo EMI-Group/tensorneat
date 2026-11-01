@@ -16,9 +16,11 @@ adjacency from the gene payload.
 Input representation: every function here deliberately operates on plain
 Python ``set``/``dict``/``list`` structures decoded from a gene payload by the
 caller (see :func:`decode_graph`) — node keys are ``int``, connections are
-``(in_key, out_key)`` pairs of ``int``. No array, no sentinel (``I_INF``,
-``NaN``) and no batch axis leaks into this module; a caller that holds
-``(P, max_nodes, node_len)`` payloads selects one population member first.
+``(in_key, out_key)`` pairs of ``int``. :func:`decode_graph` performs the one
+padding-sentinel test (``NaN`` or ``I_INF`` in a row's key column); apart from
+that, no array or sentinel and no batch axis leaks into this module: a caller
+that holds ``(P, max_nodes, node_len)`` payloads selects one population member
+first.
 
 Why the split from the schedule: the in-graph schedule answers *how to execute
 a whole population with static shapes* and costs ``O(P * conns)`` inside a
@@ -129,10 +131,11 @@ def decode_graph(nodes, conns, node_attrs=1, conn_attrs=2):
     Returns
     -------
     nodes_out : dict[int, tuple[float, ...]]
-        Key ``int(row[0])`` (the integer-valued float gene key, cast with
-        ``int(...)`` exactly as the pre-rewrite ``to_dict`` helpers did) mapped
-        to that node's gene attributes, i.e. ``row[node_attrs:]`` as a tuple of
-        Python floats. Insertion order follows the payload row order.
+        Key ``int(row[0])`` mapped to that node's gene attributes, i.e.
+        ``row[node_attrs:]`` as a tuple of Python floats. Insertion order
+        follows the payload row order. Canonical keys are ``int32`` (an
+        integer-valued ``float32`` under the pre-rewrite spelling); either way
+        ``int(...)`` round-trips them because they stay below ``KEY_MAX``.
     conns_out : set[tuple[int, int]]
         ``(int(row[0]), int(row[1]))`` for every used connection row. The
         connection *attribute* columns are not returned: every graph algorithm
