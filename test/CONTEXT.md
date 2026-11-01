@@ -2,45 +2,53 @@
 
 ## Intent
 Prove three separate things about the rewrite: the evoxc kernels are *correct* (unit, against numpy oracles), they are *equivalent* to the frozen legacy library where the legacy semantics are well defined (parity, against `benchmarks/legacy_jax`), and the installed package is *JAX-free and runnable end to end* (release gate + integration).
+This is a verifier, not a specification: every test body executes a real kernel and asserts on its output.
 Every suite reads `../src/tensorneat` and `../benchmarks/legacy_jax` as read-only inputs; nothing in `src/` imports anything from here.
 `./support` holds the host-side helpers the suites share (one graph runner, hand-built gene payloads, numpy reference oracles); it is test code and is not packaged.
 
 ## How to run
-Commands an owner runs from the repo root (`[tool.pytest.ini_options]` in `pyproject.toml` sets `testpaths = ["test"]`, `addopts = "-q"`):
-- `pytest -m "not parity and not slow"` — the default gate: `./unit` plus the release gate, numpy backend only, no optional dependency, target under a minute.
-- `pytest -m parity` — kernel equality against the frozen legacy JAX implementation; needs `pip install -e ".[bench]"`, and every parity module calls `pytest.importorskip("jax")` so a bare environment skips rather than errors.
-- `pytest -m slow` — `./integration` (XOR evolution, determinism, rebuild-on-shape-change, checkpoint round-trip) and the oversized-population unit cases.
+Commands an owner runs from the repo root (`[tool.pytest.ini_options]` in `pyproject.toml` sets `testpaths = ["test"]`, `addopts = "-q"`; a doubled `-q` suppresses the summary line, so read the counts with `-o addopts=""`):
+- `pytest -m "not parity and not slow"` — the default gate: `./unit` plus the release gate, numpy backend only, no optional dependency. Measured on this machine: **2 failed, 453 passed, 4 xfailed in 24 s**, where both failures are the release gate on the still-legacy `pipeline.py` and the 4 xfails are pinned to one real `src/` defect (see Known items).
+- `pytest -m parity` — kernel equality against the frozen legacy JAX implementation; needs `pip install -e ".[bench]"` and finishes in **19 s** (53 passed). Every parity module calls `pytest.importorskip("jax")` so a bare environment skips rather than errors.
+- `pytest -m slow` — `./integration` (XOR evolution, determinism, rebuild-on-shape-change, checkpoint round-trip) plus the release gate's end-to-end XOR run: **17 skipped, 1 failed in 1.2 s** until the evoxc-native `Pipeline` lands.
 - `pytest test/release_gate_no_jax.py` — the import-hygiene gate alone; it runs subprocesses and belongs to the default gate.
 Markers `parity` and `slow` are declared in `pyproject.toml`; `requires_iree` is declared in `conftest.py` and is in no gate (it needs `evoxc[iree]`).
 
 ## Layout
 ```
 test/
-  conftest.py            sys.path guards (src/, benchmarks/legacy_jax), marker registration, seed fixture
+  conftest.py            sys.path guards (src/, benchmarks/legacy_jax, test/), marker registration, seed/rng/evoxc_key fixtures
   release_gate_no_jax.py the import-hygiene gate (collected by a conftest hook, see Constraints)
   support/               shared host-side test infrastructure (runner, payloads, numpy oracles, lazy imports)
   unit/                  numpy-backend kernel and invariant tests, mirrors src/tensorneat/
+    conftest.py          session-wide optional-framework leak guard
     common/  genome/  algorithm/  problem/
   parity/                same kernels vs the frozen legacy JAX library, marker `parity`
   integration/           whole-Pipeline runs, marker `slow`
 ```
 Every directory that holds test modules carries an `__init__.py`: pytest's default prepend import mode names a module by its basename, so un-namespaced directories collide (`test/unit/genome/test_forward.py` vs `test/parity/test_forward.py`) and abort the session with an import-mismatch error.
-Counts in the Phase-1 skeleton: `unit/common` 148, `unit/genome` 85, `unit/algorithm` 71, `unit/problem` 60, `parity` 50, `integration` 15, release gate 4 — 433 collected, of which only `parity/test_convert.py` (17) runs for real today.
+Current counts: `unit/common` 155, `unit/genome` 95, `unit/algorithm` 140 passed + 4 strict xfail, `unit/problem` 62, `parity` 53, `integration` 17 (skipped until the pipeline lands), release gate 4.
 
 ## What each suite proves
-- `./unit/common` — the schedule derived from a hand-built genome has the right level order, incoming-edge windows and sentinels, `validate_schedule` accepts what `derive_schedule` produces and rejects tampered schedules, flat gather/scatter/mutation helpers agree with a plain-numpy oracle, the ACT/AGG dispatchers agree with a per-option Python loop, and host graph walks (`topological_sort`, `node_depth`) agree with the in-graph `level`.
-- `./unit/genome` — forward values on hand-built genomes (dense chain, skipped node, unconnected node ⇒ NaN propagation, activation `-1` ⇒ identity), the recurrent tick, `grad` against the numpy oracle, and the genetic operators only through their *invariants* (capacity, key uniqueness, in-degree bound, structural stability of crossover).
-- `./unit/algorithm` — speciation, stagnation, spawn allocation and parent selection invariants: `sum(spawn) == pop_size`, no NaN fitness survives `tell`, a one-member species never yields NaN probabilities, every genome ends in exactly one species.
-- `./unit/problem` — func-fit losses against the closed form and each `error_method`, dataset tiling order, `NaN` prediction ⇒ `-inf` fitness, and CartPole returns against a host-numpy re-implementation of the same Euler dynamics.
-- `./parity` — on *identical* genomes: `forward` values and NaN pattern, `execute_distance`, `XOR`/`XOR3d` fitness and `grad` within tolerance.
+- `./unit/common` — the schedule derived from a hand-built genome has the right level order, incoming-edge windows and sentinels, `validate_schedule` accepts what `derive_schedule` produces and rejects every tampered invariant, flat gather/scatter/mutation helpers agree with a plain-numpy oracle, the ACT/AGG dispatchers agree with a per-option Python loop for all 12 ACT / 6 AGG ids (including `-1` and out-of-range ⇒ identity), `State` is an immutable pytree container, and the host graph walks (`decode_graph`, `topological_sort`, `find_useful_nodes`, `node_depth`, `check_cycles`) agree with the in-graph `node_level`.
+- `./unit/genome` — forward values on hand-built genomes (dense chain, skipped node, unconnected node ⇒ NaN propagation, activation `-1` ⇒ identity), the recurrent tick, `grad` against the numpy / finite-difference reference, `execute_distance`, and the genetic operators through their *invariants* (capacity, key uniqueness, in-degree bound, cycle and duplicate rejection, structural stability of crossover), plus the host-only helpers (`network_dict`, `sympy_func`, `visualize`, `repr`) and the in-graph `hash`.
+- `./unit/algorithm` — speciation, stagnation, spawn allocation, parent selection and `NEAT.tell` bookkeeping: `sum(spawn) == pop_size`, the last-qualifying-block layout rule, damping law and `min_species_size` floor, elite pinning, father-wins-tie, no NaN fitness surviving `tell`, a one-member species never yielding NaN probabilities, every genome ending in exactly one species.
+- `./unit/problem` — func-fit losses against the closed form for each `error_method`, individual-major dataset tiling order, `NaN` prediction ⇒ `-inf` fitness, `CustomFuncFit` sampling from a seeded `Generator` (`method="grid"` pinned), `CartPole` construction validation and returns against a host-numpy re-implementation of the same Euler dynamics, and NaN logits ⇒ `-inf` fitness.
+- `./parity` — on *identical* genomes: `forward` values and NaN pattern (rtol 1e-5) on chain / skip / isolated / random-DAG genomes, `execute_distance` closed forms, `XOR`/`XOR3d` fitness for every `error_method`, and gradients w.r.t. `conn_attrs`/`node_attrs` (rtol 1e-4), plus the lossless-schedule guard in `convert.py`.
 - `./integration` — `Pipeline.auto_run` reaches the XOR fitness target inside a small generation budget, the same seed reproduces the same run, a shape-signature change rebuilds (and does not corrupt) the cached executable, and `is_save` writes a loadable checkpoint.
 - `release_gate_no_jax.py` — in a clean subprocess, `import tensorneat` leaves `jax`, `torch`, `brax`, `gymnax`, `mujoco` out of `sys.modules`, and a full XOR generation still runs.
 
 ## Shared infrastructure (`./support`)
-`support/runner.py` is the ONLY place that touches `evoxc.build`/`evoxc.run`/`evoxc.lower`/`evoxc.compile`/`evoxc.load`: `build_defn(fn, *args, backend="numpy")` maps a `@evoxc.defn` (or any plain callable closure) plus its arguments to an executable, `run_defn(fn, *args)` builds and runs in one call, `run_graph(graph, *arrays)` compiles and runs a `Graph` (what `genome.grad` returns), and `to_numpy(tree)` unwraps `evoxc.Tensor` leaves of nested tuples/lists/dicts/namedtuples.
+`support/runner.py` is the ONLY place that touches `evoxc.build`/`evoxc.run`/`evoxc.lower`/`evoxc.compile`/`evoxc.load`: `build_defn(fn, *args, backend="numpy")` maps a `@evoxc.defn` (or any plain callable closure) plus its arguments to an executable, `run_defn(fn, *args)` builds and runs in one call, `run_graph(graph, *arrays)` compiles and runs a `Graph` (what `genome.grad` returns), and `to_numpy(tree)` unwraps `evoxc.Tensor` leaves of nested tuples/lists/dicts/namedtuples (a plain `tuple` is rebuilt rather than called).
 `support/payloads.py` builds `int32`/`float32` gene payloads by hand (`node_keys`, `node_attrs`, `conn_keys`, `conn_attrs` as plain numpy arrays, with `I_INF`/`NaN` padding) plus the canonical small genomes (dense chain, skipped node, isolated node, recurrent ring).
-`support/oracle.py` holds the numpy reference implementations the assertions compare against: the schedule derivation, a NaN-aware forward pass, the four func-fit losses, and the CartPole Euler rollout; `support/functions_ref.py` keeps the 12 ACT / 6 AGG reference kernels.
-`support/lazy.py::require(module)` is how a suite resolves anything that is not importable yet: it turns a design-skeleton `NotImplementedError` into a named skip and leaves every other failure visible.
+`support/oracle.py` holds the numpy reference implementations the assertions compare against: the schedule derivation (field-for-field against `Transformed`), a NaN-aware forward pass, the four func-fit losses, and the CartPole Euler rollout; `support/functions_ref.py` keeps the 12 ACT / 6 AGG reference kernels.
+`support/lazy.py::require(module)` is kept for a suite that must resolve a module lazily; the suites now import their sources at module scope, so a broken import surfaces as an error instead of a skip.
+
+## Known items
+`src/tensorneat/algorithm/neat/neat.py::NEAT._new_gene_keys` reshapes the per-individual `(P,)` result of `genome.max_node_key`/`max_conn_marker` to `()`, so `NEAT.tell` raises `evoxc.ShapeError: reshape: element counts differ: P vs 1` for `pop_size > 1`. `test/unit/algorithm/test_neat_tell.py` pins that with 4 `xfail(strict=True)` markers, which turn into XPASS failures (the signal to delete them) once the source is fixed.
+`test/release_gate_no_jax.py` is red on 3 of its 4 tests until `src/tensorneat/pipeline.py` stops importing jax: `import tensorneat` currently pulls jax in at module level.
+`test/integration/` skips structurally — `conftest.py` probes the loaded `Pipeline` for the documented `backend`/`device`/`compile_options`/`is_detailed` parameters and for a top-level jax import, and the whole directory skips with that precise reason until the evoxc compile site lands.
+`evoxc`'s power pullback computes `d(x²)/dx` as `y*b/a`, yielding `NaN` at `x == 0` where jax yields `0`; `./parity` differentiates at a differentiable point and records the corner rather than depending on it.
 
 ## Known divergences parity must tolerate
 RNG draws differ by construction (`evoxc.random` splitmix64 vs `jax.random`), so parity never compares populations, mutations or crossovers — only kernels on identical payloads.
@@ -52,15 +60,14 @@ The legacy forward aggregated over a full `max_nodes`-wide column with no in-deg
 The legacy RL problems are gone, so CartPole has no parity oracle — `./unit/problem`'s numpy reference is the only oracle.
 `problem.finalize_fitness` maps NaN → `-inf` while the legacy pipeline left NaN in the fitness array, so parity compares finite fitness only and the mapping is pinned as the one deliberate divergence.
 `mape` with a zero target is `1` for a zero prediction but `NaN` (`0/0`) when prediction and target are both exactly zero on the legacy side; parity genomes are chosen to avoid that corner.
-CartPole with NaN logits keeps a finite fitness (the action test is `out[1] > out[0]`, false for NaN, so it pushes left) — unlike func-fit, a NaN network is not demoted; `./unit/problem` pins that documented behaviour.
+A NaN *source slot* is dropped when the destination also has a live source, so an isolated node poisons only a read-out that has no other live input; both halves of that rule are pinned in `./parity` and `./unit/genome`.
 
 ## Conventions
-Every test that depends on unimplemented source code has a real signature and docstring and a body of `pytest.skip("not implemented")`, so the file is importable and collectable before the implementation wave and the skip text names the owner.
-No test module imports `tensorneat` or a `support` module at module scope: `import tensorneat` raises `NotImplementedError` today because `algorithm/base.py` evaluates `State()` as a default argument, so each suite's `conftest.py` resolves the package and the support modules through `support.lazy.require` in module-scoped fixtures — those two lines become plain imports once `src/` is implemented.
-`jax` is imported only inside `./parity` modules, and only after `pytest.importorskip("jax")`; no other test may import it at module scope.
-`release_gate_no_jax.py` is red until `src/tensorneat/pipeline.py` becomes evoxc-native (it still imports `jax` and asserts the legacy `problem.jitable` flag): that failure is the ratchet for the implementation wave, not a broken test.
-No network, no GPU, `backend="numpy"` everywhere except tests marked `requires_iree`.
+No test body is a placeholder: every test either asserts on a real kernel or is skipped with a structural, self-clearing reason (`./integration`).
+`jax` is imported only inside `./parity` modules, and only after `pytest.importorskip("jax")`; no other test may import it at module scope, and `test/unit/conftest.py` enforces that with a session-baseline `sys.modules` diff plus an import recorder that attributes the offending file.
+A behaviour the implementation documents but does not deliver is pinned with `xfail(strict=True)` and a reason starting `src defect:` — never removed, never softened.
 Shapes and keys in the suite are small (pop ≤ 16, `max_nodes` ≤ 16) except where a test exists specifically to exceed a static bound.
+No network, no GPU, `backend="numpy"` everywhere except tests marked `requires_iree`.
 Files stay under ~1000 lines; one test module per source module, named `test_<module>.py`.
 
 ## Constraints
