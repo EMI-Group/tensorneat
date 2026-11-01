@@ -39,7 +39,8 @@ Counts in the Phase-1 skeleton: `unit/common` 148, `unit/genome` 85, `unit/algor
 ## Shared infrastructure (`./support`)
 `support/runner.py` is the ONLY place that touches `evoxc.build`/`evoxc.run`/`evoxc.lower`/`evoxc.compile`/`evoxc.load`: `build_defn(fn, *args, backend="numpy")` maps a `@evoxc.defn` (or any plain callable closure) plus its arguments to an executable, `run_defn(fn, *args)` builds and runs in one call, `run_graph(graph, *arrays)` compiles and runs a `Graph` (what `genome.grad` returns), and `to_numpy(tree)` unwraps `evoxc.Tensor` leaves of nested tuples/lists/dicts/namedtuples.
 `support/payloads.py` builds `int32`/`float32` gene payloads by hand (`node_keys`, `node_attrs`, `conn_keys`, `conn_attrs` as plain numpy arrays, with `I_INF`/`NaN` padding) plus the canonical small genomes (dense chain, skipped node, isolated node, recurrent ring).
-`support/oracle.py` holds the numpy reference implementations the assertions compare against: the schedule derivation, a NaN-aware forward pass, the four func-fit losses, and the CartPole Euler rollout.
+`support/oracle.py` holds the numpy reference implementations the assertions compare against: the schedule derivation, a NaN-aware forward pass, the four func-fit losses, and the CartPole Euler rollout; `support/functions_ref.py` keeps the 12 ACT / 6 AGG reference kernels.
+`support/lazy.py::require(module)` is how a suite resolves anything that is not importable yet: it turns a design-skeleton `NotImplementedError` into a named skip and leaves every other failure visible.
 
 ## Known divergences parity must tolerate
 RNG draws differ by construction (`evoxc.random` splitmix64 vs `jax.random`), so parity never compares populations, mutations or crossovers — only kernels on identical payloads.
