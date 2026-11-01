@@ -210,7 +210,7 @@ Host-only, pure Python (stdlib + `errors.GraphError`), never traced: `decode_gra
 `common.__init__` re-exports `decode_graph`, `topological_sort` and `find_useful_nodes`.
 
 ### `sympy_tools.py`
-Host-only (`sympy`, `numpy`, regex): `analysis_nodes_exprs`, `round_expr`, `replace_variable_names`, `to_latex_code`, `to_python_code` — the 8-tuple contract of `Genome.sympy_func` is unchanged from the pre-rewrite library.
+Host-only (`re` + `sympy`, no numpy, no evoxc): `analysis_nodes_exprs`, `round_expr`, `replace_variable_names`, `to_latex_code`, `to_python_code` — the 8-tuple contract of `Genome.sympy_func` is unchanged from the pre-rewrite library, and `to_python_code` emits the legacy line-by-line source (allocate `h`/`o`, then assignment lines) rather than a `def`.
 It is deliberately not re-exported by `common.__init__` (its only consumer is `Genome.sympy_func`, which imports `..common.sympy_tools` directly), so the package surface stays what the contract lists.
 
 ## evoxc idioms and gotchas (validated on this box)
