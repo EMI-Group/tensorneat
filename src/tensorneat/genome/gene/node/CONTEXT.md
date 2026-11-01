@@ -22,7 +22,7 @@ Aggregation indices index into `aggregation_options`, which defaults to the sing
 
 # Known Issues
 `DefaultNode.new_identity_attrs` returns `self.activation_default` while its comment claims `activation=-1`; only `BiasNode` emits `-1`.
-`response_lower_bound` is stored as the misspelled `self.reponse_lower_bound` in both `DefaultNode.input`/`BiasNode` ctor and then used for clipping.
+`response_lower_bound` is stored as the misspelled `self.reponse_lower_bound` in both `DefaultNode` and `BiasNode` constructors and then used for clipping.
 
 # Routing Table
 No subdirectories.
