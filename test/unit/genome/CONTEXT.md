@@ -19,6 +19,11 @@ Every test that depends on source code that is still a design skeleton carries a
 ## Conventions
 Nothing imports `tensorneat` or `support` at module scope: `import tensorneat` still raises `NotImplementedError` (a `State()` default argument in a design skeleton), so every input is a `scope="module"` fixture resolved through `support.lazy.require`.
 Every graph runs through `support.runner` only, and through `conftest.py`'s fixtures rather than a module-scope import.
+`run_kernel`/`run_transform`/`run_forward` reuse one compiled `evoxc.Executable` per `(genome identity, state identity, kernel or graph name, argument shapes and dtypes)`; a different genome/state object, a different static value or a different shape/dtype rebuilds.
+The key keeps the genome and state objects alive and is never an `id()`, so an address cannot be recycled into a false hit.
+Frozen scalar statics are keyed by value, so `initialize(..., pop_size=3)` and `initialize(..., pop_size=4)` are two entries, while data *values* are never part of the key.
+`genome.grad` graphs are never cached — `runner.run_graph` retraces per call — and a call the conftest cannot classify (a mutable-container static, a callee that is not a bound method) rebuilds every time.
+Serving a cached executable is the one step outside `support.runner`'s public surface (`conftest._run_one` calls `evoxc.run`); a `runner.run_built(executable, *args)` would move the cache into `../../support/`.
 `genome.transform` is the only source of a `Transformed`: tests never name a schedule field, so a rename cannot silently pass.
 A `Transformed` is passed field by field and rebuilt inside the traced closure — the shared runner treats only top-level array leaves as data, so a namedtuple argument would be baked as a static (see `conftest.py`).
 Payloads come from `support.payloads` and expectations from `support.oracle`; neither is re-implemented here.
