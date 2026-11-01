@@ -112,6 +112,12 @@ Data-dependent `while_loop` trip counts work on numpy and iree/llvm-cpu but not 
 `evoxc.constant` warns above 1 MiB, which bounds how large a substrate coordinate table may be before it must become an explicit pipeline input.
 `evoxc` has no `io_callback`/print op, so all logging stays in `show_details` on the host side.
 
+## Package Exports (verified against the code)
+`algorithm/__init__.py` exports exactly `BaseAlgorithm`, `NEAT`, `HyperNEAT`; **`HyperNEATFeedForward` is NOT re-exported there** — import it from `tensorneat.algorithm.hyperneat`.
+`algorithm/hyperneat/__init__.py` exports `HyperNEAT`, `HyperNEATFeedForward`, `HyperNEATNode`, `HyperNEATConn`, `SubstrateSchedule`, `BaseSubstrate`, `DefaultSubstrate`, `FullSubstrate`, `MLPSubstrate`.
+`algorithm/hyperneat/substrate/__init__.py` exports the four substrate classes plus `as_coor_array`, `cartesian_product`, `check_same_coordinate_dim`, `layer_coors`, `node_key_blocks`; the two `analysis_substrate` builders stay in `substrate/full.py` and `substrate/mlp.py`.
+`algorithm/neat/__init__.py` exports `NEAT`, `SpeciesController`, `SpeciesState`.
+
 ## Constraints
 No `jax` / `torch` / `numpy.random` import anywhere in this subtree; `import tensorneat` must stay free of them (release gate).
 No Python branching, `bool()`, `len()` or host reads on traced values; static Python `if`/`for` over constructor configuration is fine and unrolls at trace time.
