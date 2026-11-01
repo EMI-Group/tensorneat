@@ -489,15 +489,18 @@ class SpeciesController(StatefulBaseClass):
             two fields.
 
         Note:
-            **Scan 1's distances are hoisted.**  An iteration reads the centre row
-            it inherited and only ever writes its own row, so every row is already
-            final when the scan starts and the whole ``(S, P)`` table is built by
-            one ``distance_table`` call whenever it fits ``TABLE_ROWS``
-            (``_kernels.py``); above that size the call stays inside the scan,
-            which measures faster because the interpreter then reuses the same
-            warm buffers.  Scan 2 cannot be hoisted the same way: a *created*
-            species takes the first unassigned genome as its centre, so the row a
-            dead slot needs depends on the assignments of every earlier iteration.
+            **Both scans read liveness-gated distance tables.**  A scan-1
+            iteration reads the centre row it inherited and only ever writes its own
+            row, so every row is final before the scan starts; the whole ``(S, P)``
+            table is therefore built up front by ``chunked_distance_table``, which
+            splits the species axis into static ``CHUNK_SLOTS``-sized chunks and
+            skips an all-dead chunk with an ``evoxc.cond`` (``_kernels.py``).
+            Scan 2's live rows are a second such table, built from the centres
+            scan 1 leaves behind.  A *created* species is different: it takes the
+            first unassigned genome as its centre, so its row depends on the
+            assignments of every earlier iteration and is computed lazily inside
+            the scan, behind the same ``create`` predicate.  A dead slot's row is
+            never read, which is what makes both substitutions bit-identical.
         """
         population = self._population(state, pop)
         values = _kernels.speciate(
