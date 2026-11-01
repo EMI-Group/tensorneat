@@ -48,7 +48,7 @@ CartPole's fitness is a mean of 0/1 rewards, so it is always finite outside the 
 
 ## Conventions
 Nothing imports `tensorneat`, `support` or `evoxc` at module scope: `../conftest.py` prepends `src/`, `benchmarks/legacy_jax` and `test/` to `sys.path` at collection time, so every input is a `scope="module"` fixture that imports inside its body.
-Those imports are plain statements — the suite must never convert a broken or regressed module into a skip, so a green run here really executed every kernel it claims to (the earlier `support.lazy.require` indirection is gone from this node).
+Those imports are plain statements — the suite must never convert a broken or regressed module into a skip, so a green run here really executed every kernel it claims to.
 Every graph runs through `support.runner` only, through the fixtures in `conftest.py`, never a module-scope import.
 Shapes stay small (`pop <= 8`, `max_step <= 50`, `S <= 8`) and the backend is always `"numpy"`; no `jax`/`torch`, no network, no GPU, no display.
 
