@@ -1,93 +1,36 @@
-import jax, jax.numpy as jnp
+"""ACT / AGG option registries and the per-node dispatchers.
 
-from .act_jnp import *
-from .act_sympy import *
-from .agg_jnp import *
-from .agg_sympy import *
+This package is the single source of truth for the activation and aggregation
+options a NEAT node gene may select. It exposes exactly five names:
+
+* ``ACT`` / ``AGG`` -- module-level :class:`FunctionManager` instances pairing
+  the evoxc kernels with their sympy counterparts, in canonical option order.
+* ``FunctionManager`` -- the registry class, for genomes that need a private
+  registry (custom options with their own sympy form).
+* ``apply_activation`` / ``apply_aggregation`` -- the in-graph dispatchers.
+
+Import order matters only in that ``.act``/``.agg`` own the canonical option
+order and ``.act_sympy``/``.agg_sympy`` own the paired sympy tuple; the manager
+validates the pairing at import time, so a mismatched table fails immediately
+rather than producing a wrong formula later.
+
+``import tensorneat`` pulls in ``sympy`` through this package (a declared
+dependency); no backend module, no JAX, no torch.
+"""
+
+from .act import ACT_FUNCS, apply_activation
+from .act_sympy import ACT_SYMPY_FUNCS, ACT_SYMPY_HELPERS
+from .agg import AGG_FUNCS, apply_aggregation
+from .agg_sympy import AGG_SYMPY_FUNCS
 from .manager import FunctionManager
 
-act_name2jnp = {
-    "scaled_sigmoid": scaled_sigmoid_,
-    "sigmoid": sigmoid_,
-    "scaled_tanh": scaled_tanh_,
-    "tanh": tanh_,
-    "sin": sin_,
-    "relu": relu_,
-    "lelu": lelu_,
-    "identity": identity_,
-    "inv": inv_,
-    "log": log_,
-    "exp": exp_,
-    "abs": abs_,
-}
+ACT = FunctionManager(ACT_FUNCS, ACT_SYMPY_FUNCS, ACT_SYMPY_HELPERS)
+AGG = FunctionManager(AGG_FUNCS, AGG_SYMPY_FUNCS)
 
-act_name2sympy = {
-    "scaled_sigmoid": SympyScaledSigmoid,
-    "sigmoid": SympySigmoid,
-    "scaled_tanh": SympyScaledTanh,
-    "tanh": SympyTanh,
-    "sin": SympySin,
-    "relu": SympyRelu,
-    "lelu": SympyLelu,
-    "identity": SympyIdentity,
-    "inv": SympyIdentity,
-    "log": SympyLog,
-    "exp": SympyExp,
-    "abs": SympyAbs,
-    "clip": SympyClip,
-}
-
-agg_name2jnp = {
-    "sum": sum_,
-    "product": product_,
-    "max": max_,
-    "min": min_,
-    "maxabs": maxabs_,
-    "mean": mean_,
-}
-
-agg_name2sympy = {
-    "sum": SympySum,
-    "product": SympyProduct,
-    "max": SympyMax,
-    "min": SympyMin,
-    "maxabs": SympyMaxabs,
-    "mean": SympyMean,
-}
-
-ACT = FunctionManager(act_name2jnp, act_name2sympy)
-AGG = FunctionManager(agg_name2jnp, agg_name2sympy)
-
-def apply_activation(idx, z, act_funcs):
-    """
-    calculate activation function for each node
-    """
-    idx = jnp.asarray(idx, dtype=jnp.int32)
-    # change idx from float to int
-
-    # -1 means identity activation
-    res = jax.lax.cond(
-        idx == -1,
-        lambda: z,
-        lambda: jax.lax.switch(idx, act_funcs, z),
-    )
-
-    return res
-
-def apply_aggregation(idx, z, agg_funcs, mask):
-    """
-    calculate aggregation function for inputs of node
-    """
-    idx = jnp.asarray(idx, dtype=jnp.int32)
-
-    return jax.lax.cond(
-        jnp.all(~mask),
-        lambda: 0.0,
-        lambda: jax.lax.switch(idx, agg_funcs, z, mask),
-    )
-
-def get_func_name(func):
-    name = func.__name__
-    if name.endswith("_"):
-        name = name[:-1]
-    return name
+__all__ = [
+    "ACT",
+    "AGG",
+    "FunctionManager",
+    "apply_activation",
+    "apply_aggregation",
+]
