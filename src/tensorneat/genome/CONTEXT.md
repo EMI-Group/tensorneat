@@ -110,3 +110,11 @@ Gradients are cleaned with `select(isnan(g), 0, g)` and by masking absent rows, 
 
 Out of node but required: `../common/tensorization.py` (`derive_schedule(node_keys, conn_in, conn_out, input_keys, output_keys, pop_size, max_nodes, max_conns, max_in_degree, key_span)` → `Transformed`), `../common/functions/` (`ACT`/`AGG`, `apply_activation`, `apply_aggregation` with `-1` = identity), `../common/tools.py` (`I_INF`), `../common/state.py` (`State`), `../common/errors.py` (`TensorNEATError`).
 Consumers: `../algorithm/neat/` (`ask`/`transform`/`forward`/`tell`), `../algorithm/hyperneat/` (`RecurrentGenome` as CPPN), `../pipeline.py` (compile site, per-shape executable cache).
+
+## Known Issues
+Every module in this node is a skeleton: all compute/operator methods raise `NotImplementedError` (108 raise sites), and the package cannot even be imported yet.
+- `base.py:37` imports `build_schedule`, which does not exist; the schedule kernel is `common.tensorization.derive_schedule` and it takes split key columns plus `pop_size`/`max_nodes`/`max_conns`/`max_in_degree`/`key_span`, not `(node_keys, conn_keys, max_in_degree, network_type)`.
+- `default.py:19-25` imports `topological_sort_python` from `..common`; the exported host walk is named `topological_sort`.
+- `gene/node/default.py:22` and `gene/node/bias.py:21` import `get_func_name` from `common.functions`; that helper was replaced by `ACT.name_of`/`AGG.name_of` on `FunctionManager`.
+- `BaseNode.forward` declares `(state, attrs, messages, is_output_node, valid_mask)`; `algorithm/hyperneat.HyperNEATNode.forward` declares `(state, attrs, ins, valid_mask, is_output_node)` — the genome-side order is the authority for `_node_step`.
+- There is no `from_attrs` payload builder and no `uses_historical_marker` flag; detect the marker column with `"historical_marker" in conn_gene.fixed_attrs`.
