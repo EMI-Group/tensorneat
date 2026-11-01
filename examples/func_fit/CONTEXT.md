@@ -3,7 +3,7 @@
 ## Intent
 Runnable, copy-pasteable supervised function-fitting examples for the evoxc-based TensorNEAT API.
 Each script is a single top-level pipeline run: build the `Pipeline`, `setup()`, `auto_run()`, `show()`.
-Budgets stay small (pop 1000, ≤ 150 generations, numpy backend) so a run finishes well under a minute on CPU.
+Budgets are demo-sized (pop 200–500, ≤ 50 generations, numpy backend) so each run finishes in seconds on CPU, not the minutes a real run takes.
 
 ## API Surface
 Shared entry point is `from tensorneat import Pipeline, algorithm, genome, problem`, plus `from tensorneat.common import ACT`.
