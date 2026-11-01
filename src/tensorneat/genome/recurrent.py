@@ -55,6 +55,7 @@ class RecurrentGenome(BaseGenome):
         max_in_degree: int | None = None,
         max_depth: int = 16,
         activate_time: int = 10,
+        key_span: int | None = None,
     ):
         """Configure a recurrent genome with NEAT-python default genes and operators.
 
@@ -85,6 +86,10 @@ class RecurrentGenome(BaseGenome):
                 signature matches :class:`.default.DefaultGenome`.
             activate_time: Number of synchronous ticks unrolled in the forward pass; a static
                 Python int, so changing it forces a rebuild.
+            key_span: Static key bound ``S`` of the schedule's dense key table; ``None``
+                resolves to ``max(max_nodes, num_inputs + num_outputs) + max_conns``. A caller
+                that allocates structural keys beyond that default (the mutation operators take
+                caller-allocated keys) must raise it here.
 
         Raises:
             TensorNEATError: If ``activate_time`` is not a positive int (zero ticks would read
@@ -116,6 +121,7 @@ class RecurrentGenome(BaseGenome):
             init_hidden_layers=init_hidden_layers,
             max_in_degree=max_in_degree,
             max_depth=max_depth,
+            key_span=key_span,
         )
 
     def forward(
@@ -134,7 +140,10 @@ class RecurrentGenome(BaseGenome):
         ``activate_time``:
 
         1. ``values = full((P, N), NaN)``; ``hit_conn_attrs = self._hit_conn_attrs(transformed,
-           conn_attrs)`` once, since edge attributes are constant over the ticks.
+           conn_attrs)`` once, since edge attributes are constant over the ticks, and the
+           attribute rows of absent nodes are rewritten to ``0`` in the same one-off step
+           (``self._padding_safe_attrs``) so the node gene's ``int32`` option-index cast never
+           sees a ``NaN``.
         2. ``for _ in range(self.activate_time)`` (a Python loop, unrolled at trace time):
            re-inject the raw ``inputs`` into the input rows, then
            ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs, values,
@@ -167,6 +176,10 @@ class RecurrentGenome(BaseGenome):
         """
         pop_size, max_nodes = (int(size) for size in transformed.node_exists.shape)
         values = enp.full((pop_size, max_nodes), float("nan"), dtype=evoxc.float32)
+        # Absent rows read as ``0`` instead of ``NaN`` before the tick loop, so the option
+        # index columns the node gene casts to ``int32`` are never NaN (see
+        # ``BaseGenome._padding_safe_attrs``).
+        node_attrs = self._padding_safe_attrs(node_attrs, node_keys)
         hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs)
         valid_count = enp.sum(evoxc.cast(transformed.in_valid, evoxc.int32), axis=-1)
         update_mask = evoxc.logical_and(
@@ -215,10 +228,14 @@ class RecurrentGenome(BaseGenome):
             Never returns.
 
         Raises:
-            NotImplementedError: Always — symbolic form is not defined for a recurrent genome.
+            TensorNEATError: Always — symbolic form is not defined for a recurrent genome, so
+                this rewrite keeps the pre-rewrite refusal instead of emitting a truncated
+                formula. Use ``..common.host_graph``/``network_dict`` to inspect the topology.
         """
-        raise NotImplementedError(
-            "symbolic form / visualization is not defined for a recurrent genome"
+        raise TensorNEATError(
+            f"{type(self).__name__}.sympy_func is not supported: a cyclic network has no "
+            "finite closed form, so no symbolic expression can be generated. Inspect the "
+            "topology with network_dict(), or use DefaultGenome for a feedforward genome."
         )
 
     def visualize(self, network: dict, **kwargs: Any) -> None:
@@ -235,8 +252,13 @@ class RecurrentGenome(BaseGenome):
             Never returns.
 
         Raises:
-            NotImplementedError: Always — visualization is not defined for a recurrent genome.
+            TensorNEATError: Always — the layered drawing assumes a depth-ordered feedforward
+                graph, which a cyclic network does not have; the rewrite keeps the pre-rewrite
+                refusal rather than drawing a misleading picture. Draw the topology yourself
+                from ``network_dict()``, or use ``DefaultGenome``.
         """
-        raise NotImplementedError(
-            "symbolic form / visualization is not defined for a recurrent genome"
+        raise TensorNEATError(
+            f"{type(self).__name__}.visualize is not supported: the layered layout assumes a "
+            "depth-ordered feedforward graph, which a cyclic network does not have. Build the "
+            "figure from network_dict(), or use DefaultGenome for a feedforward genome."
         )
