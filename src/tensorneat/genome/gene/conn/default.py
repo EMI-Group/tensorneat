@@ -4,7 +4,7 @@ Batch-first: one call computes the message of every edge slot of the whole
 population, purely elementwise in ``(weight, source value)``.
 This file declares the weight table and the NaN-safe message; it must not import
 ``jax``/``torch`` and must not duplicate the key-column or crossover machinery of
-:class:`..base.BaseConn`.
+:class:`.base.BaseConn`.
 """
 
 import evoxc

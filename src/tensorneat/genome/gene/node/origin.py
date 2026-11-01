@@ -1,6 +1,6 @@
 """Origin (NEAT-paper) node gene: ``DefaultNode`` attributes, whole-gene crossover.
 
-The layout is identical to :class:`..default.DefaultNode` -- the difference is pure
+The layout is identical to :class:`.default.DefaultNode` -- the difference is pure
 genetic-operator semantics, so nothing in the forward path changes.
 Batch-first: crossover draws one scalar per gene pair, never one draw per attribute,
 and is expressed with ``select`` rather than branching on traced values.
@@ -15,7 +15,7 @@ from .default import DefaultNode
 class OriginNode(DefaultNode):
     """Node gene of the original NEAT paper (see EMI-Group/tensorneat issue 11).
 
-    Same float32 attribute columns as :class:`..default.DefaultNode`
+    Same float32 attribute columns as :class:`.default.DefaultNode`
     (``bias``, ``response``, ``aggregation``, ``activation``), same aggregation,
     combine, activation and code-generation hooks; only :meth:`crossover` differs:
     the original paper aligns genes and copies a whole gene, so a single random draw

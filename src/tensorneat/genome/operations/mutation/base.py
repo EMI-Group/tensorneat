@@ -13,17 +13,10 @@ from typing import TYPE_CHECKING
 import evoxc
 
 from ....common import State, StatefulBaseClass, TensorNEATError
+from ...utils import GenomeTensors
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps genome -> operations acyclic
     from ...base import BaseGenome
-
-#: The four payload arrays a mutation kernel returns, in this order.
-Payload = tuple[
-    evoxc.SymbolicTensor,  # node_keys  (P, N) int32
-    evoxc.SymbolicTensor,  # node_attrs (P, N, NA) float32
-    evoxc.SymbolicTensor,  # conn_keys  (P, E, CK) int32
-    evoxc.SymbolicTensor,  # conn_attrs (P, E, CA) float32
-]
 
 
 class BaseMutation(StatefulBaseClass):
@@ -52,7 +45,7 @@ class BaseMutation(StatefulBaseClass):
         conn_attrs: evoxc.SymbolicTensor,
         new_node_keys: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
-    ) -> Payload:
+    ) -> GenomeTensors:
         """Mutate a whole population in one kernel call.
 
         The key is split internally into one key per stage; :meth:`mutate_structure` runs
@@ -87,7 +80,7 @@ class BaseMutation(StatefulBaseClass):
                 column 2 the add-conn edge.
 
         Returns:
-            Payload: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` with the shapes and
+            GenomeTensors: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` with the shapes and
             dtypes of the inputs — the mutated population.
 
         Raises:
@@ -109,7 +102,7 @@ class BaseMutation(StatefulBaseClass):
         conn_attrs: evoxc.SymbolicTensor,
         new_node_keys: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
-    ) -> Payload:
+    ) -> GenomeTensors:
         """Apply at most one structural change per individual.
 
         Args:
@@ -130,7 +123,7 @@ class BaseMutation(StatefulBaseClass):
                 keys.
 
         Returns:
-            Payload: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` after the structural
+            GenomeTensors: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` after the structural
             stage; every individual whose gate is off is returned unchanged.
 
         Raises:
@@ -149,7 +142,7 @@ class BaseMutation(StatefulBaseClass):
         node_attrs: evoxc.SymbolicTensor,
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
-    ) -> Payload:
+    ) -> GenomeTensors:
         """Mutate the attributes of every existing gene in the population.
 
         Only ``node_attrs`` and ``conn_attrs`` change; the key arrays are returned
@@ -169,7 +162,7 @@ class BaseMutation(StatefulBaseClass):
                 to mutate, NaN padded.
 
         Returns:
-            Payload: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` with mutated
+            GenomeTensors: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` with mutated
             attribute arrays and unchanged key arrays.
 
         Raises:
@@ -180,4 +173,4 @@ class BaseMutation(StatefulBaseClass):
         )
 
 
-__all__ = ["BaseMutation", "Payload"]
+__all__ = ["BaseMutation"]

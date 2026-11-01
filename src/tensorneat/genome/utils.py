@@ -128,7 +128,7 @@ def add_node(
     """Write new node rows at caller-chosen free rows of every individual.
 
     The write is unconditional at ``rows``, so a caller must gate the result with ``select``
-    when ``rows == I_INF`` for some individual (as ``..operations.mutation`` does); garbage
+    when ``rows == I_INF`` for some individual (as ``.operations.mutation`` does); garbage
     is written at such a row instead of the write being skipped, because no scatter can be a
     no-op per row.
 

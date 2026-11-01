@@ -23,7 +23,7 @@ from ...utils import (
     first_free_row,
     valid_count,
 )
-from .base import BaseMutation, Payload
+from .base import BaseMutation
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...base import BaseGenome
@@ -77,7 +77,7 @@ class DefaultMutation(BaseMutation):
         conn_attrs: evoxc.SymbolicTensor,
         new_node_keys: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
-    ) -> Payload:
+    ) -> GenomeTensors:
         """Apply at most one gated structural mutation per individual.
 
         Draws ``evoxc.random.uniform(key, (4, P))`` once; its rows gate add-node,
@@ -97,7 +97,7 @@ class DefaultMutation(BaseMutation):
                 ``[:, 0]``/``[:, 1]`` for the add-node edges, ``[:, 2]`` for add-conn.
 
         Returns:
-            Payload: the four payload arrays after the structural stage.
+            GenomeTensors: the four payload arrays after the structural stage.
 
         Raises:
             TensorNEATError: If ``genome.network_type`` is neither ``"feedforward"`` nor
@@ -118,7 +118,7 @@ class DefaultMutation(BaseMutation):
         conn_attrs: evoxc.SymbolicTensor,
         new_node_keys: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
-    ) -> Payload:
+    ) -> GenomeTensors:
         """Split one connection per individual with a new node, preserving network output.
 
         The chosen connection is deleted, the new node is written at ``first_free_row`` with
@@ -145,7 +145,7 @@ class DefaultMutation(BaseMutation):
                 edge when the conn gene declares one.
 
         Returns:
-            Payload: the four payload arrays; an individual that cannot split is unchanged.
+            GenomeTensors: the four payload arrays; an individual that cannot split is unchanged.
         """
         raise NotImplementedError(
             "choose a connection, delete it, insert the node and add the two replacement edges"
@@ -160,7 +160,7 @@ class DefaultMutation(BaseMutation):
         node_attrs: evoxc.SymbolicTensor,
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
-    ) -> Payload:
+    ) -> GenomeTensors:
         """Delete one hidden node per individual together with all its connections.
 
         Input rows (``0..num_inputs-1``) and output rows (``N-num_outputs..N-1``) are never
@@ -181,7 +181,7 @@ class DefaultMutation(BaseMutation):
             conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
 
         Returns:
-            Payload: the four payload arrays, with the deleted node's row and every touching
+            GenomeTensors: the four payload arrays, with the deleted node's row and every touching
             connection row sent back to their padding sentinels.
         """
         raise NotImplementedError(
@@ -198,7 +198,7 @@ class DefaultMutation(BaseMutation):
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
-    ) -> Payload:
+    ) -> GenomeTensors:
         """Add one connection per individual with the connection gene's zero attributes.
 
         Two independent :meth:`choose_node_key` draws pick the endpoints: the source may be
@@ -225,7 +225,7 @@ class DefaultMutation(BaseMutation):
                 ``[:, 2]`` becomes the ``historical_marker`` of the new edge when declared.
 
         Returns:
-            Payload: the four payload arrays; a refused add leaves the individual unchanged.
+            GenomeTensors: the four payload arrays; a refused add leaves the individual unchanged.
         """
         raise NotImplementedError(
             "draw both endpoints, reject duplicates/cycles/in-degree overflow and add the edge"
@@ -240,7 +240,7 @@ class DefaultMutation(BaseMutation):
         node_attrs: evoxc.SymbolicTensor,
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
-    ) -> Payload:
+    ) -> GenomeTensors:
         """Delete one connection per individual.
 
         The candidate row comes from :meth:`choose_connection_key` and is cleared with
@@ -257,7 +257,7 @@ class DefaultMutation(BaseMutation):
             conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
 
         Returns:
-            Payload: the four payload arrays, with the chosen connection row cleared.
+            GenomeTensors: the four payload arrays, with the chosen connection row cleared.
         """
         raise NotImplementedError(
             "choose a connection row and clear it with delete_conn_by_pos"
@@ -272,7 +272,7 @@ class DefaultMutation(BaseMutation):
         node_attrs: evoxc.SymbolicTensor,
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
-    ) -> Payload:
+    ) -> GenomeTensors:
         """Mutate every existing gene's attributes with one batched draw per array.
 
         ``genome.node_gene.mutate`` and ``genome.conn_gene.mutate`` are called once each on
@@ -290,7 +290,7 @@ class DefaultMutation(BaseMutation):
             conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
 
         Returns:
-            Payload: mutated attributes, unchanged keys, padding sentinels restored.
+            GenomeTensors: mutated attributes, unchanged keys, padding sentinels restored.
         """
         raise NotImplementedError(
             "call each gene's batched mutate once and re-mask padded rows to NaN"

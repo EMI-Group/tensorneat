@@ -4,7 +4,7 @@ No depth levels are used: the network is unrolled ``activate_time`` ticks in a p
 ``for`` loop, each tick recomputing every existing node from the *previous* tick's values, so
 the traced graph holds only ``gather``/``select``/``reduce_*`` and elementwise ops.
 Everything is batch-first (population on axis 0) and the shared window reduce lives in
-:class:`..base.BaseGenome`; HyperNEAT also uses this genome as its CPPN.
+:class:`.base.BaseGenome`; HyperNEAT also uses this genome as its CPPN.
 """
 
 from collections.abc import Callable, Sequence
@@ -64,7 +64,7 @@ class RecurrentGenome(BaseGenome):
         (``DefaultNode()``, ``DefaultConn()``, ``DefaultMutation()``, ``DefaultCrossover()``,
         ``DefaultDistance()``), never shared through a mutable default argument, so two genomes
         never alias one gene object.  The initial network, the row/key invariant and the
-        ``max_in_degree`` window width come from :class:`..base.BaseGenome`.
+        ``max_in_degree`` window width come from :class:`.base.BaseGenome`.
 
         Args:
             num_inputs: Input node count, also the network input width.
@@ -84,7 +84,7 @@ class RecurrentGenome(BaseGenome):
             max_in_degree: Static window width ``K``; ``None`` resolves to
                 ``max(initial in-degree, 4)``.
             max_depth: Static depth unroll count ``D``; unused by the tick loop, kept so the
-                signature matches :class:`..default.DefaultGenome`.
+                signature matches :class:`.default.DefaultGenome`.
             activate_time: Number of synchronous ticks unrolled in the forward pass; a static
                 Python int, so changing it forces a rebuild.
 
@@ -166,7 +166,7 @@ class RecurrentGenome(BaseGenome):
 
         Args:
             state: Host configuration container.
-            network: Output of :meth:`..base.BaseGenome.network_dict`.
+            network: Output of :meth:`.base.BaseGenome.network_dict`.
             sympy_input_transform: Ignored.
             sympy_output_transform: Ignored.
             backend: Ignored.
@@ -188,7 +188,7 @@ class RecurrentGenome(BaseGenome):
         does not have; the legacy library refused rather than drawing a misleading picture.
 
         Args:
-            network: Output of :meth:`..base.BaseGenome.network_dict`.
+            network: Output of :meth:`.base.BaseGenome.network_dict`.
             **kwargs: Ignored.
 
         Returns:

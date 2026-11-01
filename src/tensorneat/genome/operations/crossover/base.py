@@ -12,17 +12,10 @@ from typing import TYPE_CHECKING
 import evoxc
 
 from ....common import State, StatefulBaseClass, TensorNEATError
+from ...utils import GenomeTensors
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps genome -> operations acyclic
     from ...base import BaseGenome
-
-#: The offspring payload: ``node_keys``, ``node_attrs``, ``conn_keys``, ``conn_attrs``.
-Offspring = tuple[
-    evoxc.SymbolicTensor,  # node_keys  (P, N) int32
-    evoxc.SymbolicTensor,  # node_attrs (P, N, NA) float32
-    evoxc.SymbolicTensor,  # conn_keys  (P, E, CK) int32
-    evoxc.SymbolicTensor,  # conn_attrs (P, E, CA) float32
-]
 
 
 class BaseCrossover(StatefulBaseClass):
@@ -48,7 +41,7 @@ class BaseCrossover(StatefulBaseClass):
         node_attrs2: evoxc.SymbolicTensor,
         conn_keys2: evoxc.SymbolicTensor,
         conn_attrs2: evoxc.SymbolicTensor,
-    ) -> Offspring:
+    ) -> GenomeTensors:
         """Cross a batch of parent pairs into a batch of offspring.
 
         Parent 1 is the **fitter** parent: its keys define the offspring's structure and its
@@ -78,7 +71,7 @@ class BaseCrossover(StatefulBaseClass):
                 of parent 2, NaN padded.
 
         Returns:
-            Offspring: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` — parent 1's keys
+            GenomeTensors: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` — parent 1's keys
             with the recombined attributes.
 
         Raises:
@@ -90,4 +83,4 @@ class BaseCrossover(StatefulBaseClass):
         )
 
 
-__all__ = ["BaseCrossover", "Offspring"]
+__all__ = ["BaseCrossover"]

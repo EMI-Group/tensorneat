@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 import evoxc
 
 from ....common import I_INF, State
-from .base import BaseCrossover, Offspring
+from ...utils import GenomeTensors
+from .base import BaseCrossover
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...base import BaseGenome
@@ -43,7 +44,7 @@ class DefaultCrossover(BaseCrossover):
         node_attrs2: evoxc.SymbolicTensor,
         conn_keys2: evoxc.SymbolicTensor,
         conn_attrs2: evoxc.SymbolicTensor,
-    ) -> Offspring:
+    ) -> GenomeTensors:
         """Cross node and connection genes of the two parents, batch-first.
 
         Splits the key into one key per gene family, computes the homologue table with
@@ -73,7 +74,7 @@ class DefaultCrossover(BaseCrossover):
                 NaN padded.
 
         Returns:
-            Offspring: ``(node_keys1, recombined_node_attrs, conn_keys1,
+            GenomeTensors: ``(node_keys1, recombined_node_attrs, conn_keys1,
             recombined_conn_attrs)``.
         """
         raise NotImplementedError(

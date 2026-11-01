@@ -83,7 +83,7 @@ class BaseConn(BaseGene):
         Raises:
             NotImplementedError: Hook; only families that declare a
                 ``historical_marker`` key column implement it
-                (:class:`..origin.OriginConn` returns key column 2).
+                (:class:`.origin.OriginConn` returns key column 2).
         """
         raise NotImplementedError(
             "return key column 2 for families that declare a historical_marker key column"

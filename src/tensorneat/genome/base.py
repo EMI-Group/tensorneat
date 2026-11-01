@@ -6,6 +6,17 @@ compose — ``default.py`` and ``recurrent.py`` must not duplicate it.
 Every compute method is batch-first (population on axis 0) with static shapes: no
 ``vmap``/``vectorize`` and no ``scan``/``while_loop``/``cond`` — depth and tick loops are plain
 Python ``for`` loops unrolled at trace time, which is what keeps ``evoxc.grad`` usable.
+
+## Cross-module contracts
+Every name below is provided by the ``common`` node and is never re-derived here.
+``../common.tensorization.build_schedule`` derives the ``Transformed`` schedule.
+``../common.functions.apply_aggregation`` is the only window-reduce kernel.
+``../common.functions.apply_activation`` is the only activation kernel.
+``../common.functions`` also provides ``ACT``, ``AGG`` and ``get_func_name``.
+``../common.tools.I_INF`` is the ``int32`` "no index" sentinel padding every key array.
+``../common.State`` and ``../common.StatefulBaseClass`` are the immutable host containers.
+``../common.errors.TensorNEATError`` is raised for every configuration violation.
+Host-only helpers: ``../common.topological_sort_python`` and ``../common.find_useful_nodes``.
 """
 
 from collections.abc import Callable, Sequence
@@ -464,7 +475,7 @@ class BaseGenome(StatefulBaseClass):
     ) -> evoxc.SymbolicTensor:
         """Ask whether adding one edge per individual would close a cycle.
 
-        Documented delegation to ``..utils.check_cycles``; the mutation operator calls the
+        Documented delegation to ``.utils.check_cycles``; the mutation operator calls the
         predicate through the genome, so a genome can opt out by ``network_type``.
 
         Args:
@@ -542,7 +553,7 @@ class BaseGenome(StatefulBaseClass):
             state: Host configuration container.
             genome: Payload of one individual.
             whether_re_cound_idx: Renumber hidden keys to be contiguous above
-                ``max(input/output keys)`` via ``..utils.re_cound_idx``; input and output keys
+                ``max(input/output keys)`` via ``.utils.re_cound_idx``; input and output keys
                 are untouched.
 
         Returns:

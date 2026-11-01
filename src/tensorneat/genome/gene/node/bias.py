@@ -4,7 +4,7 @@ Batch-first like every gene kernel: one call covers the whole population and the
 option indices of the attribute rows are resolved with ``select`` chains.
 This file declares the response-free attribute table and the ``bias + z`` combine;
 it must not import ``jax``/``torch`` and must not duplicate the aggregation or
-activation machinery of :class:`..default.DefaultNode`.
+activation machinery of :class:`.default.DefaultNode`.
 """
 
 from typing import Callable, Sequence
@@ -29,7 +29,7 @@ class BiasNode(DefaultNode):
 
     Three float32 attribute columns, in this order: ``bias``, ``aggregation`` (int
     option index), ``activation`` (int option index); the aggregation and activation
-    handling is inherited unchanged from :class:`..default.DefaultNode`.
+    handling is inherited unchanged from :class:`.default.DefaultNode`.
 
     Identity attributes use ``activation_default`` -- the configured option index --
     and never ``-1``: the legacy ``lax.switch(-1, ...)`` clamped to the last option,
@@ -147,7 +147,7 @@ class BiasNode(DefaultNode):
             attrs: Node attributes, ``(P, N, 3)`` float32; reads the ``bias`` column
                 by its ``attr_specs`` position.
             aggregated: ``(P, N)`` float32 output of
-                :meth:`..default.DefaultNode.aggregate`.
+                :meth:`.default.DefaultNode.aggregate`.
 
         Returns:
             ``(P, N)`` float32 pre-activation values.
@@ -198,7 +198,7 @@ class BiasNode(DefaultNode):
 
         Returns:
             ``{"idx": int, "bias": float, "agg": str, "act": str}`` -- no ``res`` key,
-            unlike :meth:`..default.DefaultNode.to_dict`; ``act`` resolves ``-1`` to
+            unlike :meth:`.default.DefaultNode.to_dict`; ``act`` resolves ``-1`` to
             ``"identity"``.
 
         Raises:
@@ -218,7 +218,7 @@ class BiasNode(DefaultNode):
             node_dict: Output of :meth:`to_dict` for this node.
             inputs: sympy expression of the aggregated incoming signal.
             is_output_node: True to leave the expression unactivated, matching
-                :meth:`..default.DefaultNode.forward`.
+                :meth:`.default.DefaultNode.forward`.
 
         Returns:
             ``(expression, {symbol: value})`` where the expression is

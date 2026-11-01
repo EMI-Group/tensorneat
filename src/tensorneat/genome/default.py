@@ -5,7 +5,7 @@ Python ``for`` loop, so the traced graph contains only ``gather``/``select``/``r
 elementwise ops — no ``scan``/``while_loop``/``cond`` — which is what lets ``evoxc.grad``
 differentiate it.
 Everything is batch-first (population on axis 0); the shared window reduce lives in
-:class:`..base.BaseGenome` and must not be re-implemented here.
+:class:`.base.BaseGenome` and must not be re-implemented here.
 """
 
 from collections.abc import Callable, Sequence
@@ -73,7 +73,7 @@ class DefaultGenome(BaseGenome):
         its gene objects, and two genomes that shared one would silently mutate each other's
         attribute tables.
 
-        See :class:`..base.BaseGenome` for the dense initial network
+        See :class:`.base.BaseGenome` for the dense initial network
         (``num_inputs -> init_hidden_layers -> num_outputs``), the row/key invariant and the
         transform probes.
 
@@ -133,7 +133,7 @@ class DefaultGenome(BaseGenome):
            values, update_mask=(transformed.node_level == level) & transformed.node_exists &
            (valid_count > 0))``, with ``valid_count = reduce_sum(transformed.in_valid,
            axis=-1)`` the static "this row has at least one incoming connection" gate (a
-           per-row live-slot count, not ``..utils.valid_count``, which counts existing rows).
+           per-row live-slot count, not ``.utils.valid_count``, which counts existing rows).
            The dynamic "at least one *live* slot" term is ANDed in inside ``_node_step``, so a
            node whose sources are all NaN keeps NaN and its descendants lose their only live
            source: the legacy NaN poisoning, reproduced exactly.
@@ -170,7 +170,7 @@ class DefaultGenome(BaseGenome):
     ) -> dict[str, Any]:
         """Convert one individual to host dicts plus feedforward graph utilities.
 
-        Extends :meth:`..base.BaseGenome.network_dict` with three host-only entries computed on
+        Extends :meth:`.base.BaseGenome.network_dict` with three host-only entries computed on
         the renumbered key sets — ``topological_sort_python`` and ``find_useful_nodes`` run in
         Python and never enter a graph.
 

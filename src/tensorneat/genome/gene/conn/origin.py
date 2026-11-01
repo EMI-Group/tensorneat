@@ -21,7 +21,7 @@ class OriginConn(DefaultConn):
     split share a marker and are homologous during crossover/distance even when
     their endpoints were re-routed.
 
-    Differences from :class:`..default.DefaultConn`: key column 2 carries the marker,
+    Differences from :class:`.default.DefaultConn`: key column 2 carries the marker,
     :meth:`crossover` picks a whole gene with one draw, and :meth:`get_historical_marker`
     exposes the marker. Reference: https://github.com/EMI-Group/tensorneat/issues/11
     """

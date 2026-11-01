@@ -12,8 +12,13 @@ import evoxc
 import evoxc.numpy as enp
 
 from ....common import I_INF, State, TensorNEATError
-from ...utils import add_conn, fetch_random_index, first_free_row, valid_count
-from .base import Payload
+from ...utils import (
+    GenomeTensors,
+    add_conn,
+    fetch_random_index,
+    first_free_row,
+    valid_count,
+)
 from .default import DefaultMutation
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -73,7 +78,7 @@ class RecurrentMutation(DefaultMutation):
         conn_attrs: evoxc.SymbolicTensor,
         new_node_keys: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
-    ) -> Payload:
+    ) -> GenomeTensors:
         """Apply at most one gated structural mutation, with the recurrent add-connection.
 
         The gate draw, the add-node / delete-node / delete-conn helpers and their no-op
@@ -106,7 +111,7 @@ class RecurrentMutation(DefaultMutation):
                 as the ``historical_marker`` when the conn gene declares one).
 
         Returns:
-            Payload: the four payload arrays after the structural stage.
+            GenomeTensors: the four payload arrays after the structural stage.
 
         Raises:
             TensorNEATError: If ``genome.network_type`` is neither ``"feedforward"`` nor
