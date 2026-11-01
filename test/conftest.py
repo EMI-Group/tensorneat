@@ -65,6 +65,25 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+def _named_on_command_line(config: pytest.Config, path: Path) -> bool:
+    """True when ``path`` was passed to pytest explicitly (``pytest test/<file>.py``).
+
+    pytest already collects an explicitly named file whatever its name is, so
+    :func:`pytest_collect_file` must decline for it — otherwise the file is
+    collected twice and every subprocess in it runs twice.
+    """
+    for argument in config.invocation_params.args:
+        candidate = str(argument).split("::", 1)[0]
+        if not candidate or candidate.startswith("-"):
+            continue
+        try:
+            if Path(candidate).resolve() == path:
+                return True
+        except OSError:  # pragma: no cover - an unparsable path is not our argument
+            continue
+    return False
+
+
 def pytest_collect_file(file_path: Path, parent: pytest.Collector):
     """Collect ``release_gate_no_jax.py`` even though it lacks a ``test_`` prefix.
 
@@ -72,9 +91,11 @@ def pytest_collect_file(file_path: Path, parent: pytest.Collector):
     ``python_files`` patterns; rather than rename it (and lose the readable
     gate name) the collection rule is spelled out here.
     """
-    if file_path.name == RELEASE_GATE_FILENAME and file_path.parent == TEST_DIR:
-        return pytest.Module.from_parent(parent, path=file_path)
-    return None
+    if file_path.name != RELEASE_GATE_FILENAME or file_path.parent != TEST_DIR:
+        return None
+    if _named_on_command_line(parent.config, Path(file_path)):
+        return None
+    return pytest.Module.from_parent(parent, path=file_path)
 
 
 @pytest.fixture
