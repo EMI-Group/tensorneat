@@ -95,6 +95,7 @@ Shared numeric constants (`SCALE`, `LELU_SLACK`, `INV_EPS`, `LOG_EPS`, `EXP_CLIP
 Out-of-range activation/aggregation ids fall back to identity / `0.0` instead of clamping to the last option (`lax.switch` behaviour); mutation only samples valid ids, so this is reachable only through hand-written genes or a stale checkpoint replayed against a shortened option list.
 `mean` is `0.0` instead of `NaN` for an all-`False` mask; indistinguishable through the dispatcher, different only when the kernel is called standalone.
 `sympy_module` no longer accepts `"jax"`; `obtain_sympy` accepts an option id as well as a name or callable.
+`sympy_module()` binds numpy as the *keyword* `backend` (the pre-rewrite `partial(fn, jnp_or_np)` bound it to `val`, so `lambdify`d `clip` evaluations raised `AttributeError`); and `SympyMaxabs` renders as an explicit `Piecewise` over `Eq(Abs(t_i), max_j Abs(t_j))`, because `sp.Max(*z, key=sp.Abs)` is rejected by current sympy — the signed term and its first-maximum tie-break are unchanged.
 The aggregation reduce axis moved from the legacy per-node axis 0 to the batch-first last axis of `(P, N, K)`; numerically identical, but HyperNEAT substrate code that used to call `AGG.sum(inputs)` directly must reshape to `(..., K)`.
 
 ## Constraints
