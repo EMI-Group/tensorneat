@@ -19,6 +19,9 @@ to emit the fewest ops that stay bit-identical:
   ``(P, N, K, CA)`` constant is 3.2 MB at ``P=1000`` and ``evoxc`` warns about embedding it.
 * ``select`` and ``logical_and`` broadcast, so the attribute-column mask is widened with a
   trailing-``1`` axis (``_column_mask``) instead of a ``broadcast_to`` op.
+* The one *reduction* of the pass lives here too, as :func:`any_slot`: a reduction over the
+  innermost window axis is far more expensive than the equivalent static slice fold (see
+  ``_WINDOW_FOLD_LIMIT``), and it is the same static-window reasoning the index helpers use.
 
 No state, no genome class: every function is a pure tensor transformation of its arguments, and
 every static (``row_len``, ``attr_width``, shapes) is a Python value fixed at trace time.
@@ -192,6 +195,66 @@ def _gather_prepared(
         )
         values = evoxc.select(present, values, scalar)
     return values
+#: Window width up to which the sliced ``logical_or`` fold replaces the innermost-axis
+#: ``reduce_max`` of the "has at least one live slot" test.
+#:
+#: A reduction over the *innermost* axis is the expensive shape on the numpy backend: it
+#: costs about as much as a whole unrolled level's worth of elementwise ops, and it barely
+#: depends on the window width (measured on ``(P, 50, K) bool`` as the median of 7
+#: ``evoxc.run``, single-threaded: ``P=1000`` -> 1.23 ms at ``K=4`` and 1.16 ms at ``K=32``,
+#: ``P=4000`` -> 4.4 ms at ``K=4`` and 5.7 ms at ``K=32``), because its per-run cost
+#: dominates. The ``K``-slice ``logical_or`` fold of :func:`any_slot` instead scales with
+#: the traced op count at ~0.016 ms per op: 0.13 ms at ``K=4``, 0.63 ms at ``K=16``
+#: (``P=1000``). The measured crossover: at ``P=1000`` the fold still wins at ``K=24`` and
+#: loses at ``K=32``; at ``P=100`` the whole run is one fixed overhead per op, so the
+#: crossover sits between ``K=8`` (0.156 vs 0.158 ms) and ``K=12`` (0.196 vs 0.159 ms).
+#: ``K <= 8`` is therefore the width where the fold wins at *every* measured population,
+#: and wider windows fall back to the reduction.
+_WINDOW_FOLD_LIMIT = 8
+
+
+def any_slot(mask: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
+    """Fold the static window axis of a mask to "does this node have any live slot".
+
+    The exact equivalent of ``evoxc.reduce_max(mask, axes=-1)`` on a ``(P, N, K)`` bool
+    block, written as ``K`` static slices folded with ``logical_or`` because that
+    *innermost*-axis reduction is one of the most expensive ops per unrolled level (see
+    :data:`_WINDOW_FOLD_LIMIT`). Both spellings are a boolean "any", so the result is
+    bit-identical, and the sliced folding emits ``K`` slices plus ``K - 1`` ``logical_or``
+    plus one reshape (``2K`` ops) — a slightly larger *op count* that is several times
+    faster in wall clock: the objective is time, and the op budget only matters when it
+    buys nothing.
+
+    ``evoxc.slice`` takes per-axis ``start``/``lengths``, so each slice must spell out
+    ``(0, 0, k)``; a bare scalar start broadcasts to every axis and would try to slice the
+    node axis too. The fold stays rank-3 until the end (one reshape, not ``K`` of them),
+    because ``logical_or`` broadcasts a ``(P, N, 1)`` operand onto another ``(P, N, 1)``.
+
+    Args:
+        mask: ``(P, N, K) bool`` per-slot liveness mask, ``K`` the static window width.
+
+    Returns:
+        ``(P, N) bool``: True where at least one window slot is live.
+
+    Raises:
+        TensorNEATError: If the window is empty (``K == 0``) — there is no slot to fold and
+            a silent ``False`` would turn every node into a NaN carrier.
+    """
+    pop_size, num_nodes, width = (int(size) for size in mask.shape)
+    if width <= 0:
+        raise TensorNEATError(
+            f"any_slot cannot fold an empty window (K={width}); max_in_degree must be >= 1"
+        )
+    if width > _WINDOW_FOLD_LIMIT:
+        return evoxc.reduce_max(mask, axes=-1)
+    folded = evoxc.slice(mask, (0, 0, 0), (pop_size, num_nodes, 1))
+    for slot in range(1, width):
+        folded = evoxc.logical_or(
+            folded, evoxc.slice(mask, (0, 0, slot), (pop_size, num_nodes, 1))
+        )
+    return evoxc.reshape(folded, (pop_size, num_nodes))
+
+
 def _iinf(dtype: Any = evoxc.int32) -> evoxc.SymbolicTensor:
     """Rank-0 ``I_INF`` — the padding sentinel of every key array, left to broadcast.
 

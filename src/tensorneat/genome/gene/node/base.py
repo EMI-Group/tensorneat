@@ -19,6 +19,7 @@ from ....common.errors import ConfigError
 from ....common.functions import FunctionManager
 from ....common.functions.act import ACT_IDENTITY
 from ..base import BaseGene, column, option_masks, select_cascade
+from ...window import any_slot
 
 
 class NodeOperands(NamedTuple):
@@ -339,8 +340,10 @@ class BaseNode(BaseGene):
         # ``0.0``, so the ``-inf`` / ``+inf`` neutral padding of ``max`` / ``min`` cannot
         # leak into a node value (and a padded product cannot become ``1``). ``valid_mask``
         # is ``bool``, so its boolean "any" is the same predicate as the dispatcher's
-        # ``count > 0`` at two ops instead of four (``reduce_max`` over a bool mask).
-        return evoxc.select(evoxc.reduce_max(valid_mask, axes=-1), aggregated, zero)
+        # ``count > 0`` at two ops instead of four, and it is folded slice-wise
+        # (:func:`~tensorneat.genome.window.any_slot`) because a reduction over the
+        # innermost window axis is the expensive shape on the numpy backend.
+        return evoxc.select(any_slot(valid_mask), aggregated, zero)
 
     def combine(
         self,

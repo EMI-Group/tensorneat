@@ -52,6 +52,7 @@ from .window import (
     _i32,
     _iinf,
     _slot_index,
+    any_slot,
 )
 from .utils import GenomeTensors, check_cycles as _check_cycles
 
@@ -1006,7 +1007,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
             hit_conn_attrs.output_rows,
             live,
         )
-        update = evoxc.logical_and(update_mask, evoxc.reduce_max(live, axes=-1))
+        update = evoxc.logical_and(update_mask, any_slot(live))
         return evoxc.select(update, z, values)
 
     def _is_output_row(self, node_keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
