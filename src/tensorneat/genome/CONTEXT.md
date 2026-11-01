@@ -142,5 +142,5 @@ Cost of the exact path on the numpy backend (`P=1000`, `max_nodes=50`, `max_conn
 | `./recurrent.py` | `RecurrentGenome`: tick-unrolled Jacobi forward. |
 | `./utils.py` | (640 lines) Batched genome-array editing helpers (`add_node`, `add_conn`, `delete_*`, `first_free_row`, `fetch_random_index`) and host-only display helpers. |
 
-Out of node but required: `../common/tensorization.py` (`build_schedule` → `Transformed`), `../common/functions/` (`ACT`/`AGG`, `apply_activation`, `apply_aggregation` with `-1` = identity), `../common/tools.py` (`I_INF`), `../common/state.py` (`State`), `../common/errors.py` (`TensorNEATError`).
+Out of node but required: `../common/tensorization.py` (`derive_schedule` → `Transformed`), `../common/functions/` (`ACT`/`AGG`, `apply_activation(z, act_ids, act_fns)`, `apply_aggregation(values, mask, agg_ids, agg_fns)` with `-1` = identity), `../common/tools.py` (`I_INF`, flat gather/scatter), `../common/state.py` (`State`), `../common/errors.py` (`TensorNEATError`), `../common/host_graph.py` (host-only topological walks), `../common/sympy_tools.py` (the 8-tuple codegen).
 Consumers: `../algorithm/neat/` (`ask`/`transform`/`forward`/`tell`), `../algorithm/hyperneat/` (`RecurrentGenome` as CPPN), `../pipeline.py` (compile site, per-shape executable cache).
