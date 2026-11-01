@@ -117,7 +117,7 @@ Integration: `examples/func_fit/xor_hyperneat.py` and `xor_hyperneat_feedforward
 ## Notes for Agents
 Every shape above is static: derive it from `self.neat`/`self.substrate`/`self.hyper_genome`, never from a traced tensor shape.
 `_validate` runs before `_make_hyper_genome`, so a bad configuration raises before any genome is constructed; keep that order.
-`_validate` compares `weight_threshold`/`max_weight` numerically, so a non-numeric value surfaces as `TypeError` from the comparison rather than `TensorNEATError` — pass floats.
+`_validate` checks `weight_threshold`/`max_weight`/`activate_time` with `_require_real` (rejecting `bool`, which is an `int` subclass) before the range checks, so a non-numeric value raises `TensorNEATError`, never `TypeError`; NumPy scalars pass.
 The substrate tables are host data: read them at trace time through `_graph_constant`, never in `__init__`.
 If a substrate ever needs a table over ~1 MiB, stop in-graph and escalate: the coordinates would have to become an explicit executable input, which is a `pipeline.py` change.
 
