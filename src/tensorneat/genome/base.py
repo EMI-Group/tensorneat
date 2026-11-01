@@ -121,7 +121,7 @@ def _slot_index(
     for size in block:
         count *= size
     present = evoxc.logical_and(
-        enp.not_equal(idx, _iinf(tuple(idx.shape), idx.dtype)), mask
+        enp.not_equal(idx, _iinf(idx.dtype)), mask
     )
     safe = evoxc.select(present, idx, enp.zeros((), dtype=idx.dtype))
     offsets = evoxc.reshape(
@@ -197,17 +197,23 @@ def _gather_prepared(
         present = evoxc.reshape(present, (pop_size * len_flat,))
         values = evoxc.select(present, values, enp.full((), float(fill), dtype=x.dtype))
     return evoxc.reshape(values, (pop_size, *block))
-def _iinf(shape: tuple[int, ...], dtype: Any = evoxc.int32) -> evoxc.SymbolicTensor:
-    """``I_INF`` broadcast to ``shape`` — the padding sentinel of every key array.
+def _iinf(dtype: Any = evoxc.int32) -> evoxc.SymbolicTensor:
+    """Rank-0 ``I_INF`` — the padding sentinel of every key array, left to broadcast.
+
+    Deliberately *not* materialised at the operand's shape: ``enp.full(shape, I_INF)`` embeds a
+    full-size array as a graph constant (``(P, N, K, CA)`` is 3.2 MB at ``P=1000``), which
+    ``evoxc`` warns about ("Embedding a tensor ... as a graph constant") and which the numpy
+    backend copies on every run. Every use here is a comparison (``not_equal``/``equal``), and
+    those broadcast a rank-0 operand, so the constant stays 4 bytes and the op count is
+    unchanged.
 
     Args:
-        shape: Static shape of the result.
         dtype: Integer dtype of the result.
 
     Returns:
-        ``shape``-shaped tensor full of ``I_INF``.
+        Rank-0 tensor holding ``I_INF``.
     """
-    return enp.full(tuple(shape), I_INF, dtype=dtype)
+    return enp.full((), I_INF, dtype=dtype)
 
 
 def _constant_int32(values: Sequence[int]) -> evoxc.SymbolicTensor:
@@ -1314,7 +1320,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         Returns:
             ``(P, N) bool``, True where the row is not the padding sentinel.
         """
-        return enp.not_equal(node_keys, _iinf(tuple(node_keys.shape), node_keys.dtype))
+        return enp.not_equal(node_keys, _iinf(node_keys.dtype))
 
     def conn_exists(self, conn_keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
         """Mark the connection rows that hold a real connection.
@@ -1328,7 +1334,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         columns = conn_keys[(slice(None), slice(None), slice(0, 1))]
         sources = evoxc.reshape(columns, (int(conn_keys.shape[0]), int(conn_keys.shape[1])))
         return enp.not_equal(
-            sources, _iinf(tuple(sources.shape), sources.dtype)
+            sources, _iinf(sources.dtype)
         )
 
     def max_node_key(
