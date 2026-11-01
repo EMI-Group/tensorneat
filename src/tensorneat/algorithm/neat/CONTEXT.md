@@ -5,7 +5,7 @@ Everything in a NEAT generation that is neither network mathematics (genome) nor
 `NEAT` (`neat.py`) is the algorithm the pipeline drives; `SpeciesController` + `SpeciesState` (`species.py`) own the species algebra.
 Every kernel here is batch-first over `P = pop_size` and compiled by `pipeline.py` into the single per-generation evoxc graph, so no function may branch on a traced value or read the host.
 Measured on the numpy reference backend with the real `DefaultGenome(max_nodes=50, max_conns=100)` and `XOR`, `species_size=20`: the whole `tell` runs in ~289 ms/generation at `P=100` and ~1002 ms at `P=500`, of which `speciate` is ~77 % and breeding ~11 % (see `## Measured Cost`); the interpreter, not the data, dominates.
-The layer's own work is `O(species_size × pop_size)` distance work in `speciate` plus `O(pop_size)` selection/crossover/mutation, and it never materialises a `max_nodes × max_nodes` tensor; the measured cost is the genome's per-pair distance kernel invoked `2 × species_size` times per generation, not a tensor size.
+The layer's own work is `O(species_size × pop_size)` distance work in `speciate` plus `O(pop_size)` selection/crossover/mutation, and it never materialises a `max_nodes × max_nodes` tensor; the measured cost is the genome's per-pair distance kernel, invoked `species_size` times in phase 2 and (below the `TABLE_ROWS` gate) once for the whole phase-1 table, not a tensor size.
 
 ## Layout (four files, each under 1000 lines)
 `species.py` — `SpeciesState` plus `SpeciesController`: the documented, traced-facing methods and the species algebra, each delegating its tensor body to `_kernels.py`.
