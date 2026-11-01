@@ -26,4 +26,5 @@ Every script builds one `Pipeline(algorithm=..., problem=..., seed=42, generatio
 - `CustomFuncFit.func` runs host-side with numpy, one 1-D point per call; it is never traced into a graph.
 - Custom activation functions are plain callables in a per-genome `activation_options=[...]` list (no global registration).
 - A recurrent substrate pairs with `HyperNEAT` and needs `activate_time`; `MLPSubstrate` pairs with `HyperNEATFeedForward` and takes none.
+- Keep each script ≲ 110 lines, plain module-level literals, `if __name__ == "__main__":` guard, no argparse.
 - Budgets are demo-sized: each script carries a `# Demo budget:` comment above its `pop_size`, and a real run uses pop_size in the thousands with a few hundred generations.
