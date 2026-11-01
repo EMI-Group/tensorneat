@@ -43,10 +43,9 @@ Gotchas this module encodes
 ---------------------------
 * The residual ``pop_size - sum(spawn)`` is added to the **first live slot**
   (``argmax`` of the liveness mask) by one ``scatter``; after the descending
-  species sort of ``update_species`` that is slot ``0``.  Every fixture table
-  here keeps slot ``0`` live, so the oracle can apply the residual with a plain
-  index write — a table whose first slot is dead is a different (documented but
-  untested) corner.
+  species sort of ``update_species`` that is slot ``0``.  The leading-dead table
+  of :func:`test_the_residual_lands_on_the_first_live_slot` is the case where the
+  two differ, so "first live" cannot degrade into "slot ``0``".
 * The residual can be *negative*: the ``min_species_size`` floor is applied
   before the total is known, so a four-live table with ``min_species_size = 2``
   overflows and the correction subtracts from the head slot.  Conservation, not
@@ -498,6 +497,68 @@ def test_dead_slots_receive_no_spawn(
     )
     assert int(spawn.sum()) == ctrl.pop_size, spawn
     np.testing.assert_array_equal(oracle(mode, bookkeeping, ctrl), spawn)
+
+
+@pytest.mark.parametrize("mode", sorted(ALLOCATORS))
+def test_the_residual_lands_on_the_first_live_slot(
+    species_state, controller, species_kernel, mode
+):
+    """Invariant: with slot ``0`` dead, the residual goes to the first *live* slot.
+
+    Oracle: a leading-dead table (``keys = [NaN, 0, 1, NaN]``) at ``rate = 1``,
+    where the pre-correction total is ``7 < 8`` and the correction is ``+1``.  It
+    must land on slot ``1``: both dead slots stay ``0`` and the vector matches
+    :func:`expected_spawn`, whose :func:`integerise` applies the same ``argmax``
+    rule.  An ``argmax``-free "always slot ``0``" correction would hand the budget
+    to a killed species, which is exactly the corruption the liveness mask prevents.
+    """
+    ctrl = controller(spawn_number_change_rate=1.0)
+    bookkeeping = species_state(
+        species_keys=np.array([np.nan, 0.0, 1.0, np.nan], dtype=np.float32),
+        best_fitness=np.array([np.nan, 0.5, 0.2, np.nan], dtype=np.float32),
+        member_count=np.array([np.nan, 0.0, 0.0, np.nan], dtype=np.float32),
+    )
+    assert np.floor(damped_for(mode, bookkeeping, ctrl)).sum() < ctrl.pop_size, (
+        "fixture must leave budget over so the residual is non-zero"
+    )
+
+    spawn = allocate(species_kernel, mode, bookkeeping, ctrl)
+
+    np.testing.assert_array_equal(oracle(mode, bookkeeping, ctrl), spawn)
+    np.testing.assert_array_equal(
+        spawn[[0, 3]], np.zeros(2, np.int32), err_msg=f"spawn={spawn}"
+    )
+    assert int(spawn.sum()) == ctrl.pop_size, spawn
+
+
+@pytest.mark.parametrize("mode", sorted(ALLOCATORS))
+def test_a_live_slot_with_a_nan_member_count_starts_from_zero(
+    species_state, controller, species_kernel, mode
+):
+    """Invariant: ``previous = 0`` for a ``NaN`` ``member_count``, live slot or not.
+
+    Oracle: slot ``1`` is live with ``member_count = NaN`` at ``rate = 1``, so its
+    spawn is the raw target and not the ``min_species_size`` floor that a ``NaN``
+    damped value falls through to (the kernel's ``isnan(damped)`` guard runs *before*
+    the floor).  The two differ, so this pins the ``previous`` guard that protects
+    the damping term from a ``NaN`` count — the count is read before the liveness
+    mask, which is why only this table can observe it.
+    """
+    ctrl = controller(spawn_number_change_rate=1.0)
+    bookkeeping = species_state(
+        species_keys=np.array([0.0, 1.0, np.nan, np.nan], dtype=np.float32),
+        best_fitness=np.array([0.5, 0.2, np.nan, np.nan], dtype=np.float32),
+        member_count=np.array([2.0, np.nan, np.nan, np.nan], dtype=np.float32),
+    )
+    target = np.floor(damped_for(mode, bookkeeping, ctrl))
+    assert target[1] > ctrl.min_species_size, target
+
+    spawn = allocate(species_kernel, mode, bookkeeping, ctrl)
+
+    np.testing.assert_array_equal(oracle(mode, bookkeeping, ctrl), spawn)
+    assert int(spawn[1]) == int(target[1]), (
+        f"slot 1 must start from 0 and land on its target {target[1]}, got {spawn[1]}"
+    )
 
 
 @pytest.mark.parametrize("mode", sorted(ALLOCATORS))

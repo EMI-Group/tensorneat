@@ -2,82 +2,61 @@
 
 What this module proves
 -----------------------
-Speciation turns "a population of networks" into "a population of species": it
-writes one species key per individual into ``idx2species``, re-elects the centre
-genome of every slot and materialises new species from dead slots when a group of
-genomes is far from every existing centre.  It is written as *two*
-``evoxc.scan``s over the static ``species_size`` axis instead of the pre-rewrite
-data-dependent ``while_loop``, so the replacement must be observationally
-identical:
+Speciation writes one species key per individual into ``idx2species``, re-elects the
+centre genome of every slot and materialises new species from dead slots.  It runs as
+*two* ``evoxc.scan``s over the static ``species_size`` axis instead of the pre-rewrite
+data-dependent ``while_loop``, so it must be observationally identical:
 
-* after the call **every** individual carries exactly one **live** species key —
-  no ``NaN`` (the in-progress "unassigned" sentinel) and no stale key of a slot
-  that died this generation;
+* after the call **every** individual carries exactly one **live** species key — no
+  ``NaN`` (the in-progress "unassigned" sentinel) and no stale key of a slot that
+  died this generation;
+* scan 1 claims the nearest *unassigned* genome for a live slot, never one an
+  earlier slot already owns and never anything for a dead slot;
 * a genome whose distance to a centre is **strictly** below
   ``compatibility_threshold`` joins that species, one at exactly the threshold does
   not (it falls through to the leftover rule);
-* a genome that is *closer* to a later species than to its current one is
-  reassigned (scan 2's ``d < o2c``), so the scan order can never freeze a bad
-  first claim;
+* a genome *closer* to a later species than to its current one is reassigned (scan
+  2's ``d < o2c``), so the scan order can never freeze a bad first claim;
 * a one-member species keeps a **finite** ``member_count`` of ``1`` — the species
   algebra divides by it in spawn allocation and in the survivor count;
 * a dead slot is recognisable by ``isnan(species_keys)`` alone, and its centre rows
-  are never read: they hold stale integers (``int32`` cannot carry ``NaN``) and
-  must come out of the call exactly as they went in;
-* ``next_species_key`` advances by exactly one per species that is actually
-  created — never per dead slot that had nothing to seed;
-* the result is a pure function of ``(state, distances)``: running it twice yields
-  identical arrays, and permuting the population permutes ``idx2species`` while
-  ``member_count`` and the elected centres stay the same;
+  are never read: they hold stale integers (``int32`` cannot carry ``NaN``) and must
+  come out of the call exactly as they went in;
+* ``next_species_key`` advances by exactly one per species actually created — never
+  per dead slot with nothing to seed — and a created slot starts at
+  ``best_fitness = -inf`` with ``last_improved = generation``;
+* the result is a pure function of ``(state, distances)``: two runs agree, and
+  permuting the population permutes ``idx2species`` while ``member_count`` and the
+  elected centres stay the same;
 * the centre genes keep the **split payload** contract of
-  ``tensorneat/CONTEXT.md`` reconciliation #2: four arrays of shapes ``(S, N)``,
+  ``tensorneat/CONTEXT.md`` reconciliation #2: four arrays shaped ``(S, N)``,
   ``(S, N, NA)``, ``(S, E, CK)`` and ``(S, E, CA)``, integers and floats never
   packed into one array.
 
 Oracles used here (never the implementation)
 --------------------------------------------
-* **A controlled distance table.** ``speciate`` takes ``distance_fn`` as an
-  argument, so the tests hand it a fake genome kernel (:func:`table_distance`) that
-  ignores the real compatibility metric and reads a static ``(P, P)`` host matrix
-  instead.  ``table[centre_identity, member_identity]`` is written out literally in
-  each test, which is what makes "closer than the threshold", "strictly closer than
-  the owner" and the ``argmin`` order testable at all.
-* **An independent host re-derivation.** :func:`assign_by_hand` applies the two
-  documented phases (nearest unassigned genome per live slot, then threshold
-  membership with the ``d < o2c`` rule, then the leftover rule and the compare-sum
-  member count) with plain Python loops over the same distance table, and the
-  kernel's fields are compared to it — loops vs. scans, so a scan that writes one
-  slot too many or masks one iteration too few shows up.
-* **Identity, on the structural claims.** Determinism, the untouched centre rows
-  and the permutation law are checked with ``np.testing.assert_array_equal``
-  against the inputs (NaN-aware, so a ``NaN`` padding value compares equal).
+* **A controlled distance table.** ``speciate`` takes ``distance_fn`` as an argument,
+  so the tests hand it a fake kernel (:func:`table_distance`) reading a static
+  ``(P, P)`` host matrix instead of the real compatibility metric.
+* **An independent host re-derivation.** :func:`assign_by_hand` applies the documented
+  phases with plain Python loops over the same table — loops vs. scans, so a scan that
+  writes one slot too many or masks one iteration too few shows up.
+* **Identity, on the structural claims.** Determinism, the untouched centre rows and
+  the permutation law are checked with ``assert_array_equal`` against the inputs.
 
 Gotchas this module encodes
 ---------------------------
-* ``idx2species`` holds species **keys**, not species slot indices.  Every live key
-  is compared against ``species_keys`` (``NaN`` excluded) rather than against
-  ``np.arange(species_size)``.
-* ``distance_fn`` is genome-owned and population-shaped:
-  ``distance_fn(state, centre, pop) -> (P,)`` with **both** payloads shaped
-  ``(P, ...)``.  ``speciate`` slices the centre row out of the ``(S, ...)`` fields
-  and broadcasts it, so :func:`table_distance` reads its identity key from
-  ``centre.node_keys[0, IDENTITY_ROW]`` and would raise a shape error if the
-  broadcast were missing.
-* Scan 1 always claims the *nearest unassigned* genome for a live slot and does
-  **not** apply the threshold, so the threshold rule is only observable when a
-  genome survives scan 1 unclaimed — every threshold test builds ``S < P``.
-* The post-pass gives every still-unassigned genome the **last live species key**,
-  which is what makes the strict ``<`` observable: a genome at exactly the
-  threshold ends up in the last species, a genome just below it in the nearest one.
-* Scan 2 evaluates ``distance_fn`` for a **dead** slot too (the trip count is
-  static and the centre rows are only masked out afterwards), so a stale centre row
-  must still hold a valid table index.  "Never read" is therefore checked as
-  "never written from a stale row": the sentinel rows come out byte-identical.
+* ``idx2species`` holds species **keys**, not slot indices: every live key is compared
+  against ``species_keys`` (``NaN`` excluded), never against ``np.arange(species_size)``.
+* ``distance_fn`` is genome-owned and population-shaped — ``(state, centre, pop) ->
+  (P,)`` with **both** payloads shaped ``(P, ...)`` — so :func:`table_distance`
+  raises a shape error if the broadcast of one centre row is missing.
+* Scan 2 evaluates ``distance_fn`` for a **dead** slot too (the trip count is static),
+  so a stale centre row must still hold a valid table index; "never read" is checked
+  as "never written from a stale row".
 
-Backend is ``"numpy"`` throughout; no optional dependency, no ``jax``/``torch``,
-no network.  The modules under test and the support helpers are reached through
-the ``./conftest.py`` fixtures, which import ``tensorneat`` once at collection
-time; this module builds nothing on its own.
+Backend is ``"numpy"`` throughout; no optional dependency, no ``jax``/``torch``, no
+network.  The support helpers come from the ``./conftest.py`` fixtures.
 """
 
 from __future__ import annotations
@@ -99,15 +78,14 @@ POP_SIZE = 8
 MAX_NODES = 8
 MAX_CONNS = 16
 SPECIES_SIZE = 4
-#: Gene widths of the default gene stack: ``DefaultNode`` has four attribute
-#: columns, ``DefaultConn`` two key columns and one ``weight`` attribute.
+#: Gene widths of the default gene stack (``DefaultNode`` 4 attrs, ``DefaultConn`` 2
+#: key columns, 1 ``weight``).
 NODE_ATTR_WIDTH = 4
 CONN_KEY_WIDTH = 2
 CONN_ATTR_WIDTH = 1
-#: Node row that carries the per-individual *identity key* in these tests.
-#: ``support.payloads`` writes inputs to rows ``0..num_inputs-1`` and outputs to the
-#: last ``num_outputs`` rows, so row ``2`` is the first hidden row a two-input,
-#: one-output payload leaves free.
+#: Node row carrying the per-individual *identity key*: ``support.payloads`` writes
+#: inputs to rows ``0..num_inputs-1`` and outputs last, so row ``2`` is the first
+#: hidden row a two-input, one-output payload leaves free.
 IDENTITY_ROW = 2
 #: The controller's ``compatibility_threshold`` in every table below.
 THRESHOLD = 2.0
@@ -133,26 +111,21 @@ def table_distance(table, seen=None):
 
     Args:
         table: ``(P, P) float32`` host array, ``table[c, m]`` = distance from the
-            centre whose identity key is ``c`` to the individual whose identity key
-            is ``m``.  Every test writes it out literally (see
-            :func:`distance_table`).
-        seen: Optional list; every call appends the four shapes of the centre
-            payload it received, which is how the shape test observes the broadcast.
+            centre keyed ``c`` to the individual keyed ``m`` (see :func:`distance_table`).
+        seen: Optional list; every call appends the four centre shapes it received,
+            which is how the shape test observes the broadcast.
 
     Returns:
         A callable with the genome-owned signature
         ``(state, centre: GenomeTensors, pop: GenomeTensors) -> (P,)``.  It reads
-        both identities from ``IDENTITY_ROW`` of the node keys (the centre's at
-        index ``0`` — the broadcast makes every row equal — and the members' in
-        population order) and gathers the table twice, so a distance follows a
-        genome through a permutation of the payload instead of following its row.
+        both identities from ``IDENTITY_ROW`` (the centre's at index ``0``, which the
+        broadcast makes uniform), so a distance follows a genome through a
+        permutation of the payload instead of following its row.
 
     Notes:
-        This is deliberately *not* the compatibility metric: ``speciate`` only
-        consumes distances, so controlling them directly is what makes the scan
-        semantics (threshold, stealing, ``argmin`` order) observable.  The constant
-        is built *inside* the callable because ``evoxc.constant`` is only legal
-        during an active trace.
+        Deliberately *not* the compatibility metric: controlling the distances is what
+        makes the scan semantics (threshold, stealing, ``argmin`` order) observable.
+        The constant is built *inside* the callable (``evoxc.constant`` needs a trace).
     """
     array = np.asarray(table, dtype=np.float32)
 
@@ -185,8 +158,8 @@ def distance_table(rows):
             makes "the first unassigned genome becomes the new centre" observable.
 
     Returns:
-        ``(P, P) float32``; ties are the caller's responsibility (they would make the
-        ``argmin`` winner index-dependent).
+        ``(P, P) float32``; ties are the caller's responsibility (an ``argmin`` winner
+        would become index-dependent).
     """
     table = np.full((POP_SIZE, POP_SIZE), FAR, dtype=np.float32)
     np.fill_diagonal(table, 0.0)
@@ -212,8 +185,7 @@ def assign_by_hand(
             (``NaN`` = dead slot).
         centre_identities: ``(S,)`` identity key of each slot's centre genome; the
             value of a dead slot is never read.
-        member_identities: ``(P,)`` identity key of each population slot, in
-            population order.
+        member_identities: ``(P,)`` identity key of each population slot, in order.
         next_species_key: 0-d float, the counter before the call.
         compatibility_threshold: The controller's threshold.
 
@@ -222,13 +194,11 @@ def assign_by_hand(
         ``next_species_key``, computed by the documented rules only.
 
     Notes:
-        Phase 1 reserves the nearest *unassigned* genome for every live slot, in
-        slot order and without a threshold.  Phase 2 applies
-        ``d < compatibility_threshold and (unassigned or d < o2c)``; a dead slot with
-        anything unassigned first materialises a species (key = the counter, which
-        then advances; centre = the first unassigned genome) and the same rule runs
-        against that new centre.  The leftover rule then gives the remainder the
-        last live key, and ``member_count`` is a compare-sum, ``NaN`` for dead slots.
+        Phase 1 reserves the nearest *unassigned* genome for every live slot, without
+        a threshold.  Phase 2 applies ``d < threshold and (unassigned or d < o2c)``; a
+        dead slot with anything unassigned first materialises a species (key = the
+        counter, centre = the first unassigned genome).  The leftover rule then gives
+        the remainder the last live key, and ``member_count`` is a compare-sum.
     """
     table = np.asarray(distance_table, dtype=np.float64)
     keys = np.array(species_keys, dtype=np.float64)
@@ -295,10 +265,9 @@ def assign_by_hand(
 def run_speciate(species, controller, state, distance_fn):
     """Run ``SpeciesController.speciate`` in one graph and return host numpy fields.
 
-    ``evoxc.build`` only turns a ``numpy.ndarray`` argument into a graph input and
-    bakes everything else as a constant, so the bookkeeping fields, ``generation``
-    **and** the four split population arrays travel positionally; the ``State`` /
-    ``SpeciesState`` containers are rebuilt inside the traced closure.
+    ``evoxc.build`` only turns a ``numpy.ndarray`` argument into a graph input, so the
+    bookkeeping fields, ``generation`` **and** the four split population arrays travel
+    positionally and the containers are rebuilt inside the traced closure.
 
     Args:
         species: The ``tensorneat.algorithm.neat.species`` module fixture.
@@ -313,8 +282,7 @@ def run_speciate(species, controller, state, distance_fn):
     Notes:
         ``generation`` is a graph *input*, not a baked constant: the post-pass writes
         it into ``last_improved`` through ``scalar_f32``, which rejects a numpy
-        scalar.  The field order is ``dataclasses.fields`` order, so a new
-        ``SpeciesState`` field costs no change here.
+        scalar.  The field order is ``dataclasses.fields`` order.
     """
     names = [field.name for field in dataclasses.fields(species.SpeciesState)]
     bookkeeping = [np.asarray(getattr(state.species, name)) for name in names]
@@ -341,8 +309,8 @@ def centre_fields(payloads, identities):
     Args:
         payloads: The ``support.payloads`` module fixture (``I_INF``).
         identities: ``(S,)`` table indices.  Scan 1 overwrites a **live** slot's row
-            with the elected genome, so only a *dead* slot's row survives — and there
-            the value is exactly the stale integer the dead-slot test asserts on.
+            with the elected genome, so only a *dead* slot's row survives — carrying
+            exactly the stale integer the dead-slot test asserts on.
 
     Returns:
         dict: the four ``SpeciesState`` centre fields
@@ -350,10 +318,10 @@ def centre_fields(payloads, identities):
         ``center_conn_attrs``) with the documented shapes and dtypes.
 
     Notes:
-        Every row is padded with the sentinel of *its own* array plus a per-slot
-        marker, so "the dead rows came back unchanged" is an assertion on the whole
-        row.  The identity cell must stay a valid table index: ``speciate`` evaluates
-        ``distance_fn`` for a dead slot too (its result is masked out afterwards).
+        Every row carries the sentinel of *its own* array plus a per-slot marker, so
+        "the dead rows came back unchanged" is an assertion on the whole row.  The
+        identity cell must stay a valid table index: ``speciate`` evaluates
+        ``distance_fn`` for a dead slot too.
     """
     slot_count = len(identities)
     node_keys = np.full((slot_count, MAX_NODES), payloads.I_INF, dtype=np.int32)
@@ -390,10 +358,9 @@ def bookkeeping(species_state, payloads, *, keys, identities, next_species_key=2
         keys: ``(S,)`` species keys; ``NaN`` marks a dead slot.
         identities: ``(S,)`` centre identity per slot (see :func:`centre_fields`).
         next_species_key: 0-d counter before the call.
-        member_count: Optional ``(S,)`` override — the dead-slot test sets a finite
-            count there to pin that "dead" is ``isnan`` of the key alone.
-        best_fitness: Optional ``(S,)`` override.
-        last_improved: Optional ``(S,)`` override.
+        member_count/best_fitness/last_improved: Optional ``(S,)`` overrides — the
+            dead-slot test sets finite values there to pin that "dead" is ``isnan`` of
+            the key alone.
 
     Returns:
         The ``SpeciesState``, ``idx2species`` at the in-progress ``NaN`` sentinel.
@@ -420,7 +387,7 @@ def bookkeeping(species_state, payloads, *, keys, identities, next_species_key=2
 def permuted(population, order):
     """Permute the population axis: ``order[i]`` is the old row now sitting at ``i``.
 
-    A genome's identity key lives in its own payload row, so it travels with it.
+    A genome's identity key lives in its own row, so it travels with it.
     """
     return PayloadTensors(*(np.asarray(array)[order] for array in population))
 
@@ -434,11 +401,10 @@ def permuted(population, order):
 def population(payloads):
     """A four-array payload whose ``IDENTITY_ROW`` key is the population index.
 
-    Every individual keeps the two input rows that a genome's row/key invariant
-    requires and stores its own population index in ``IDENTITY_ROW`` — so a test can
-    address a genome in the distance table by its identity instead of by its
-    (mutable) row position, and permuting the payload moves the identity with the
-    genome.
+    Every individual keeps the two input rows a genome's row/key invariant requires
+    and stores its own population index in ``IDENTITY_ROW``, so a test addresses a
+    genome by its identity rather than by its (mutable) row position and a permutation
+    moves the identity with the genome.
 
     Returns:
         A :class:`PayloadTensors` of host numpy arrays, ready for
@@ -466,13 +432,11 @@ def test_centre_genes_keep_the_split_payload_contract(
 ):
     """Invariant: the centre genes are four split arrays of the documented shapes.
 
-    Oracle: the field names of ``SpeciesState`` plus the shape/dtype of every
-    returned centre array — ``(S, N) int32``, ``(S, N, NA) float32``,
-    ``(S, E, CK) int32``, ``(S, E, CA) float32`` — and the shapes the fake
-    ``distance_fn`` actually received, which must be the *population-shaped*
-    broadcast ``(P, ...)`` of one centre row.  This pins
-    ``src/tensorneat/CONTEXT.md`` reconciliation #2: a centre is the split
-    ``GenomeTensors`` payload, never a packed integer gene row.
+    Oracle: the ``SpeciesState`` field names, the shape/dtype of every returned centre
+    array — ``(S, N) int32``, ``(S, N, NA) float32``, ``(S, E, CK) int32``,
+    ``(S, E, CA) float32`` — and the population-shaped ``(P, ...)`` broadcast the fake
+    ``distance_fn`` received.  This pins ``src/tensorneat/CONTEXT.md`` reconciliation
+    #2: a centre is the split ``GenomeTensors`` payload, never a packed gene row.
     """
     identities = [0, 2, 5, 6]
     state = algorithm_state(
@@ -539,12 +503,12 @@ def test_every_genome_is_assigned_to_exactly_one_live_species(
 ):
     """Invariant: after ``speciate`` no ``NaN`` survives and every key is a live slot's key.
 
-    Oracle: ``np.isnan(idx2species).sum() == 0``, plus "every assigned value is in
-    ``species_keys[~isnan]``" (a set test, not a range test — the assignment holds
-    *keys*, not slot indices), plus the per-key counts equal ``member_count`` and
-    sum to ``pop_size``, plus :func:`assign_by_hand` field by field.  The table
-    produces two claimed genomes, two fresh species (one per dead slot) and two
-    leftovers, so both scans and the post-pass are exercised at once.
+    Oracle: no ``NaN`` in ``idx2species``, every assigned value in
+    ``species_keys[~isnan]`` (a set test, not a range test — the assignment holds
+    *keys*, not slot indices), the per-key counts equal ``member_count`` and sum to
+    ``pop_size``, and :func:`assign_by_hand` field by field.  The table claims two
+    genomes, creates two fresh species (one per dead slot) and leaves two leftovers,
+    so both scans and the post-pass are exercised at once.
     """
     table = distance_table({0: {1: 0.5}, 2: {3: 1.0}})
     keys = [0.0, 1.0, np.nan, np.nan]
@@ -580,6 +544,41 @@ def test_every_genome_is_assigned_to_exactly_one_live_species(
     assert float(result["next_species_key"]) == float(expected["next_species_key"])
 
 
+def test_scan_one_claims_the_nearest_unassigned_genome(
+    species, controller, species_state, algorithm_state, payloads, population
+):
+    """Invariant: scan 1 masks out the genomes an earlier live slot already owns.
+
+    Oracle: slot ``0`` claims genome ``5`` (``table[0, 5] = 0.1``, its own identity
+    pushed to ``FAR``); slot ``1``'s centre then sits at ``0.05`` from that same,
+    now *assigned* genome and ``1.0`` from genome ``3``.  Only ``3`` may become its
+    member: an ``argmin`` over every genome would hand ``5`` to key ``1.0`` and
+    leave ``3`` to the leftover rule, which moves both ``idx2species`` and
+    ``member_count``.
+    """
+    table = distance_table({0: {0: FAR, 5: 0.1}, 2: {2: FAR, 3: 1.0, 5: 0.05}})
+    keys = [0.0, 1.0]
+    identities = [0, 2]
+    state = algorithm_state(
+        bookkeeping(species_state, payloads, keys=keys, identities=identities),
+        pop=population,
+        generation=4.0,
+    )
+    result = run_speciate(
+        species, controller(species_size=2), state, table_distance(table)
+    )
+    expected = assign_by_hand(
+        table, keys, identities, np.arange(POP_SIZE), 2.0, THRESHOLD
+    )
+
+    np.testing.assert_array_equal(
+        result["idx2species"], [1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0]
+    )
+    np.testing.assert_array_equal(result["member_count"], [1.0, 7.0])
+    np.testing.assert_array_equal(result["idx2species"], expected["idx2species"])
+    np.testing.assert_array_equal(result["member_count"], expected["member_count"])
+
+
 @pytest.mark.parametrize(
     "offset, expected_key",
     [(-1e-3, 0.0), (0.0, 1.0), (1e-3, 1.0)],
@@ -595,17 +594,14 @@ def test_a_genome_closer_than_the_threshold_joins_the_centre(
     offset,
     expected_key,
 ):
-    """Invariant: ``d < compatibility_threshold`` joins, ``d == threshold`` does not (strict ``<``).
+    """Invariant: ``d < compatibility_threshold`` joins, ``d == threshold`` does not.
 
-    Oracle: a distance table with two live slots (keys ``0.0``, ``1.0``; centre
-    identities ``0`` and ``2``) and one genome (identity ``1``) that scan 1 leaves
-    unclaimed.  ``species_size = 2`` so there is **no dead slot** that could seed a
-    new species — the leftover rule (last live key ``1.0``) is therefore the only
-    alternative owner.  ``table[0, 1]`` is parametrised over ``threshold - 1e-3``,
-    ``threshold`` and ``threshold + 1e-3`` while ``table[2, 1]`` stays above the
-    threshold.  Expected: the first case assigns key ``0.0``, the other two key
-    ``1.0``.  Asserting the exact key is what distinguishes the scan-2 threshold
-    write from the post-pass, since both are legal owners of the same genome.
+    Oracle: two live slots (keys ``0.0``/``1.0``, centres ``0``/``2``) and one genome
+    (identity ``1``) that scan 1 leaves unclaimed.  ``species_size = 2`` means there
+    is **no dead slot** to seed a new species, so the leftover rule (last live key
+    ``1.0``) is the only alternative owner.  ``table[0, 1]`` takes threshold ``-1e-3``,
+    ``0``, ``+1e-3``; only the first must land in key ``0.0``.  Asserting the exact
+    key distinguishes the scan-2 write from the post-pass.
     """
     table = distance_table({0: {1: THRESHOLD + offset}})
     keys = [0.0, 1.0]
@@ -651,15 +647,12 @@ def test_a_member_closer_than_its_owner_steals_the_slot(
     later,
     expected_key,
 ):
-    """Invariant: a later slot with ``d < o2c`` reassigns the genome, so scan order cannot freeze a claim.
+    """Invariant: a later slot with ``d < o2c`` reassigns, so scan order cannot freeze a claim.
 
-    Oracle: two live slots (keys ``0.0``, ``1.0``; centre identities ``0`` and
-    ``2``) and a genome (identity ``1``) that scan 1 leaves unassigned.
-    ``table[0, 1] = threshold - 0.1`` (slot ``0`` claims it first in scan 2) and
-    ``table[2, 1]`` is parametrised: ``1.0`` is strictly closer, so the genome must
-    end in ``species_keys[1]``; ``1.95`` is farther, so it must stay in
-    ``species_keys[0]``.  The mirror case pins that the rule is ``d < o2c`` and not
-    "the last slot always wins".
+    Oracle: slot ``0`` claims genome ``1`` at ``threshold - 0.1`` in scan 2 and
+    ``table[2, 1]`` takes ``1.0`` (strictly closer ⇒ the genome moves to key ``1.0``)
+    or ``1.95`` (farther ⇒ it stays with key ``0.0``).  The mirror case pins that the
+    rule is ``d < o2c`` and not "the last slot always wins".
     """
     table = distance_table({0: {1: 1.9}, 2: {1: later}})
     keys = [0.0, 1.0]
@@ -690,15 +683,13 @@ def test_a_member_closer_than_its_owner_steals_the_slot(
 def test_a_one_member_species_keeps_a_finite_member_count(
     species, controller, species_state, algorithm_state, payloads, population
 ):
-    """Invariant: a live slot with exactly one member reports ``member_count == 1.0``, never ``NaN``.
+    """Invariant: a live slot with one member reports ``member_count == 1.0``, never ``NaN``.
 
-    Oracle: a ``(species_size, pop_size)`` compare-sum recomputed on the host from
-    the returned ``idx2species`` and ``species_keys`` — the same primitive the
-    post-pass documents.  Slot ``0`` is set up to absorb everything except the
-    genome that scan 1 already elected as slot ``1``'s centre, so slot ``1`` ends
-    with one member: the case that made the legacy
-    ``floor(threshold * members) / survive_size`` divide by zero, and the reason the
-    count has to stay a real number for spawn allocation to work.
+    Oracle: a ``(species_size, pop_size)`` compare-sum recomputed on the host from the
+    returned ``idx2species`` and ``species_keys``.  Slot ``0`` absorbs everything
+    except the genome scan 1 elected as slot ``1``'s centre, so slot ``1`` ends with
+    one member — the case that made the legacy survivor count divide by zero, and the
+    reason the count has to stay a real number.
     """
     table = distance_table({0: {}, 2: {}})
     table[0, :] = 0.0  # every genome is at distance 0 from slot 0's centre
@@ -729,20 +720,17 @@ def test_a_one_member_species_keeps_a_finite_member_count(
 def test_dead_slots_carry_nan_keys_and_their_centre_rows_are_never_read(
     species, controller, species_state, algorithm_state, payloads, population
 ):
-    """Invariant: a dead slot stays dead, and its four centre rows come back byte-identical.
+    """Invariant: a dead slot stays dead, and its four centre rows come back unchanged.
 
-    Oracle: the centre rows of the dead slots are pre-filled with per-slot sentinel
+    Oracle: each dead slot's centre rows are pre-filled with per-slot sentinel
     integers (:func:`centre_fields`) that no elected genome produces, and the call
-    must return them unchanged; meanwhile each live slot's centre equals the whole
-    population row of the genome scan 1 elected (``center_*[i] == pop[identity]``).
-    "Never read" is therefore checked as "never written from a stale row".
-
-    Deadness is pinned to ``isnan(species_keys)`` by filling the dead slots'
-    ``member_count``/``best_fitness``/``last_improved`` with **finite** values first:
-    an implementation keying off ``member_count`` would treat them as live and
-    either claim a genome or rewrite their centre rows.  The table assigns every
-    genome before the dead slots are reached, so no species is created and the
-    counter must not move.
+    must return them unchanged; each live slot's centre equals the whole population
+    row of the genome scan 1 elected.  Deadness is pinned to ``isnan(species_keys)``
+    by filling the dead slots' ``member_count``/``best_fitness``/``last_improved``
+    with **finite** values first, so an implementation keying off ``member_count``
+    would claim a genome or rewrite a centre row.  The table assigns every genome
+    before the dead slots are reached, so no species is created and the counter must
+    not move.
     """
     table = distance_table({0: {}, 2: {2: 0.0}})
     table[0, :] = 0.0  # slot 0 absorbs everyone ...
@@ -849,13 +837,12 @@ def test_each_created_species_consumes_exactly_one_species_key(
 ):
     """Invariant: ``next_species_key`` grows by exactly one per species actually created.
 
-    Oracle: the state starts at ``next_species_key = 2.0`` with two live slots and
-    two dead slots; the table forces ``n`` new species (``n = 0, 1, 2``).  The
-    returned counter must be ``2 + n``, the ``n`` created slots must carry exactly
-    the keys ``2 .. 2 + n - 1`` in creation order (no gaps, no reuse of the initial
-    ``0``), and a dead slot that finds nothing to seed must **not** consume a key —
-    that is the ``n = 0`` case, where two dead slots stay ``NaN`` and the counter
-    does not move.
+    Oracle: from ``next_species_key = 2.0`` with two live and two dead slots, the
+    table forces ``n`` new species (``n = 0, 1, 2``): the counter must end at
+    ``2 + n``, the created slots must carry exactly the keys ``2 .. 2 + n - 1`` in
+    creation order, and a dead slot that finds nothing to seed must **not** consume a
+    key (the ``n = 0`` case).  A created slot also starts at ``best_fitness = -inf``
+    with ``last_improved = generation``.
     """
     table = distance_table(rows)
     keys = [0.0, 1.0, np.nan, np.nan]
@@ -878,6 +865,17 @@ def test_each_created_species_consumes_exactly_one_species_key(
     np.testing.assert_array_equal(
         result["member_count"], np.asarray(expected_members, np.float32)
     )
+    # Contract: a slot created this generation starts at ``-inf`` best fitness and
+    # records the generation that created it, so it cannot be stagnated at birth.
+    created_slots = ~np.isnan(np.asarray(expected_keys, np.float32))[2:]
+    np.testing.assert_array_equal(
+        result["best_fitness"][2:][created_slots],
+        np.full(int(created_slots.sum()), -np.inf, np.float32),
+    )
+    np.testing.assert_array_equal(
+        result["last_improved"][2:][created_slots],
+        np.full(int(created_slots.sum()), 4.0, np.float32),
+    )
 
     live_keys = result["species_keys"][~np.isnan(result["species_keys"])]
     assert len(set(live_keys.tolist())) == len(live_keys), (
@@ -892,11 +890,10 @@ def test_speciation_is_deterministic_for_the_same_state(
 ):
     """Invariant: the same ``(state, distances)`` yields identical arrays on every run.
 
-    Oracle: ``np.testing.assert_array_equal`` over all ``SpeciesState`` fields of
-    two independent calls (a fresh ``distance_fn`` each time, so no mutable state
-    hides in the fake).  Speciation must not touch ``randkey`` or any host RNG — it
-    is a pure function of the distance table, and the pipeline relies on that to
-    make a ``(seed, config, shape)`` triple reproducible.
+    Oracle: ``assert_array_equal`` over all ``SpeciesState`` fields of two independent
+    calls (a fresh ``distance_fn`` each time, so no mutable state hides in the fake).
+    Speciation touches no RNG, which is what makes a ``(seed, config, shape)`` triple
+    reproducible.
     """
     table = distance_table({0: {1: 0.5}, 2: {3: 1.0}})
     keys = [0.0, 1.0, np.nan, np.nan]
@@ -921,16 +918,14 @@ def test_speciation_is_deterministic_for_the_same_state(
 def test_speciation_permuting_the_population_only_permutes_the_keys(
     species, controller, species_state, algorithm_state, payloads, population
 ):
-    """Invariant: a population permutation permutes ``idx2species`` and changes nothing else.
+    """Invariant: permuting the population permutes ``idx2species`` and nothing else.
 
     Oracle: run once on the payload and once on ``payload[order]`` with the same
-    species state and the **same** distance table (the identity of a genome is
-    written inside its own payload row, so the table is addressed by genome, not by
-    row).  Assert ``idx2species_permuted == idx2species[order]`` — a genome keeps
-    the species of the genome it *is*, not of the row it sat in — plus unchanged
-    ``member_count``, unchanged ``next_species_key`` and unchanged centre arrays.
-    Distinct distances are used so no ``argmin`` tie makes the result
-    index-dependent by definition.
+    species state and the **same** distance table (a genome's identity is written
+    inside its own row, so the table is addressed by genome).  ``idx2species`` must
+    permute with the genome, while ``member_count``, ``next_species_key``, the centre
+    arrays and ``species_keys`` stay identical.  Distinct distances keep every
+    ``argmin`` free of ties.
     """
     rows = {
         0: {1: 0.5, 2: 0.7, 3: 1.1, 4: 2.5, 5: 2.7, 6: 2.9, 7: 3.1},
@@ -964,13 +959,12 @@ def test_speciation_permuting_the_population_only_permutes_the_keys(
 def test_leftover_genomes_adopt_the_last_species_key_when_the_cap_is_hit(
     species, controller, species_state, algorithm_state, payloads, population
 ):
-    """Invariant: when the species cap is reached, leftovers join the last live key, never ``NaN``.
+    """Invariant: at the species cap, leftovers join the last live key, never ``NaN``.
 
-    Oracle: a population with three clusters but only ``species_size = 2`` live
-    slots, so the second scan runs out of dead slots; the uncapped group must carry
-    exactly ``species_keys[last live slot]`` and ``member_count`` therefore exceeds
-    the number of genomes near that centre.  The assertion is on the *key value*,
-    not the slot index, and it is cross-checked against :func:`assign_by_hand`.
+    Oracle: three clusters but only ``species_size = 2`` live slots, so scan 2 runs
+    out of dead slots; the uncapped group must carry exactly the *key* of the last
+    live slot and ``member_count`` must exceed the number of genomes near that centre.
+    Cross-checked against :func:`assign_by_hand`.
     """
     rows = {0: {1: 0.5}, 4: {5: 0.5}}
     table = distance_table(rows)
