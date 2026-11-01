@@ -2,7 +2,7 @@
 
 ## Intent
 Turn a NEAT individual into fixed-shape `int32`/`float32` evoxc tensors, and evaluate a whole population of differently-shaped networks in one batch-first kernel.
-This node owns exactly four things: (1) the **gene payload** (key columns in `int32`, attribute columns in `float32`, padded rows), (2) the **genetic operators** (mutation / crossover / distance) as batched kernels, (3) the **forward algebra** over a precomputed execution schedule, and (4) host-only introspection (`network_dict`, `sympy_func`, `visualize`, `repr`, `hash`).
+This node owns exactly four things: (1) the **gene payload** (key columns in `int32`, attribute columns in `float32`, padded rows), (2) the **genetic operators** (mutation / crossover / distance) as batched kernels, (3) the **forward algebra** over a precomputed execution schedule plus the exact gradient path beside it (`grad.py`), and (4) host-only introspection (`network_dict`, `sympy_func`, `visualize`, `repr`, `hash`).
 It does not own the schedule derivation (`../common/tensorization.py`) nor `ACT`/`AGG` (`../common/functions/`); it consumes both.
 
 ## Gene payload (binding)
