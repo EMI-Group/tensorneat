@@ -858,7 +858,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
             ``(P, *shape)`` tensor with ``x``'s dtype.
         """
         flat_index, present = _slot_index(idx, mask, int(x.shape[1]))
-        return _gather_prepared(x, flat_index, present, tuple(idx.shape[1:]), fill)
+        return _gather_prepared(x, flat_index, present, fill)
     def _hit_conn_attrs(
         self, transformed: Transformed, conn_attrs: evoxc.SymbolicTensor
     ) -> _StepStatics:
@@ -884,7 +884,9 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         Notes:
             The flat index of slot ``(p, n, k, w)`` is ``p * (E * CA) + row * CA + w``, i.e.
             the slot row index times the attribute width plus the column index, because the
-            payload is gathered from ``reshape(conn_attrs, (P, E * CA))``.
+            payload is gathered from ``reshape(conn_attrs, (P, E * CA))``. The index is
+            returned *block-shaped* (``(P, N, K, CA)``), so the gather of this pass and of
+            every unrolled level produces its window shape directly.
         """
         pop_size, max_nodes, window = (int(size) for size in transformed.in_conn.shape)
         conn_rows, attr_width = (int(size) for size in conn_attrs.shape[1:])
@@ -923,10 +925,12 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         :class:`_StepStatics` of this pass:
 
         1. ``xv = gather(values, statics.flat_index)`` -> ``(P, N, K)`` source values per
-           slot (flatten, one flat gather, reshape back), with every *static* dead slot
-           overwritten by ``NaN`` in the same step (the gather's fill ``select``). ``values``
-           stays ``(P, N)`` and is never widened into a ``max_nodes``-wide column per node. The
-           index table is derived once per pass, so a level pays only flatten/gather/reshape.
+           slot (flatten the value table, one gather into the window block shape — the index
+           table is already block-shaped, so nothing is reshaped back), with every *static*
+           dead slot overwritten by ``NaN`` in the same step (the gather's fill ``select``).
+           ``values`` stays ``(P, N)`` and is never widened into a ``max_nodes``-wide column
+           per node. The index table is derived once per pass, so a level pays only
+           flatten/gather/fill.
         2. ``live = xv == xv`` — IEEE makes ``x == x`` False exactly on ``NaN``, so that
            equality *is* ``~isnan(xv)`` in a single comparison. It is the *liveness* mask
            because step 1 writes ``NaN`` into every statically dead slot: a slot the schedule
@@ -976,6 +980,14 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
                 f"{type(hit_conn_attrs).__name__}"
             )
         block = tuple(int(size) for size in transformed.in_src.shape[1:])
+        if tuple(int(size) for size in hit_conn_attrs.present.shape[1:]) != block:
+            # A static (host-side) check, hence no traced op: the window index and the mask
+            # must come from this very schedule or the gather would read another window.
+            raise TensorNEATError(
+                "_node_step got step statics of window "
+                f"{tuple(int(size) for size in hit_conn_attrs.present.shape[1:])} for a "
+                f"schedule of window {block}"
+            )
         # The gather fills every statically dead slot with ``NaN``, so one comparison gives
         # the liveness mask: ``x == x`` is False exactly on ``NaN``, which now covers both a
         # statically dead slot and a live slot whose source row is still ``NaN``.
@@ -983,7 +995,6 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
             values,
             hit_conn_attrs.flat_index,
             hit_conn_attrs.present,
-            block,
             hit_conn_attrs.nan,
         )
         live = evoxc.equal(xv, xv)

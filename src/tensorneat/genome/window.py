@@ -10,9 +10,11 @@ much as eighty microseconds at ``P=1000``, whatever its shape), so every helper 
 to emit the fewest ops that stay bit-identical:
 
 * ``evoxc.gather`` has ``np.take`` semantics and splices the *whole* index shape into the axis
-  it indexes, so a batch-wide flat index is the only one-dimensional form that works. The
-  per-individual offset ``p * row_len`` is static, hence a single constant (``_row_offsets``)
-  instead of an in-graph ``arange``/``multiply``/``reshape`` chain.
+  it indexes, so the table is indexed flat (``p * row_len + row``) and the flat index is then
+  *shaped* like the window block: the gather returns the block shape directly, which is what
+  lets an unrolled level skip its reshape-back. The per-individual offset ``p * row_len`` is
+  static, hence a single constant (``_row_offsets``) instead of an in-graph
+  ``arange``/``multiply``/``reshape`` chain.
 * The padding sentinel is a *rank-0* ``I_INF`` (``_iinf``), never a full-size array: a
   ``(P, N, K, CA)`` constant is 3.2 MB at ``P=1000`` and ``evoxc`` warns about embedding it.
 * ``select`` and ``logical_and`` broadcast, so the attribute-column mask is widened with a
@@ -51,11 +53,11 @@ def _slot_index(
     mask: evoxc.SymbolicTensor,
     row_len: int,
 ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
-    """Flatten one window index table to a batch-wide gather index plus a liveness mask.
-    ``evoxc.gather`` follows ``np.take`` semantics — it splices the *whole* index shape into
-    the axis it indexes — so an index that already carries the population axis cannot gather
-    along the table's second axis. The batch-wide flat index ``p * row_len + row`` is the
-    form that works, and it keeps the gather one-dimensional.
+    """Flatten one window index table to a block-shaped gather index plus a liveness mask.
+    ``evoxc.gather`` follows ``np.take`` semantics and splices the *whole* index shape into the
+    axis it indexes, so the source table is indexed flat (``p * row_len + row``) and the flat
+    index is then shaped like the window block: the gather returns that block shape directly,
+    which is what keeps the per-level step to one gather and no reshape-back.
     Both results depend only on the schedule (``idx`` and ``mask``) and on the static
     ``row_len``, so :meth:`BaseGenome._hit_conn_attrs` derives them once per forward pass and
     every unrolled level reuses them instead of re-deriving them.
@@ -65,20 +67,18 @@ def _slot_index(
         mask: ``(P, *block) bool`` liveness of each slot.
         row_len: ``R``, the source table's second-axis length.
     Returns:
-        ``(flat_index, present)``: the ``(P * prod(block),)`` flat index with every absent
-        slot redirected to row ``0`` of its own individual (the backend never sees an
-        out-of-range index) and the ``(P, *block) bool`` liveness mask — block-shaped, which
-        is the shape the per-level value gather uses to fill its dead slots with ``NaN``.
+        ``(flat_index, present)``: the ``(P, *block)`` gather index into the flattened
+        ``(P * R,)`` table, with every absent slot redirected to row ``0`` of its own
+        individual (the backend never sees an out-of-range index), and the ``(P, *block) bool``
+        liveness mask — block-shaped, which is the shape the per-level value gather uses to
+        fill its dead slots with ``NaN``.
     """
     pop_size = int(idx.shape[0])
     block = tuple(int(size) for size in idx.shape[1:])
-    count = 1
-    for size in block:
-        count *= size
     present = evoxc.logical_and(enp.not_equal(idx, _iinf(idx.dtype)), mask)
     safe = evoxc.select(present, idx, enp.zeros((), dtype=idx.dtype))
     flat = evoxc.add(safe, _row_offsets(pop_size, row_len, len(block)))
-    return evoxc.reshape(flat, (pop_size * count,)), present
+    return evoxc.reshape(flat, (pop_size, *block)), present
 
 
 def _row_offsets(pop_size: int, row_len: int, block_rank: int) -> evoxc.SymbolicTensor:
@@ -153,20 +153,20 @@ def _gather_prepared(
     x: evoxc.SymbolicTensor,
     flat_index: evoxc.SymbolicTensor,
     present: evoxc.SymbolicTensor,
-    block: tuple[int, ...],
     fill: float | evoxc.SymbolicTensor | None,
 ) -> evoxc.SymbolicTensor:
     """Gather one already-indexed window out of a batch-first ``(P, R)`` table.
-    The per-level half of :meth:`BaseGenome._gather_slots`: three ops (flatten the table,
-    gather, reshape back) once the index table of :func:`_slot_index` exists, plus one fill
-    ``select`` when the caller asks for one.
+    The per-level half of :meth:`BaseGenome._gather_slots`: two ops (flatten the table,
+    gather) once the index table of :func:`_slot_index` exists — the index already carries
+    the window block shape, so nothing is reshaped back — plus one fill ``select`` when the
+    caller asks for one.
     Args:
         x: ``(P, R)`` source table (node values, or a reshaped attribute payload).
-        flat_index: ``(P * prod(block),)`` flat index from :func:`_slot_index`.
+        flat_index: ``(P, *block)`` gather index into the flattened table, from
+            :func:`_slot_index`.
         present: ``(P, *block) bool`` liveness mask from :func:`_slot_index` (a broadcastable
             ``(P, *block[:-1], 1)`` mask is accepted too, so an attribute gather needs no
             explicit widening op).
-        block: The window shape the result is reshaped to.
         fill: Value written where the slot is absent, or ``None`` to leave the gathered value
             in place. Both production callers pass ``NaN``: an *attribute* gather needs it so
             the gene's ``prepare`` sees a clean "absent row" sentinel, and a *value* gather
@@ -179,11 +179,11 @@ def _gather_prepared(
     Returns:
         ``(P, *block)`` tensor with ``x``'s dtype.
     """
-    pop_size, row_len = (int(size) for size in x.shape)
-    values = evoxc.gather(evoxc.reshape(x, (pop_size * row_len,)), flat_index, axis=0)
-    values = evoxc.reshape(values, (pop_size, *block))
+    values = evoxc.gather(
+        evoxc.reshape(x, (int(x.shape[0]) * int(x.shape[1]),)), flat_index, axis=0
+    )
     if fill is not None:
-        # After the reshape, so the trailing-``1`` mask of ``_column_mask`` broadcasts without
+        # After the gather, so the trailing-``1`` mask of ``_column_mask`` broadcasts without
         # an explicit widening op.
         scalar = (
             fill
