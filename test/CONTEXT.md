@@ -18,12 +18,14 @@ Markers `parity` and `slow` are declared in `pyproject.toml`; `requires_iree` is
 test/
   conftest.py            sys.path guards (src/, benchmarks/legacy_jax), marker registration, seed fixture
   release_gate_no_jax.py the import-hygiene gate (collected by a conftest hook, see Constraints)
-  support/               shared host-side test infrastructure (runner, payloads, numpy oracles)
+  support/               shared host-side test infrastructure (runner, payloads, numpy oracles, lazy imports)
   unit/                  numpy-backend kernel and invariant tests, mirrors src/tensorneat/
     common/  genome/  algorithm/  problem/
   parity/                same kernels vs the frozen legacy JAX library, marker `parity`
   integration/           whole-Pipeline runs, marker `slow`
 ```
+Every directory that holds test modules carries an `__init__.py`: pytest's default prepend import mode names a module by its basename, so un-namespaced directories collide (`test/unit/genome/test_forward.py` vs `test/parity/test_forward.py`) and abort the session with an import-mismatch error.
+Counts in the Phase-1 skeleton: `unit/common` 148, `unit/genome` 85, `unit/algorithm` 71, `unit/problem` 60, `parity` 50, `integration` 15, release gate 4 — 433 collected, of which only `parity/test_convert.py` (17) runs for real today.
 
 ## What each suite proves
 - `./unit/common` — the schedule derived from a hand-built genome has the right level order, incoming-edge windows and sentinels, `validate_schedule` accepts what `derive_schedule` produces and rejects tampered schedules, flat gather/scatter/mutation helpers agree with a plain-numpy oracle, the ACT/AGG dispatchers agree with a per-option Python loop, and host graph walks (`topological_sort`, `node_depth`) agree with the in-graph `level`.
