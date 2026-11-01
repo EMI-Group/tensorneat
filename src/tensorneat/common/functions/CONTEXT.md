@@ -20,6 +20,7 @@ A node gene stores an integer id = **position in the user's option list** (`acti
 An option's registry name is its kernel's `__name__`, so kernels must be named after the option they implement; `FunctionManager` derives `names`, `name2index`, `index2name` from the tuples.
 The order is part of the gene encoding: **append only** — reordering or deleting changes sampled ids and breaks checkpoint/parity.
 Ids are sampled with `evoxc.random` stateless keys (`FunctionManager.random_index(key)` → rank-0 int32 in `[0, len)`, in-graph) and mutated within `[0, len)` only.
+`random_index` draws `evoxc.random.randint(key, (1,), 0, len(self))` and reshapes it to rank 0: the numpy reference backend returns a bare NumPy scalar for a 0-d `randint` result and then rejects it while building the output tensor, so the `(1,)` draw plus `evoxc.reshape` is the working spelling of the documented rank-0 contract.
 Host lookups (`get_evoxc_func`, `get_sympy_func`, `obtain_sympy`) reject ids outside `[0, len)` with `IndexError` instead of wrapping, so a corrupted gene id fails loudly.
 
 ### ACT — canonical order (12)
