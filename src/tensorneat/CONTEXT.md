@@ -20,7 +20,7 @@ Host-only helpers (`network_dict`, `sympy_func`, `visualize`, `repr`, `hash`) st
 
 ## Contract Reconciliations (authoritative; resolves the divergences found in Phase 1)
 1. **Gene payload is split and integer-keyed**: `node_keys (P,max_nodes) int32` (`I_INF` padding), `node_attrs (P,max_nodes,A) float32`, `conn_keys (P,max_conns,2) int32` (`I_INF` padding; a third column only when the conn gene uses `historical_marker`), `conn_attrs (P,max_conns,W) float32` (NaN padding). Keys are never floats; `host_graph`/`tensorization` detect absence with `key != I_INF`.
-2. **Payload arity is four arrays**, bundled as `genome.utils.GenomeTensors` (a `typing.NamedTuple` in order `node_keys, node_attrs, conn_keys, conn_attrs`): `algorithm.transform(state, pop=None)` and `execute_*(state, key, payload, ...)` accept the container or the four positional arrays; `algorithm.forward(state, transformed, inputs, pop=None)` and the genome kernel `forward(state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, inputs)` spell the arrays out. `BaseAlgorithm.forward(state, transformed, inputs)` has no `pop`; `SpeciesState` centers store the split payload (never packed ints).
+2. **Payload arity is four arrays**, bundled as `genome.utils.GenomeTensors`: `initialize(state, key, pop_size)`, `transform(state, payload)`, `forward(state, transformed, payload, inputs)`, `execute_*(state, key, payload, ...)`. `BaseAlgorithm.forward(state, transformed, payload, inputs)` therefore takes the payload too, and `SpeciesState` centers store the split payload (never packed ints).
 3. **`Transformed` authority is `common/tensorization.py`**, with the Phase-1 review amendments: fields `src, dst, edge_valid, in_conn, in_src, in_valid, level, node_level, topo_key, input_slot, output_slot, node_exists, edge_overflow` where `in_valid (P,N,K)` marks a live window slot, `node_level (P,N) int32` is the topological level (authority for `level`), and `edge_overflow (P,)` counts connections that did not fit the static `K`.
 4. **Public names**: `common.tensorization.derive_schedule` (no `build_schedule` alias); **all static arguments are positional** (evoxc cannot pass keyword-only statics to `build`, so no `functools.partial` dance at call sites); `common.host_graph.{decode_graph, topological_sort, find_useful_nodes, node_depth, check_cycles}` and `common.__init__` re-exports the first three; `ACT.name_of`/`AGG.name_of` replace `get_func_name`; `common.tools.to_numpy(tensor)` is the host-side array accessor.
 5. **No default `State()` in signatures**: `setup(self, state=None)` builds `State()` in the body (a default argument would run at class-definition time and break `import tensorneat`).
@@ -41,11 +41,6 @@ There is no `problem.jitable` flag any more: whether a graph compiles is the bac
 - NaN padding semantics of the pre-rewrite library are preserved (`test/parity/` depends on them); `select` chains stand in for `lax.switch`.
 - Errors: user/config validation raises `common.errors.TensorNEATError` (and its subclasses); tensor/backend errors are never caught and re-wrapped.
 - Files ≤ ~1000 lines; shared math lives in `common/`, never duplicated per genome/algorithm.
-
-## Known Issues
-- `pipeline.py` is still the pre-rewrite JAX implementation (`pipeline.py:5 import jax`, `:33 assert problem.jitable`, `:82 def setup(self, state=State())`), so `import tensorneat` imports `jax` today and the `Pipeline` API Surface above describes the intended file, not the current one.
-- The replacement `Pipeline` must register `backend` / `device` / `compile_options` on `State`: `NEAT._build_options` reads exactly those keys (`algorithm/neat/neat.py:349-354`), defaulting `backend` to `"numpy"`.
-- No `fitness_history` attribute exists anywhere in `src/`; the integration suite expects the new `Pipeline` to expose one.
 
 ## Routing Table
 | Path | Responsibility |
