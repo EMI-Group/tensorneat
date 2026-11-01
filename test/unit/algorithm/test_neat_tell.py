@@ -536,7 +536,10 @@ def test_a_non_finite_fitness_can_never_become_a_parent(
         idx2species=[0, 0, 0, 0, 1, 1, 1, 1],
     )
     species_fitness = species_kernel(
-        "_species_fitness", controller(species_elitism=0), bookkeeping, sanitized
+        "_species_fitness",
+        bookkeeping,
+        sanitized,
+        controller=controller(species_elitism=0),
     )
     assert not np.isnan(species_fitness).any()
     assert species_fitness[0] == np.float32(0.9)
@@ -552,9 +555,9 @@ def test_a_non_finite_fitness_can_never_become_a_parent(
     )
     broken_fitness = species_kernel(
         "_species_fitness",
-        controller(species_elitism=0),
         bookkeeping,
         np.asarray(sanitize_reference(broken_raw)),
+        controller=controller(species_elitism=0),
     )
     assert np.isneginf(broken_fitness[0])
     assert broken_fitness[1] == np.float32(0.6)
@@ -563,11 +566,11 @@ def test_a_non_finite_fitness_can_never_become_a_parent(
     spawn = np.array([4, 4, 0, 0], dtype=np.int32)
     winner, loser, elite_mask = species_kernel(
         "_pair_parents",
-        controller(species_elitism=0),
         bookkeeping,
         evoxc_key,
         spawn,
         np.asarray(sanitized),
+        controller=controller(species_elitism=0),
     )
 
     assert winner.shape == (POP_SIZE,)
@@ -613,10 +616,10 @@ def test_stagnation_kills_a_species_that_stops_improving(
 
     next_state, next_fitness = species_kernel(
         "_stagnation",
-        controller(max_stagnation=max_stagnation, species_elitism=0),
         bookkeeping,
         np.asarray(species_fitness),
         np.float32(generation),
+        controller=controller(max_stagnation=max_stagnation, species_elitism=0),
     )
     after = species_arrays(species, next_state)
 
@@ -677,12 +680,12 @@ def test_stagnation_exempts_the_top_species_elitism(
     def kill_mask(species_elitism):
         next_state, next_fitness = species_kernel(
             "_stagnation",
-            controller(
-                max_stagnation=max_stagnation, species_elitism=species_elitism
-            ),
             bookkeeping,
             np.asarray(species_fitness),
             np.float32(generation),
+            controller=controller(
+                max_stagnation=max_stagnation, species_elitism=species_elitism
+            ),
         )
         after = species_arrays(species, next_state)
         return np.isnan(after["species_keys"]), after, next_fitness
