@@ -189,10 +189,84 @@ class BaseSubstrate:
             ``num_outputs``, ``nodes_cnt`` and ``conns_cnt`` -- never the arrays
             themselves, which would flood a log.
 
-        Raises:
-            NotImplementedError: Always, in the abstract base class.
+        Notes:
+            The five values are read through the abstract properties, so this
+            method is usable on concrete substrates only; the bare
+            :class:`BaseSubstrate` has no counts to report.
         """
-        raise NotImplementedError
+        return (
+            f"{type(self).__name__}("
+            f"connection_type={self.connection_type!r}, "
+            f"num_inputs={self.num_inputs}, "
+            f"num_outputs={self.num_outputs}, "
+            f"nodes_cnt={self.nodes_cnt}, "
+            f"conns_cnt={self.conns_cnt})"
+        )
+
+
+def _positive_int(value: Any, name: str) -> int:
+    """Return ``value`` as a plain ``int``, requiring ``int`` and ``>= 1``.
+
+    ``bool`` is rejected because ``True`` would silently pass as ``1``.
+
+    Args:
+        value: The candidate configuration value.
+        name: Field name used in the raised error message.
+
+    Raises:
+        TensorNEATError: If ``value`` is a ``bool``, not an integer, or ``< 1``.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise TensorNEATError(f"{name} must be an int, got {value!r}")
+    if value < 1:
+        raise TensorNEATError(f"{name} must be >= 1, got {value!r}")
+    return int(value)
+
+
+def _as_float(value: Any, name: str) -> float:
+    """Return ``value`` as a plain finite ``float``.
+
+    ``bool`` is rejected because ``True`` would silently pass as ``1.0``.
+
+    Args:
+        value: The candidate configuration value.
+        name: Field name used in the raised error message.
+
+    Raises:
+        TensorNEATError: If ``value`` is a ``bool``, not a real number, or not
+            finite.
+    """
+    if isinstance(value, bool) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        raise TensorNEATError(f"{name} must be a real number, got {value!r}")
+    number = float(value)
+    if not np.isfinite(number):
+        raise TensorNEATError(f"{name} must be finite, got {value!r}")
+    return number
+
+
+def _to_int32(values: Any, name: str) -> np.ndarray:
+    """Return a fresh ``int32`` copy of key data, refusing lossy casts.
+
+    A floating-point key array is accepted only when every entry is finite and
+    integral; anything a cast would truncate or corrupt is an error.
+
+    Args:
+        values: Array-like of node keys / endpoint keys.
+        name: Field name used in the raised error message.
+
+    Raises:
+        TensorNEATError: If ``values`` is not numeric, or is floating point with
+            a non-integral or non-finite entry.
+    """
+    array = np.asarray(values)
+    if array.dtype.kind == "f":
+        if not np.all(np.isfinite(array)) or not np.all(array == np.floor(array)):
+            raise TensorNEATError(f"{name} must hold integer keys, got {values!r}")
+    elif array.dtype.kind not in "iub":
+        raise TensorNEATError(f"{name} must be numeric, got dtype {array.dtype}")
+    return np.array(array, dtype=np.int32, copy=True)
 
 
 def as_coor_array(coors: Any, name: str = "coors") -> np.ndarray:
@@ -209,10 +283,28 @@ def as_coor_array(coors: Any, name: str = "coors") -> np.ndarray:
         single-neuron layout must be written ``((x, y),)``.
 
     Raises:
-        TensorNEATError: If ``coors`` is not 2-dimensional, empty, or contains a
-            zero coordinate dimension.
+        TensorNEATError: If ``coors`` is not 2-dimensional, empty, contains a
+            zero coordinate dimension, or holds a non-finite coordinate.
     """
-    raise NotImplementedError
+    try:
+        array = np.array(coors, dtype=np.float32, copy=True)
+    except (TypeError, ValueError) as err:
+        raise TensorNEATError(
+            f"{name} must be a rectangular (n, cd) sequence of coordinates, "
+            f"got {coors!r}"
+        ) from err
+    if array.ndim != 2:
+        raise TensorNEATError(
+            f"{name} must be a 2-D (n, cd) array, got shape {array.shape}; "
+            f"a single-neuron layout is written ((x, y),)"
+        )
+    if array.shape[0] < 1:
+        raise TensorNEATError(f"{name} must hold at least one coordinate")
+    if array.shape[1] < 1:
+        raise TensorNEATError(f"{name} must have at least one coordinate dimension")
+    if not np.all(np.isfinite(array)):
+        raise TensorNEATError(f"{name} must hold finite coordinates, got {coors!r}")
+    return array
 
 
 def check_same_coordinate_dim(*named_coors: tuple[str, np.ndarray]) -> int:
@@ -227,9 +319,31 @@ def check_same_coordinate_dim(*named_coors: tuple[str, np.ndarray]) -> int:
         ``query_coors.shape[1] == 2 * cd`` is derived from.
 
     Raises:
-        TensorNEATError: If the pairs disagree on ``cd``.
+        TensorNEATError: If no pair is given, a pair is not a 2-D array with a
+            positive coordinate dimension, or the pairs disagree on ``cd``.
     """
-    raise NotImplementedError
+    if not named_coors:
+        raise TensorNEATError(
+            "check_same_coordinate_dim needs at least one (name, array) pair"
+        )
+    shared_cd = None
+    first_name = ""
+    for name, coors in named_coors:
+        array = np.asarray(coors)
+        if array.ndim != 2 or array.shape[1] < 1:
+            raise TensorNEATError(
+                f"{name} must be a 2-D (n, cd) array with cd >= 1, "
+                f"got shape {array.shape}"
+            )
+        if shared_cd is None:
+            shared_cd, first_name = int(array.shape[1]), name
+        elif array.shape[1] != shared_cd:
+            raise TensorNEATError(
+                f"{name} has {array.shape[1]} coordinate dimensions while "
+                f"{first_name} has {shared_cd}; all coordinate sets must live in "
+                f"the same coordinate space"
+            )
+    return shared_cd
 
 
 def node_key_blocks(
@@ -258,10 +372,29 @@ def node_key_blocks(
         ``j`` of hidden layer ``i``.
 
     Raises:
-        TensorNEATError: If ``num_inputs`` or ``num_outputs`` is not positive, or
-            a hidden size is negative.
+        TensorNEATError: If ``num_inputs`` or ``num_outputs`` is not a positive
+            integer, or a hidden size is not an integer or is negative.
     """
-    raise NotImplementedError
+    inputs_cnt = _positive_int(num_inputs, "num_inputs")
+    outputs_cnt = _positive_int(num_outputs, "num_outputs")
+
+    hidden_total = 0
+    for layer_idx, size in enumerate(hidden_sizes):
+        if isinstance(size, bool) or not isinstance(size, (int, np.integer)):
+            raise TensorNEATError(
+                f"hidden_sizes[{layer_idx}] must be an int, got {size!r}"
+            )
+        if size < 0:
+            raise TensorNEATError(
+                f"hidden_sizes[{layer_idx}] must be >= 0, got {size!r}"
+            )
+        hidden_total += int(size)
+
+    input_keys = np.arange(inputs_cnt, dtype=np.int32)
+    output_keys = np.arange(inputs_cnt, inputs_cnt + outputs_cnt, dtype=np.int32)
+    hidden_start = inputs_cnt + outputs_cnt
+    hidden_keys = np.arange(hidden_start, hidden_start + hidden_total, dtype=np.int32)
+    return input_keys, output_keys, hidden_keys
 
 
 def cartesian_product(
@@ -290,8 +423,60 @@ def cartesian_product(
         coors2[j]]`` per row -- and ``key_pairs`` is ``(n1 * n2, 2)`` ``int32``
         -- ``(keys1[i], keys2[j])`` per row.  An empty ``keys1`` or ``keys2``
         yields zero rows with the correct trailing width.
+
+    Raises:
+        TensorNEATError: If the key arrays are not 1-D, a coordinate array is not
+            2-D, the coordinate sets disagree on ``cd``, or a coordinate array's
+            length disagrees with its key array's.
     """
-    raise NotImplementedError
+    source_keys = np.asarray(keys1)
+    target_keys = np.asarray(keys2)
+    for keys, name in ((source_keys, "keys1"), (target_keys, "keys2")):
+        if keys.ndim != 1:
+            raise TensorNEATError(
+                f"{name} must be a 1-D key array, got shape {keys.shape}"
+            )
+    source_coors = np.asarray(coors1, dtype=np.float32)
+    target_coors = np.asarray(coors2, dtype=np.float32)
+    for coors, keys, name in (
+        (source_coors, source_keys, "coors1"),
+        (target_coors, target_keys, "coors2"),
+    ):
+        if coors.ndim != 2:
+            raise TensorNEATError(
+                f"{name} must be a 2-D (n, cd) array, got shape {coors.shape}"
+            )
+        if coors.shape[0] != keys.shape[0]:
+            raise TensorNEATError(
+                f"{name} has {coors.shape[0]} rows but its key array has "
+                f"{keys.shape[0]} entries"
+            )
+    if source_coors.shape[1] != target_coors.shape[1]:
+        raise TensorNEATError(
+            f"coors1 has {source_coors.shape[1]} coordinate dimensions while "
+            f"coors2 has {target_coors.shape[1]}; both ends of a connection must "
+            f"live in the same coordinate space"
+        )
+
+    cd = source_coors.shape[1]
+    n1, n2 = source_keys.shape[0], target_keys.shape[0]
+    if n1 == 0 or n2 == 0:
+        return (
+            np.zeros((0, 2 * cd), dtype=np.float32),
+            np.zeros((0, 2), dtype=np.int32),
+        )
+
+    coors = np.concatenate(
+        [
+            np.repeat(source_coors, n2, axis=0),
+            np.tile(target_coors, (n1, 1)),
+        ],
+        axis=1,
+    ).astype(np.float32, copy=False)
+    key_pairs = np.stack(
+        [np.repeat(source_keys, n2), np.tile(target_keys, n1)], axis=1
+    ).astype(np.int32, copy=False)
+    return coors, key_pairs
 
 
 def layer_coors(
@@ -313,5 +498,18 @@ def layer_coors(
         spanning ``x_min .. x_max`` inclusively; a single neuron is centred at
         ``((x_min + x_max) / 2, y_coor)`` so a 1-neuron layer does not collapse
         onto the left edge.
+
+    Raises:
+        TensorNEATError: If ``neuron_cnt`` is not a positive integer, or an edge
+            or ``y`` value is not a finite real number.
     """
-    raise NotImplementedError
+    count = _positive_int(neuron_cnt, "neuron_cnt")
+    left = _as_float(x_min, "x_min")
+    right = _as_float(x_max, "x_max")
+    row = _as_float(y_coor, "y_coor")
+    if count == 1:
+        xs = np.full(1, (left + right) / 2.0, dtype=np.float32)
+    else:
+        xs = np.linspace(left, right, count, dtype=np.float32)
+    ys = np.full(count, row, dtype=np.float32)
+    return np.stack([xs, ys], axis=1).astype(np.float32, copy=False)
