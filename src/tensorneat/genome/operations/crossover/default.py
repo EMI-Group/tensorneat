@@ -1,25 +1,26 @@
 """Key-aligned crossover: parent 1 keeps its structure, attributes may come from parent 2.
 
 Alignment is exact on the whole key column tuple of a gene (``(in_key, out_key)`` plus
-``historical_marker`` for connections), found through a hash plus ``argsort`` plus a fixed
-collision window: ``O(M log M)`` per array, never an ``O(M^2)`` scan, and still one batched
-kernel for the whole population.
+``historical_marker`` for connections), found through a hash plus an ``argsort`` merge plus
+an exact key-row confirmation of every candidate pair: ``O(M log M)`` per array, never an
+``O(M^2)`` scan, and still one batched kernel for the whole population.
+The merge itself lives in :mod:`..alignment`, shared with the compatibility distance, and
+this module only turns its homologue table into recombined attribute rows.
 """
 
 from typing import TYPE_CHECKING
 
 import evoxc
+import evoxc.numpy as enp
 
-from ....common import I_INF, State
+from ....common import I_INF, State, masked_flat_gather
 from ...utils import GenomeTensors
+from ..alignment import find_homologous
 from .base import BaseCrossover
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...base import BaseGenome
     from ...gene import BaseGene
-
-#: Number of sorted neighbours compared around each hashed position (hash collisions).
-_COLLISION_WINDOW = 4
 
 
 class DefaultCrossover(BaseCrossover):
@@ -56,7 +57,7 @@ class DefaultCrossover(BaseCrossover):
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene``.
             key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this call.
-            node_keys1 (evoxc.SymbolicTensor): ``(P, N, NK) int32`` node keys, parent 1
+            node_keys1 (evoxc.SymbolicTensor): ``(P, N) int32`` node keys, parent 1
                 (fitter), ``I_INF`` padded.
             node_attrs1 (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs, parent 1,
                 NaN padded.
@@ -64,7 +65,7 @@ class DefaultCrossover(BaseCrossover):
                 ``I_INF`` padded.
             conn_attrs1 (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs, parent 1,
                 NaN padded.
-            node_keys2 (evoxc.SymbolicTensor): ``(P, N, NK) int32`` node keys, parent 2,
+            node_keys2 (evoxc.SymbolicTensor): ``(P, N) int32`` node keys, parent 2,
                 ``I_INF`` padded.
             node_attrs2 (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs, parent 2,
                 NaN padded.
@@ -77,8 +78,18 @@ class DefaultCrossover(BaseCrossover):
             GenomeTensors: ``(node_keys1, recombined_node_attrs, conn_keys1,
             recombined_conn_attrs)``.
         """
-        raise NotImplementedError(
-            "align both gene families with find_homologous and recombine their attributes"
+        return super().__call__(
+            state,
+            genome,
+            key,
+            node_keys1,
+            node_attrs1,
+            conn_keys1,
+            conn_attrs1,
+            node_keys2,
+            node_attrs2,
+            conn_keys2,
+            conn_attrs2,
         )
 
     def find_homologous(
@@ -89,11 +100,11 @@ class DefaultCrossover(BaseCrossover):
         """Locate, for every gene of parent 1, its homologous row in parent 2.
 
         Exact match on the whole key-column tuple: one hash per gene (the gene's ``hash``
-        over its ``int32`` key columns), one ``argsort`` of parent 2's hashes, a
-        ``searchsorted``-style position for each parent-1 hash and then a comparison of at
-        most ``_COLLISION_WINDOW`` sorted neighbours to confirm the keys really are equal.
-        That is ``O(M log M)`` in the gene count ``M`` — never an ``O(M^2)`` scan — and all of
-        it is one batched kernel over the population axis.
+        over its ``int32`` key columns), one ``argsort`` of the two parents' tagged hashes,
+        and a comparison of the full key rows of every ``(parent 1, parent 2)`` adjacency
+        that shares a hash — so a hash collision cannot produce a false homologue.  That is
+        ``O(M log M)`` in the gene count ``M`` — never an ``O(M^2)`` scan — and all of it is
+        one batched kernel over the population axis.
 
         Args:
             keys1 (evoxc.SymbolicTensor): ``(P, M, K) int32`` key columns of parent 1,
@@ -104,10 +115,13 @@ class DefaultCrossover(BaseCrossover):
         Returns:
             evoxc.SymbolicTensor: ``(P, M) int32`` row indices into parent 2, with ``I_INF``
             for genes whose homologue is absent there (and for parent 1's padded rows).
+
+        Notes:
+            Delegates to the module-level
+            :func:`tensorneat.genome.operations.alignment.find_homologous`, which owns the
+            sorted-merge alignment; nothing family-specific is left to do here.
         """
-        raise NotImplementedError(
-            "hash both key tables, argsort parent 2 and confirm exact matches in the sorted window"
-        )
+        return find_homologous(keys1, keys2)
 
     def crossover_gene_attrs(
         self,
@@ -139,10 +153,34 @@ class DefaultCrossover(BaseCrossover):
         Returns:
             evoxc.SymbolicTensor: ``(P, M, A) float32`` recombined attributes; entries whose
             homologue is missing equal ``attrs1``, padding rows remain NaN.
+
+        Notes:
+            The row of parent 2 is turned into a flat index into the ``(P, M * A)`` view of
+            ``attrs2`` (``row * A + arange(A)``), and ``I_INF`` rows are redirected to row
+            ``0`` **before** that multiplication: ``I_INF * A`` would overflow ``int32``,
+            whereas the gathered value of a redirected row is discarded by the final
+            ``select``.  The mask still marks those positions absent, so the gather can
+            never read outside the payload.  A family without attribute columns has nothing
+            to recombine and comes back unchanged.
         """
-        raise NotImplementedError(
-            "gather parent 2's homologous rows, cross them and select parent 1 where absent"
+        if gene.attr_width == 0:
+            return attrs1
+        pop_size, count, width = attrs1.shape
+        rows = enp.reshape(homologous_rows, (pop_size, count, 1))
+        present = evoxc.not_equal(rows, enp.full((), I_INF, dtype=evoxc.int32))
+        safe_rows = evoxc.select(present, rows, enp.full((), 0, dtype=evoxc.int32))
+        index = evoxc.add(
+            evoxc.multiply(safe_rows, enp.full((), width, dtype=evoxc.int32)),
+            enp.arange(0, width, dtype=evoxc.int32),
         )
+        gathered = masked_flat_gather(
+            enp.reshape(attrs2, (pop_size, count * width)),
+            index,
+            mask=enp.broadcast_to(present, (pop_size, count, width)),
+            fill=float("nan"),
+        )
+        crossed = gene.crossover(state, key, attrs1, gathered)
+        return evoxc.select(present, crossed, attrs1)
 
 
 __all__ = ["DefaultCrossover"]
