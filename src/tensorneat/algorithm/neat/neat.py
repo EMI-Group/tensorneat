@@ -28,8 +28,6 @@ connection attribute widths declared by the genome's genes.
 
 from __future__ import annotations
 
-import inspect
-import operator
 from typing import Any, Callable, Optional
 
 import evoxc
@@ -42,6 +40,7 @@ from tensorneat.common.tools import to_numpy
 from ...genome.utils import GenomeTensors
 from ..base import BaseAlgorithm
 from .species import SpeciesController, SpeciesState
+from ._validation import positive_int
 
 
 def _sanitize_fitness(fitness: Any, pop_size: int) -> Any:
@@ -168,10 +167,10 @@ class NEAT(BaseAlgorithm):
                     "from the genome"
                 )
 
-        self._pop_size = _positive_int("pop_size", pop_size)
+        self._pop_size = positive_int(pop_size, "pop_size")
         self._pop_batch_size = None
         if pop_batch_size is not None:
-            batch = _positive_int("pop_batch_size", pop_batch_size)
+            batch = positive_int(pop_batch_size, "pop_batch_size")
             if self._pop_size % batch != 0:
                 raise TensorNEATError(
                     f"NEAT: pop_batch_size={batch} must divide "
@@ -296,15 +295,11 @@ class NEAT(BaseAlgorithm):
             SpeciesState: The generation-0 species table.
 
         Note:
-            ``SpeciesController.setup`` has two documented spellings -- one
-            taking the whole payload, one taking the node/connection key rows --
-            so the arity is read from the bound method once at trace time
-            instead of pinning this module to one of them.
+            ``SpeciesController.setup`` takes one ``GenomeTensors`` individual --
+            no population axis, because it is a single centre genome -- and
+            returns the threaded state, so only ``.species`` is kept here.
         """
-        setup_fn = self.species.setup
-        if len(inspect.signature(setup_fn).parameters) == 2:
-            return setup_fn(cfg, first).species
-        return setup_fn(cfg, first.node_keys, first.conn_keys).species
+        return self.species.setup(cfg, first).species
 
     def _static_state(self, state: State) -> State:
         """Return a tensor-free copy of ``state`` for capture inside a trace.
@@ -802,31 +797,3 @@ class NEAT(BaseAlgorithm):
             class declares it read-only and the pipeline reads it).
         """
         return self._pop_size
-
-
-def _positive_int(name: str, value: Any) -> int:
-    """Validate a strictly positive integer configuration value.
-
-    Args:
-        name (str): Parameter name used in the error message.
-        value (Any): Candidate value; anything ``operator.index`` accepts (a
-            Python int or a NumPy integer) is allowed.
-
-    Returns:
-        int: ``value`` as a plain Python int.
-
-    Raises:
-        TensorNEATError: If ``value`` is a bool, not integral, or not positive.
-    """
-    if isinstance(value, bool):
-        raise TensorNEATError(f"NEAT: {name} must be a positive int, got {value!r}")
-    try:
-        integer = operator.index(value)
-    except TypeError:
-        raise TensorNEATError(
-            f"NEAT: {name} must be a positive int, got {value!r} "
-            f"({type(value).__name__})"
-        ) from None
-    if integer <= 0:
-        raise TensorNEATError(f"NEAT: {name} must be a positive int, got {value!r}")
-    return int(integer)

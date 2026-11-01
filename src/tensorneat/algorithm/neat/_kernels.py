@@ -169,12 +169,15 @@ def spawn_from_target(
     forced to ``0.0`` on dead slots, floored to int32, and finally corrected so
     the total is exactly ``pop_size``.
 
-    The residual correction is a single ``scatter`` on slot ``0``
-    (``evoxc.scatter`` is replacement-only).  It is non-negative in practice:
-    ``sum(member_count)`` and ``sum(target)`` are both bounded by ``pop_size``,
-    and the ``min_species_size`` floor cannot push the total past ``pop_size``
-    either, because ``species_size * min_species_size <= pop_size`` is validated
-    in the controller constructor.
+    The residual correction is a single ``scatter`` on the **first live slot**
+    (``evoxc.scatter`` is replacement-only), which after the descending species
+    sort of :meth:`SpeciesController.update_species` is slot ``0`` -- so the
+    common path is unchanged -- while a hand-built or degenerate table can never
+    hand population slots to a dead species.  The residual is non-negative in
+    practice: ``sum(member_count)`` and ``sum(target)`` are both bounded by
+    ``pop_size``, and the ``min_species_size`` floor cannot push the total past
+    ``pop_size`` either, because ``species_size * min_species_size <= pop_size``
+    is validated in the controller constructor.
     """
     live = evoxc.logical_not(evoxc.isnan(species_keys))
     previous = evoxc.select(evoxc.isnan(member_count), const(0.0), member_count)
@@ -188,8 +191,11 @@ def spawn_from_target(
     spawn = evoxc.cast(evoxc.floor(damped), evoxc.int32)
     total = evoxc.cast(evoxc.sum(spawn, axes=0), evoxc.int32)
     residual = evoxc.subtract(pop_size, total)
-    head = evoxc.cast(evoxc.add(evoxc.gather(spawn, 0, axis=0), residual), evoxc.int32)
-    return evoxc.scatter(spawn, 0, head)
+    # First live slot: ``argmax`` of the 0/1 liveness mask, and index ``0`` when
+    # the whole table is dead (nothing left to protect in that case).
+    head_slot = evoxc.cast(evoxc.argmax(evoxc.cast(live, evoxc.int32), axis=0), evoxc.int32)
+    head = evoxc.cast(evoxc.add(evoxc.gather(spawn, head_slot, axis=0), residual), evoxc.int32)
+    return evoxc.scatter(spawn, head_slot, head)
 
 
 def spawn_numbers_by_rank(

@@ -55,6 +55,12 @@ from tensorneat.common.errors import TensorNEATError
 from tensorneat.common.tools import rank_elements
 
 from . import _kernels
+from ._validation import (
+    non_negative_int,
+    positive_float,
+    positive_int,
+    unit_interval,
+)
 from ._kernels import (
     POP_KEY,
     SPLIT_POP_KEYS,
@@ -68,91 +74,6 @@ from ._kernels import (
 SPAWN_MODES = ("rank", "fitness")
 
 
-# --------------------------------------------------------------------------- #
-# host-side configuration validation (runs before anything is traced)
-# --------------------------------------------------------------------------- #
-
-
-def _positive_int(value: Any, name: str) -> int:
-    """Validate a positive ``int`` configuration value.
-
-    Args:
-        value: The candidate value.
-        name (str): Parameter name, quoted in the error message.
-
-    Returns:
-        int: ``value`` unchanged.
-
-    Raises:
-        TensorNEATError: If ``value`` is not a positive ``int`` (``bool`` is
-            rejected even though it is an ``int`` subclass).
-    """
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise TensorNEATError(f"{name} must be a positive int, got {value!r}")
-    return value
-
-
-def _non_negative_int(value: Any, name: str) -> int:
-    """Validate a non-negative ``int`` configuration value.
-
-    Args:
-        value: The candidate value.
-        name (str): Parameter name, quoted in the error message.
-
-    Returns:
-        int: ``value`` unchanged.
-
-    Raises:
-        TensorNEATError: If ``value`` is not an ``int`` ``>= 0``.
-    """
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise TensorNEATError(f"{name} must be a non-negative int, got {value!r}")
-    return value
-
-
-def _unit_interval(value: Any, name: str, allow_zero: bool = True) -> float:
-    """Validate a rate that must live in ``[0, 1]`` or ``(0, 1]``.
-
-    Args:
-        value: The candidate value.
-        name (str): Parameter name, quoted in the error message.
-        allow_zero (bool, optional): Whether ``0.0`` is legal.
-
-    Returns:
-        float: ``value`` as a ``float``.
-
-    Raises:
-        TensorNEATError: If ``value`` is not a real number inside the interval.
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TensorNEATError(f"{name} must be a float in [0, 1], got {value!r}")
-    number = float(value)
-    lower_ok = number >= 0.0 if allow_zero else number > 0.0
-    if not lower_ok or number > 1.0:
-        interval = "[0, 1]" if allow_zero else "(0, 1]"
-        raise TensorNEATError(f"{name} must be a float in {interval}, got {value!r}")
-    return number
-
-
-def _positive_float(value: Any, name: str) -> float:
-    """Validate a strictly positive ``float`` configuration value.
-
-    Args:
-        value: The candidate value.
-        name (str): Parameter name, quoted in the error message.
-
-    Returns:
-        float: ``value`` as a ``float``.
-
-    Raises:
-        TensorNEATError: If ``value`` is not a finite positive number.
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TensorNEATError(f"{name} must be a positive float, got {value!r}")
-    number = float(value)
-    if not number > 0.0 or number != number or number == float("inf"):
-        raise TensorNEATError(f"{name} must be a finite positive float, got {value!r}")
-    return number
 
 
 @dataclass(frozen=True)
@@ -267,19 +188,19 @@ class SpeciesController(StatefulBaseClass):
         species_fitness_func: Callable = evoxc.max,
         species_number_calculate_by: str = "rank",
     ):
-        self.pop_size = _positive_int(pop_size, "pop_size")
-        self.species_size = _positive_int(species_size, "species_size")
-        self.max_stagnation = _non_negative_int(max_stagnation, "max_stagnation")
-        self.species_elitism = _non_negative_int(species_elitism, "species_elitism")
-        self.spawn_number_change_rate = _unit_interval(
+        self.pop_size = positive_int(pop_size, "pop_size")
+        self.species_size = positive_int(species_size, "species_size")
+        self.max_stagnation = non_negative_int(max_stagnation, "max_stagnation")
+        self.species_elitism = non_negative_int(species_elitism, "species_elitism")
+        self.spawn_number_change_rate = unit_interval(
             spawn_number_change_rate, "spawn_number_change_rate"
         )
-        self.genome_elitism = _non_negative_int(genome_elitism, "genome_elitism")
-        self.survival_threshold = _unit_interval(
+        self.genome_elitism = non_negative_int(genome_elitism, "genome_elitism")
+        self.survival_threshold = unit_interval(
             survival_threshold, "survival_threshold", allow_zero=False
         )
-        self.min_species_size = _positive_int(min_species_size, "min_species_size")
-        self.compatibility_threshold = _positive_float(
+        self.min_species_size = positive_int(min_species_size, "min_species_size")
+        self.compatibility_threshold = positive_float(
             compatibility_threshold, "compatibility_threshold"
         )
         if not callable(species_fitness_func):
@@ -715,7 +636,8 @@ class SpeciesController(StatefulBaseClass):
         ``0`` on dead slots, cast to int32, and finally corrected so the total is
         exactly ``pop_size``:
 
-        ``spawn = scatter(spawn, 0, spawn[0] + (pop_size - sum(spawn)))``
+        ``spawn = scatter(spawn, h, spawn[h] + (pop_size - sum(spawn)))``
+        with ``h`` the first *live* slot (slot ``0`` after the sort).
 
         Args:
             species_state (SpeciesState): Species state *after* the descending
@@ -726,9 +648,11 @@ class SpeciesController(StatefulBaseClass):
             at ``0``.
 
         Note:
-            The residual is added to slot ``0`` by convention (it is the fittest
-            species, and ``species_size * min_species_size <= pop_size`` is
-            validated upstream so the corrected block stays positive).
+            The residual is added to the first live slot, which after the
+            descending sort is slot ``0`` (the fittest species); gating on the
+            liveness mask keeps a dead slot at ``0`` even for a hand-built,
+            unsorted table.  ``species_size * min_species_size <= pop_size`` is
+            validated upstream, so the corrected block stays positive.
 
         Note:
             **Defect fix (all-dead / empty table).**  The legacy denominator
