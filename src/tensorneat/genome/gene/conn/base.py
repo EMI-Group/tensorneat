@@ -32,9 +32,12 @@ class ConnOperands(NamedTuple):
         columns: One tensor per ``attr_specs`` column, in table order, with the NaN of the
             padding rows cleaned to ``0`` (the default "absent row" policy of
             :meth:`BaseConn.prepare`).
+        zero: Rank-0 ``float32`` zero, created once per pass so a family can sanitise its
+            ``NaN`` operand without materialising a fresh constant on every level.
     """
 
     columns: tuple
+    zero: Any
 
 
 class BaseConn(BaseGene):
@@ -157,7 +160,10 @@ class BaseConn(BaseGene):
 
         Loop-invariant work hoisted out of the unrolled level/tick loop: the gathered
         edge attributes do not change while a forward pass runs, so the per-column reads
-        and the NaN cleaning belong here, not in the family's ``forward``.
+        and the NaN cleaning belong here, not in the family's ``forward``. Each column is
+        read **once** (a second ``column`` call would emit its ``slice`` + ``reshape``
+        pair again) and the ``0`` the cleaning writes is a single rank-0 constant shared
+        by every column.
 
         The default policy is "a NaN attribute means an absent (padding) row, so it reads
         as ``0``", which is what the pre-rewrite library did in every family; a family
@@ -183,12 +189,12 @@ class BaseConn(BaseGene):
                 f"{type(self).__name__} reads {self.attr_width} attribute column(s) but "
                 f"the payload carries {width}"
             )
-        return ConnOperands(
-            tuple(
-                evoxc.select(evoxc.isnan(column(attrs, index)), 0.0, column(attrs, index))
-                for index in range(width)
-            )
-        )
+        zero = enp.zeros((), dtype=evoxc.float32)
+        columns = []
+        for index in range(width):
+            values = column(attrs, index)
+            columns.append(evoxc.select(evoxc.isnan(values), zero, values))
+        return ConnOperands(tuple(columns), zero)
 
     def column_of(self, attrs: Any, name: str) -> evoxc.SymbolicTensor:
         """Read one named attribute column of a raw batch or of a prepared bundle.

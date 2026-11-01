@@ -10,7 +10,6 @@ This file declares the weight table and the NaN-safe message; it must not import
 from typing import Any
 
 import evoxc
-import evoxc.numpy as enp
 import sympy as sp
 
 from ....common import State
@@ -171,8 +170,7 @@ class DefaultConn(BaseConn):
             select(isnan(weight), 0, weight)`` per slot.
         """
         prepared = attrs if isinstance(attrs, ConnOperands) else self.prepare(attrs)
-        zero = enp.zeros((), dtype=evoxc.float32)
-        safe_source = evoxc.select(evoxc.isnan(source_values), zero, source_values)
+        safe_source = evoxc.select(evoxc.isnan(source_values), prepared.zero, source_values)
         return evoxc.multiply(safe_source, prepared.columns[self.attr_index("weight")])
 
     def sympy_func(

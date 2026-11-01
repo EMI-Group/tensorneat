@@ -50,6 +50,58 @@ def column(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
     return evoxc.reshape(tensor[slicer], tuple(tensor.shape[:-1]))
 
 
+def option_masks(
+    ids: evoxc.SymbolicTensor, count: int
+) -> tuple[evoxc.SymbolicTensor, ...]:
+    """Precompute the per-option ``ids == index`` masks of one option dispatch.
+
+    The dispatchers in :mod:`tensorneat.common.functions`
+    (:func:`~tensorneat.common.functions.apply_activation` and
+    ``apply_aggregation``) rebuild ``equal(ids, index)`` -- plus the ``int32`` cast of
+    ``ids`` -- on every call, and a gene calls them once per unrolled forward level even
+    though a gene row's option ids are loop-invariant. A gene that hoists the dispatch
+    into its ``prepare`` builds these masks once per forward pass and then selects with
+    :func:`select_cascade`, which is one op fewer per option per level.
+
+    Args:
+        ids: ``(...) int32`` option ids of the gene rows (already cast).
+        count: Number of configured options.
+
+    Returns:
+        One ``bool`` mask per option index, in dispatch order.
+    """
+    return tuple(evoxc.equal(ids, index) for index in range(count))
+
+
+def select_cascade(
+    masks: Sequence[evoxc.SymbolicTensor],
+    branches: Sequence[evoxc.SymbolicTensor],
+    otherwise: evoxc.SymbolicTensor,
+) -> evoxc.SymbolicTensor:
+    """Select per element among precomputed option branches, one ``select`` per option.
+
+    The mask form of the cascade in :mod:`tensorneat.common.functions`: same ops in the
+    same order, except that the per-option equality and the id cast were hoisted into the
+    caller's ``prepare`` (:func:`option_masks`). The branches are still the registry
+    kernels, so no numeric kernel is re-implemented here.
+
+    Args:
+        masks: One ``(...) bool`` mask per option, from :func:`option_masks`.
+        branches: The value of each option, ``(...)``, in the same order as ``masks``.
+        otherwise: Value where no mask matches, i.e. the dispatcher's initial value --
+            ``z`` itself for an activation, ``0`` for an aggregation. An id outside the
+            option list matches no mask, so it keeps this value exactly as
+            ``apply_activation`` / ``apply_aggregation`` do.
+
+    Returns:
+        ``(...)`` values: ``branches[i]`` where ``masks[i]``, else ``otherwise``.
+    """
+    out = otherwise
+    for mask, branch in zip(masks, branches):
+        out = evoxc.select(mask, branch, out)
+    return out
+
+
 def hash_int32(keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
     """Reduce the integer key columns of a gene row to one xor-mixed row hash.
 
