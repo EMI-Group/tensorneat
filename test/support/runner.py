@@ -103,9 +103,11 @@ def _split_arg(value: Any) -> tuple[Any, Any]:
         return spec_like(value), tensor(value)
     if isinstance(value, tuple):
         pairs = [_split_arg(item) for item in value]
-        return type(value)(*(build for build, _ in pairs)), type(value)(
-            *(run for _, run in pairs)
-        )
+        builds = tuple(build for build, _ in pairs)
+        runs = tuple(run for _, run in pairs)
+        if type(value) is tuple:  # a plain tuple is not rebuilt by calling its type
+            return builds, runs
+        return type(value)(*builds), type(value)(*runs)
     if isinstance(value, list):
         pairs = [_split_arg(item) for item in value]
         return [build for build, _ in pairs], [run for _, run in pairs]
@@ -221,7 +223,10 @@ def to_numpy(value: Any) -> Any:
     if isinstance(value, evoxc.Tensor):
         return value.numpy()
     if isinstance(value, tuple):
-        return type(value)(*(to_numpy(item) for item in value))
+        items = [to_numpy(item) for item in value]
+        if type(value) is tuple:  # a plain tuple is not rebuilt by calling its type
+            return tuple(items)
+        return type(value)(*items)
     if isinstance(value, list):
         return [to_numpy(item) for item in value]
     if isinstance(value, dict):
