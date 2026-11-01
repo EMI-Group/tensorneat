@@ -59,6 +59,7 @@ class DefaultGenome(BaseGenome):
         init_hidden_layers: Sequence[int] = (),
         max_in_degree: int | None = None,
         max_depth: int = 16,
+        key_span: int | None = None,
     ):
         """Configure a feedforward genome with NEAT-python default genes and operators.
 
@@ -91,6 +92,10 @@ class DefaultGenome(BaseGenome):
                 ``max(initial in-degree, 4)``.
             max_depth: Static depth unroll count ``D``; deeper networks leave their unreachable
                 tail NaN (and raise ``Transformed.overflow``).
+            key_span: Static key bound ``S`` of the schedule's dense key table; ``None``
+                resolves to ``max(max_nodes, num_inputs + num_outputs) + max_conns``. A caller
+                that allocates structural keys beyond that default (the mutation operators take
+                caller-allocated keys) must raise it here.
 
         Raises:
             TensorNEATError: If ``max_nodes``/``max_conns`` cannot hold the initial network, if
@@ -113,6 +118,7 @@ class DefaultGenome(BaseGenome):
             init_hidden_layers=init_hidden_layers,
             max_in_degree=max_in_degree,
             max_depth=max_depth,
+            key_span=key_span,
         )
 
     def forward(
@@ -136,7 +142,9 @@ class DefaultGenome(BaseGenome):
            leaves every other row at the ``NaN`` padding value, instead of a ``(P, N)`` mask.
         2. ``hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs)`` **once**: edge
            attributes are constant during a forward pass, so the per-slot gather is hoisted out
-           of the loop.
+           of the loop. The attribute rows of absent nodes are rewritten to ``0`` in the same
+           one-off step (``self._padding_safe_attrs``): the node gene casts its option-index
+           columns to ``int32``, and those rows are never read back into ``values``.
         3. ``for level in range(1, self.max_depth + 1)`` (a Python loop, hence unrolled at trace
            time): ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs,
            values, update_mask=(transformed.node_level == level) & transformed.node_exists &
@@ -180,6 +188,10 @@ class DefaultGenome(BaseGenome):
             ],
             axis=1,
         )
+        # Absent rows read as ``0`` instead of ``NaN`` before the level loop: their option
+        # index columns are cast to ``int32`` by the node gene, and a ``NaN``-to-int cast is a
+        # warning (and a garbage id) even though those rows never reach ``values``.
+        node_attrs = self._padding_safe_attrs(node_attrs, node_keys)
         hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs)
         for level in range(1, self.max_depth + 1):
             # One level per unrolled step: the "has a live incoming slot" term is ANDed in by

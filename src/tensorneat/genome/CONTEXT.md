@@ -20,6 +20,7 @@ Padding sentinels never mix: `I_INF` (`int32` max) for "no index", float NaN for
 ## Genome API (batch-first, population on axis 0)
 `BaseGenome` holds host-side configuration (`num_inputs`, `num_outputs`, `max_nodes`, `max_conns`, `max_in_degree`, `max_depth`, `key_span`, transforms, `init_hidden_layers`) and the gene/operator objects; nothing on the compute path reads `State`.
 `key_span` (`S`, default `max(max_nodes, num_inputs + num_outputs) + max_conns`) bounds every node key: keys must lie in `[0, S)`, a caller allocating larger keys must raise it, and `S` is part of the Pipeline's shape signature.
+`DefaultGenome`/`RecurrentGenome` accept `key_span=` explicitly (last keyword before super) so `algorithm/` can raise it past the default for its own structural-key allocation.
 `node_exists`, `conn_exists`, `max_node_key`, `max_conn_marker` are the thin in-graph helpers `algorithm/` calls; `execute_mutation`/`execute_crossover`/`execute_distance`/`transform` accept both the `GenomeTensors` payload and the positional four-array spelling.
 The shared window step is `_hit_conn_attrs` + `_node_step` + `_output_values`, and `_gather_slots` is the flat-index gather both use (one-dimensional indices, because evoxc's scatter VJP requires equal ranks).
 - `initialize(state, key, pop_size) -> GenomeTensors` — `key` is a rank-0 `evoxc.random` key and randomness is drawn once per tensor with the batched output shape, so individual `i` gets an independent stream from one call.
@@ -29,7 +30,7 @@ The shared window step is `_hit_conn_attrs` + `_node_step` + `_output_values`, a
 - `execute_mutation(state, key, genome, new_node_keys (P,), new_conn_keys (P,3)) -> GenomeTensors`
 - `execute_crossover(state, key, genome1, genome2) -> GenomeTensors`
 - `execute_distance(state, genome1, genome2) -> (P,)` — pairwise, batched over pairs; the algorithm forms the pairs.
-- Host-only (NumPy in, Python out, never traced): `network_dict`, `sympy_func`, `visualize`, `repr`, `hash`, `get_input_idx`, `get_output_idx`.
+- Host-only (NumPy in, Python out, never traced): `network_dict`, `sympy_func`, `visualize`, `repr`, `hash`, `get_input_idx`, `get_output_idx` — the non-`sympy_func`/`visualize` ones live in `host.py::BaseGenomeHost`, so each takes **one** individual: `_individual` raises `TensorNEATError` telling the caller to slice first, e.g. `GenomeTensors(*(a[i:i+1] for a in payload))` (there is no `payload.of(i)`).
 `GenomeTensors` is a namedtuple-like pytree of exactly the four payload arrays; every kernel takes and returns it by field, never by column offsets.
 Structural mutation keys (`new_node_keys`, `new_conn_keys`) are **allocated by the caller** (globally unique across the population) and passed in as int32 tensors — they are not RNG draws.
 
@@ -45,6 +46,7 @@ Per-population, batch-first, static shapes; field names are a binding contract w
 
 ## Forward algebra (feedforward)
 `values (P, max_nodes) float32`, all NaN except the input rows, which hold `input_transform(inputs)`.
+Step 0 (both genomes): `node_attrs = self._padding_safe_attrs(node_attrs, node_keys)` replaces the attrs of **absent** rows with `0` via `select`, so the option-index columns (`activation`, `aggregation`) never reach the int cast as NaN (that cast emitted `RuntimeWarning: invalid value encountered in cast`); a NaN *value* column of a live row is untouched, so real corruption still poisons as documented.
 Unroll depth in **Python** (`for l in range(1, max_depth+1)`) — never `scan`/`while_loop`/`cond`, which evoxc cannot batch or differentiate.
 Per level:
 1. `xv = gather(values_flat, in_src_flat) -> (P, max_nodes, K)`; `live = in_valid & ~isnan(xv)`; `xs = select(live, xv, 0)` — the NaN→0 sanitization is mandatory before any differentiable op, because a zeroed cotangent multiplied by a NaN local derivative still yields NaN.
@@ -60,6 +62,7 @@ Measured budget (numpy backend, `P=1000`, `max_nodes=50`, `K=2`, ~20 ops per lev
 Same window machinery, no levels: unroll `activate_time` ticks in Python.
 Each tick: re-inject `input_transform`-free inputs into the input rows, compute every node from the previous tick's values (Jacobi/synchronous), then `values = select(node_exists & valid_count > 0, z, values)`.
 `input_transform` is **not** applied by `RecurrentGenome` (legacy parity; HyperNEAT uses it as a CPPN).
+`RecurrentGenome.sympy_func`/`visualize` are documented refusals: a cyclic network has no finite closed form and the layered layout assumes a depth-ordered DAG, so both raise `TensorNEATError` naming that reason and pointing at `network_dict()` / `DefaultGenome` (never a bare `NotImplementedError` stub).
 
 ## Gradient algebra
 No control-flow (region) op exists in the forward, so reverse-mode works; but three evoxc rules shape the API:
@@ -86,6 +89,7 @@ Instead `grad` differentiates a mathematically identical **dense** pass built be
 - Integer arithmetic: an `int32` tensor plus a Python literal promotes to `int64` in evoxc, so index math stays in int32 tensors.
 - Errors: configuration violations raise `../common/errors.TensorNEATError`; tensor/backend errors from evoxc propagate unchanged — never caught and re-wrapped.
 - Files ≤ ~1000 lines; shared machinery (one window-reduce node step) lives in `base.py` and is parameterized by the update mask, never duplicated between `default.py` and `recurrent.py`.
+- File-size outcome: `base.py` 1568 lines (~1000 without the contract docstrings) had two responsibilities — tensor kernels and NumPy-in/Python-out introspection — so the host half moved to `host.py` (`BaseGenomeHost`, inherited by `BaseGenome`; every public name unchanged). The remaining `base.py` size is one job (the kernel contract) plus its docstrings; `gene/base.py` (801), `utils.py` (640) and the mutation files (≤573) are under budget.
 
 ## Deviations from the pre-rewrite library (intentional)
 - `activation == -1` means **identity** everywhere; the legacy `lax.switch(-1, ...)` clamped to the last option, so `BiasNode` split nodes silently used the wrong activation.
@@ -120,10 +124,11 @@ Cost of the exact path on the numpy backend (`P=1000`, `max_nodes=50`, `max_conn
 | `./operations/mutation/` | Structural (add/delete node, add/delete conn) and value mutation, `DefaultMutation` and `RecurrentMutation`. |
 | `./operations/crossover/` | Key-alignment crossover (`DefaultCrossover`). |
 | `./operations/distance/` | Compatibility distance (disjoint/excess + attribute distance). |
-| `./base.py` | `BaseGenome`: configuration, `initialize`, the shared window-reduce node step, `grad` factory, host-only helpers. |
+| `./base.py` | `BaseGenome`: configuration, `initialize`, the shared window-reduce node step, `grad` factory, `_padding_safe_attrs`, abstract `sympy_func`/`visualize` hooks (1568 lines, ~1000 code lines after the docstrings). |
+| `./host.py` | `BaseGenomeHost` mixin: host-only helpers (`network_dict`, `_get_node_dict`, `_get_conn_dict`, `repr`, `hash`, `_row_hashes`, `get_input_idx`, `get_output_idx`, `_individual`), `HASH_QUANT_SCALE`, `_row_slice` (348 lines). |
 | `./default.py` | `DefaultGenome`: depth-unrolled level-synchronous forward. |
 | `./recurrent.py` | `RecurrentGenome`: tick-unrolled Jacobi forward. |
-| `./utils.py` | Batched genome-array editing helpers (`add_node`, `add_conn`, `delete_*`, `first_free_row`, `fetch_random_index`) and host-only display helpers. |
+| `./utils.py` | (640 lines) Batched genome-array editing helpers (`add_node`, `add_conn`, `delete_*`, `first_free_row`, `fetch_random_index`) and host-only display helpers. |
 
 Out of node but required: `../common/tensorization.py` (`build_schedule` → `Transformed`), `../common/functions/` (`ACT`/`AGG`, `apply_activation`, `apply_aggregation` with `-1` = identity), `../common/tools.py` (`I_INF`), `../common/state.py` (`State`), `../common/errors.py` (`TensorNEATError`).
 Consumers: `../algorithm/neat/` (`ask`/`transform`/`forward`/`tell`), `../algorithm/hyperneat/` (`RecurrentGenome` as CPPN), `../pipeline.py` (compile site, per-shape executable cache).
