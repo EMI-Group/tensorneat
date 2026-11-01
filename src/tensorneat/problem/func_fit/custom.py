@@ -67,7 +67,53 @@ class CustomFuncFit(FuncFit):
                 ``low_bounds.shape != upper_bounds.shape``, or if
                 ``func(low_bounds)`` raises.
         """
-        raise NotImplementedError
+        low = np.asarray(low_bounds, dtype=np.float32)
+        high = np.asarray(upper_bounds, dtype=np.float32)
+        if low.shape != high.shape:
+            raise TensorNEATError(
+                f"low_bounds.shape {low.shape} must equal upper_bounds.shape "
+                f"{high.shape}"
+            )
+        try:
+            func(low)
+        except Exception as exc:  # noqa: BLE001 - re-raised as a config error
+            raise TensorNEATError(
+                f"func(low_bounds) raised {type(exc).__name__}: {exc}"
+            ) from exc
+        if method not in {"sample", "grid"}:
+            raise TensorNEATError(
+                f"method must be 'sample' or 'grid', got {method!r}"
+            )
+        if num_samples <= 0:
+            raise TensorNEATError(
+                f"num_samples must be positive, got {num_samples}"
+            )
+        if method == "grid":
+            if step_size is None:
+                raise TensorNEATError(
+                    "step_size must be provided when method is 'grid'"
+                )
+            step = np.asarray(step_size, dtype=np.float32)
+            if step.shape != low.shape:
+                raise TensorNEATError(
+                    f"step_size must have the same shape as the bounds "
+                    f"{low.shape}, got {step.shape}"
+                )
+            if not np.all(step > 0):
+                raise TensorNEATError(
+                    f"step_size must be strictly positive, got {step}"
+                )
+            self.step_size = step
+        else:
+            self.step_size = step_size
+        self.func = func
+        self.low_bounds = low
+        self.upper_bounds = high
+        self.method = method
+        self.num_samples = num_samples
+        self.seed = seed
+        self.generate_dataset()
+        super().__init__(error_method=error_method)
 
     def generate_dataset(self) -> None:
         """Build the ``(S, I)`` inputs and ``(S, O)`` targets on the host.
@@ -86,7 +132,31 @@ class CustomFuncFit(FuncFit):
             ``None``; the arrays are stored on the instance for ``inputs`` and
             ``targets``.
         """
-        raise NotImplementedError
+        if self.method == "sample":
+            generator = np.random.default_rng(self.seed)
+            inputs = generator.uniform(
+                low=self.low_bounds,
+                high=self.upper_bounds,
+                size=(self.num_samples, self.low_bounds.shape[0]),
+            )
+        else:
+            inputs = np.zeros((1, 1))
+            for axis in range(self.low_bounds.shape[0]):
+                grid = np.arange(
+                    self.low_bounds[axis],
+                    self.upper_bounds[axis],
+                    self.step_size[axis],
+                )
+                inputs = cartesian_product(inputs, grid[:, None])
+            inputs = inputs[:, 1:]
+        inputs = np.asarray(inputs, dtype=np.float32)
+        targets = np.asarray(
+            np.apply_along_axis(self.func, -1, inputs), dtype=np.float32
+        )
+        if targets.ndim == 1:
+            targets = targets[:, None]
+        self._inputs = inputs
+        self._targets = targets
 
     @property
     def inputs(self) -> np.ndarray:
@@ -95,7 +165,7 @@ class CustomFuncFit(FuncFit):
         Returns:
             Float32 array with one row per sample.
         """
-        raise NotImplementedError
+        return self._inputs
 
     @property
     def targets(self) -> np.ndarray:
@@ -104,7 +174,7 @@ class CustomFuncFit(FuncFit):
         Returns:
             Float32 array with one row per sample.
         """
-        raise NotImplementedError
+        return self._targets
 
     @property
     def input_shape(self) -> tuple[int, ...]:
@@ -113,7 +183,7 @@ class CustomFuncFit(FuncFit):
         Returns:
             The number of bounds, without the sample axis.
         """
-        raise NotImplementedError
+        return (int(self.low_bounds.shape[0]),)
 
     @property
     def output_shape(self) -> tuple[int, ...]:
@@ -122,7 +192,7 @@ class CustomFuncFit(FuncFit):
         Returns:
             The shape ``func`` returns for one point, without the sample axis.
         """
-        raise NotImplementedError
+        return (int(self._targets.shape[1]),)
 
 
 def cartesian_product(arr1: np.ndarray, arr2: np.ndarray) -> np.ndarray:
@@ -137,9 +207,21 @@ def cartesian_product(arr1: np.ndarray, arr2: np.ndarray) -> np.ndarray:
         arr2: Array of shape ``(n2, k2)`` with ``arr1.ndim == arr2.ndim``.
 
     Returns:
-        Array of shape ``(n1 * n2, k1 + k2)`` holding every pair of rows.
+        Array of shape ``(n1 * n2, k1 + k2)`` holding every pair of rows. Rank-1
+        inputs are treated as single columns, so the result is
+        ``(n1 * n2, 2)``.
 
     Raises:
         AssertionError: If the inputs disagree in rank or exceed rank 2.
     """
-    raise NotImplementedError
+    arr1 = np.asarray(arr1)
+    arr2 = np.asarray(arr2)
+    assert arr1.ndim == arr2.ndim, "arr1 and arr2 must have the same number of dimensions"
+    assert arr1.ndim <= 2, "arr1 and arr2 must have at most 2 dimensions"
+    len1 = arr1.shape[0]
+    len2 = arr2.shape[0]
+    repeated_arr1 = np.repeat(arr1, len2, axis=0)
+    if arr1.ndim == 1:
+        return np.stack([repeated_arr1, np.tile(arr2, len1)], axis=1)
+    tiled_arr2 = np.tile(arr2, (len1, 1))
+    return np.concatenate((repeated_arr1, tiled_arr2), axis=1)
