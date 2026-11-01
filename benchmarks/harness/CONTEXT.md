@@ -14,6 +14,9 @@ The CLI writes one JSON document to `--json` and hands the same dict to the repo
 `meta` carries `env`, `cases`, `impls`, `backends`, `protocol` (generations/warmup/repeats/seed/threads/timeout), `command`, `case_matrix` (each case's `as_dict()`) and the paths.
 `reporter.render_report(doc) -> str` and `reporter.write_report(doc, path)` are the only consumers; the reporter is presentation only and reuses `protocol.comparisons` / `doc["verdict"]` instead of recomputing verdicts.
 `protocol.short_error(text)` is the single error summariser: it keeps the exception line of a traceback (not `Traceback (most recent call last):`) and is used by `aggregate`, `verdict`, the CLI progress line and the reporter.
+Paths in the report are repo-relative (`_display_path`): `meta.json_path`/`meta.out_path` and the interpreter recorded in `meta.command` drop the worktree prefix when they sit inside the checkout and fall back to the basename otherwise, so a committed `RESULTS.md` never names the machine that produced it.
+The `## How to reproduce` block therefore starts with the portable `python benchmarks/run_benchmark.py <flags...>` and states the interpreter that actually ran on its own line.
+The case matrix is one table (family, problem, pop, timed generations, target, and `yes`/`not run`/`n/a` per implementation); the verdict section drops protocol's per-case "no verdict" reasons and keeps the error rows, the `Sub-verdicts` line and the closing `N run(s) not ok` line.
 The worker redirects stdout/stderr for `prepare`, the warmup and the timed loop; the quality curve covers warmup + timed generations, so the new side's build generation (excluded by `generations_consumed_before_timing`) is the only index the two sides do not share.
 ## Adapter Contract
 ```python
