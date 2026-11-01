@@ -66,7 +66,9 @@ Measured on the numpy backend (build excluded, `evoxc.run` median of 7, single-t
 | `P=500` | 2.42 ms | 13.24 ms | 1.66 ms |
 | `P=1000` | 3.78 ms | 24.75 ms | 3.09 ms |
 
-Build (trace + lower + compile) costs 50–180 ms per shape signature, once per shape.
+Build (trace + lower + compile) costs 50–180 ms per shape.
+Schedule + forward per generation, measured on the same box (`P=1000`, `max_nodes=50`, `max_conns=100`, 96 live edges, depth 8, build excluded, median of 7 `evoxc.run`): `K=2` → `transform` 40.6 ms + `forward` 24.8 ms = 65.4 ms; `K=4` (the default `max_in_degree` of a 2-input genome) → 47.6 + 30.4 = 78.0 ms; `P=100` → 8.2 + 4.8 ms at `K=2`.
+The forward scales linearly in `max_depth`, so the default `max_depth=16` roughly doubles the figures above for a genome whose real depth is smaller — `max_depth` is a genuine cost knob the Pipeline owner may lower per problem.
 The step now emits **35 traced ops per level** (was 44): the in-scope share is 13 — flatten+gather+reshape of the value window (3), `isnan`+`logical_and` liveness (2), conn-gene `isnan`/`select`/`multiply` (3), node `combine` (2), and `logical_and`+`reduce_max`+`select` for the update (3) — leaving ≈22 ops per level in `../common/functions/` and `default.py`'s level mask, which is why the ≈14 ms target is out of this node's reach.
 Remaining hot spots, all outside this node: `apply_activation`'s per-option `equal`+`select` cascade and its `cast` of ids (≈7 ops, `common/functions/act.py`), `apply_aggregation`'s per-option `equal`+`select` plus its `has_valid` guard and ids cast (≈8 ops, `common/functions/agg.py`), and `default.py`'s per-level `node_level == l` mask (3 ops).
 
