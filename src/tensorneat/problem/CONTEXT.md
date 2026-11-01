@@ -12,7 +12,7 @@ A problem is pure host-side configuration (`StatefulBaseClass`) plus plain-Pytho
 - `act_fn(batch, *input_shape) -> (batch, *output_shape)` with population/batch on axis 0; `batch` may be `P * S` (func fit tiles the dataset) or `P * R` (rollout repeats), not necessarily `P`.
 - `transformed` is the batch-first execution schedule from `Genome.transform`; the only thing a problem may read from it is `static_batch_size(transformed)` (schema-agnostic: the static leading dim of its leaves), because problems cannot otherwise know `P`.
 - `input_shape` / `output_shape` are **per-sample** shapes (`XOR` → `(2,)` / `(1,)`), so `input_shape[-1]` equals `algorithm.num_inputs`; legacy problems returned dataset-shaped tuples — that convention is gone.
-- `setup(self, state=State()) -> State` is inherited from `StatefulBaseClass`; no shipped problem registers keys today, `state` exists for protocol uniformity (and for user problems that need normalization stats).
+- `setup(self, state: State | None = None) -> State` is inherited from `StatefulBaseClass` and only returns the incoming `State` (or a fresh `State()`), so no shipped problem registers a key; `state` exists for protocol uniformity (and for user problems that need normalization stats).
 - `show(self, state, key, act_fn, transformed)` is **host-side** (never called from a trace): it evaluates a batch of one and prints a human-facing report.
 - `show_details(self, state, key, act_fn, transformed)` is a host-side no-op hook called by `Pipeline.auto_run` when `show_problem_details=True`.
 - `finalize_fitness(fitness)` maps NaN → `-inf` and is applied by every problem, so a network that poisons itself with NaN can never win selection.
