@@ -63,7 +63,7 @@ A problem is pure host-side configuration (`StatefulBaseClass`) plus plain-Pytho
 ## Known Issues
 - `show(state, key, act_fn, transformed)` builds its own one-individual graph, so the `act_fn` it receives must be a predictor over **traced** tensors (`act_fn(batch)` with the schedule bound inside the same trace).
   A `Pipeline.show` that passes a host-bound `functools.partial(algorithm.forward, state, transformed, payload)` therefore fails with `evoxc.TraceError: Concrete Tensor operands are not allowed in graph ops`; the pipeline must build the transform → forward graph itself or hand over a schedule-parametric predictor.
-- `FuncFit.setup`/`CartPole.setup` still come from `common.stateful_class.StatefulBaseClass.setup`, which is a skeleton while `common` is implemented (no shipped problem registers keys, so `evaluate` never calls it).
+- `FuncFit.setup`/`CartPole.setup` are the inherited `common.stateful_class.StatefulBaseClass.setup`, which returns the state unchanged and registers nothing (no shipped problem registers keys, so `evaluate` never calls it).
 
 ## Notes for Agents
 - CartPole cost is interpreter-bound on numpy and horizon-bound on iree: a measured `max_step=500` scan with a toy linear `(B,4)->(B,2)` policy costs ≈180 ms per `evaluate` at `P=100` and ≈315 ms at `P=1000` on the numpy reference backend, versus ≈24 ms at `P=100` and ≈310 ms at `P=1000` with `backend="iree"` (llvm-cpu, build ≈1.3 s per shape); a real genome forward is heavier per step than the toy policy.
