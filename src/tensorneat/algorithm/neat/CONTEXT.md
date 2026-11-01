@@ -98,12 +98,13 @@ Keys are rank-0 scalars, so a batched kernel takes one key and draws its own pop
 `common`: `State` (immutable, `register`/`update`/`registered_keys`), `StatefulBaseClass`, `errors.TensorNEATError`, `tools.{rank_elements, fetch_first, argmin_with_mask, flat_gather, to_numpy}`.
 `pipeline`: creates `randkey` with `evoxc.random.key(seed)`, calls `setup` on the host, drives `ask → transform → forward/evaluate → tell`, and calls `show_details` on host-readable values.
 
-## Measured Cost (numpy backend, stand-in genome, this repo)
-`NEAT.setup` (init kernel build + run): 21 ms at `P=100`, 23 ms at `P=500`.
-`NEAT.tell` graph build: 307–338 ms across runs, at both `P=100` and `P=500` (one graph per shape, cached by the pipeline).
-`NEAT.tell` execution: 11.4–12.0 ms/generation at `P=100` (5 generations), 12.7–13.4 ms at `P=500` (3 generations).
-The near-flat scaling shows the cost is per-op interpreter overhead plus the stand-in genome's `execute_distance`, which runs `2 × species_size` whole-population comparisons per generation; the real genome's edge-proportional distance should lower both.
-`_sanitize_fitness` alone: 0.037 ms. `speciate` alone: 8.7 ms at `P=100`, 9.2 ms at `P=500`. `update_species` alone: ~1.0–1.2 ms.
+## Measured Cost (numpy backend, real `DefaultGenome(max_nodes=50, max_conns=100)`, XOR, `species_size=20`, this repo)
+Whole `Pipeline.step` (one graph, build cached by the pipeline): 313 ms/generation at `P=100`, 1024 ms at `P=500`, 2157 ms at `P=1000`; the first step additionally pays a 4.3 / 5.5 / 7.3 s graph build.
+Phase split at `P=100` / `P=500`: evaluation (`transform` + `forward` + `evaluate`) 48 / 232 ms, `tell` 289 / 1002 ms — `tell` is 71 % / 81 % of the generation.
+Inside `tell` at `P=100` / `P=500`: `speciate` 223 / 614 ms, crossover + mutation + elite select 33 / 89 ms, `update_species` (species fitness, stagnation, sort, spawn, pairing) 1.2 / 1.6 ms.
+`execute_distance` for one broadcast centre against the whole population: 5.7 / 17.1 ms, so `speciate`'s ~`2 × species_size` passes account for its whole cost — the distance kernel is genome-owned, and the pass count is this node's.
+`NEAT.setup` (init kernel build + run): 40 / 38 / 47 ms at `P=100` / `500` / `1000`.
+The legacy JAX baseline is 51 / 109 / 157 ms per generation, so the cycle is 6–14× over budget at the configuration above in this node.
 
 ## Known Issues
 `next_species_key` must stay strictly greater than every live key; `setup` seeds it at `1.0` (slot 0 uses `0.0`) and each created species increments it, so the invariant holds as long as the counter is never rebound by hand — a colliding counter silently merges two species' `member_count`.
