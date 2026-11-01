@@ -51,14 +51,12 @@ class OriginConn(DefaultConn):
         Returns:
             Child attribute rows, ``(*shape, attr_width)`` float32, each row copied
             verbatim from one parent.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
         """
-        raise NotImplementedError(
-            "one scalar draw per gene row (broadcast over attr_width) selects the whole "
-            "attribute vector from attrs1 or attrs2"
+        batch_shape = tuple(attrs1.shape[:-1])
+        draw = evoxc.random.normal(
+            key, (*batch_shape, 1), 0.0, 1.0, dtype=evoxc.float32
         )
+        return evoxc.select(evoxc.greater(draw, 0.0), attrs1, attrs2)
 
     def get_historical_marker(
         self, state: State, key_row: evoxc.SymbolicTensor
@@ -74,55 +72,5 @@ class OriginConn(DefaultConn):
             ``(*shape,)`` int32 historical markers, compared exactly (never a float
             attribute), which is what makes crossover/distance alignment an integer
             match.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
         """
-        raise NotImplementedError("return key column 2 -> (*shape,) int32 historical markers")
-
-    def repr(
-        self,
-        state: State,
-        key_row: evoxc.SymbolicTensor,
-        attr_row: evoxc.SymbolicTensor,
-        precision: int = 2,
-    ) -> str:
-        """Render one connection gene as ``in / out / historical_marker / weight``.
-
-        Args:
-            state: Host configuration container.
-            key_row: ``(3,)`` int32 key columns of a single gene.
-            attr_row: ``(1,)`` float32 attribute columns of the same gene.
-            precision: Decimal places for the weight.
-
-        Returns:
-            A single-line description, e.g.
-            ``OriginConn(in: 1, out: 4, historical_marker: 7, weight: 0.50)``.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
-        """
-        raise NotImplementedError("format the in/out keys, the marker and the rounded weight")
-
-    def to_dict(
-        self,
-        state: State,
-        key_row: evoxc.SymbolicTensor,
-        attr_row: evoxc.SymbolicTensor,
-    ) -> dict:
-        """Convert one connection gene to the dict used by host code generation.
-
-        Args:
-            state: Host configuration container.
-            key_row: ``(3,)`` int32 key columns of a single gene.
-            attr_row: ``(1,)`` float32 attribute columns of the same gene.
-
-        Returns:
-            ``{"in": int, "out": int, "historical_marker": int, "weight": float}``.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
-        """
-        raise NotImplementedError(
-            "map the in/out keys, the marker key column and the weight column to a dict"
-        )
+        return self.key_column(key_row, "historical_marker")

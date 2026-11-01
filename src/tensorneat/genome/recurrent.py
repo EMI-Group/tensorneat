@@ -11,11 +11,10 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import evoxc
-import evoxc.numpy as enp  # noqa: F401 - tensor creation for the implementation wave
-import numpy as np  # noqa: F401 - host-only helpers
-import sympy as sp  # noqa: F401 - declared hooks raise; kept for the shared signature
+import evoxc.numpy as enp
+import numpy as np  # host-only: the ``activate_time`` validation of the constructor
 
-from ..common import I_INF, State, TensorNEATError
+from ..common import State, TensorNEATError
 from ..common.tensorization import Transformed
 from .base import BaseGenome
 from .gene import BaseConn, BaseNode, DefaultConn, DefaultNode
@@ -27,7 +26,6 @@ from .operations import (
     DefaultDistance,
     DefaultMutation,
 )
-from .utils import GenomeTensors
 
 
 class RecurrentGenome(BaseGenome):
@@ -57,6 +55,7 @@ class RecurrentGenome(BaseGenome):
         max_in_degree: int | None = None,
         max_depth: int = 16,
         activate_time: int = 10,
+        key_span: int | None = None,
     ):
         """Configure a recurrent genome with NEAT-python default genes and operators.
 
@@ -87,17 +86,42 @@ class RecurrentGenome(BaseGenome):
                 signature matches :class:`.default.DefaultGenome`.
             activate_time: Number of synchronous ticks unrolled in the forward pass; a static
                 Python int, so changing it forces a rebuild.
+            key_span: Static key bound ``S`` of the schedule's dense key table; ``None``
+                resolves to ``max(max_nodes, num_inputs + num_outputs) + max_conns``. A caller
+                that allocates structural keys beyond that default (the mutation operators take
+                caller-allocated keys) must raise it here.
 
         Raises:
-            NotImplementedError: Skeleton stub; the per-instance default construction and the
-                ``super().__init__`` call land in the implementation wave.
-            TensorNEATError: (implementation wave) if ``activate_time`` is not a positive int
-                or the capacity invariants of the base class are violated.
+            TensorNEATError: If ``activate_time`` is not a positive int (zero ticks would read
+                out the ``NaN`` seed, a silently dead population), or if the capacity
+                invariants of the base class are violated.
+            ValueError: If any other size argument is not a positive int.
         """
-        raise NotImplementedError(
-            "build DefaultNode/DefaultConn/DefaultMutation/DefaultCrossover/DefaultDistance "
-            "per instance where the argument is None, store activate_time, then call "
-            "super().__init__"
+        if (
+            isinstance(activate_time, bool)
+            or not isinstance(activate_time, (int, np.integer))
+            or int(activate_time) < 1
+        ):
+            raise TensorNEATError(
+                f"activate_time must be a positive int, got {activate_time!r}"
+            )
+        self.activate_time = int(activate_time)
+        super().__init__(
+            num_inputs=num_inputs,
+            num_outputs=num_outputs,
+            max_nodes=max_nodes,
+            max_conns=max_conns,
+            node_gene=DefaultNode() if node_gene is None else node_gene,
+            conn_gene=DefaultConn() if conn_gene is None else conn_gene,
+            mutation=DefaultMutation() if mutation is None else mutation,
+            crossover=DefaultCrossover() if crossover is None else crossover,
+            distance=DefaultDistance() if distance is None else distance,
+            output_transform=output_transform,
+            input_transform=input_transform,
+            init_hidden_layers=init_hidden_layers,
+            max_in_degree=max_in_degree,
+            max_depth=max_depth,
+            key_span=key_span,
         )
 
     def forward(
@@ -116,18 +140,26 @@ class RecurrentGenome(BaseGenome):
         ``activate_time``:
 
         1. ``values = full((P, N), NaN)``; ``hit_conn_attrs = self._hit_conn_attrs(transformed,
-           conn_attrs)`` once, since edge attributes are constant over the ticks.
+           conn_attrs)`` once, since edge attributes are constant over the ticks, and the
+           attribute rows of absent nodes are rewritten to ``0`` in the same one-off step
+           (``self._padding_safe_attrs``) so the node gene's ``int32`` option-index cast never
+           sees a ``NaN``.
         2. ``for _ in range(self.activate_time)`` (a Python loop, unrolled at trace time):
            re-inject the raw ``inputs`` into the input rows, then
            ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs, values,
            update_mask=transformed.node_exists & (valid_count > 0))`` (``valid_count =
            reduce_sum(transformed.in_valid, axis=-1)``, the per-row live-slot count), which
            reads the *previous* tick's values for every node (Jacobi/synchronous, no in-place
-           ordering dependency).  ``input_transform`` is deliberately **not** applied — legacy parity:
-           the pre-rewrite class fed raw inputs on every tick, which is also what HyperNEAT
-           relies on when it uses this genome as a CPPN.
+           ordering dependency).  Re-injection is one ``concatenate`` of the input block with
+           the non-input rows of the previous tick, so the values computed last tick survive in
+           every non-input row.  ``input_transform`` is deliberately **not** applied — legacy
+           parity: the pre-rewrite class fed raw inputs on every tick, which is also what
+           HyperNEAT relies on when it uses this genome as a CPPN.
         3. ``return self._output_values(values, self.output_transform)`` — rows
            ``max_nodes-num_outputs..max_nodes-1`` of the last tick, then ``output_transform``.
+
+        ``node_level`` is ignored on purpose: the schedule reports ``I_INF`` for every node on
+        or downstream of a cycle, so a level-driven mask would produce an all-``NaN`` read-out.
 
         Args:
             state: Host configuration container.
@@ -141,15 +173,36 @@ class RecurrentGenome(BaseGenome):
 
         Returns:
             ``(P, num_outputs) float32`` outputs after ``output_transform``.
-
-        Raises:
-            NotImplementedError: Skeleton stub; the tick loop is pending.
         """
-        raise NotImplementedError(
-            "NaN-seed values, gather hit_conn_attrs once, unroll activate_time ticks that "
-            "re-inject the raw inputs and run _node_step with mask node_exists & "
-            "(valid_count > 0), then read out the output rows and apply output_transform"
+        pop_size, max_nodes = (int(size) for size in transformed.node_exists.shape)
+        values = enp.full((pop_size, max_nodes), float("nan"), dtype=evoxc.float32)
+        # Absent rows read as ``0`` instead of ``NaN`` before the tick loop, so the option
+        # index columns the node gene casts to ``int32`` are never NaN (see
+        # ``BaseGenome._padding_safe_attrs``).
+        node_attrs = self._padding_safe_attrs(node_attrs, node_keys)
+        hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs)
+        valid_count = enp.sum(evoxc.cast(transformed.in_valid, evoxc.int32), axis=-1)
+        update_mask = evoxc.logical_and(
+            transformed.node_exists,
+            evoxc.greater(valid_count, enp.full((), 0, dtype=evoxc.int32)),
         )
+        for _ in range(self.activate_time):
+            values = evoxc.concatenate(
+                [
+                    inputs,
+                    values[(slice(None), slice(self.num_inputs, max_nodes))],
+                ],
+                axis=1,
+            )
+            values = self._node_step(
+                state,
+                transformed,
+                node_attrs,
+                hit_conn_attrs,
+                values,
+                update_mask,
+            )
+        return self._output_values(values, self.output_transform)
 
     def sympy_func(
         self,
@@ -175,10 +228,14 @@ class RecurrentGenome(BaseGenome):
             Never returns.
 
         Raises:
-            NotImplementedError: Always — symbolic form is not defined for a recurrent genome.
+            TensorNEATError: Always — symbolic form is not defined for a recurrent genome, so
+                this rewrite keeps the pre-rewrite refusal instead of emitting a truncated
+                formula. Use ``..common.host_graph``/``network_dict`` to inspect the topology.
         """
-        raise NotImplementedError(
-            "symbolic form / visualization is not defined for a recurrent genome"
+        raise TensorNEATError(
+            f"{type(self).__name__}.sympy_func is not supported: a cyclic network has no "
+            "finite closed form, so no symbolic expression can be generated. Inspect the "
+            "topology with network_dict(), or use DefaultGenome for a feedforward genome."
         )
 
     def visualize(self, network: dict, **kwargs: Any) -> None:
@@ -195,8 +252,13 @@ class RecurrentGenome(BaseGenome):
             Never returns.
 
         Raises:
-            NotImplementedError: Always — visualization is not defined for a recurrent genome.
+            TensorNEATError: Always — the layered drawing assumes a depth-ordered feedforward
+                graph, which a cyclic network does not have; the rewrite keeps the pre-rewrite
+                refusal rather than drawing a misleading picture. Draw the topology yourself
+                from ``network_dict()``, or use ``DefaultGenome``.
         """
-        raise NotImplementedError(
-            "symbolic form / visualization is not defined for a recurrent genome"
+        raise TensorNEATError(
+            f"{type(self).__name__}.visualize is not supported: the layered layout assumes a "
+            "depth-ordered feedforward graph, which a cyclic network does not have. Build the "
+            "figure from network_dict(), or use DefaultGenome for a feedforward genome."
         )

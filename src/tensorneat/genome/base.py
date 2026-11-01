@@ -6,17 +6,19 @@ compose — ``default.py`` and ``recurrent.py`` must not duplicate it.
 Every compute method is batch-first (population on axis 0) with static shapes: no
 ``vmap``/``vectorize`` and no ``scan``/``while_loop``/``cond`` — depth and tick loops are plain
 Python ``for`` loops unrolled at trace time, which is what keeps ``evoxc.grad`` usable.
+The exact gradient path — a dense-weight twin of the window forward, needed because evoxc
+0.1.0's ``gather`` VJP does not accumulate duplicate indices — lives in ``grad.py``;
+:meth:`BaseGenome.grad` is its public entry point and delegates there.
 
 ## Cross-module contracts
 Every name below is provided by the ``common`` node and is never re-derived here.
-``../common.tensorization.build_schedule`` derives the ``Transformed`` schedule.
-``../common.functions.apply_aggregation`` is the only window-reduce kernel.
-``../common.functions.apply_activation`` is the only activation kernel.
-``../common.functions`` also provides ``ACT``, ``AGG`` and ``get_func_name``.
-``../common.tools.I_INF`` is the ``int32`` "no index" sentinel padding every key array.
-``../common.State`` and ``../common.StatefulBaseClass`` are the immutable host containers.
-``../common.errors.TensorNEATError`` is raised for every configuration violation.
-Host-only helpers: ``../common.topological_sort_python`` and ``../common.find_useful_nodes``.
+``../common.tensorization.derive_schedule`` is the only schedule derivation.
+``../common.functions.apply_activation``/``apply_aggregation`` are the only activation and
+window-reduce kernels, reached through the node gene.
+``../common.tools.I_INF`` is the ``int32`` "no index" sentinel padding every key array, and
+``../common.tools.masked_flat_gather`` is the flat-index gather used by the window step.
+``../common.State``/``StatefulBaseClass`` are the immutable host containers and
+``../common.errors.TensorNEATError`` (``ConfigError``) covers every configuration violation.
 
 ## Cost budget (measured, numpy backend)
 A forward pass costs about one unrolled level per network depth: measured 1.8 ms per level at `P=1000`, `max_nodes=50`, `K=2` with ~20 ops per level, i.e. ~14 ms for a depth-8 forward against the 157 ms legacy generation at the same population.
@@ -28,19 +30,298 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import evoxc
-import evoxc.numpy as enp  # noqa: F401 - tensor creation for the implementation wave
-import numpy as np  # noqa: F401 - host-only helpers
-import sympy as sp  # noqa: F401 - host-only code generation
+import evoxc.numpy as enp
+import numpy as np
 
-from ..common import I_INF, State, StatefulBaseClass, TensorNEATError
-from ..common.functions import apply_aggregation
-from ..common.tensorization import Transformed, build_schedule
+from ..common import (
+    I_INF,
+    State,
+    StatefulBaseClass,
+    TensorNEATError,
+    Transformed,
+    derive_schedule,
+)
 from .gene import BaseConn, BaseNode
+from .grad import build_grad
+from .host import BaseGenomeHost
 from .operations import BaseCrossover, BaseDistance, BaseMutation
-from .utils import GenomeTensors, check_cycles as _check_cycles, re_cound_idx, valid_count
+from .utils import GenomeTensors, check_cycles as _check_cycles
 
 
-class BaseGenome(StatefulBaseClass):
+# --------------------------------------------------------------------------- #
+# module-level helpers: static scalars, sentinels, host conversion
+# --------------------------------------------------------------------------- #
+
+
+def _positive_int(value: Any, name: str) -> int:
+    """Validate one positive constructor integer.
+
+    Args:
+        value: Candidate value; ``bool`` is refused because it is not a count.
+        name: Argument name used in the error message.
+
+    Returns:
+        ``value`` as a Python ``int`` (NumPy integers are normalised, so a trace never sees a
+        NumPy scalar).
+
+    Raises:
+        ValueError: If ``value`` is not an ``int``/``numpy.integer`` or is not positive — the
+            documented error for a bad size argument.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise ValueError(f"{name} must be a positive int, got {value!r}")
+    value = int(value)
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive int, got {value!r}")
+    return value
+
+
+def _i32(value: int) -> evoxc.SymbolicTensor:
+    """Rank-0 ``int32`` constant.
+
+    Written out instead of a bare Python literal because an ``int32`` tensor plus a Python
+    ``int`` promotes to ``int64`` in ``evoxc``, which would silently widen index arithmetic.
+
+    Args:
+        value: Static integer baked into the trace.
+
+    Returns:
+        Rank-0 ``int32`` tensor inside the active trace.
+    """
+    return enp.full((), int(value), dtype=evoxc.int32)
+
+
+def _slot_index(
+    idx: evoxc.SymbolicTensor,
+    mask: evoxc.SymbolicTensor,
+    row_len: int,
+) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+    """Flatten one window index table to a batch-wide gather index plus a liveness mask.
+    ``evoxc.gather`` follows ``np.take`` semantics — it splices the *whole* index shape into
+    the axis it indexes — so an index that already carries the population axis cannot gather
+    along the table's second axis. The batch-wide flat index ``p * row_len + row`` is the
+    form that works, and it keeps the gather one-dimensional.
+    Both results depend only on the schedule (``idx`` and ``mask``) and on the static
+    ``row_len``, so :meth:`BaseGenome._hit_conn_attrs` derives them once per forward pass and
+    every unrolled level reuses them instead of re-deriving them.
+    Args:
+        idx: ``(P, *block) int32`` row indices into the source table's second axis; ``I_INF``
+            (or a masked-out position) means "no slot".
+        mask: ``(P, *block) bool`` liveness of each slot.
+        row_len: ``R``, the source table's second-axis length.
+    Returns:
+        ``(flat_index, present)``: the ``(P * prod(block),)`` flat index with every absent
+        slot redirected to row ``0`` of its own individual (the backend never sees an
+        out-of-range index) and the ``(P, *block) bool`` liveness mask — block-shaped, which
+        is the shape the per-level value step ANDs against its ``isnan`` test.
+    """
+    pop_size = int(idx.shape[0])
+    block = tuple(int(size) for size in idx.shape[1:])
+    count = 1
+    for size in block:
+        count *= size
+    present = evoxc.logical_and(
+        enp.not_equal(idx, _iinf(tuple(idx.shape), idx.dtype)), mask
+    )
+    safe = evoxc.select(present, idx, enp.zeros((), dtype=idx.dtype))
+    offsets = evoxc.reshape(
+        evoxc.multiply(enp.arange(0, pop_size, dtype=evoxc.int32), _i32(row_len)),
+        (pop_size, *([1] * len(block))),
+    )
+    return evoxc.reshape(evoxc.add(safe, offsets), (pop_size * count,)), present
+def _column_index(
+    rows: evoxc.SymbolicTensor, attr_width: int
+) -> evoxc.SymbolicTensor:
+    """Widen a ``(P, N, K)`` connection-row index to every attribute column.
+    Args:
+        rows: ``(P, N, K) int32`` connection **row** index of each window slot.
+        attr_width: ``CA``, the number of attribute columns of one connection row.
+    Returns:
+        ``(P, N, K, CA) int32`` index into the flattened ``(P, E * CA)`` attribute table,
+        i.e. ``row * CA + column``.
+    """
+    pop_size, max_nodes, window = (int(size) for size in rows.shape)
+    scaled = evoxc.multiply(
+        evoxc.reshape(rows, (pop_size, max_nodes, window, 1)), _i32(attr_width)
+    )
+    return evoxc.add(
+        scaled,
+        enp.reshape(enp.arange(0, attr_width, dtype=evoxc.int32), (1, 1, 1, attr_width)),
+    )
+
+
+def _column_mask(
+    present: evoxc.SymbolicTensor, attr_width: int
+) -> evoxc.SymbolicTensor:
+    """Broadcast a ``(P, N, K)`` slot mask over the attribute columns of a connection row.
+    Args:
+        present: ``(P, N, K) bool`` liveness of each window slot.
+        attr_width: ``CA``, the number of attribute columns of one connection row.
+    Returns:
+        ``(P, N, K, CA) bool`` mask, True where the whole attribute row is real.
+    """
+    pop_size, max_nodes, window = (int(size) for size in present.shape)
+    return enp.broadcast_to(
+        evoxc.reshape(present, (pop_size, max_nodes, window, 1)),
+        (pop_size, max_nodes, window, attr_width),
+    )
+
+
+def _gather_prepared(
+    x: evoxc.SymbolicTensor,
+    flat_index: evoxc.SymbolicTensor,
+    present: evoxc.SymbolicTensor,
+    block: tuple[int, ...],
+    fill: float | None,
+) -> evoxc.SymbolicTensor:
+    """Gather one already-indexed window out of a batch-first ``(P, R)`` table.
+    The per-level half of :meth:`BaseGenome._gather_slots`: three ops (flatten the table,
+    gather, reshape back) once the index table of :func:`_slot_index` exists, plus one fill
+    ``select`` when the caller asks for one.
+    Args:
+        x: ``(P, R)`` source table (node values, or a reshaped attribute payload).
+        flat_index: ``(P * prod(block),)`` flat index from :func:`_slot_index`.
+        present: ``(P, *block) bool`` liveness mask from :func:`_slot_index`.
+        block: The window shape the result is reshaped to.
+        fill: Value written where the slot is absent, or ``None`` to leave the gathered value
+            in place — a value gather does not need the fill, because the slots it would
+            overwrite are exactly the ones its liveness mask marks dead and the aggregation
+            neutralises, whereas an attribute gather must fill NaN for the gene to clean.
+    Returns:
+        ``(P, *block)`` tensor with ``x``'s dtype.
+    """
+    pop_size, row_len = (int(size) for size in x.shape)
+    len_flat = round(int(flat_index.shape[0]) / pop_size)
+    values = evoxc.gather(evoxc.reshape(x, (pop_size * row_len,)), flat_index, axis=0)
+    if fill is not None:
+        present = evoxc.reshape(present, (pop_size * len_flat,))
+        values = evoxc.select(present, values, enp.full((), float(fill), dtype=x.dtype))
+    return evoxc.reshape(values, (pop_size, *block))
+def _iinf(shape: tuple[int, ...], dtype: Any = evoxc.int32) -> evoxc.SymbolicTensor:
+    """``I_INF`` broadcast to ``shape`` — the padding sentinel of every key array.
+
+    Args:
+        shape: Static shape of the result.
+        dtype: Integer dtype of the result.
+
+    Returns:
+        ``shape``-shaped tensor full of ``I_INF``.
+    """
+    return enp.full(tuple(shape), I_INF, dtype=dtype)
+
+
+def _constant_int32(values: Sequence[int]) -> evoxc.SymbolicTensor:
+    """Embed a host integer sequence as an in-graph ``int32`` constant.
+
+    Args:
+        values: Static integers (node keys, column indices, ...).
+
+    Returns:
+        ``(len(values),)`` ``int32`` tensor. Genuinely static data (the initial key layout,
+        the input/output key vector), never per-generation payload.
+    """
+    array = np.ascontiguousarray(np.asarray(values, dtype=np.int32))
+    return evoxc.constant(evoxc.from_numpy(array))
+
+
+def _row_slice(table: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
+    """Read one static column of a ``(P, M)`` traced table as a ``(P,)`` vector.
+
+    A slice-then-reshape instead of ``table[:, index]``: ``evoxc``'s reverse-mode rule for an
+    axis-dropping integer index has no usable cotangent shape, and the same idiom is used by
+    the gene attribute readers.
+
+    Args:
+        table: ``(P, M)`` traced tensor.
+        index: Static column index in ``[0, M)``.
+
+    Returns:
+        ``(P,)``-shaped view of column ``index``.
+    """
+    pop_size = int(table.shape[0])
+    sliced = table[(slice(None), slice(index, index + 1))]
+    return evoxc.reshape(sliced, (pop_size,))
+
+
+class _StepStatics:
+    """Loop-invariant operands of one forward pass, built once by ``_hit_conn_attrs``.
+
+    Both concrete genomes call :meth:`BaseGenome._hit_conn_attrs` once and then
+    :meth:`BaseGenome._node_step` once per unrolled level/tick with the same attribute
+    tensors. Everything that does not depend on the current node values — the gathered and
+    NaN-cleaned connection attributes, the window-gather index of the value table, its
+    present-slot mask, the output-row mask, and (filled on the first step) the prepared node
+    attributes — lives here, so the window step spends its op budget on the values instead of
+    re-deriving its own operands.
+
+    This is a plain trace-local Python object, never a graph input or output: it holds
+    ``evoxc`` tensors of the trace that created it and is not part of any pytree.
+
+    Attributes:
+        conn: ``ConnOperands`` of the gathered ``(P, N, K, CA)`` edge attributes, with the
+            NaN of the padding rows cleaned.
+        flat_index: ``(P * N * K,) int32`` flat gather index of the node-value window.
+        present: ``(P, N, K) bool`` liveness of each window slot.
+        output_rows: ``(P, N) bool``, True on the rows read out as network outputs.
+        node_attrs: The attribute tensor the prepared ``node`` was built from, so a second
+            forward pass cannot silently reuse it.
+        node: ``NodeOperands`` of ``node_attrs``; ``None`` until the first step.
+    """
+
+    __slots__ = ("conn", "flat_index", "present", "output_rows", "node_attrs", "node")
+
+    def __init__(
+        self,
+        conn: Any,
+        flat_index: evoxc.SymbolicTensor,
+        present: evoxc.SymbolicTensor,
+        output_rows: evoxc.SymbolicTensor,
+    ):
+        """Store the tensors derived once by :meth:`BaseGenome._hit_conn_attrs`.
+
+        Args:
+            conn: ``ConnOperands`` of the gathered connection attributes.
+            flat_index: Flat gather index of the node-value window.
+            present: Liveness mask of the same slots.
+            output_rows: ``(P, N) bool`` output-row mask.
+        """
+        self.conn = conn
+        self.flat_index = flat_index
+        self.present = present
+        self.output_rows = output_rows
+        self.node_attrs = None
+        self.node = None
+
+    def node_operands(
+        self, genome: "BaseGenome", node_attrs: evoxc.SymbolicTensor
+    ) -> Any:
+        """Prepared node attributes of this forward pass, built on the first step.
+
+        Args:
+            genome: The genome whose node gene reads the attributes.
+            node_attrs: ``(P, N, NA) float32`` node attributes of this pass — the same
+                tensor on every step, because attributes never change during a pass.
+
+        Returns:
+            The ``NodeOperands`` bundle of ``node_attrs``.
+
+        Raises:
+            TensorNEATError: If a step is handed a different attribute tensor than the one
+                this bundle was built from, which would silently mix two forward passes.
+        """
+        if self.node is None:
+            self.node_attrs = node_attrs
+            self.node = genome.node_gene.prepare(node_attrs, self.output_rows)
+        elif self.node_attrs is not node_attrs:
+            raise TensorNEATError(
+                "_node_step received different node attributes than the ones these step "
+                "statics were built for; derive them once per forward pass and reuse them "
+                "for every level/tick"
+            )
+        return self.node
+
+
+class BaseGenome(BaseGenomeHost, StatefulBaseClass):
     """Configuration and compute contract of one NEAT genome family.
 
     Payload (``GenomeTensors``, batch-first, static; ``P`` population, ``N`` ``max_nodes``,
@@ -54,10 +335,22 @@ class BaseGenome(StatefulBaseClass):
     ``0..num_inputs-1`` and output keys rows ``max_nodes-num_outputs..max_nodes-1``; those rows
     are never deleted or moved, so ``get_input_idx()``/``get_output_idx()`` double as row
     indices, while hidden keys are arbitrary and may move rows (compare keys, never rows).
+    Hidden keys of the initial network are contiguous with the input keys (rows
+    ``num_inputs..num_inputs+sum(init_hidden_layers)-1``), so row ``i`` holds key ``i`` for
+    every hidden node as well.
 
     ``max_in_degree`` is the static incoming-window width ``K`` (default
     ``max(initial in-degree, 4)``), ``max_depth`` the static unroll count ``D``; both are
     Python ints fixed at construction, so changing either forces a rebuild.
+
+    ``key_span`` is the static key-magnitude bound ``S`` that
+    ``common.tensorization.derive_schedule`` needs for its dense key->slot table: **every node
+    key must lie in ``[0, S)``** and ``S`` is part of the Pipeline's shape signature, so a
+    caller that allocates larger keys must raise it (or construct the genome with a larger
+    ``key_span``).  The default is the compact bound
+    ``max(max_nodes, num_inputs + num_outputs) + max_conns``, which covers the initial key
+    layout plus one allocated key per connection row; a key outside ``S`` is *not* aliased —
+    the schedule reports it as an unmatched endpoint, exactly like an unknown key.
     """
 
     network_type: str | None = None
@@ -78,16 +371,18 @@ class BaseGenome(StatefulBaseClass):
         init_hidden_layers: Sequence[int] = (),
         max_in_degree: int | None = None,
         max_depth: int = 16,
+        key_span: int | None = None,
     ):
         """Configure one genome family and derive its dense initial network.
 
         The initial network is fully connected and layered,
         ``num_inputs -> init_hidden_layers -> num_outputs``, keys assigned in layer order
-        (input keys ``0..num_inputs-1``, output keys the last ``num_outputs``) and written to
-        rows ``0..count-1`` of the payload by :meth:`initialize` together with the dense edges.
-        ``input_transform``/``output_transform`` are elementwise host callables over the last
-        axis of a ``(P, n)`` batch, probed on a ``(1, n)`` batch here so a broken transform
-        fails at construction instead of inside a trace.
+        (input keys ``0..num_inputs-1``, hidden keys continuing from there, output keys the
+        last ``num_outputs`` of the padded payload) and written to the payload by
+        :meth:`initialize` together with the dense edges.
+        ``input_transform``/``output_transform`` are elementwise evoxc graph callables over
+        the last axis of a ``(P, n)`` batch; each is probed by tracing a ``(1, n)`` graph here,
+        so a broken transform fails at construction instead of inside a later trace.
 
         Args:
             num_inputs: Input node count, also the network input width.
@@ -107,37 +402,243 @@ class BaseGenome(StatefulBaseClass):
             max_in_degree: Static window width ``K``; ``None`` resolves to
                 ``max(initial in-degree, 4)``.
             max_depth: Static depth unroll count ``D``.
+            key_span: Static key bound ``S``; ``None`` resolves to
+                ``max(max_nodes, num_inputs + num_outputs) + max_conns``.
 
         Raises:
             TensorNEATError: If ``max_nodes``/``max_conns`` cannot hold the initial network, if
-                ``init_hidden_layers`` needs an in-degree above ``max_in_degree``, or if a
-                transform probe on a ``(1, n)`` batch raises or returns a wrong shape.
+                ``init_hidden_layers`` needs an in-degree above ``max_in_degree``, if
+                ``key_span`` is below ``max_nodes``, if a gene/operator is not the expected
+                type, or if a transform probe raises or returns a wrong shape.
             ValueError: If a size argument is not a positive int.
         """
-        raise NotImplementedError(
-            "build the dense layered initial network, resolve max_in_degree/max_depth, and "
-            "probe input_transform/output_transform on a (1, n) batch"
+        self.num_inputs = _positive_int(num_inputs, "num_inputs")
+        self.num_outputs = _positive_int(num_outputs, "num_outputs")
+        self.max_nodes = _positive_int(max_nodes, "max_nodes")
+        self.max_conns = _positive_int(max_conns, "max_conns")
+        self.max_depth = _positive_int(max_depth, "max_depth")
+        hidden = tuple(
+            _positive_int(width, "init_hidden_layers entry")
+            for width in init_hidden_layers
         )
+        self.init_hidden_layers = hidden
 
-    def setup(self, state: State = State()) -> State:
+        for value, expected, name in (
+            (node_gene, BaseNode, "node_gene"),
+            (conn_gene, BaseConn, "conn_gene"),
+            (mutation, BaseMutation, "mutation"),
+            (crossover, BaseCrossover, "crossover"),
+            (distance, BaseDistance, "distance"),
+        ):
+            if not isinstance(value, expected):
+                raise TensorNEATError(
+                    f"{type(self).__name__}: {name} must be a {expected.__name__}, "
+                    f"got {type(value).__name__}"
+                )
+
+        layers = (self.num_inputs, *hidden, self.num_outputs)
+        node_count = sum(layers)
+        conn_count = sum(left * right for left, right in zip(layers, layers[1:]))
+        if node_count > self.max_nodes:
+            raise TensorNEATError(
+                f"max_nodes={self.max_nodes} cannot hold the initial network of "
+                f"{node_count} nodes ({' -> '.join(str(width) for width in layers)})"
+            )
+        if conn_count > self.max_conns:
+            raise TensorNEATError(
+                f"max_conns={self.max_conns} cannot hold the {conn_count} dense initial "
+                f"connections of {' -> '.join(str(width) for width in layers)}"
+            )
+
+        # Row/key invariant: input keys start at row 0, hidden keys continue in row order and
+        # the output keys sit at the tail of the *padded* payload (rows N-num_outputs..N-1).
+        self.input_idx = tuple(range(self.num_inputs))
+        self.output_idx = tuple(range(self.max_nodes - self.num_outputs, self.max_nodes))
+        layer_keys: list[tuple[int, ...]] = []
+        next_key = 0
+        for width in layers[:-1]:
+            layer_keys.append(tuple(range(next_key, next_key + width)))
+            next_key += width
+        layer_keys.append(self.output_idx)
+        self._layer_keys = tuple(layer_keys)
+        #: Node keys in payload row order: inputs and hidden nodes first, then the outputs.
+        self._init_node_keys = tuple(range(sum(layers[:-1]))) + self.output_idx
+        edges = [
+            (src, dst)
+            for left, right in zip(layer_keys, layer_keys[1:])
+            for src in left
+            for dst in right
+        ]
+        self._init_edges = tuple(edges)
+
+        initial_in_degree = max(len(keys) for keys in layer_keys[:-1])
+        if max_in_degree is None:
+            self.max_in_degree = max(initial_in_degree, 4)
+        else:
+            self.max_in_degree = _positive_int(max_in_degree, "max_in_degree")
+            if self.max_in_degree < initial_in_degree:
+                raise TensorNEATError(
+                    f"max_in_degree={self.max_in_degree} is below the initial in-degree "
+                    f"{initial_in_degree} of the configured network; the dense initial edges "
+                    "would not fit the static window"
+                )
+        if key_span is None:
+            self.key_span = (
+                max(self.max_nodes, self.num_inputs + self.num_outputs) + self.max_conns
+            )
+        else:
+            self.key_span = _positive_int(key_span, "key_span")
+            if self.key_span < self.max_nodes:
+                raise TensorNEATError(
+                    f"key_span={self.key_span} is below max_nodes={self.max_nodes}: the "
+                    "initial output keys occupy rows up to max_nodes - 1, which must be "
+                    "inside the schedule's key table"
+                )
+
+        self.node_gene = node_gene
+        self.conn_gene = conn_gene
+        self.mutation = mutation
+        self.crossover = crossover
+        self.distance = distance
+        self.output_transform = output_transform
+        self.input_transform = input_transform
+
+        self._probe_transform(input_transform, self.num_inputs, "input_transform")
+        self._probe_transform(output_transform, self.num_outputs, "output_transform")
+
+    def _probe_transform(
+        self, transform: Callable | None, width: int, name: str
+    ) -> None:
+        """Trace-probe an elementwise transform on a ``(1, width)`` batch.
+
+        Args:
+            transform: Optional graph callable over the last axis of a ``(1, width)`` batch.
+            width: Expected (and required) last-axis length of the probe and its result.
+            name: Argument name used in error messages.
+
+        Returns:
+            ``None``; the probe only traces, it never compiles or runs.
+
+        Raises:
+            TensorNEATError: If the transform raises while being traced or returns a shape
+                other than ``(1, width)`` — a broken transform must fail at construction, not
+                inside the generation graph.
+        """
+        if transform is None:
+            return
+        expected = (1, width)
+
+        def probe(values: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
+            out = transform(values)
+            shape = tuple(int(size) for size in out.shape)
+            if shape != expected:
+                raise TensorNEATError(
+                    f"{name} returned shape {shape} on a {expected} probe; an elementwise "
+                    "transform must preserve the batch shape"
+                )
+            return out
+
+        try:
+            evoxc.trace(probe, evoxc.TensorSpec(expected, evoxc.float32))
+        except TensorNEATError:
+            raise
+        except Exception as error:  # noqa: BLE001 - re-raised as a configuration error
+            raise TensorNEATError(
+                f"{name} failed on a {expected} probe: {error}"
+            ) from error
+
+    # ------------------------------------------------------------- host plumbing
+    def _resolve_pop_size(
+        self, state: State, pop_size: int | None, caller: str
+    ) -> int:
+        """Resolve the static population size of a kernel call.
+
+        ``pop_size`` is a static, so it is either passed explicitly or read from the
+        ``pop_size`` entry the algorithm registers on ``state``.
+
+        Args:
+            state: Host configuration container.
+            pop_size: Explicit population size, or ``None`` to read ``state.pop_size``.
+            caller: Method name used in the error message.
+
+        Returns:
+            The validated population size ``P``.
+
+        Raises:
+            TensorNEATError: If no population size is available or it is not a positive int.
+        """
+        if pop_size is None:
+            try:
+                pop_size = state.pop_size
+            except KeyError:
+                raise TensorNEATError(
+                    f"{caller} needs a static pop_size: pass it explicitly or register "
+                    "'pop_size' on the state"
+                ) from None
+        try:
+            return _positive_int(pop_size, "pop_size")
+        except ValueError as error:
+            raise TensorNEATError(f"{caller}: {error}") from error
+
+    def _split_payload(self, *arrays: Any) -> tuple[GenomeTensors, tuple]:
+        """Split a call's positional payload arguments into genes and trailing arguments.
+
+        Both spellings are accepted, because the algorithm's doc spells the operators with the
+        four arrays while ``genome/CONTEXT.md`` spells them with a ``GenomeTensors`` payload:
+
+        * ``(payload, *trailing)`` — one ``GenomeTensors`` (or a 4-tuple of the four arrays);
+        * ``(node_keys, node_attrs, conn_keys, conn_attrs, *trailing)``.
+
+        Args:
+            *arrays: The positional arguments after the ``state``/``key`` ones.
+
+        Returns:
+            ``(payload, trailing)``.
+
+        Raises:
+            TensorNEATError: If the arguments match neither spelling, or a payload leaf is not
+                the documented ``(P, ...)`` tensor.
+        """
+        if arrays and isinstance(arrays[0], GenomeTensors):
+            payload, trailing = arrays[0], tuple(arrays[1:])
+        elif len(arrays) >= 4:
+            payload, trailing = GenomeTensors(*arrays[:4]), tuple(arrays[4:])
+        else:
+            raise TensorNEATError(
+                f"{type(self).__name__}: expected a GenomeTensors payload or its four arrays "
+                f"(node_keys, node_attrs, conn_keys, conn_attrs), got {len(arrays)} argument(s)"
+            )
+        for name, value in zip(payload.field_names, payload):
+            if len(value.shape) < 2:
+                raise TensorNEATError(
+                    f"{type(self).__name__}: payload field {name} must be batch-first "
+                    f"(population on axis 0), got shape {tuple(value.shape)}"
+                )
+        return payload, trailing
+
+    # ---------------------------------------------------------------- lifecycle
+    def setup(self, state: State | None = None) -> State:
         """Register the gene/operator configuration on an immutable state.
 
         Args:
-            state: Base state to extend; never mutated in place.
+            state: Base state to extend; never mutated in place. ``None`` starts from a fresh
+                ``State()`` (a ``State()`` default argument would run at class-definition time).
 
         Returns:
             A new ``State`` after chaining ``node_gene``, ``conn_gene``, ``mutation``,
             ``crossover`` and ``distance`` setup, in that order.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
         """
-        raise NotImplementedError(
-            "chain node_gene, conn_gene, mutation, crossover, distance setup(state)"
-        )
+        state = State() if state is None else state
+        state = self.node_gene.setup(state)
+        state = self.conn_gene.setup(state)
+        state = self.mutation.setup(state)
+        state = self.crossover.setup(state)
+        state = self.distance.setup(state)
+        return state
 
+    # ----------------------------------------------------------------- payload
     def initialize(
-        self, state: State, key: evoxc.SymbolicTensor, pop_size: int
+        self, state: State, key: evoxc.SymbolicTensor, pop_size: int | None = None
     ) -> GenomeTensors:
         """Draw the initial population of dense layered networks.
 
@@ -149,40 +650,108 @@ class BaseGenome(StatefulBaseClass):
         Args:
             state: Host configuration container from :meth:`setup`.
             key: Rank-0 ``evoxc.random`` key, split internally per gene family.
-            pop_size: Static population size ``P``.
+            pop_size: Static population size ``P``; ``None`` reads ``state.pop_size``.
 
         Returns:
             ``GenomeTensors``: ``node_keys (P, N) int32`` (``I_INF`` padded, input/output rows
             at their invariant positions), ``node_attrs (P, N, NA) float32`` (NaN padded),
             ``conn_keys (P, E, CK) int32`` (``I_INF`` padded), ``conn_attrs (P, E, CA)
             float32`` (NaN padded).
-
-        Raises:
-            NotImplementedError: Skeleton stub.
-            TensorNEATError: (implementation wave) if ``pop_size`` is not a positive int.
         """
-        raise NotImplementedError(
-            "fill the invariant node rows in key order and the dense initial connections, "
-            "drawing attrs with one batched call per gene family"
+        pop_size = self._resolve_pop_size(state, pop_size, "initialize")
+        node_count = len(self._init_node_keys)
+        conn_count = len(self._init_edges)
+        node_attr_width = self.node_gene.attr_width
+        conn_attr_width = self.conn_gene.attr_width
+        head_count = len(self._init_node_keys) - self.num_outputs
+
+        node_rows = np.full(self.max_nodes, I_INF, dtype=np.int32)
+        node_rows[:head_count] = np.asarray(self._init_node_keys[:head_count], dtype=np.int32)
+        node_rows[self.max_nodes - self.num_outputs :] = np.asarray(
+            self.output_idx, dtype=np.int32
+        )
+        node_keys = enp.broadcast_to(
+            evoxc.reshape(_constant_int32(node_rows), (1, self.max_nodes)),
+            (pop_size, self.max_nodes),
         )
 
-    def transform(
-        self,
-        state: State,
-        node_keys: evoxc.SymbolicTensor,
-        conn_keys: evoxc.SymbolicTensor,
-    ) -> Transformed:
+        key_node, key_conn = evoxc.random.split_n(key, 2)
+        drawn_nodes = self.node_gene.new_random_attrs(
+            state, key_node, (pop_size, node_count)
+        )
+        head_attrs = drawn_nodes[(slice(None), slice(0, head_count))]
+        tail_attrs = drawn_nodes[(slice(None), slice(head_count, node_count))]
+        pad_rows = self.max_nodes - node_count
+        if pad_rows:
+            node_attrs = evoxc.concatenate(
+                [
+                    head_attrs,
+                    enp.full(
+                        (pop_size, pad_rows, node_attr_width),
+                        float("nan"),
+                        dtype=evoxc.float32,
+                    ),
+                    tail_attrs,
+                ],
+                axis=1,
+            )
+        else:
+            node_attrs = evoxc.concatenate([head_attrs, tail_attrs], axis=1)
+
+        conn_rows = np.full((self.max_conns, self.conn_gene.key_width), I_INF, dtype=np.int32)
+        conn_rows[:conn_count, 0] = np.asarray(
+            [edge[0] for edge in self._init_edges], dtype=np.int32
+        )
+        conn_rows[:conn_count, 1] = np.asarray(
+            [edge[1] for edge in self._init_edges], dtype=np.int32
+        )
+        if self.conn_gene.uses_historical_marker:
+            # The initial marker of a connection is its row index (legacy convention).
+            conn_rows[:conn_count, 2] = np.arange(conn_count, dtype=np.int32)
+        conn_keys = enp.broadcast_to(
+            evoxc.reshape(_constant_int32(conn_rows.reshape(-1)), (1, *conn_rows.shape)),
+            (pop_size, *conn_rows.shape),
+        )
+
+        drawn_conns = self.conn_gene.new_random_attrs(
+            state, key_conn, (pop_size, conn_count)
+        )
+        if self.max_conns > conn_count:
+            conn_attrs = evoxc.concatenate(
+                [
+                    drawn_conns,
+                    enp.full(
+                        (pop_size, self.max_conns - conn_count, conn_attr_width),
+                        float("nan"),
+                        dtype=evoxc.float32,
+                    ),
+                ],
+                axis=1,
+            )
+        else:
+            conn_attrs = drawn_conns
+
+        return GenomeTensors(node_keys, node_attrs, conn_keys, conn_attrs)
+
+    def transform(self, state: State, *arrays: Any) -> Transformed:
         """Derive the execution schedule of every individual (in-graph, no host round-trip).
 
         The only place the schedule is derived: it delegates to
-        ``..common.tensorization.build_schedule(node_keys, conn_keys, self.max_in_degree,
-        self.network_type)``.  It must stay outside any differentiated graph (``argsort`` has
-        no AD rule), which is why :meth:`grad` takes an already-derived ``Transformed``.
+        ``..common.tensorization.derive_schedule`` with the input/output keys as ``int32``
+        in-graph constants and the five statics of this genome.  The composition goes through
+        ``derive_schedule.fn`` — the ``@evoxc.defn`` object itself refuses to be called
+        (``Defn`` is a graph definition, not a callable), so a graph that needs the schedule
+        inline calls the plain function, which evoxc documents as the supported way to
+        specialize it.  The derivation must stay outside any differentiated graph
+        (``argsort`` has no AD rule), which is why :meth:`grad` takes an already-derived
+        ``Transformed``.
 
         Args:
             state: Host configuration container.
-            node_keys: ``(P, N) int32`` node keys, ``I_INF`` padded.
-            conn_keys: ``(P, E, CK) int32`` connection keys, ``I_INF`` padded.
+            *arrays: The key arrays, in either accepted spelling: a ``GenomeTensors``
+                payload; ``(node_keys, conn_keys)``; or the full four-array payload
+                ``(node_keys, node_attrs, conn_keys, conn_attrs)`` — the attribute arrays are
+                ignored, the schedule only needs the keys.
 
         Returns:
             ``Transformed`` with ``in_src``/``in_conn``/``in_valid (P, N, K)``,
@@ -190,10 +759,47 @@ class BaseGenome(StatefulBaseClass):
             edge-proportional, never ``max_nodes**2`` per node.
 
         Raises:
-            NotImplementedError: Skeleton stub.
+            TensorNEATError: If the arguments match none of the accepted spellings.
         """
-        raise NotImplementedError(
-            "build_schedule(node_keys, conn_keys, self.max_in_degree, self.network_type)"
+        node_keys, conn_keys = self._schedule_inputs(arrays)
+        pop_size, max_nodes = (int(size) for size in node_keys.shape)
+        conn_in = self.conn_gene.key_column(conn_keys, "input_index")
+        conn_out = self.conn_gene.key_column(conn_keys, "output_index")
+        return derive_schedule.fn(
+            node_keys,
+            conn_in,
+            conn_out,
+            _constant_int32(self.input_idx),
+            _constant_int32(self.output_idx),
+            pop_size,
+            max_nodes,
+            self.max_conns,
+            self.max_in_degree,
+            self.key_span,
+        )
+
+    @staticmethod
+    def _schedule_inputs(arrays: tuple) -> tuple:
+        """Pick the node and connection key arrays out of a schedule call.
+
+        Args:
+            arrays: ``(payload,)``, ``(node_keys, conn_keys)`` or the four payload arrays.
+
+        Returns:
+            ``(node_keys, conn_keys)``.
+
+        Raises:
+            TensorNEATError: If the arguments match none of the accepted spellings.
+        """
+        if len(arrays) == 1 and isinstance(arrays[0], GenomeTensors):
+            return arrays[0].node_keys, arrays[0].conn_keys
+        if len(arrays) == 2:
+            return arrays[0], arrays[1]
+        if len(arrays) == 4:
+            return arrays[0], arrays[2]
+        raise TensorNEATError(
+            "transform takes a GenomeTensors payload, (node_keys, conn_keys), or the four "
+            f"payload arrays; got {len(arrays)} argument(s)"
         )
 
     def forward(
@@ -240,71 +846,178 @@ class BaseGenome(StatefulBaseClass):
         """Build the gradient graph of one forward pass (graph factory, not a kernel).
 
         Like ``evoxc.grad`` itself, this traces its own graph and returns it for the Pipeline
-        to cache per shape signature.  Three evoxc rules shape it: the transform needs exactly
+        to cache per shape signature.  Four evoxc rules shape it: the transform needs exactly
         one scalar output, so the loss is scalarized as ``sum(loss_fn(outputs))``
         (per-individual gradients are unaffected — the population axis is independent of the
         sum); only float arguments are differentiable, so ``argnums`` selects
-        ``node_attrs``/``conn_attrs`` while keys and the schedule stay non-differentiated
-        ``int32``/bool inputs (a differentiated int32 argument is a hard ``TransformError``);
-        and the schedule stays outside the differentiated graph because ``argsort`` has no AD
-        rule.  Gradients are cleaned with ``select(isnan(g), 0, g)`` and masked to absent rows,
-        so padding never carries NaN.
+        ``node_attrs``/``conn_attrs`` while keys and inputs stay non-differentiated graph
+        inputs (a differentiated ``int32`` argument is a hard ``TransformError``); the schedule
+        must stay outside the differentiated graph because ``argsort`` has no AD rule, so every
+        ``Transformed`` field is embedded as an in-graph constant of this factory call; and the
+        NaN contract is enforced at the *input* boundary — each attribute tensor is first
+        masked to its existing rows and NaN-cleaned (``select(isnan(a) | ~exists, 0, a)``),
+        which makes the reverse sweep emit exactly ``0`` on padding (a zeroed cotangent times
+        a NaN local derivative would otherwise be NaN) and leaves live rows untouched.
+
+        The differentiated pass is ``.grad.dense_forward``, not the window step of
+        :meth:`_node_step`.  evoxc 0.1.0 transposes ``gather`` with *put* semantics, so a node
+        value read by several incoming-edge slots keeps only one of their cotangents; the
+        exact path therefore aggregates with a per-individual dense weight matrix and a batched
+        ``dot``, whose transpose rule is exact.  The plain forward keeps the cheap window op
+        budget and is untouched.  :func:`.grad.build_grad` builds the graph; this method is the
+        public entry point and delegates to it.
 
         Args:
             state: Host configuration container.
-            transformed: Execution schedule of the population, already derived.
+            transformed: Execution schedule of the population, already derived. Its fields
+                must be host data (numpy arrays or ``evoxc.Tensor``): they are baked into the
+                graph, and a traced schedule belongs to another module.
             node_keys: ``(P, N) int32`` node keys, non-differentiated input.
             node_attrs: ``(P, N, NA) float32`` node attributes, differentiated input.
             conn_keys: ``(P, E, CK) int32`` connection keys, non-differentiated input.
             conn_attrs: ``(P, E, CA) float32`` connection attributes, differentiated input.
             inputs: ``(P, num_inputs) float32`` network inputs.
-            loss_fn: ``(P, num_outputs) -> (P, ...)`` float32 per-individual loss, summed
-                before the gradient transform.
+            loss_fn: ``(P, num_outputs) -> (*)`` float32 per-individual loss, summed before
+                the gradient transform.
 
         Returns:
-            ``evoxc.Graph`` mapping the same arguments to
-            ``(scalar_loss, (node_attr_grads, conn_attr_grads))``, gradients taking the shapes
-            and dtypes of the differentiated inputs.
+            ``evoxc.Graph`` mapping ``(node_keys, node_attrs, conn_keys, conn_attrs, inputs)``
+            to ``(node_attr_grads, conn_attr_grads)``, gradients taking the shapes and dtypes
+            of the differentiated inputs. ``evoxc.grad`` returns gradients only, so the loss
+            value is not part of this graph; callers that need it read it from
+            :meth:`forward` plus the same ``loss_fn``.
 
         Raises:
-            NotImplementedError: Skeleton stub.
+            ConfigError: If the genome is not the level-synchronous ``"feedforward"`` kind, if
+                its node gene does not aggregate with a single ``AGG.sum``/``AGG.mean`` option,
+                if its connection gene declares no ``weight`` attribute column, if the schedule
+                violates its own invariants, or if one individual carries two connections with
+                the same ``(destination, source)`` pair — each of those breaks the identity
+                between this pass and :meth:`forward`.
+            ShapeBoundError: If an individual's in-degree exceeds the schedule's static
+                ``max_in_degree``, so an edge has no incoming-window slot to be evaluated in.
         """
-        raise NotImplementedError(
-            "trace forward, scalarize the loss with sum(loss_fn(outputs)), take evoxc.grad "
-            "over (node_attrs, conn_attrs), then NaN-clean and mask padding rows"
+        return build_grad(
+            self,
+            state,
+            transformed,
+            node_keys,
+            node_attrs,
+            conn_keys,
+            conn_attrs,
+            inputs,
+            loss_fn,
         )
 
-    # ---------------------------------------------------------------- shared kernel
-    def _hit_conn_attrs(
-        self, transformed: Transformed, conn_attrs: evoxc.SymbolicTensor
+    def _padding_safe_attrs(
+        self, attrs: evoxc.SymbolicTensor, keys: evoxc.SymbolicTensor
     ) -> evoxc.SymbolicTensor:
-        """Gather the attributes of every incoming edge slot, once per forward pass.
+        """Read the attribute rows of absent genes as ``0`` instead of ``NaN``.
 
-        Attributes are constant during a forward pass, so the gather is hoisted out of the
-        level/tick loop instead of being repeated per step.
+        An option-index column (``activation``, ``aggregation``) is a float gene column that
+        ``common.functions.apply_activation``/``apply_aggregation`` cast to ``int32``; the
+        ``NaN`` padding of an absent row would be a ``NaN``-to-integer cast there.  The rows
+        this touches belong to genes that do not exist, so their attributes are never read
+        back into a network value — replacing them with ``0`` (option id of the first
+        configured option, and the neutral value of every other column) changes nothing
+        observable, while a ``NaN`` on a *live* row is left alone so a corrupt gene still
+        poisons its node instead of silently reading as option ``0``.
+
+        Applied once per forward pass (never per unrolled level), so the padding rows reach
+        the node step already clean and the per-level op budget is unchanged.
 
         Args:
-            transformed: Schedule whose ``in_conn`` is the flat ``(P, N, K) int32`` index into
-                ``reshape(conn_attrs, (P*max_conns,))``.
+            attrs: ``(P, R, W) float32`` attribute rows, NaN padded.
+            keys: ``(P, R) int32`` gene keys of the same rows, ``I_INF`` padded.
+
+        Returns:
+            ``(P, R, W) float32``: ``attrs`` with every row whose key is ``I_INF`` set to
+            ``0``; live rows are returned untouched (NaN included).
+        """
+        shape = tuple(attrs.shape)
+        if not shape[-1]:  # a family without evolvable attributes
+            return attrs
+        rows = enp.broadcast_to(
+            evoxc.reshape(self.node_exists(keys), (*shape[:-1], 1)), shape
+        )
+        return evoxc.select(rows, attrs, enp.zeros((), dtype=evoxc.float32))
+
+    # ---------------------------------------------------------------- shared kernel
+    @staticmethod
+    def _gather_slots(
+        x: evoxc.SymbolicTensor,
+        idx: evoxc.SymbolicTensor,
+        mask: evoxc.SymbolicTensor,
+        fill: float,
+    ) -> evoxc.SymbolicTensor:
+        """Gather ``(P, *shape)`` window slots out of one batch-first table.
+        The gather runs along the table's second axis (``axis=1``) and ``evoxc`` inserts the
+        index shape after it, so an index that already has the output shape produces the
+        output directly: no flattening, no reshape back, and no per-individual offset.  When
+        the index is derived once per forward pass (:func:`_slot_index`), a level pays only
+        :func:`_gather_prepared` — one gather plus the fill select.
+        Masked-out and ``I_INF`` slots are redirected to row ``0`` before the gather and
+        overwritten with ``fill`` afterwards, so the backend never sees an out-of-range index.
+        Args:
+            x: ``(P, R, ...)`` source table (node values, or the connection attribute payload).
+            idx: ``(P, *shape) int32`` row indices into ``x``'s second axis; ``I_INF`` (or a
+                masked-out position) means "no slot".
+            mask: ``(P, *shape) bool`` liveness of each slot.
+            fill: Value written where the slot is absent, or ``None`` to keep the gathered
+                value (see :func:`_gather_prepared`).
+        Returns:
+            ``(P, *shape)`` tensor with ``x``'s dtype.
+        """
+        flat_index, present = _slot_index(idx, mask, int(x.shape[1]))
+        return _gather_prepared(x, flat_index, present, tuple(idx.shape[1:]), fill)
+    def _hit_conn_attrs(
+        self, transformed: Transformed, conn_attrs: evoxc.SymbolicTensor
+    ) -> _StepStatics:
+        """Build the loop-invariant operands of one forward pass (called once per pass).
+
+        The edge attributes are constant while a forward pass runs, and so is the window
+        index of the node values, so both are derived here — before the level/tick loop —
+        and handed to :meth:`_node_step` in a :class:`_StepStatics`. That is what keeps the
+        per-level cost at the window arithmetic alone.
+
+        Args:
+            transformed: Schedule whose ``in_conn`` is the ``(P, N, K) int32`` connection
+                **row** index of each slot, and whose ``in_src``/``in_valid`` are the source
+                index and liveness of the same slots.
             conn_attrs: ``(P, E, CA) float32`` connection attributes, NaN padded.
 
         Returns:
-            ``(P, N, K, CA) float32`` per-slot attributes; absent slots hold NaN, which the
-            conn gene sanitises.
+            :class:`_StepStatics` of this population: the gathered edge attributes (absent
+            slots hold NaN, cleaned by the connection gene's ``prepare``), the flat window
+            index of the node values, its present-slot mask and the output-row mask.
 
-        Raises:
-            NotImplementedError: Skeleton stub.
+        Notes:
+            The flat index of slot ``(p, n, k, w)`` is ``p * (E * CA) + row * CA + w``, i.e.
+            the slot row index times the attribute width plus the column index, because the
+            payload is gathered from ``reshape(conn_attrs, (P, E * CA))``.
         """
-        raise NotImplementedError(
-            "gather(conn_attrs.reshape((P*E, CA)), in_conn.reshape((P*N, K))) -> (P, N, K, CA)"
+        pop_size, max_nodes, window = (int(size) for size in transformed.in_conn.shape)
+        conn_rows, attr_width = (int(size) for size in conn_attrs.shape[1:])
+        if attr_width:  # absent slots hold NaN, which the conn gene's prepare cleans
+            hit = self._gather_slots(
+                evoxc.reshape(conn_attrs, (pop_size, conn_rows * attr_width)),
+                _column_index(transformed.in_conn, attr_width),
+                _column_mask(transformed.in_valid, attr_width),
+                float("nan"),
+            )
+        else:  # a family without evolvable attributes: nothing to gather
+            hit = enp.zeros((pop_size, max_nodes, window, 0), dtype=evoxc.float32)
+        return _StepStatics(
+            self.conn_gene.prepare(hit),
+            *_slot_index(transformed.in_src, transformed.in_valid, max_nodes),
+            self._output_row_mask(pop_size, max_nodes),
         )
-
     def _node_step(
         self,
         state: State,
         transformed: Transformed,
         node_attrs: evoxc.SymbolicTensor,
-        hit_conn_attrs: evoxc.SymbolicTensor,
+        hit_conn_attrs: _StepStatics,
         values: evoxc.SymbolicTensor,
         update_mask: evoxc.SymbolicTensor,
     ) -> evoxc.SymbolicTensor:
@@ -312,32 +1025,37 @@ class BaseGenome(StatefulBaseClass):
 
         Written here once; ``default.py`` (per depth level) and ``recurrent.py`` (per tick)
         call it with their own ``update_mask`` and must not duplicate it.  With ``P`` the
-        population, ``N`` ``max_nodes``, ``K`` the window width and ``CA`` the conn
-        ``attr_width``:
+        population, ``N`` ``max_nodes`` and ``K`` the window width, and ``statics`` the
+        :class:`_StepStatics` of this pass:
 
-        1. ``xv = gather(values.reshape((P*N,)), in_src.reshape((P*N, K)))`` -> ``(P, N, K)``
-           source values per slot; ``values`` stays ``(P, N)`` and is never widened into a
-           ``max_nodes``-wide column per node.
-        2. ``live = in_valid & ~isnan(xv)``; ``xs = select(live, xv, 0)`` — the NaN-to-0
-           sanitisation is mandatory before any differentiable op, because a zeroed cotangent
-           times a NaN local derivative is still NaN.
-        3. ``msg = conn_gene.forward(state, hit_conn_attrs, xs)`` -> ``(P, N, K)``, one scalar
-           message per edge slot, elementwise in the slot.
-        4. ``z = node_gene.forward(state, node_attrs, msg, is_output_row, live)`` -> ``(P, N)``:
-           the gene runs ``apply_aggregation(aggregation_index, msg, live,
-           aggregation_options)`` (dead slots neutral-filled per option, then a ``select``
-           chain), then ``combine`` (``bias + response * agg``), then the activation select
-           except on output rows.
-        5. ``values = select(update_mask & (live_count > 0), z, values)`` with
-           ``live_count = reduce_sum(live, axis=-1)``: a node with no live incoming edge keeps
-           its previous value, so NaN stays NaN and its descendants lose their only live
-           source — the legacy NaN poisoning, reproduced exactly.
+        1. ``xv = gather(values, statics.flat_index)`` -> ``(P, N, K)`` source values per
+           slot, then the fill on every slot the index table marks absent; ``values`` stays
+           ``(P, N)`` and is never widened into a ``max_nodes``-wide column per node. The index
+           table is derived once per pass, so a level pays only flatten/gather/fill/reshape.
+        2. ``live = ~isnan(xv)`` — a slot is live exactly when the gathered value is a number,
+           because the gather already wrote ``NaN`` on every absent slot; the static
+           ``in_valid`` term is therefore implied and no extra ``logical_and`` is emitted.
+        3. ``msg = conn_gene.forward(state, statics.conn, xv)`` -> ``(P, N, K)``, one scalar
+           message per edge slot: the gene sanitises the source value, and the weight column
+           arrives already NaN-cleaned. The window is gathered *without* a fill, so an absent
+           slot may carry a finite value here — its message is harmless because ``live`` (step
+           4) marks it dead and the aggregation neutralises it. The NaN-to-0 sanitisation is mandatory before any
+           product, because a zeroed cotangent times a NaN local derivative is still NaN.
+        4. ``z = node_gene.forward(state, statics.node, msg, statics.output_rows, live)`` ->
+           ``(P, N)``: the gene runs ``apply_aggregation`` (dead slots neutral-filled per
+           option, then a ``select`` chain), then ``combine`` (``bias + response * agg``), then
+           the activation, whose id is ``-1`` (identity) on the output rows.
+        5. ``values = select(update_mask & (live_count > 0), z, values)``: a node with no live
+           incoming edge keeps its previous value, so NaN stays NaN and its descendants lose
+           their only live source — the legacy NaN poisoning, reproduced exactly.
 
         Args:
             state: Host configuration container (read-only during a trace).
-            transformed: Execution schedule of the population.
+            transformed: Execution schedule of the population; it must be the one whose
+                fields ``statics`` was derived from (its ``in_src`` shape gives the window).
             node_attrs: ``(P, N, NA) float32`` node attributes, NaN padded.
-            hit_conn_attrs: ``(P, N, K, CA) float32`` output of :meth:`_hit_conn_attrs`.
+            hit_conn_attrs: The :class:`_StepStatics` of :meth:`_hit_conn_attrs` for this
+                forward pass.
             values: ``(P, N) float32`` current node values, NaN where not yet computed.
             update_mask: ``(P, N) bool`` caller gate — the level mask for the feedforward
                 genome, ``node_exists & (valid_count > 0)`` for the recurrent one; the dynamic
@@ -347,14 +1065,32 @@ class BaseGenome(StatefulBaseClass):
             ``(P, N) float32`` updated values; rows masked off are returned unchanged.
 
         Raises:
-            NotImplementedError: Skeleton stub.
+            TensorNEATError: If ``hit_conn_attrs`` is not the :class:`_StepStatics` of
+                :meth:`_hit_conn_attrs`, which would silently reintroduce the per-level
+                operand derivation this kernel exists to avoid.
         """
-        raise NotImplementedError(
-            "gather in_src, live = in_valid & ~isnan(xv), xs = select(live, xv, 0), "
-            "msg = conn_gene.forward(hit_conn_attrs, xs), "
-            "z = node_gene.forward(node_attrs, msg, is_output_row, live), "
-            "values = select(update_mask & (live_count > 0), z, values)"
+        if not isinstance(hit_conn_attrs, _StepStatics):
+            raise TensorNEATError(
+                "_node_step expects the _StepStatics returned by _hit_conn_attrs, not "
+                f"{type(hit_conn_attrs).__name__}"
+            )
+        block = tuple(int(size) for size in transformed.in_src.shape[1:])
+        xv = _gather_prepared(
+            values, hit_conn_attrs.flat_index, hit_conn_attrs.present, block, None
         )
+        live = evoxc.logical_and(
+            hit_conn_attrs.present, evoxc.logical_not(evoxc.isnan(xv))
+        )
+        messages = self.conn_gene.forward(state, hit_conn_attrs.conn, xv)
+        z = self.node_gene.forward(
+            state,
+            hit_conn_attrs.node_operands(self, node_attrs),
+            messages,
+            hit_conn_attrs.output_rows,
+            live,
+        )
+        update = evoxc.logical_and(update_mask, evoxc.reduce_max(live, axes=-1))
+        return evoxc.select(update, z, values)
 
     def _is_output_row(self, node_keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
         """Flag the node rows read out as network outputs.
@@ -365,13 +1101,25 @@ class BaseGenome(StatefulBaseClass):
         Returns:
             ``(P, N) bool``, True on rows ``max_nodes-num_outputs..max_nodes-1``, which the
             node gene leaves unactivated.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
         """
-        raise NotImplementedError(
-            "True on rows [max_nodes-num_outputs, max_nodes) -> (P, N) bool"
-        )
+        pop_size, max_nodes = (int(size) for size in node_keys.shape)
+        return self._output_row_mask(pop_size, max_nodes)
+
+    def _output_row_mask(
+        self, pop_size: int, max_nodes: int
+    ) -> evoxc.SymbolicTensor:
+        """Build the ``(P, N)`` output-row mask from static facts alone.
+
+        Args:
+            pop_size: Static population size ``P``.
+            max_nodes: Static node capacity ``N``.
+
+        Returns:
+            ``(P, N) bool``, True on the last ``num_outputs`` rows.
+        """
+        rows = enp.arange(0, max_nodes, dtype=evoxc.int32)
+        flag = evoxc.greater_equal(rows, _i32(max_nodes - self.num_outputs))
+        return enp.broadcast_to(evoxc.reshape(flag, (1, max_nodes)), (pop_size, max_nodes))
 
     def _output_values(
         self, values: evoxc.SymbolicTensor, output_transform: Callable | None
@@ -385,91 +1133,148 @@ class BaseGenome(StatefulBaseClass):
         Returns:
             ``(P, num_outputs) float32`` — rows ``max_nodes-num_outputs..max_nodes-1``, then
             ``output_transform`` when it is not ``None``.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
         """
-        raise NotImplementedError(
-            "take values[:, max_nodes-num_outputs:] then apply output_transform if any"
-        )
+        max_nodes = int(values.shape[1])
+        outputs = values[(slice(None), slice(max_nodes - self.num_outputs, max_nodes))]
+        return outputs if output_transform is None else output_transform(outputs)
 
     # ------------------------------------------------------------------- operators
     def execute_mutation(
-        self,
-        state: State,
-        key: evoxc.SymbolicTensor,
-        genome: GenomeTensors,
-        new_node_keys: evoxc.SymbolicTensor,
-        new_conn_keys: evoxc.SymbolicTensor,
+        self, state: State, key: evoxc.SymbolicTensor, *args: Any
     ) -> GenomeTensors:
         """Run the batched mutation operator on a whole population.
 
         Structural keys are allocated by the caller (not RNG draws) and must be unique across
-        the population.
+        the population.  Accepts ``(payload, new_node_keys, new_conn_keys)`` and the
+        four-array spelling ``(node_keys, node_attrs, conn_keys, conn_attrs, new_node_keys,
+        new_conn_keys)``.
 
         Args:
             state: Host configuration container.
             key: Rank-0 ``evoxc.random`` key for this call.
-            genome: ``(P, ...)`` payload to mutate; shapes and dtypes are preserved.
-            new_node_keys: ``(P,) int32`` caller-allocated node keys the add-node mutation may
-                insert.
-            new_conn_keys: ``(P, 3) int32`` caller-allocated connection keys: column 0 feeds the
-                add-node identity edge, column 1 the add-node copy edge, column 2 the
-                add-connection edge.
+            *args: Payload (``GenomeTensors`` or its four arrays) followed by
+                ``new_node_keys`` and ``new_conn_keys``.
 
         Returns:
             ``GenomeTensors`` with identical static shapes — the mutated population.
 
         Raises:
-            NotImplementedError: Skeleton stub.
-            TensorNEATError: (implementation wave) if the key tensors have the wrong shapes.
+            TensorNEATError: If the payload or the allocated key tensors have the wrong shapes.
         """
-        raise NotImplementedError(
-            "self.mutation(state, self, key, *genome, new_node_keys, new_conn_keys)"
+        payload, trailing = self._split_payload(*args)
+        if len(trailing) != 2:
+            raise TensorNEATError(
+                "execute_mutation expects new_node_keys and new_conn_keys after the payload, "
+                f"got {len(trailing)} trailing argument(s)"
+            )
+        new_node_keys, new_conn_keys = trailing
+        pop_size = int(payload.node_keys.shape[0])
+        self._check_key_shapes(
+            (new_node_keys, "new_node_keys", (pop_size,)),
+            (new_conn_keys, "new_conn_keys", (pop_size, 3)),
+        )
+        return self.mutation(
+            state, self, key, *payload, new_node_keys, new_conn_keys
         )
 
     def execute_crossover(
-        self,
-        state: State,
-        key: evoxc.SymbolicTensor,
-        genome1: GenomeTensors,
-        genome2: GenomeTensors,
+        self, state: State, key: evoxc.SymbolicTensor, *args: Any
     ) -> GenomeTensors:
         """Recombine two batches of parents into one batch of offspring.
+
+        Accepts ``(genome1, genome2)`` and the four-array-per-parent spelling
+        ``(node_keys1, node_attrs1, conn_keys1, conn_attrs1, node_keys2, ...)``.
 
         Args:
             state: Host configuration container.
             key: Rank-0 ``evoxc.random`` key for this call.
-            genome1: ``(P, ...)`` payload of the fitter parent; its structure is kept.
-            genome2: ``(P, ...)`` payload of the second parent, same shapes.
+            *args: Two payloads (``GenomeTensors`` or four arrays each); the first is the
+                fitter parent, whose structure is kept.
 
         Returns:
             ``GenomeTensors`` — parent 1's keys with key-aligned recombined attributes.
 
         Raises:
-            NotImplementedError: Skeleton stub.
-            TensorNEATError: (implementation wave) if the parents' shapes differ.
+            TensorNEATError: If the two parents' shapes differ.
         """
-        raise NotImplementedError("self.crossover(state, self, key, *genome1, *genome2)")
+        first, remaining = self._split_payload(*args)
+        second, trailing = self._split_payload(*remaining)
+        if trailing:
+            raise TensorNEATError(
+                f"execute_crossover takes exactly two payloads, got {len(trailing)} extra "
+                "argument(s)"
+            )
+        self._check_same_shapes(first, second, "execute_crossover")
+        return self.crossover(state, self, key, *first, *second)
 
     def execute_distance(
-        self, state: State, genome1: GenomeTensors, genome2: GenomeTensors
+        self, state: State, *args: Any
     ) -> evoxc.SymbolicTensor:
         """Compute one compatibility distance per aligned pair of genomes.
 
+        Accepts ``(genome1, genome2)`` and the four-array-per-genome spelling.
+
         Args:
             state: Host configuration container.
-            genome1: ``(P, ...)`` payload of the first parent of each pair.
-            genome2: ``(P, ...)`` payload of the second parent of each pair, same shapes.
+            *args: Two payloads (``GenomeTensors`` or four arrays each).
 
         Returns:
             ``(P,) float32`` distances, ``0`` for an empty pair rather than NaN.
 
         Raises:
-            NotImplementedError: Skeleton stub.
-            TensorNEATError: (implementation wave) if the parents' shapes differ.
+            TensorNEATError: If the two genomes' shapes differ.
         """
-        raise NotImplementedError("self.distance(state, self, *genome1, *genome2)")
+        first, remaining = self._split_payload(*args)
+        second, trailing = self._split_payload(*remaining)
+        if trailing:
+            raise TensorNEATError(
+                f"execute_distance takes exactly two payloads, got {len(trailing)} extra "
+                "argument(s)"
+            )
+        self._check_same_shapes(first, second, "execute_distance")
+        return self.distance(state, self, *first, *second)
+
+    def _check_same_shapes(
+        self, first: GenomeTensors, second: GenomeTensors, caller: str
+    ) -> None:
+        """Refuse two payloads whose static shapes differ.
+
+        Args:
+            first: Left payload.
+            second: Right payload.
+            caller: Method name used in the error message.
+
+        Raises:
+            TensorNEATError: If a field's shape disagrees between the two payloads.
+        """
+        for name, left, right in zip(first.field_names, first, second):
+            if tuple(left.shape) != tuple(right.shape):
+                raise TensorNEATError(
+                    f"{caller}: payload field {name} has shape {tuple(left.shape)} in the "
+                    f"first genome and {tuple(right.shape)} in the second"
+                )
+
+    @staticmethod
+    def _check_key_shapes(*checks: tuple) -> None:
+        """Validate the static shapes of caller-allocated structural key tensors.
+
+        Args:
+            *checks: ``(tensor, name, expected_shape)`` triples.
+
+        Raises:
+            TensorNEATError: If a tensor's shape differs from its expected shape, or its dtype
+                is not an integer dtype (keys are never floats).
+        """
+        for tensor, name, expected in checks:
+            shape = tuple(int(size) for size in tensor.shape)
+            if shape != tuple(expected):
+                raise TensorNEATError(
+                    f"{name} must have shape {tuple(expected)}, got {shape}"
+                )
+            if tensor.dtype not in (evoxc.int8, evoxc.int16, evoxc.int32, evoxc.int64):
+                raise TensorNEATError(
+                    f"{name} must be an integer key tensor, got dtype {tensor.dtype}"
+                )
 
     def check_cycles(
         self,
@@ -481,7 +1286,8 @@ class BaseGenome(StatefulBaseClass):
         """Ask whether adding one edge per individual would close a cycle.
 
         Documented delegation to ``.utils.check_cycles``; the mutation operator calls the
-        predicate through the genome, so a genome can opt out by ``network_type``.
+        predicate through the genome, so a genome can opt out by ``network_type`` — a
+        recurrent genome accepts cycles, and its answer is a constant ``False``.
 
         Args:
             node_keys: ``(P, N) int32`` node keys, ``I_INF`` padded.
@@ -491,182 +1297,79 @@ class BaseGenome(StatefulBaseClass):
 
         Returns:
             ``(P,) bool`` True where the new edge would close a cycle; False for absent or
-            degenerate keys.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
+            degenerate keys, and always False outside a feedforward genome.
         """
-        raise NotImplementedError(
-            "delegate to utils.check_cycles(node_keys, conn_keys, src_keys, dst_keys)"
+        pop_size = int(node_keys.shape[0])
+        if self.network_type != "feedforward":
+            return enp.zeros((pop_size,), dtype=evoxc.bool_)
+        return _check_cycles(node_keys, conn_keys, src_keys, dst_keys)
+
+    # ------------------------------------------------------------- helper surface
+    def node_exists(self, node_keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
+        """Mark the node rows that hold a real node key.
+
+        Args:
+            node_keys: ``(P, N) int32`` node keys, ``I_INF`` padded.
+
+        Returns:
+            ``(P, N) bool``, True where the row is not the padding sentinel.
+        """
+        return enp.not_equal(node_keys, _iinf(tuple(node_keys.shape), node_keys.dtype))
+
+    def conn_exists(self, conn_keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
+        """Mark the connection rows that hold a real connection.
+
+        Args:
+            conn_keys: ``(P, E, CK) int32`` connection keys, ``I_INF`` padded.
+
+        Returns:
+            ``(P, E) bool``, True where the source-key column is not the padding sentinel.
+        """
+        columns = conn_keys[(slice(None), slice(None), slice(0, 1))]
+        sources = evoxc.reshape(columns, (int(conn_keys.shape[0]), int(conn_keys.shape[1])))
+        return enp.not_equal(
+            sources, _iinf(tuple(sources.shape), sources.dtype)
         )
 
-    # ------------------------------------------------------------------ host-only
-    def get_input_idx(self) -> list[int]:
-        """Keys and row positions of the input nodes.
-
-        Returns:
-            ``[0, 1, ..., num_inputs-1]``; the row/key invariant makes both coincide.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
-        """
-        raise NotImplementedError("list(range(num_inputs))")
-
-    def get_output_idx(self) -> list[int]:
-        """Keys and row positions of the output nodes.
-
-        Returns:
-            ``[max_nodes-num_outputs, ..., max_nodes-1]``; the row/key invariant makes both
-            coincide.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
-        """
-        raise NotImplementedError("list(range(max_nodes - num_outputs, max_nodes))")
-
-    def hash(self, genome: GenomeTensors) -> evoxc.SymbolicTensor:
-        """Hash every individual's payload for fast de-duplication (in-graph).
-
-        An xor-mix over the ``int32`` key columns.  evoxc has no float/int bitcast, so float
-        attributes are quantised (scaled, rounded to ``int32``) before mixing instead of being
-        hashed by bit pattern; NaN padding quantises to one sentinel, so identical genomes hash
-        identically.
+    def max_node_key(
+        self, state: State, node_keys: evoxc.SymbolicTensor
+    ) -> evoxc.SymbolicTensor:
+        """Largest present node key per individual.
 
         Args:
-            genome: ``(P, ...)`` payload batch.
+            state: Host configuration container (unused; kept for the algorithm's call shape).
+            node_keys: ``(P, N) int32`` node keys, ``I_INF`` padded.
 
         Returns:
-            ``(P,) uint32`` hashes, one per individual.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
+            ``(P,) int32``: the largest non-padding node key, ``0`` for an individual with no
+            node row at all (it has no key to continue from).
         """
-        raise NotImplementedError(
-            "xor-mix (keys, quantised attrs) of both gene families -> (P,) uint32"
+        exists = self.node_exists(node_keys)
+        safe = evoxc.select(
+            exists, node_keys, enp.zeros(tuple(node_keys.shape), dtype=node_keys.dtype)
         )
+        return evoxc.cast(enp.max(safe, axis=-1), evoxc.int32)
 
-    def network_dict(
-        self, state: State, genome: GenomeTensors, whether_re_cound_idx: bool = True
-    ) -> dict[str, dict]:
-        """Convert one individual to host-side dicts (never traced).
-
-        Host-only: converts with ``Tensor.numpy()`` and walks rows in Python, so the result must
-        never be fed back into a graph.  ``genome`` is one individual (unbatched arrays, or a
-        batch with ``P == 1``).
+    def max_conn_marker(
+        self, state: State, conn_keys: evoxc.SymbolicTensor
+    ) -> evoxc.SymbolicTensor:
+        """Largest present ``historical_marker`` per individual.
 
         Args:
-            state: Host configuration container.
-            genome: Payload of one individual.
-            whether_re_cound_idx: Renumber hidden keys to be contiguous above
-                ``max(input/output keys)`` via ``.utils.re_cound_idx``; input and output keys
-                are untouched.
+            state: Host configuration container (unused; kept for the algorithm's call shape).
+            conn_keys: ``(P, E, CK) int32`` connection keys, ``I_INF`` padded.
 
         Returns:
-            ``{"nodes": {key: node_dict}, "conns": {(in_key, out_key): conn_dict}}`` from
-            ``node_gene.to_dict``/``conn_gene.to_dict``; ``default.py`` adds
-            ``topo_order``/``topo_layers``/``useful_nodes``.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
+            ``(P,) int32``: the largest marker of a real connection row, or ``0`` for every
+            individual when the conn gene declares no ``historical_marker`` column (there is
+            then no marker to continue from and the third allocated key column is ignored).
         """
-        raise NotImplementedError(
-            "re_cound_idx (optional) then build {nodes: ..., conns: ...} row by row"
+        pop_size = int(conn_keys.shape[0])
+        if not self.conn_gene.uses_historical_marker:
+            return enp.zeros((pop_size,), dtype=evoxc.int32)
+        markers = self.conn_gene.key_column(conn_keys, "historical_marker")
+        exists = self.conn_exists(conn_keys)
+        safe = evoxc.select(
+            exists, markers, enp.zeros(tuple(markers.shape), dtype=markers.dtype)
         )
-
-    def repr(self, state: State, genome: GenomeTensors, precision: int = 2) -> str:
-        """Render one individual as a multi-line string (host-only).
-
-        Args:
-            state: Host configuration container.
-            genome: Payload of one individual.
-            precision: Decimal places forwarded to the gene ``repr`` hooks.
-
-        Returns:
-            ``"<ClassName>(nodes=<count>, conns=<count>):"`` then one line per node (annotated
-            ``(input)``/``(output)``) and one line per connection.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
-        """
-        raise NotImplementedError(
-            "header with valid node/conn counts, then node_gene.repr / conn_gene.repr lines"
-        )
-
-    def _get_node_dict(self, state: State, node_keys: evoxc.SymbolicTensor) -> dict:
-        """Map node key -> node dict for one individual (host-only).
-
-        Args:
-            state: Host configuration container.
-            node_keys: Node key array of one individual, ``I_INF`` padded.
-
-        Returns:
-            ``{node_key: node_gene.to_dict(...)}``, padded rows skipped.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
-        """
-        raise NotImplementedError("walk node rows, skip I_INF rows, call node_gene.to_dict")
-
-    def _get_conn_dict(self, state: State, conn_keys: evoxc.SymbolicTensor) -> dict:
-        """Map connection ``(in_key, out_key)`` -> conn dict for one individual (host-only).
-
-        Args:
-            state: Host configuration container.
-            conn_keys: Connection key array of one individual, ``I_INF`` padded.
-
-        Returns:
-            ``{(in_key, out_key): conn_gene.to_dict(...)}``, padded rows skipped.
-
-        Raises:
-            NotImplementedError: Skeleton stub.
-        """
-        raise NotImplementedError("walk conn rows, skip I_INF rows, call conn_gene.to_dict")
-
-    def sympy_func(
-        self,
-        state: State,
-        network: dict,
-        sympy_input_transform: Any = None,
-        sympy_output_transform: Any = None,
-        backend: str = "numpy",
-    ) -> tuple:
-        """Build the sympy expression of a network and its NumPy evaluator (host-only).
-
-        Declared here, implemented by the concrete genomes; the tuple is the contract with
-        ``..common.sympy_tools``.
-
-        Args:
-            state: Host configuration container.
-            network: Output of :meth:`network_dict`.
-            sympy_input_transform: Sympy counterpart of ``input_transform``.
-            sympy_output_transform: Sympy counterpart of ``output_transform``.
-            backend: Codegen backend; ``"numpy"`` only in this rewrite (no JAX).
-
-        Returns:
-            ``(symbols, args_symbols, input_symbols, nodes_exprs, output_exprs, forward_func,
-            topo_order, useful_nodes)`` — the legacy 8-tuple.
-
-        Raises:
-            NotImplementedError: Always — concrete genomes implement it.
-        """
-        raise NotImplementedError(
-            "concrete genomes return the 8-tuple consumed by common.sympy_tools"
-        )
-
-    def visualize(self, network: dict, **kwargs: Any) -> None:
-        """Draw a network (host-only; networkx/matplotlib imported inside the body).
-
-        Declared here, implemented by the concrete genomes, so ``import tensorneat`` never
-        imports ``networkx``/``matplotlib``.
-
-        Args:
-            network: Output of :meth:`network_dict`.
-            **kwargs: Per-genome drawing options.
-
-        Returns:
-            ``None``; the figure goes to the path chosen by the concrete genome.
-
-        Raises:
-            NotImplementedError: Always — concrete genomes implement it.
-        """
-        raise NotImplementedError("concrete genomes draw the network and save the figure")
+        return evoxc.cast(enp.max(safe, axis=-1), evoxc.int32)
