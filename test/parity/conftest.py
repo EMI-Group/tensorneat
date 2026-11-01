@@ -216,8 +216,8 @@ def genome_pair(new, legacy, convert):
 
     Returns:
         ``build(num_inputs=2, num_outputs=1, max_nodes=8, max_conns=16, *,
-        activation="sigmoid", aggregation="sum", input_transform=None,
-        output_transform=None) -> GenomePair``.
+        max_in_degree=None, activation="sigmoid", aggregation="sum",
+        input_transform=None, output_transform=None) -> GenomePair``.
 
     Notes:
         Three conversions happen here, and each one is a parity rule:
@@ -229,6 +229,10 @@ def genome_pair(new, legacy, convert):
         * ``max_in_degree = convert.max_in_degree_for(max_nodes)``: the rewrite's
           incoming window is ``max_nodes`` slots wide, like the legacy dense
           column, so ``Transformed.edge_overflow`` is ``0`` for every payload.
+          ``max_in_degree`` may be overridden **only** to build a deliberately
+          lossy pair for the constructive half of the schedule guard in
+          ``test_forward.py``; such a pair must never be compared value by value,
+          because the two sides then see different edge sets.
         * ``max_depth = max_nodes``: the unroll bound must not truncate a parity
           network — a tail left ``NaN`` by the depth bound would look like a value
           mismatch.
@@ -262,6 +266,7 @@ def genome_pair(new, legacy, convert):
         max_nodes: int = DEFAULT_MAX_NODES,
         max_conns: int = DEFAULT_MAX_CONNS,
         *,
+        max_in_degree: int | None = None,
         activation: str = DEFAULT_ACTIVATION,
         aggregation: str = DEFAULT_AGGREGATION,
         input_transform: Any = None,
@@ -276,6 +281,11 @@ def genome_pair(new, legacy, convert):
                 f"max_conns={max_conns} cannot hold the legacy dense initial "
                 f"network of {initial_edges} edges for this layout"
             )
+        window = (
+            convert.max_in_degree_for(max_nodes)
+            if max_in_degree is None
+            else int(max_in_degree)
+        )
         new_input_transform = resolve_transform(input_transform)
         new_output_transform = resolve_transform(output_transform)
 
@@ -296,7 +306,7 @@ def genome_pair(new, legacy, convert):
             input_transform=new_input_transform,
             output_transform=new_output_transform,
             init_hidden_layers=hidden,
-            max_in_degree=convert.max_in_degree_for(max_nodes),
+            max_in_degree=window,
             max_depth=max_nodes,
         )
 
@@ -323,7 +333,7 @@ def genome_pair(new, legacy, convert):
             num_outputs=num_outputs,
             max_nodes=max_nodes,
             max_conns=max_conns,
-            max_in_degree=convert.max_in_degree_for(max_nodes),
+            max_in_degree=window,
             new_genome=new_genome,
             new_state=new_genome.setup(new.common.State()),
             legacy_genome=legacy_genome,
