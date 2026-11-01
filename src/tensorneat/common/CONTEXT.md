@@ -49,6 +49,13 @@ Consequence: `state.register/update(...)` must be *reassigned*; `state.x = v` an
 `to_latex_code(...)` / `to_python_code(...)` — both take the 8-tuple produced by `DefaultGenome.sympy_func` (`symbols, args_symbols, input_symbols, nodes_exprs, output_exprs, forward_func, topo_order, useful_nodes`); iterate `topo_order[input_cnt:]`, skip nodes not in `useful_nodes`, `subs` args/norm symbols, round to 2 (latex) / 6 (python), and emit `\begin{align}` lines or `h = np.zeros(...)`/`o = np.zeros(...)` assignments.
 The `input_symbols`, `output_exprs` and `forward_func` parameters are accepted but unused by both code generators.
 
+## Tensorization Trick (how this node's helpers form it)
+Step 1, host/`transform`: `../genome/utils.py::unflatten_conns(nodes, conns)` maps the ragged `(max_conns, ...)` rows to a dense `(max_nodes, max_nodes)` int32 matrix `u_conns` holding the connection row index, with `I_INF` where no connection exists (`jnp.full(..., I_INF).at[i_idxs, o_idxs].set(jnp.arange(C))`).
+Step 2, `transform` (feedforward): `topological_sort(nodes, u_conns != I_INF)` returns `cal_seqs`, a fixed-length `(max_nodes,)` int32 order, so the variable-length graph becomes a `lax.fori_loop(0, max_nodes, ...)` with per-iteration validity masks.
+Step 2', `transform` (recurrent): no ordering at all — `attach_with_inf(conns_attrs, u_conns)` yields the dense `(max_nodes, max_nodes, attrs)` weight tensor consumed by `lax.fori_loop(0, activate_time, ...)`.
+Step 3, `forward`: per destination node `i`, `u_conns[:, i]` gives every incoming edge, `attach_with_inf(conns_attrs, conn_indices)` gathers their weights (NaN for absent edges) and NaN-padded rows/values are filtered by `conn_exists & ~jnp.isnan(values)` masks, so all arrays stay rectangular and `vmap`/`lax.switch` can run branch-free.
+This is why `attach_with_inf` must emit NaN rather than 0 (it doubles as the "edge absent" mask) and why `I_INF` and NaN are both required.
+
 ## Constraints & Conventions
 No host-side reads inside jit: everything traced must be jnp/lax; data-dependent trip counts use `lax.while_loop` (Kahn's algorithm, transitive closure), never python `for`.
 Two disjoint sentinels: NaN for "absent/invalid" float data (padded node/conn rows, missing source values), `I_INF` (`int32` max) for "no index / unavailable index"; never mix them within one array.
