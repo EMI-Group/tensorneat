@@ -53,7 +53,9 @@ The legacy RL problems are gone, so CartPole has no parity oracle — `./unit/pr
 
 ## Conventions
 Every test that depends on unimplemented source code has a real signature and docstring and a body of `pytest.skip("not implemented")`, so the file is importable and collectable before the implementation wave and the skip text names the owner.
+No test module imports `tensorneat` or a `support` module at module scope: `import tensorneat` raises `NotImplementedError` today because `algorithm/base.py` evaluates `State()` as a default argument, so each suite's `conftest.py` resolves the package and the support modules through `support.lazy.require` in module-scoped fixtures — those two lines become plain imports once `src/` is implemented.
 `jax` is imported only inside `./parity` modules, and only after `pytest.importorskip("jax")`; no other test may import it at module scope.
+`release_gate_no_jax.py` is red until `src/tensorneat/pipeline.py` becomes evoxc-native (it still imports `jax` and asserts the legacy `problem.jitable` flag): that failure is the ratchet for the implementation wave, not a broken test.
 No network, no GPU, `backend="numpy"` everywhere except tests marked `requires_iree`.
 Shapes and keys in the suite are small (pop ≤ 16, `max_nodes` ≤ 16) except where a test exists specifically to exceed a static bound.
 Files stay under ~1000 lines; one test module per source module, named `test_<module>.py`.
