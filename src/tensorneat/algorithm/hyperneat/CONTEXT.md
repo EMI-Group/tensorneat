@@ -88,6 +88,7 @@ This node reads only those tables: it never calls `make_nodes`/`make_conns`, nev
 `../../common`: `State`, `functions.{ACT, AGG}` (aggregation callables are `(z, mask)`), `errors.TensorNEATError`, `tools.to_numpy` (host-only gene `repr`/`to_dict`).
 `../base.py`: `BaseAlgorithm`, including `show_details` as the only host-side member.
 `problem`: `evaluate` reads only `static_batch_size(transformed)`, so the `SubstrateSchedule` container is legal as long as every leaf keeps axis 0 = population.
+`problem`'s `FuncFit.show` does **not** honour that: it rebuilds the schedule with `schedule_type(*evoxc.tree_leaves(transformed))` (`problem/func_fit/func_fit.py:224`), which assumes a flat one-level NamedTuple and therefore breaks on the nested `SubstrateSchedule` (see Known Issues).
 `pipeline.py`: creates `randkey`; this node seeds nothing and draws no randomness.
 
 ## Constraints
