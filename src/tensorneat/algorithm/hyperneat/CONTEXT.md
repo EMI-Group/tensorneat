@@ -36,7 +36,6 @@ The `output_transform` argument of `HyperNEAT` is the substrate network's output
 `HyperNEATNode.forward(self, state, attrs, inputs, is_output_node=False)` is out of sync with the gene protocol `BaseNode.forward(..., is_output_node=False, valid_mask=None)`: `DefaultGenome.forward` passes `valid_mask=` as a keyword while `RecurrentGenome.forward` passes it as a 5th positional argument, so both paths raise `TypeError` at trace time.
 `HyperNEATNode.forward` calls `self.aggregation(inputs)` with a single argument, but every `AGG` function has signature `(z, mask)` (e.g. `sum_(z, mask)`), which raises `TypeError`; invalid-source masking (`apply_aggregation` / `valid_mask`) is not implemented here, unlike `DefaultNode.forward`.
 `HyperNEATConn.forward` does not NaN-guard inputs or weights (unlike `DefaultConn.forward`), so invalid sources would propagate NaN if the node-side masking is ever bypassed.
-`substrate/default.py` imports `vmap` and `set_gene_attrs` without using either.
 
 ## Test Coverage
 No tests live in this subtree; `test/mlp_substrate.py` only prints `analysis_substrate` output.
