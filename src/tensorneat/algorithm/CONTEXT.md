@@ -53,6 +53,7 @@ Rationale for scans instead of the legacy data-dependent `while_loop`: evoxc de-
 
 ## Randomness Budget
 Per generation the algorithm performs exactly two `evoxc.random.split`s, yielding three subkeys consumed in this order: parent selection, crossover, mutation — the advanced parent key is stored back into `state.randkey`.
+When `pop_batch_size` chunks a population kernel into a `scan`, the algorithm pre-splits `n_batches` keys with `evoxc.random.split_n` and passes the stacked `(n_batches,)` int64 array as the scan's `xs`, so each step receives a valid rank-0 key.
 Key-form is whatever `splitmix64` produces (rank-0 int64); nothing here assumes a JAX `PRNGKey`.
 There is no `random.choice` and no probability vector: uniform parent rank slots come from `evoxc.random.randint` with a broadcast symbolic `high`, which is also the fix for the legacy zero-survivor division.
 No random draw happens inside a control-flow body, so keys never need to travel through a loop carry.
