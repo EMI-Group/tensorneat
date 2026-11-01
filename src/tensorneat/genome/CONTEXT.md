@@ -28,7 +28,7 @@ The shared window step is `_hit_conn_attrs` + `_node_step` + `_output_values`, a
 - `initialize(state, key, pop_size) -> GenomeTensors` — `key` is a rank-0 `evoxc.random` key and randomness is drawn once per tensor with the batched output shape, so individual `i` gets an independent stream from one call.
 - `transform(state, node_keys, conn_keys) -> Transformed` — schedule derivation, delegated to `../common/tensorization.py`; pure tensor ops, no host round-trip.
 - `forward(state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, inputs) -> (P, num_outputs)` — trace-time kernel.
-- `grad(state, transformed, node_*, conn_*, inputs, loss_fn) -> evoxc.Graph` — **graph factory** (like `evoxc.grad`), not a trace-time kernel: it traces its own graph and returns it for the Pipeline to cache/compile/run.
+- `grad(state, transformed, node_*, conn_*, inputs, loss_fn) -> evoxc.Graph` — **graph factory** (like `evoxc.grad`), not a trace-time kernel: it traces its own graph and returns it for the Pipeline to cache/compile/run, and its body is `grad.build_grad(self, ...)`.
 - `execute_mutation(state, key, genome, new_node_keys (P,), new_conn_keys (P,3)) -> GenomeTensors`
 - `execute_crossover(state, key, genome1, genome2) -> GenomeTensors`
 - `execute_distance(state, genome1, genome2) -> (P,)` — pairwise, batched over pairs; the algorithm forms the pairs.
