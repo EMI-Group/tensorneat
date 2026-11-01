@@ -33,7 +33,8 @@ A problem is pure host-side configuration (`StatefulBaseClass`) plus plain-Pytho
 - `input_shape = (4,)` = `(x, x_dot, theta, theta_dot)`; `output_shape = (2,)` = two continuous logits, action = "push right" iff `out[1] > out[0]` (a tie pushes left, matching `argmax` index 0) computed with `enp.split` + `enp.greater`, so no integer/bool control flow and no `argmax` dtype handling.
 - A genome used with `CartPole` must emit two logits: do **not** set an `argmax`-style `output_transform` (the problem owns the discrete decision).
 - One `evoxc.scan` over `max_step=500` timesteps: `xs = enp.zeros((max_step, 1))`, carry `(obs (B, 4), alive (B,))`, `B = P * repeat_times`, individual-major.
-- Step body: `reward_t = alive` (the failing step still scores, matching Gym returns), `alive = alive & ~( |x'| > 2.4 | |theta'| > 12deg )`, state frozen after death via `enp.where(alive[:, None], next_obs, obs)` — no `cond`, no data-dependent trip count, every carried dtype/shape constant across iterations.
+- Step body: `reward_t = alive` (the failing step still scores, matching Gym returns), `alive = alive & ~( |x'| > 2.4 | |theta'| > 12deg )`, state frozen after death via `enp.where(enp.expand_dims(alive, 1), next_obs, obs)` — no `cond`, no data-dependent trip count, every carried dtype/shape constant across iterations.
+- A traced tensor has no `__getitem__`: broadcast with `enp.expand_dims`, split columns with `enp.split`, never `x[:, 0]`.
 - Fitness = mean over the `repeat_times` axis of the summed reward (return in `[0, max_step]`), then `finalize_fitness`.
 - Randomness: a single `evoxc.random.uniform(key, (B, 4), low=-0.05, high=0.05)`; no key threading through the scan, no `np.random`.
 - Because episodes are frozen, an individual's return is its survival time: `max_step` is the fitness ceiling, so `fitness_target` must be `<= max_step`.
