@@ -4,8 +4,8 @@
 Everything in a NEAT generation that is neither network mathematics (genome) nor task evaluation (problem): the population payload, the generation counter, speciation, stagnation, spawn allocation, parent pairing, and the crossover/mutation dispatch.
 `NEAT` (`neat.py`) is the algorithm the pipeline drives; `SpeciesController` + `SpeciesState` (`species.py`) own the species algebra.
 Every kernel here is batch-first over `P = pop_size` and compiled by `pipeline.py` into the single per-generation evoxc graph, so no function may branch on a traced value or read the host.
-Measured on the numpy reference backend with a stand-in genome (`N=8, E=12, NA=4, CK=2, CA=1`): `tell` builds in ~310–340 ms and runs in ~11.4 ms/generation at `P=100` and ~13.4 ms at `P=500`; the interpreter, not the data, dominates (see `## Measured Cost`).
-The layer itself is cheap — `O(species_size × pop_size)` distance work in `speciate` plus `O(pop_size)` selection/crossover/mutation — and never materialises a `max_nodes × max_nodes` tensor.
+Measured on the numpy reference backend with the real `DefaultGenome(max_nodes=50, max_conns=100)` and `XOR`, `species_size=20`: the whole `tell` runs in ~289 ms/generation at `P=100` and ~1002 ms at `P=500`, of which `speciate` is ~77 % and breeding ~11 % (see `## Measured Cost`); the interpreter, not the data, dominates.
+The layer's own work is `O(species_size × pop_size)` distance work in `speciate` plus `O(pop_size)` selection/crossover/mutation, and it never materialises a `max_nodes × max_nodes` tensor; the measured cost is the genome's per-pair distance kernel invoked `2 × species_size` times per generation, not a tensor size.
 
 ## Layout (four files, each under 1000 lines)
 `species.py` — `SpeciesState` plus `SpeciesController`: the documented, traced-facing methods and the species algebra, each delegating its tensor body to `_kernels.py`.
@@ -70,10 +70,12 @@ Carries are kept narrow and packed (`idx2species` and the running distance as tw
 No random draw happens inside a scan body — keys never travel through a carry.
 
 ## Gene Keys & Padding
-`new_node_keys = max_node_key(state, pop.node_keys) + 1 + arange(P)`; `new_conn_markers = max_conn_marker(state, pop.conn_keys) + 1 + arange(P * 3).reshape(P, 3)`, or zeros when `conn_gene.uses_historical_marker` is False.
+`max_node_key(state, node_keys)` and `max_conn_marker(state, conn_keys)` return one maximum **per individual** (`(P,) int32`, `0` for an individual with no real row), so `_new_gene_keys` builds a per-individual base: `new_node_keys = base + 1 + arange(P)` (`(P,) int32`, no reshape) and `new_conn_markers = reshape(base_marker, (P, 1)) + 1 + arange(P * 3).reshape(P, 3)` when `conn_gene.uses_historical_marker`, else zeros.
+Uniqueness is therefore guaranteed **within one individual's own keys** (keys are namespaced per individual; a key handed to one genome may coincide with a key held by another, which is legal because the mutation kernel only inspects an individual's own rows): each allocated key is strictly above that individual's own maximum, and the three markers of one individual are distinct from each other.
+Node keys and connection markers live in different key columns, so a numerical coincidence between an allocated node key and an allocated marker is meaningless, and gene alignment compares full key rows (endpoints plus marker), so a marker that two individuals share never yields a false homologue.
 The width `3` is a genome-level convention: one mutation call may add at most three connections per genome.
-The `+1` is an int32 constant on purpose: mixing a float literal into the int32 chain would promote the keys to int64.
-Validity is never inferred from packaging: this subtree calls `node_exists`, `conn_exists`, `max_node_key` and `max_conn_marker` on the genome.
+The `+1` is an int32 constant tensor on purpose: an `evoxc` addition against a Python int promotes the whole chain to int64, and the gene key columns are int32.
+Validity is never inferred from packaging: this subtree calls `node_exists(node_keys)`, `conn_exists(conn_keys)`, `max_node_key` and `max_conn_marker` on the genome — the two validity helpers take only the key array and derive the padding sentinel themselves.
 Dead species slots are recognised by `isnan(species_keys)` alone; their centre rows hold stale integers because int32 cannot carry NaN, and no kernel reads a centre gated by that mask.
 
 ## Divergences from the Pre-Rewrite Baseline (deliberate fixes)
@@ -98,17 +100,20 @@ Keys are rank-0 scalars, so a batched kernel takes one key and draws its own pop
 `common`: `State` (immutable, `register`/`update`/`registered_keys`), `StatefulBaseClass`, `errors.TensorNEATError`, `tools.{rank_elements, fetch_first, argmin_with_mask, flat_gather, to_numpy}`.
 `pipeline`: creates `randkey` with `evoxc.random.key(seed)`, calls `setup` on the host, drives `ask → transform → forward/evaluate → tell`, and calls `show_details` on host-readable values.
 
-## Measured Cost (numpy backend, stand-in genome, this repo)
-`NEAT.setup` (init kernel build + run): 21 ms at `P=100`, 23 ms at `P=500`.
-`NEAT.tell` graph build: 307–338 ms across runs, at both `P=100` and `P=500` (one graph per shape, cached by the pipeline).
-`NEAT.tell` execution: 11.4–12.0 ms/generation at `P=100` (5 generations), 12.7–13.4 ms at `P=500` (3 generations).
-The near-flat scaling shows the cost is per-op interpreter overhead plus the stand-in genome's `execute_distance`, which runs `2 × species_size` whole-population comparisons per generation; the real genome's edge-proportional distance should lower both.
-`_sanitize_fitness` alone: 0.037 ms. `speciate` alone: 8.7 ms at `P=100`, 9.2 ms at `P=500`. `update_species` alone: ~1.0–1.2 ms.
+## Measured Cost (numpy backend, real `DefaultGenome(max_nodes=50, max_conns=100)`, XOR, `species_size=20`, this repo)
+Whole `Pipeline.step` (one graph, build cached by the pipeline): 313 ms/generation at `P=100`, 1024 ms at `P=500`, 2157 ms at `P=1000`; the first step additionally pays a 4.3 / 5.5 / 7.3 s graph build.
+Phase split at `P=100` / `P=500`: evaluation (`transform` + `forward` + `evaluate`) 48 / 232 ms, `tell` 289 / 1002 ms — `tell` is 71 % / 81 % of the generation.
+Inside `tell` at `P=100` / `P=500`: `speciate` 223 / 614 ms, crossover + mutation + elite select 33 / 89 ms, `update_species` (species fitness, stagnation, sort, spawn, pairing) 1.2 / 1.6 ms.
+`execute_distance` for one broadcast centre against the whole population: 5.7 / 17.1 ms, so `speciate`'s ~`2 × species_size` passes account for its whole cost — the distance kernel is genome-owned, and the pass count is this node's.
+`NEAT.setup` (init kernel build + run): 40 / 38 / 47 ms at `P=100` / `500` / `1000`.
+The legacy JAX baseline is 51 / 109 / 157 ms per generation, so the cycle is 6–14× over budget at the configuration above in this node.
 
 ## Known Issues
 `next_species_key` must stay strictly greater than every live key; `setup` seeds it at `1.0` (slot 0 uses `0.0`) and each created species increments it, so the invariant holds as long as the counter is never rebound by hand — a colliding counter silently merges two species' `member_count`.
 `test/unit/algorithm/test_spawn.py` encodes the brief's `loc(p) = #{i : spawn[i] > 0 and E[i] <= p} - 1`; that count is wrong for a live zero-spawn species in the middle of the table, so the oracle needs the "last qualifying block" form to agree with `block_layout` (cross-node item, `test/` is not writable from here).
-`test/unit/algorithm/**` cannot run yet: the sibling skeletons break `import tensorneat` (`common/tensorization.py` has no `build_schedule` while `genome/base.py` imports it, and `common/functions` has no `get_func_name` while `genome/gene/node/bias.py` imports it). The kernels here were verified standalone on the numpy backend instead.
+`test/unit/algorithm/**` bodies are hard-coded `pytest.skip`, so the suite verifies nothing even against a working tree; this node is currently verified by driving `Pipeline` end-to-end on the numpy backend with the real `DefaultGenome`/`XOR` (pop 8/100/500/1000, `rank` and `fitness` spawn modes, `max_stagnation` kills, `OriginConn`'s `historical_marker` branch, `pop_batch_size` chunking, `RecurrentGenome`, XOR3d) plus bit-identical repeat runs.
+`speciate` calls `distance_fn` once per species slot in each of its two scans (`2 × species_size` whole-population passes per generation) and pays that even for dead slots and for iterations whose masks turn every write into a no-op; at `species_size=20` this is ~77 % of `tell`.
+`_new_gene_keys` is per-individual by contract (see `## Gene Keys & Padding`), so the genome must not assume keys are globally unique across the population.
 
 ## Constraints
 No `jax`/`torch`/`numpy.random` import; `import tensorneat` must stay free of them (release gate).

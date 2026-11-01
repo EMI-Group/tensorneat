@@ -544,15 +544,15 @@ class NEAT(BaseAlgorithm):
 
         A batch-first mutation creates nodes and connections for the whole
         population in one kernel, so every individual needs key ranges that do
-        not overlap:
+        not collide with *its own* existing rows:
 
         * ``new_node_keys = max_node_key(state, node_keys) + 1 + enp.arange(P)``
           -- with ``arange(P)`` inserted in the ``"add_node"`` path, each genome
           adds at most one node per mutation call;
         * ``new_conn_markers`` is ``(P, 3)`` int32:
-          ``max_conn_marker(state, conn_keys) + 1 + arange(P * 3).reshape(P, 3)``
-          when the connection gene carries a ``historical_marker``, otherwise
-          ``enp.zeros((P, 3), dtype=evoxc.int32)``.
+          ``reshape(max_conn_marker(state, conn_keys), (P, 1)) + 1
+          + arange(P * 3).reshape(P, 3)`` when the connection gene carries a
+          ``historical_marker``, otherwise ``enp.zeros((P, 3), dtype=evoxc.int32)``.
 
         Args:
             state (State): State carrying the population.
@@ -561,6 +561,20 @@ class NEAT(BaseAlgorithm):
             tuple: ``(new_node_keys (P,) int32, new_conn_markers (P, 3) int32)``.
 
         Note:
+            **Rank contract.** ``max_node_key``/``max_conn_marker`` return one
+            maximum per individual, ``(P,) int32``, so the base is per-individual
+            and uniqueness is only guaranteed *within* an individual's own gene
+            keys: keys are effectively namespaced per individual, and a key
+            allocated for one genome may collide with a key held by another
+            genome (legal -- the mutation kernel is batch-first and only ever
+            inspects an individual's own rows).  ``base + 1 + arange(P)`` is
+            strictly greater than *that* individual's own maximum.  The marker
+            path therefore reshapes the ``(P,)`` base to ``(P, 1)`` before adding
+            the ``(P, 3)`` offsets, so each individual's three markers are
+            strictly above its own maximum marker and distinct from each other.
+            Node keys and markers live in different key columns, so a numerical
+            coincidence between an allocated node key and an allocated marker
+            within one individual is meaningless.
             The width ``3`` is a genome-level convention: one mutation call may
             add at most three connections per genome.  Both maxima come from the
             genome helpers ``max_node_key``/``max_conn_marker``, which apply the
@@ -571,8 +585,8 @@ class NEAT(BaseAlgorithm):
         """
         one = enp.full((), 1, dtype=evoxc.int32)
         node_keys = state.pop.node_keys
-        node_base = evoxc.reshape(
-            evoxc.cast(self.genome.max_node_key(state, node_keys), evoxc.int32), ()
+        node_base = evoxc.cast(
+            self.genome.max_node_key(state, node_keys), evoxc.int32
         )
         new_node_keys = evoxc.add(
             evoxc.add(node_base, one),
@@ -585,7 +599,7 @@ class NEAT(BaseAlgorithm):
                     self.genome.max_conn_marker(state, state.pop.conn_keys),
                     evoxc.int32,
                 ),
-                (),
+                (self._pop_size, 1),
             )
             markers = evoxc.reshape(
                 enp.arange(self._pop_size * 3, dtype=evoxc.int32),
@@ -746,11 +760,9 @@ class NEAT(BaseAlgorithm):
         if self._details_cache is not None and self._details_cache[0] == shape_key:
             return self._details_cache[1]
 
-        cfg = self._static_state(state)
-
         def _count_kernel(node_key_rows, conn_key_rows):
-            node_mask = self.genome.node_exists(cfg, node_key_rows)
-            conn_mask = self.genome.conn_exists(cfg, conn_key_rows)
+            node_mask = self.genome.node_exists(node_key_rows)
+            conn_mask = self.genome.conn_exists(conn_key_rows)
             return [
                 evoxc.sum(evoxc.cast(node_mask, evoxc.int32), axes=1),
                 evoxc.sum(evoxc.cast(conn_mask, evoxc.int32), axes=1),
