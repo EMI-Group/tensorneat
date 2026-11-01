@@ -51,6 +51,7 @@ Per level:
 5. `update = (node_level == l) & node_exists & (valid_count > 0)`; `values = select(update, z, values)`. A node with no live incoming edge keeps NaN, and its descendants lose their only live source and stay NaN — this reproduces the legacy NaN poisoning exactly.
 Read out `gather(values, output_idx, axis=1) -> (P, num_outputs)`, then `output_transform`.
 Cost is `O(depth × max_nodes × K)` with only elementwise/reduce/gather ops: work scales with real depth and real in-degree, never `max_nodes²`.
+Measured budget (numpy backend, `P=1000`, `max_nodes=50`, `K=2`, ~20 ops per level): ≈1.8 ms per unrolled level, i.e. ≈14 ms for a depth-8 forward against the 157 ms legacy generation — so **op count per level**, not element count, is what the implementation must keep thin.
 
 ## Forward algebra (recurrent)
 Same window machinery, no levels: unroll `activate_time` ticks in Python.
