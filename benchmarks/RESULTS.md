@@ -1,14 +1,14 @@
 # TensorNEAT benchmark — evoxc rewrite vs frozen JAX baseline
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
-> `benchmarks/results/latest.json` at 2026-11-01T18:19:16+00:00. It must not be hand-edited:
+> `benchmarks/results/latest.json` at 2026-11-01T18:27:56+00:00. It must not be hand-edited:
 > rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 ## Environment
 
 | Item | Value |
 |---|---|
-| Date (UTC) | 2026-11-01T18:19:16+00:00 |
+| Date (UTC) | 2026-11-01T18:27:56+00:00 |
 | Python | 3.12.3 |
 | Platform / CPU | Linux-6.8.0-146-generic-x86_64-with-glibc2.39 · x86_64 · 20 cores |
 | numpy / jax / evoxc / tensorneat | numpy 2.5.4 / jax 0.12.0.1 / evoxc n/a / tensorneat n/a |
@@ -36,9 +36,9 @@ Definitions, fairness rules and verdict rules live in `benchmarks/CONTEXT.md`.
 | xor_p100 | func_fit | XOR | 100 | 150 | -0.1 | yes | not run | — |
 | xor_p500 | func_fit | XOR | 500 | 150 | -0.1 | yes | not run | — |
 | xor_p1000 | func_fit | XOR | 1000 | 150 | -0.1 | yes | not run | — |
-| xor3d_p100 | func_fit | XOR3d | 100 | 150 | -0.5 | yes | not run | — |
-| xor3d_p500 | func_fit | XOR3d | 500 | 150 | -0.5 | yes | not run | — |
-| xor3d_p1000 | func_fit | XOR3d | 1000 | 150 | -0.5 | yes | not run | — |
+| xor3d_p100 | func_fit | XOR3d | 100 | 150 | -0.05 | yes | not run | — |
+| xor3d_p500 | func_fit | XOR3d | 500 | 150 | -0.05 | yes | not run | — |
+| xor3d_p1000 | func_fit | XOR3d | 1000 | 150 | -0.05 | yes | not run | — |
 | custom_pagie_p500 | func_fit | CustomFuncFit | 500 | 150 | -0.05 | yes | not run | per-impl divergence: the legacy side seeds the global numpy RNG and vmaps a jax-typed func; the new side samples from default_rng(seed) with a numpy func — same distribution, different draws |
 | cartpole_p100 | rl | CartPole | 100 | 150 | 180 | n/a | not run | new-only: the legacy library has no equivalent problem |
 
@@ -48,43 +48,43 @@ Definitions, fairness rules and verdict rules live in `benchmarks/CONTEXT.md`.
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.774 | 36.09 | 27.71 | 581.8 | -0.0099 | 77 | 2 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.660 | 35.40 | 28.25 | 580.6 | -0.0099 | 77 | 2 |
 
 ### xor_p500
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.686 | 128.40 | 7.79 | 626.9 | -0.0000 | 39 | 2 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.637 | 124.40 | 8.04 | 630.6 | -0.0000 | 39 | 2 |
 
 ### xor_p1000
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.659 | 243.54 | 4.11 | 627.6 | -0.0000 | 32 | 2 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.544 | 242.62 | 4.12 | 616.1 | -0.0000 | 32 | 2 |
 
 ### xor3d_p100
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.732 | 19.06 | 52.47 | 592.1 | -0.1389 | 1 | 2 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.622 | 19.17 | 52.16 | 583.0 | -0.1389 | 149 | 2 |
 
 ### xor3d_p500
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.727 | 68.27 | 14.65 | 622.9 | -0.1576 | 1 | 2 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.584 | 65.46 | 15.28 | 622.8 | -0.1576 | >153 | 2 |
 
 ### xor3d_p1000
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.690 | 181.03 | 5.52 | 642.9 | -0.1250 | 1 | 2 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.615 | 164.99 | 6.06 | 620.8 | -0.1250 | 62 | 2 |
 
 ### custom_pagie_p500
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.756 | 362.46 | 2.76 | 791.8 | -0.0052 | 1 | 2 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.688 | 353.08 | 2.83 | 755.7 | -0.0052 | 1 | 2 |
 
 ### cartpole_p100
 
@@ -126,19 +126,19 @@ Sub-verdicts: timing `n/a`, quality `n/a` — timing compares measured ms/genera
 
 | Implementation | Backend | Seed | Best @1 | Best @10 | Best @25% | Best @50% | Best @100% | Final | Gens to target |
 |---|---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.2524 | -0.2500 | -0.2500 | -0.2447 | -0.0278 | -0.0278 | 1 |
+| `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.2524 | -0.2500 | -0.2500 | -0.2447 | -0.0278 | -0.0278 | 149 |
 
 ### xor3d_p500
 
 | Implementation | Backend | Seed | Best @1 | Best @10 | Best @25% | Best @50% | Best @100% | Final | Gens to target |
 |---|---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.2524 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | 1 |
+| `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.2524 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | >153 |
 
 ### xor3d_p1000
 
 | Implementation | Backend | Seed | Best @1 | Best @10 | Best @25% | Best @50% | Best @100% | Final | Gens to target |
 |---|---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.2524 | -0.2500 | -0.1850 | -0.0192 | -0.0000 | -0.0000 | 1 |
+| `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.2524 | -0.2500 | -0.1850 | -0.0192 | -0.0000 | -0.0000 | 62 |
 
 ### custom_pagie_p500
 
@@ -152,9 +152,9 @@ Percent columns are generation `round(fraction × N)` of the N recorded generati
 
 | Case | Pop | Declared legacy ms/gen | Measured old ms/gen | Ratio (measured/declared) |
 |---|---|---|---|---|
-| xor_p100 | 100 | 51.00 | 36.09 | 0.71x |
-| xor_p500 | 500 | 109.00 | 128.40 | 1.18x |
-| xor_p1000 | 1000 | 157.00 | 243.54 | 1.55x |
+| xor_p100 | 100 | 51.00 | 35.40 | 0.69x |
+| xor_p500 | 500 | 109.00 | 124.40 | 1.14x |
+| xor_p1000 | 1000 | 157.00 | 242.62 | 1.55x |
 
 The performance contract in `../CONTEXT.md` declares legacy CPU numbers measured on a
 1-thread-bound box (51 ms/gen at pop 100, 109 ms/gen at pop 500, 157 ms/gen at pop 1000).
@@ -179,4 +179,4 @@ Interpreter used: /tmp/genesis/task_d7be275380ce6fc0/bench-venv/bin/python
 
 Cases: xor_p100, xor_p500, xor_p1000, xor3d_p100, xor3d_p500, xor3d_p1000, custom_pagie_p500, cartpole_p100. Timed generations: 150, warmup generations (untimed): 3, repeats: 2 (seeds 42, 43), threads: runtime defaults (`--threads 0`). Backend(s) of the new side: numpy; the old side always ran on JAX, once per case.
 
-Generated from `benchmarks/results/latest.json` into `benchmarks/RESULTS.md` at 2026-11-01T18:19:16+00:00 — do not hand-edit.
+Generated from `benchmarks/results/latest.json` into `benchmarks/RESULTS.md` at 2026-11-01T18:27:56+00:00 — do not hand-edit.

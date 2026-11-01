@@ -34,6 +34,16 @@ These are a sanity check printed next to the *measured* old row; the verdict is
 computed from the row measured in the same run on the same box.
 """
 
+_XOR3D_FITNESS_TARGET: float = -0.05
+"""``-mse`` target of the XOR3d cases: mse <= 0.05, i.e. clearly beyond a linear fit.
+
+The target must lie below the trivial linear-baseline fitness of ``-0.25``,
+otherwise generations-to-target is satisfied from generation 1 (a purely linear
+3->1 network already fits 3-bit parity with mse 0.25). The former ``-0.5`` was
+met by every initial population, so the report's "gens to target" column read 1
+for every xor3d run and carried no information.
+"""
+
 
 def _pagie_as_jax(point: Any) -> Any:
     """Pagie polynomial ``1/(1+x**-4) + 1/(1+y**-4)`` as a traced ``(1,)`` array.
@@ -372,7 +382,7 @@ _CASES_IN_ORDER: tuple[Case, ...] = (
         pop_size=100,
         problem_class="XOR3d",
         num_inputs=3,
-        fitness_target=-0.5,
+        fitness_target=_XOR3D_FITNESS_TARGET,
         reference_ms_per_generation={},
     ),
     _xor_family_case(
@@ -380,7 +390,7 @@ _CASES_IN_ORDER: tuple[Case, ...] = (
         pop_size=500,
         problem_class="XOR3d",
         num_inputs=3,
-        fitness_target=-0.5,
+        fitness_target=_XOR3D_FITNESS_TARGET,
         reference_ms_per_generation={},
     ),
     _xor_family_case(
@@ -388,7 +398,7 @@ _CASES_IN_ORDER: tuple[Case, ...] = (
         pop_size=1000,
         problem_class="XOR3d",
         num_inputs=3,
-        fitness_target=-0.5,
+        fitness_target=_XOR3D_FITNESS_TARGET,
         reference_ms_per_generation={},
     ),
     Case(
