@@ -50,6 +50,9 @@ All configured ACT/AGG options are evaluated and selected, so a non-total option
 The legacy forward aggregated over a full `max_nodes`-wide column with no in-degree truncation, so a parity genome must be constructed with `max_in_degree >= max_nodes` (or at least ≥ every node's real in-degree) to be comparable; otherwise dropped edges show up as `edge_overflow`.
 `CustomFuncFit` samples from a seeded `Generator` instead of the global `np.random` state, so parity supplies fixed datasets (`method="grid"` or explicit arrays).
 The legacy RL problems are gone, so CartPole has no parity oracle — `./unit/problem`'s numpy reference is the only oracle.
+`problem.finalize_fitness` maps NaN → `-inf` while the legacy pipeline left NaN in the fitness array, so parity compares finite fitness only and the mapping is pinned as the one deliberate divergence.
+`mape` with a zero target is `1` for a zero prediction but `NaN` (`0/0`) when prediction and target are both exactly zero on the legacy side; parity genomes are chosen to avoid that corner.
+CartPole with NaN logits keeps a finite fitness (the action test is `out[1] > out[0]`, false for NaN, so it pushes left) — unlike func-fit, a NaN network is not demoted; `./unit/problem` pins that documented behaviour.
 
 ## Conventions
 Every test that depends on unimplemented source code has a real signature and docstring and a body of `pytest.skip("not implemented")`, so the file is importable and collectable before the implementation wave and the skip text names the owner.
