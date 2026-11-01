@@ -216,8 +216,8 @@ def genome_pair(new, legacy, convert):
 
     Returns:
         ``build(num_inputs=2, num_outputs=1, max_nodes=8, max_conns=16, *,
-        activation="sigmoid", aggregation="sum", input_transform=None,
-        output_transform=None) -> GenomePair``.
+        max_in_degree=None, activation="sigmoid", aggregation="sum",
+        input_transform=None, output_transform=None) -> GenomePair``.
 
     Notes:
         Three conversions happen here, and each one is a parity rule:
@@ -229,6 +229,10 @@ def genome_pair(new, legacy, convert):
         * ``max_in_degree = convert.max_in_degree_for(max_nodes)``: the rewrite's
           incoming window is ``max_nodes`` slots wide, like the legacy dense
           column, so ``Transformed.edge_overflow`` is ``0`` for every payload.
+          ``max_in_degree`` may be overridden **only** to build a deliberately
+          lossy pair for the constructive half of the schedule guard in
+          ``test_forward.py``; such a pair must never be compared value by value,
+          because the two sides then see different edge sets.
         * ``max_depth = max_nodes``: the unroll bound must not truncate a parity
           network — a tail left ``NaN`` by the depth bound would look like a value
           mismatch.
@@ -262,6 +266,7 @@ def genome_pair(new, legacy, convert):
         max_nodes: int = DEFAULT_MAX_NODES,
         max_conns: int = DEFAULT_MAX_CONNS,
         *,
+        max_in_degree: int | None = None,
         activation: str = DEFAULT_ACTIVATION,
         aggregation: str = DEFAULT_AGGREGATION,
         input_transform: Any = None,
@@ -276,6 +281,11 @@ def genome_pair(new, legacy, convert):
                 f"max_conns={max_conns} cannot hold the legacy dense initial "
                 f"network of {initial_edges} edges for this layout"
             )
+        window = (
+            convert.max_in_degree_for(max_nodes)
+            if max_in_degree is None
+            else int(max_in_degree)
+        )
         new_input_transform = resolve_transform(input_transform)
         new_output_transform = resolve_transform(output_transform)
 
@@ -296,7 +306,7 @@ def genome_pair(new, legacy, convert):
             input_transform=new_input_transform,
             output_transform=new_output_transform,
             init_hidden_layers=hidden,
-            max_in_degree=convert.max_in_degree_for(max_nodes),
+            max_in_degree=window,
             max_depth=max_nodes,
         )
 
@@ -323,7 +333,7 @@ def genome_pair(new, legacy, convert):
             num_outputs=num_outputs,
             max_nodes=max_nodes,
             max_conns=max_conns,
-            max_in_degree=convert.max_in_degree_for(max_nodes),
+            max_in_degree=window,
             new_genome=new_genome,
             new_state=new_genome.setup(new.common.State()),
             legacy_genome=legacy_genome,
@@ -577,7 +587,7 @@ def legacy_fitness(legacy, legacy_transformed):
 
 
 @pytest.fixture(scope="module")
-def new_fitness(new, runner, new_schedule, tile_payload):
+def new_fitness(new, runner, new_schedule):
     """Score one payload with the rewrite's ``problem.XOR`` / ``problem.XOR3d``.
 
     Returns:
@@ -585,49 +595,67 @@ def new_fitness(new, runner, new_schedule, tile_payload):
         numpy fitness, one entry per individual of ``payload``.
 
     Notes:
-        ``FuncFit.evaluate`` tiles the baked dataset over the population and calls
-        ``act_fn`` on the ``(P * S, I)`` batch, so the payload and its schedule are
-        tiled ``S`` times first (:func:`tile_payload`, individual-major) and
-        ``act_fn`` is the genome's ``forward`` over that tiled batch; every
-        ``S``-th fitness entry is then individual ``p``'s — the exact inverse of
-        the documented ``row p * S + s`` layout.  The problem is deterministic, so
-        the key is a fixed ``evoxc.random`` key and is never advanced.
+        ``FuncFit.evaluate`` reads ``P`` from ``static_batch_size(transformed)``,
+        tiles its baked dataset over that population axis and calls ``act_fn``
+        **once** on the ``(P * S, I)`` batch (row ``p * S + s`` is sample ``s`` of
+        individual ``p``).  One ``forward`` call cannot serve that batch — the
+        genome's ``forward`` is itself batch-first over ``P`` individuals — so
+        ``act_fn`` here reshapes the batch to ``(P, S, I)`` and calls ``forward``
+        once per sample, stacking the ``(P, O)`` results back to ``(P * S, O)``.
+        That is a static Python loop over ``S`` (no ``vmap``, as evoxc requires),
+        and it keeps the population axis meaning "one network per row", so
+        nothing about the problem layer is worked around.  The fixture therefore
+        does **not** tile the payload; it scores the payload as given and returns
+        one fitness per individual.  The problem is deterministic, so the key is
+        a fixed ``evoxc.random`` key and is never advanced.
     """
     import evoxc
 
-    def run(pair: GenomePair, payload: Any, *, problem_name: str = "XOR", error_method: str = "mse"):
-        problem = getattr(new.problem, problem_name)(error_method=error_method)
-        samples = int(np.asarray(problem.inputs).shape[0])
-        tiled = tile_payload(payload, samples)
-        transformed = new_schedule(pair, tiled)
-        width = len(new.common.Transformed._fields)
-        key = evoxc.random.key(0)
+    enp = evoxc.numpy
+    width = len(new.common.Transformed._fields)
 
-        def graph(*arrays):
-            schedule = new.common.Transformed(*arrays[:width])
-            node_keys, node_attrs, conn_keys, conn_attrs = arrays[width:]
+    def act_fn_for(pair: GenomePair, schedule: Any, arrays: tuple):
+        node_keys, node_attrs, conn_keys, conn_attrs = arrays
 
-            def act_fn(inputs):
-                return pair.new_genome.forward(
+        def act_fn(batch):
+            pop_size = int(schedule.node_level.shape[0])
+            rows = int(batch.shape[0])
+            samples = rows // pop_size
+            grid = enp.reshape(batch, (pop_size, samples, int(batch.shape[1])))
+            outputs = [
+                pair.new_genome.forward(
                     pair.new_state,
                     schedule,
                     node_keys,
                     node_attrs,
                     conn_keys,
                     conn_attrs,
-                    inputs,
+                    grid[:, sample, :],
                 )
+                for sample in range(samples)
+            ]
+            stacked = enp.stack(outputs, axis=1)
+            return enp.reshape(stacked, (rows, int(outputs[0].shape[-1])))
 
+        return act_fn
+
+    def run(pair: GenomePair, payload: Any, *, problem_name: str = "XOR", error_method: str = "mse"):
+        problem = getattr(new.problem, problem_name)(error_method=error_method)
+        transformed = new_schedule(pair, payload)
+        key = evoxc.random.key(0)
+
+        def graph(*arrays):
+            schedule = new.common.Transformed(*arrays[:width])
+            act_fn = act_fn_for(pair, schedule, arrays[width:])
             return problem.evaluate(pair.new_state, key, act_fn, schedule)
 
-        fitness = np.asarray(runner.run_defn(graph, *tuple(transformed), *tiled.args()))
-        return fitness[::samples]
+        return np.asarray(runner.run_defn(graph, *tuple(transformed), *payload.args()))
 
     return run
 
 
 @pytest.fixture(scope="module")
-def new_grad(runner):
+def new_grad(runner, new):
     """Differentiate the rewrite's ``forward`` through ``genome.grad``.
 
     Returns:
@@ -636,12 +664,19 @@ def new_grad(runner):
         :func:`support.runner.run_graph` (``lower`` → ``compile`` → ``load``).
 
     Notes:
-        ``genome.grad`` is a graph *factory* returning an ``evoxc.Graph`` whose
-        inputs are the differentiated tensors only — ``node_attrs`` and
-        ``conn_attrs``; the int32 keys, the schedule and the inputs are
-        specialised statics of that graph.  ``loss_fn`` must therefore be built
-        from evoxc ops: it is traced, not called on numpy data.
+        ``genome.grad`` is a graph *factory*: the ``evoxc.Graph`` it returns takes
+        the five tensor arguments ``(node_keys, node_attrs, conn_keys, conn_attrs,
+        inputs)`` in that order — only the two attribute tensors are
+        differentiated, but the int32 keys and the inputs are ordinary graph
+        inputs, while the schedule is specialised as a static constant of the
+        factory call.  ``evoxc.grad`` returns gradients only, so the loss value is
+        read from the *forward* pass of the same payload and the same ``loss_fn``
+        (one extra executable) and returned alongside them, which is what makes
+        ``test_grad``'s loss assertion a forward-tolerance comparison.
+        ``loss_fn`` must therefore be built from evoxc ops: it is traced, not
+        called on numpy data.
     """
+    width = len(new.common.Transformed._fields)
 
     def run(pair: GenomePair, payload: Any, transformed: Any, inputs: Any, loss_fn: Callable):
         graph = pair.new_genome.grad(
@@ -651,7 +686,25 @@ def new_grad(runner):
             inputs,
             loss_fn,
         )
-        return runner.run_graph(graph, payload.node_attrs, payload.conn_attrs)
+        node_grad, conn_grad = runner.run_graph(graph, *payload.args(), inputs)
+
+        def loss_graph(*arrays):
+            schedule = new.common.Transformed(*arrays[:width])
+            node_keys, node_attrs, conn_keys, conn_attrs, batch = arrays[width:]
+            return loss_fn(
+                pair.new_genome.forward(
+                    pair.new_state,
+                    schedule,
+                    node_keys,
+                    node_attrs,
+                    conn_keys,
+                    conn_attrs,
+                    batch,
+                )
+            )
+
+        loss = runner.run_defn(loss_graph, *tuple(transformed), *payload.args(), inputs)
+        return loss, (node_grad, conn_grad)
 
     return run
 
