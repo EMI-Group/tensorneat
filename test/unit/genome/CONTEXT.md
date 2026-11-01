@@ -36,7 +36,10 @@ A test may not edit `../../../src`, `../../../benchmarks` or `pyproject.toml`; a
 Whole node: 95 passed in ≈17 s on the numpy backend (`--durations=10`); ≈160 distinct graphs are traced per run, which is the floor, because each forward/recurrent test legitimately builds a fresh genome+state.
 `test_mutation.py` is ≈1020 lines for 15 invariant tests; it is at the concern threshold and should be split by operation family if it grows.
 `test_host_helpers.py`'s `visualize` test asserts `matplotlib`/`networkx` are absent from `sys.modules` before the call, so it is order-sensitive within one process; pytest runs each module once, so this never bites in a normal run.
-The module-scoped fixtures resolve `tensorneat` before `test/unit/conftest.py`'s per-test guard snapshots `sys.modules`, so that guard only catches a leak happening inside a test body; `test/release_gate_no_jax.py` is the real gate and is red until `src/tensorneat/pipeline.py` drops its `import jax`.
+The guard in `test/unit/conftest.py` is the test-side counterpart of `test/release_gate_no_jax.py`: it freezes a session baseline at session start and records every import statement of `jax`/`jaxlib`/`torch`/`brax`/`gymnax`/`mujoco`, attributed to the file that executed it.
+It therefore catches any import of an optional framework executed from `test/unit/**`, whether at module scope or inside a test body.
+It excuses the imports originating in `src/` (the still-legacy `pipeline.py`) or in `pytest.importorskip`.
+`test/release_gate_no_jax.py` stays red until `src/tensorneat/pipeline.py` drops its `import jax`.
 `pytest.mark.slow` is reserved for the oversized-population cases; the default gate is `pytest -m "not parity and not slow"`.
 
 ## Notes for Agents

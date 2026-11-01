@@ -22,9 +22,13 @@ framework may enter ``sys.modules``) honest for every module in this directory.
 Known side effect of :func:`common`: ``import tensorneat.common`` executes
 ``src/tensorneat/__init__.py``, which imports the legacy JAX ``pipeline.py``,
 so ``jax``/``jaxlib`` enter ``sys.modules`` the first time the fixture runs.
-``../conftest.py``'s leak guard snapshots ``sys.modules`` at autouse-fixture
-setup, and this module-scoped fixture is instantiated before that function-scoped
-one, so the guard does not observe those modules arriving.
+``../conftest.py``'s guard freezes a session baseline at session start and
+records every import statement of a forbidden module, attributed to the file
+that executed it.
+It therefore does observe an import this fixture causes, at module scope or
+inside a test body, and not only a module arriving after the test began.
+It excuses an import executed from ``src/`` — which is exactly this
+``pipeline.py`` — and one executed from ``pytest.importorskip``.
 The cause lies in ``src/`` — the ``pipeline.py`` rewrite away from JAX — and
 ``test/release_gate_no_jax.py`` is where that failure is owned.
 """
