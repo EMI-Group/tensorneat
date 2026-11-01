@@ -13,6 +13,9 @@ from typing import Any, Callable
 
 import numpy as np
 
+import evoxc
+import evoxc.numpy as enp
+
 from ..common.errors import TensorNEATError
 from ..common.state import State
 from ..common.stateful_class import StatefulBaseClass
@@ -40,7 +43,9 @@ def finalize_fitness(fitness: Any) -> Any:
         Every shipped problem applies this as its last operation, before the
         values are handed back to the algorithm's selection step.
     """
-    raise NotImplementedError
+    nan = evoxc.isnan(fitness)
+    floor = enp.full((), float("-inf"))
+    return evoxc.select(nan, floor, fitness)
 
 
 def static_batch_size(transformed: Any) -> int:
@@ -65,7 +70,40 @@ def static_batch_size(transformed: Any) -> int:
         TensorNEATError: If no leaf exposes a static leading dimension, or if
             the leaves disagree about it.
     """
-    raise NotImplementedError
+    leaves = evoxc.tree_leaves(transformed)
+    if not leaves:
+        raise TensorNEATError(
+            "execution schedule has no leaves, so the population size cannot be "
+            "recovered; pass the schedule returned by Genome.transform"
+        )
+    sizes: list[int] = []
+    for index, leaf in enumerate(leaves):
+        shape = getattr(leaf, "shape", None)
+        if shape is None:
+            raise TensorNEATError(
+                f"execution schedule leaf {index} ({type(leaf).__name__}) has no "
+                "``shape``; every schedule leaf must be a batch-first tensor"
+            )
+        if len(shape) == 0:
+            raise TensorNEATError(
+                f"execution schedule leaf {index} is rank-0, so it carries no "
+                "population axis; every schedule leaf must be batch-first"
+            )
+        try:
+            sizes.append(int(shape[0]))
+        except (TypeError, ValueError) as exc:
+            raise TensorNEATError(
+                f"execution schedule leaf {index} has a non-static leading "
+                f"dimension ({shape[0]!r}); shapes must be static at build time"
+            ) from exc
+    distinct = sorted(set(sizes))
+    if len(distinct) != 1:
+        raise TensorNEATError(
+            f"execution schedule leaves disagree about the population axis: "
+            f"leading dimensions {distinct}; every leaf must carry the same "
+            "population on axis 0"
+        )
+    return distinct[0]
 
 
 class BaseProblem(StatefulBaseClass):
