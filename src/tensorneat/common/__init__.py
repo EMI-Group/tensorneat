@@ -55,7 +55,6 @@ from .functions import (
     FunctionManager,
     apply_activation,
     apply_aggregation,
-    get_func_name,
 )
 
 __all__ = [
@@ -93,5 +92,4 @@ __all__ = [
     "FunctionManager",
     "apply_activation",
     "apply_aggregation",
-    "get_func_name",
 ]
