@@ -1,55 +1,40 @@
-from tensorneat.pipeline import Pipeline
-from tensorneat import algorithm, genome, problem
-from tensorneat.genome import OriginNode, OriginConn
+"""Solve XOR3d with the original-NEAT origin genes.
+
+`OriginNode` copies a whole gene on crossover and `OriginConn` keeps the
+historical marker, so every mutation stays traceable
+(https://github.com/EMI-Group/tensorneat/issues/11).
+
+Run: python examples/func_fit/xor_origin.py
+"""
+
+from tensorneat import Pipeline, algorithm, genome, problem
 from tensorneat.common import ACT
 
-"""
-Solving XOR-3d problem with OriginGene
-See https://github.com/EMI-Group/tensorneat/issues/11
-"""
+if __name__ == "__main__":
+    pipeline = Pipeline(
+        algorithm=algorithm.NEAT(
+            pop_size=1000,
+            species_size=10,
+            survival_threshold=0.01,
+            genome=genome.DefaultGenome(
+                node_gene=genome.OriginNode(),
+                conn_gene=genome.OriginConn(),
+                num_inputs=3,
+                num_outputs=1,
+                max_nodes=16,
+                output_transform=ACT.sigmoid,
+            ),
+        ),
+        problem=problem.XOR3d(),
+        seed=42,
+        generation_limit=150,
+        # fitness is maximised: this target is "error below 1e-4"
+        fitness_target=-1e-4,
+    )
 
-algorithm = algorithm.NEAT(
-    pop_size=10000,
-    species_size=20,
-    survival_threshold=0.01,
-    genome=genome.DefaultGenome(
-        node_gene=OriginNode(),
-        conn_gene=OriginConn(),
-        num_inputs=3,
-        num_outputs=1,
-        max_nodes=7,
-        output_transform=ACT.sigmoid,
-    ),
-)
-problem = problem.XOR3d()
-
-pipeline = Pipeline(
-    algorithm,
-    problem,
-    generation_limit=200,
-    fitness_target=-1e-6,
-    seed=42,
-)
-state = pipeline.setup()
-# run until terminate
-state, best = pipeline.auto_run(state)
-# show result
-pipeline.show(state, best)
-
-# visualize the best individual
-network = algorithm.genome.network_dict(state, *best)
-print(algorithm.genome.repr(state, *best))
-# algorithm.genome.visualize(network, save_path="./imgs/xor_network.svg")
-
-# transform the best individual to latex formula
-from tensorneat.common.sympy_tools import to_latex_code, to_python_code
-
-sympy_res = algorithm.genome.sympy_func(
-    state, network, sympy_output_transform=ACT.obtain_sympy(ACT.sigmoid)
-)
-latex_code = to_latex_code(*sympy_res)
-print(latex_code)
-
-# transform the best individual to python code
-python_code = to_python_code(*sympy_res)
-print(python_code)
+    # initialize the state; this is where the evoxc graphs are built
+    state = pipeline.setup()
+    # run until the fitness target is reached or the generation limit hits
+    state, best = pipeline.auto_run(state)
+    # show the best individual found
+    pipeline.show(state, best)

@@ -1,32 +1,37 @@
-from tensorneat.pipeline import Pipeline
-from tensorneat.algorithm.neat import NEAT
-from tensorneat.genome import RecurrentGenome
-from tensorneat.problem.func_fit import XOR3d
-from tensorneat.common import ACT, AGG
+"""Solve XOR3d with a recurrent genome (recurrent connections allowed).
+
+Run: python examples/func_fit/xor_recurrent.py
+"""
+
+from tensorneat import Pipeline, algorithm, genome, problem
+from tensorneat.common import ACT
 
 if __name__ == "__main__":
     pipeline = Pipeline(
-        algorithm=NEAT(
-            pop_size=10000,
-            species_size=20,
+        algorithm=algorithm.NEAT(
+            pop_size=1000,
+            species_size=10,
             survival_threshold=0.01,
-            genome=RecurrentGenome(
+            genome=genome.RecurrentGenome(
                 num_inputs=3,
                 num_outputs=1,
-                init_hidden_layers=(),
-                output_transform=ACT.sigmoid,
+                max_nodes=16,
+                # a recurrent genome is tick-unrolled, so `activate_time` is the
+                # cost knob: the forward pass runs that many relaxation ticks
                 activate_time=10,
+                output_transform=ACT.sigmoid,
             ),
         ),
-        problem=XOR3d(),
-        generation_limit=500,
-        fitness_target=-1e-6,  # float32 precision
+        problem=problem.XOR3d(),
         seed=42,
+        generation_limit=150,
+        # fitness is maximised: this target is "error below 1e-4"
+        fitness_target=-1e-4,
     )
 
-    # initialize state
+    # initialize the state; this is where the evoxc graphs are built
     state = pipeline.setup()
-    # run until terminate
+    # run until the fitness target is reached or the generation limit hits
     state, best = pipeline.auto_run(state)
-    # show result
+    # show the best individual found
     pipeline.show(state, best)
