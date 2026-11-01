@@ -104,7 +104,7 @@ Instead `grad` differentiates a mathematically identical **dense** pass built be
 - Integer arithmetic: an `int32` tensor plus a Python literal promotes to `int64` in evoxc, so index math stays in int32 tensors.
 - Errors: configuration violations raise `../common/errors.TensorNEATError`; tensor/backend errors from evoxc propagate unchanged — never caught and re-wrapped.
 - Files ≤ ~1000 lines; shared machinery (one window-reduce node step) lives in `base.py` and is parameterized by the update mask, never duplicated between `default.py` and `recurrent.py`.
-- File-size outcome: `base.py` 1568 lines (~1000 without the contract docstrings) had two responsibilities — tensor kernels and NumPy-in/Python-out introspection — so the host half moved to `host.py` (`BaseGenomeHost`, inherited by `BaseGenome`; every public name unchanged). The remaining `base.py` size is one job (the kernel contract) plus its docstrings; `gene/base.py` (801), `utils.py` (640) and the mutation files (≤573) are under budget.
+- File-size outcome: `base.py` (1375 lines) is one job — configuration, payload, schedule glue and the plain window forward — after its two side responsibilities moved out: NumPy-in/Python-out introspection went to `host.py` (`BaseGenomeHost`, inherited by `BaseGenome`), and the exact gradient path went to `grad.py` (`BaseGenome.grad` delegates to `grad.build_grad`; every public name unchanged). `grad.py` (492), `gene/base.py` (801), `utils.py` (640) and the mutation files (≤573) are under budget.
 
 ## Deviations from the pre-rewrite library (intentional)
 - `activation == -1` means **identity** everywhere; the legacy `lax.switch(-1, ...)` clamped to the last option, so `BiasNode` split nodes silently used the wrong activation.
