@@ -7,7 +7,8 @@ from tensorneat.common import ACT
 if __name__ == "__main__":
     # The CPPN maps substrate endpoint coordinates (2 coords -> 4 inputs) to a weight.
     neat = algorithm.NEAT(
-        pop_size=1000,
+        # Demo budget: a real run uses pop_size in the thousands and a few hundred generations.
+        pop_size=300,
         species_size=10,
         survival_threshold=0.1,
         genome=genome.DefaultGenome(
@@ -30,7 +31,7 @@ if __name__ == "__main__":
         ),
         problem=problem.XOR3d(),
         seed=42,
-        generation_limit=150,
+        generation_limit=40,
         fitness_target=-1e-4,
     )
 

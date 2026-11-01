@@ -20,9 +20,10 @@ def pagie_polynomial(inputs):
 
 
 if __name__ == "__main__":
+    # Demo budget: a real run uses pop_size in the thousands and a few hundred generations.
     pipeline = Pipeline(
         algorithm=algorithm.NEAT(
-            pop_size=1000,
+            pop_size=200,
             species_size=10,
             survival_threshold=0.01,
             genome=genome.DefaultGenome(
@@ -43,11 +44,11 @@ if __name__ == "__main__":
             low_bounds=np.array([-1.0, -1.0]),
             upper_bounds=np.array([1.0, 1.0]),
             method="sample",
-            num_samples=100,
+            num_samples=50,
             seed=42,
         ),
         seed=42,
-        generation_limit=100,
+        generation_limit=30,
         # fitness is maximised: this target is "error below 1e-2"
         fitness_target=-1e-2,
     )

@@ -7,9 +7,10 @@ from tensorneat import Pipeline, algorithm, genome, problem
 from tensorneat.common import ACT
 
 if __name__ == "__main__":
+    # Demo budget: a real run uses pop_size in the thousands and a few hundred generations.
     pipeline = Pipeline(
         algorithm=algorithm.NEAT(
-            pop_size=1000,
+            pop_size=300,
             species_size=10,
             survival_threshold=0.01,
             genome=genome.RecurrentGenome(
@@ -24,7 +25,7 @@ if __name__ == "__main__":
         ),
         problem=problem.XOR3d(),
         seed=42,
-        generation_limit=150,
+        generation_limit=40,
         # fitness is maximised: this target is "error below 1e-4"
         fitness_target=-1e-4,
     )
