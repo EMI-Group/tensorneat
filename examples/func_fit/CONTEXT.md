@@ -12,8 +12,8 @@ Every script builds one `Pipeline(algorithm=..., problem=..., seed=42, generatio
 ## Routing Table
 | Script | Demonstrates |
 |---|---|
-| `xor.py` | 2-input XOR, `DefaultGenome(num_inputs=2, max_nodes=12, output_transform=ACT.sigmoid)`, target `-1e-3`, 100 generations. |
-| `xor3d.py` | `problem.XOR3d()` (3 inputs, 8 samples), `max_nodes=16`, target `-1e-4`, 150 generations. |
+| `xor.py` | 2-input XOR, `DefaultGenome(num_inputs=2, max_nodes=12, output_transform=ACT.sigmoid)`, target `-1e-3`, 40 generations. |
+| `xor3d.py` | `problem.XOR3d()` (3 inputs, 8 samples), `max_nodes=16`, target `-1e-4`, 50 generations. |
 | `custom_func_fit.py` | Pagie polynomial via `problem.CustomFuncFit` with numpy bounds sampled at `seed=42`, `BiasNode` activation/aggregation menus, target `-1e-2`. |
 | `xor_recurrent.py` | `genome.RecurrentGenome(activate_time=10)` on XOR3d; `activate_time` is the tick-unroll cost knob. |
 | `xor_origin.py` | XOR3d with `genome.OriginNode()` / `genome.OriginConn()` (NEAT-paper whole-gene crossover + historical marker). |
