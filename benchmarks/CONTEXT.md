@@ -48,6 +48,12 @@ python benchmarks/run_benchmark.py --impl new --backend iree --cases xor_p500
 ```
 The worker prepends `benchmarks/legacy_jax` (old side) or `src` (new side) to `sys.path`, so an installed `tensorneat` never shadows the tree under test; the legacy side needs the `bench` extra (`jax`), the new side only `evoxc` + `numpy`.
 `--json` (default `benchmarks/results/latest.json`) holds per-run and aggregated records; `--out` (default `benchmarks/RESULTS.md`) is the regenerated report; `--dry-run` prints the planned subprocess commands without running them.
+## Notes for Agents
+- `--list` and `--dry-run` must work on an interpreter without numpy: `cases.py` is stdlib-only at module scope and `harness/protocol.py` guards its numpy import (`np = None`), so keep new module-scope imports on the numpy-free paths clean.
+- A failing run is always an `error`/`skipped` row, never a missing row: `harness/worker.py` writes its record even on a traceback, and the CLI synthesises a row when a worker dies without writing one.
+- `benchmarks/.gitignore` keeps `results/*.json` untracked; `RESULTS.md` is committed evidence and is only ever rewritten by `run_benchmark.py`.
+- The committed `RESULTS.md` is currently INCOMPLETE because the rewrite is unimplemented: `import tensorneat` fails in the `common.State` skeleton (`NotImplementedError`) before any agent code runs.
+- Bench environment: `jax` only on the old side, `evoxc` on the new side; the verdict compares the old row measured on the same box, never the declared 51/109/157 ms contract numbers.
 ## Constraints
 - Python >= 3.11; harness dependencies are stdlib + `numpy` (plus `jax` on the old side only, via the `bench` extra).
 - Never edit `legacy_jax/` — a moving baseline makes every number meaningless.
