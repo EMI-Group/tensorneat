@@ -33,11 +33,19 @@ their own sentinel above every real composite, and the sentinels are two apart a
 neither a ``(padding, padding)`` nor a ``(padding, gene)`` adjacency can ever pass the
 "differ by one and the right neighbour is population-tagged" test.
 
-Determinism: the sort is not required to be stable (ties are padding rows and, within one
-side, genes with equal key rows, which cannot pair across sides), so the cheap comparison
-sort is used; the emitted distances do not depend on the sort order because the per-gene
-terms are scattered back to the centre's own row order before the reduction (see
-:meth:`tensorneat.genome.operations.distance.base.BaseDistance.gene_measure`).
+Determinism: both sorts of this module (the digest's in :func:`prepare_family` and the merge's
+two in :func:`measure_alignment`) use ``stable=True``, which is a **performance** choice, not
+a tie-semantics one: the digest half of the merge is already ascending, so numpy's stable kind
+(timsort) detects a single run and the merge's two sorts drop from 2.49 to 0.57 ms per
+``(1000, 200)`` row block at ``M = 100`` (1.43 → 0.28 ms for the merge sort, 1.05 → 0.29 ms
+for its inverse permutation), and the digest's own sort gains 15–17 % because a payload is a
+short real-gene run followed by a long padding run.
+Stability also *pins* the tie order (input order), which is strictly better defined than a
+comparison sort's.
+Ties can only join equal composites — padding rows (whose attributes are ``NaN`` in both sides
+and which never pass the homology test) and, in a degenerate payload, duplicate key rows,
+which cannot pair across sides anyway — so results and the digest's eight leaves are
+byte-identical either way (verified on evolved payloads through the fixed-input oracle).
 
 Cost discipline: this module never calls ``enp.full`` directly — every rank-0 constant comes
 from the :class:`~.consts.ConstantPool` threaded in by the caller — and every row permutation
@@ -353,14 +361,18 @@ def prepare_family(
     Notes:
         This is the phase that used to run once per distance call; it now runs once per
         generation, so its cost is amortised over ``2 * species_size`` measurements.
-        The sort is *not* stable on purpose: ties are padding rows only (real keys are
-        unique inside a genome), and the distances do not depend on the tie order.
+        The sort is stable, which both pins the digest's tie order (input row order, where the
+        previous comparison sort left it to numpy) and costs less: the payload's real genes
+        are a run followed by a long ``NaN``/``I_INF`` padding run, so the interpreter's
+        timsort path measured 1.51 → 1.25 ms (node) and 1.43 → 1.22 ms (conn) at ``P = 1000``.
+        Ties are padding rows only (real keys are unique inside a genome), so the digest's
+        eight leaves are byte-identical either way.
     """
     pool = consts if consts is not None else ConstantPool()
     width = _key_width("prepare", gene, keys)
     pack, valid = _pack(keys, pool)
     tagged = _tagged(pack, valid, _TAG_POPULATION, _PAD_POPULATION, pool)
-    order = evoxc.cast(evoxc.argsort(tagged, axis=-1, stable=False), evoxc.int32)
+    order = evoxc.cast(evoxc.argsort(tagged, axis=-1, stable=True), evoxc.int32)
     attrs_sorted = _gather_rows(attrs, order, int(attrs.shape[-1]), pool)
     # A digest key block is always rank 3: the unf folded case keeps the *unpermuted* table
     # (nothing reads it) but still in the documented ``(P, M, K)`` spelling.
@@ -408,12 +420,18 @@ def measure_alignment(
 
     Notes:
         One sort of the ``2 * M`` concatenation, one ``argsort`` of its permutation (the
-        inverse permutation, two ops — a scatter of the ranks cost eight and measured slower),
-        then **two centre-width gathers** — the successor of each centre gene in the merged
-        order and the digest row that successor carries.  Reading the sorted block itself
-        would be a ``2 * M``-wide gather of ``int64`` composites (6.5 ms against 1.9 ms for
-        everything else here at ``4P = 4000``); the inverse permutation is what lets every
-        later step stay at the centre's own width ``M``.
+        inverse permutation, two ops — a scatter of the ranks cost eight and measured slower
+        even before the sort became stable), then **two centre-width gathers** — the successor
+        of each centre gene in the merged order and the digest row that successor carries.
+        Reading the sorted block itself would be a ``2 * M``-wide gather of ``int64``
+        composites (6.5 ms against 1.9 ms for everything else here at ``4P = 4000``); the
+        inverse permutation is what lets every later step stay at the centre's own width ``M``.
+        Both sorts are **stable**, which is a measured performance choice: the digest half of
+        the concatenation is already ascending and the interpreter's stable ``argsort``
+        (timsort) detects that run, so the merge's two sorts drop from 2.49 ms to 0.57 ms per
+        ``(1000, 200)`` row block at ``M = 100`` (the whole conn-family aligner 4.89 → 2.43 ms)
+        at an unchanged op count.  Ties only ever join equal composites — padding rows and, in
+        a degenerate payload, duplicate keys — so nothing observable moves.
         The fold is injective on the folded columns and the two sides carry different side
         tags, so a homologous pair is exactly a centre gene whose *successor* in merged order
         is the population composite ``composite + 1`` — no key-row gather and no
@@ -451,14 +469,14 @@ def measure_alignment(
     # ``int32`` indices: ``gather`` accepts ``int64`` too, but the 64-bit sort below and the
     # 64-bit index blocks it would force cost ~10 % of this kernel's milliseconds for two
     # saved casts (measured on the reference backend at P = 1000 and 4000).
-    order = evoxc.cast(evoxc.argsort(merged, axis=-1, stable=False), evoxc.int32)
+    order = evoxc.cast(evoxc.argsort(merged, axis=-1, stable=True), evoxc.int32)
     # ``order[i]`` is the merged index that sorts to position ``i``, so sorting the permutation
     # itself is its inverse: ``inverse[j]`` is the sorted position of merged index ``j`` — i.e.
     # of the centre gene that sits there (centre genes occupy merged columns ``count..2*count-1``).
-    # ``order`` is a permutation of distinct values, so no tie-breaking (and no stability)
-    # enters here.
+    # ``order`` is a permutation, so stability cannot change the inverse; it is only the
+    # cheaper sort on the reference interpreter (see the Notes).
     position = evoxc.slice(
-        evoxc.cast(evoxc.argsort(order, axis=-1, stable=False), evoxc.int32),
+        evoxc.cast(evoxc.argsort(order, axis=-1, stable=True), evoxc.int32),
         (0, count),
         (pop_size, count),
     )
