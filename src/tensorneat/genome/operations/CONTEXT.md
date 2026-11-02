@@ -68,7 +68,7 @@ Trace a bound method through a closure (`lambda *a: obj.method(state, *a)`) and 
 ## Routing Table
 | Path | Responsibility |
 |---|---|
-| `./alignment.py` | Shared exact-key homologue table: `find_homologous(keys1, keys2)` (hash + tagged `argsort` merge) and `key_rows(keys)` (rank-2/rank-3 key-table normaliser). |
+| `./alignment.py` | The single shared homologue implementation: `find_homologous(keys1, keys2)` (packed-identity rank merge, consumed by crossover and distance alike), `row_identity`, `gather_attr_rows`, `key_rows` (rank-2/rank-3 key-table normaliser) and the private `_confirm_rows`/`_gather_rows`/`_flat_row_index`/`_pad_identity` helpers. |
 | `./mutation/` | Structural (add/delete node, add/delete conn) and value mutation: `BaseMutation`, `DefaultMutation`, `RecurrentMutation`. |
 | `./crossover/` | Outcome-preserving key alignment and attribute recombination: `BaseCrossover`, `DefaultCrossover`. |
 | `./distance/` | Compatibility distance (disjoint/excess + attribute term): `BaseDistance`, `DefaultDistance`. |
