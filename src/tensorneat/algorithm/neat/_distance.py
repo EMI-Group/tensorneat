@@ -270,7 +270,9 @@ class DistanceRows:
         return evoxc.concatenate(
             [
                 self._measure_block(
-                    state, _rows(centres, start, min(block, count - start)), min(block, count - start)
+                    state,
+                    _rows(centres, start, min(block, count - start)),
+                    min(block, count - start),
                 )
                 for start in range(0, count, block)
             ],
