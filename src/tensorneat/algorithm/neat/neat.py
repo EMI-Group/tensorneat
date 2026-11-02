@@ -19,7 +19,10 @@ Conventions that hold everywhere in this module:
   genome-owned padding encoding: this module never inspects padding, it asks the
   genome (``node_exists``, ``conn_exists``, ``max_node_key``,
   ``max_conn_marker``) instead;
-* host-side Python is limited to ``__init__`` validation and ``show_details``.
+* host-side Python is limited to ``__init__`` validation and ``show_details``;
+  ``numpy`` is the one other host import, used only for the *static* dtype bound
+  of :func:`_finite_bound` (``numpy.finfo``), never for tensor arithmetic --
+  ``numpy.random`` is not used anywhere and no host array enters a kernel.
 
 Sizes: ``P = pop_size``, ``S = species_size``, ``N = max_nodes``,
 ``E = max_conns``, ``NA``/``CK``/``CA`` the node attribute, connection key and
@@ -29,6 +32,8 @@ connection attribute widths declared by the genome's genes.
 from __future__ import annotations
 
 from typing import Any, Callable, Optional
+
+import numpy as np
 
 import evoxc
 import evoxc.numpy as enp
@@ -43,15 +48,52 @@ from .species import SpeciesController, SpeciesState
 from ._validation import positive_int
 
 
+def _finite_bound(dtype: Any) -> Any:
+    """Rank-0 constant holding the largest finite magnitude representable by ``dtype``.
+
+    Args:
+        dtype (Any): Floating point dtype of the fitness array (``evoxc``/
+            ``numpy`` dtype object).
+
+    Returns:
+        Any: Rank-0 ``dtype`` constant equal to ``finfo(dtype).max``.
+
+    Raises:
+        TensorNEATError: If ``dtype`` is not a floating point dtype (an integer
+            "fitness" has no non-finite values, so this is a caller bug rather
+            than something to guess around).
+
+    Note:
+        The bound is the *exact* largest finite value of the dtype, so
+        ``abs(f) <= bound`` is true for every finite ``f`` and false for ``inf``
+        and ``NaN`` -- the same predicate the previous ``f - f`` composition
+        computed, without performing ``inf - inf`` (which numpy reports as a
+        ``RuntimeWarning: invalid value encountered in subtract``).
+    """
+    np_dtype = np.dtype(dtype)
+    if not np.issubdtype(np_dtype, np.floating):
+        raise TensorNEATError(
+            "_sanitize_fitness: fitness must be a floating point array, got "
+            f"dtype {np_dtype!r}"
+        )
+    return enp.full((), np.finfo(np_dtype).max, dtype=dtype)
+
+
 def _sanitize_fitness(fitness: Any, pop_size: int) -> Any:
     """Map NaN and infinite fitness to ``-inf``.
 
     Fitness is maximised and a broken topology evaluates to NaN, so the raw
-    ``(P,)`` value cannot enter selection.  ``evoxc`` has ``isnan`` but no
-    ``isfinite``/``isinf``; the exact composition used here is "``f - f`` is NaN
-    for NaN and for both infinities, and ``0`` for every finite value", i.e.
+    ``(P,)`` value cannot enter selection.  ``evoxc`` has no
+    ``isfinite``/``isinf``; the exact composition used here is "a value is
+    finite iff its magnitude does not exceed the dtype's largest finite value",
+    i.e.
 
-    ``finite = ~isnan(f - f)`` and ``clean = select(finite, f, -inf)``.
+    ``finite = abs(f) <= finfo(dtype).max`` and ``clean = select(finite, f, -inf)``.
+
+    ``NaN`` makes the comparison false and ``±inf`` exceeds the bound, so both
+    become ``-inf``, while every finite value (``-0.0`` and subnormals included)
+    passes through bit-identically.  No invalid arithmetic is performed, so the
+    kernel emits no numpy ``RuntimeWarning``.
 
     Args:
         fitness (Any): ``(P,)`` float32 raw fitness as produced by the problem.
@@ -64,7 +106,8 @@ def _sanitize_fitness(fitness: Any, pop_size: int) -> Any:
         only used as a ``select`` predicate, never as arithmetic).
 
     Raises:
-        TensorNEATError: If ``fitness`` is not 1-D over the population axis.
+        TensorNEATError: If ``fitness`` is not 1-D over the population axis, or
+            not floating point.
     """
     shape = tuple(getattr(fitness, "shape", ()))
     if len(shape) != 1 or shape[0] != pop_size:
@@ -73,7 +116,7 @@ def _sanitize_fitness(fitness: Any, pop_size: int) -> Any:
             f"({pop_size},) -- one value per individual -- but got "
             f"shape {shape} for {type(fitness).__name__}"
         )
-    finite = evoxc.logical_not(evoxc.isnan(evoxc.subtract(fitness, fitness)))
+    finite = evoxc.less_equal(evoxc.abs(fitness), _finite_bound(fitness.dtype))
     return evoxc.select(
         finite, fitness, enp.full((), float("-inf"), dtype=fitness.dtype)
     )
@@ -529,12 +572,19 @@ class NEAT(BaseAlgorithm):
             )
         )
 
+        # Elitism: keep the (unmutated) crossover child on elite slots.  The
+        # broadcast mask depends only on a field's rank, so it is built once per
+        # distinct rank instead of once per field.
+        masks: dict[int, Any] = {}
         next_fields = []
         for crossed_field, mutated_field in zip(crossed, mutated):
             rank = len(crossed_field.shape)
-            mask = evoxc.reshape(
-                elite_mask, (self._pop_size,) + (1,) * (rank - 1)
-            )
+            mask = masks.get(rank)
+            if mask is None:
+                mask = evoxc.reshape(
+                    elite_mask, (self._pop_size,) + (1,) * (rank - 1)
+                )
+                masks[rank] = mask
             next_fields.append(evoxc.select(mask, crossed_field, mutated_field))
 
         return state.update(pop=GenomeTensors(*next_fields), randkey=next_randkey)
@@ -546,13 +596,14 @@ class NEAT(BaseAlgorithm):
         population in one kernel, so every individual needs key ranges that do
         not collide with *its own* existing rows:
 
-        * ``new_node_keys = max_node_key(state, node_keys) + 1 + enp.arange(P)``
+        * ``new_node_keys = max_node_key(state, node_keys) + (1 + enp.arange(P))``
           -- with ``arange(P)`` inserted in the ``"add_node"`` path, each genome
           adds at most one node per mutation call;
         * ``new_conn_markers`` is ``(P, 3)`` int32:
-          ``reshape(max_conn_marker(state, conn_keys), (P, 1)) + 1
-          + arange(P * 3).reshape(P, 3)`` when the connection gene carries a
-          ``historical_marker``, otherwise ``enp.zeros((P, 3), dtype=evoxc.int32)``.
+          ``reshape(max_conn_marker(state, conn_keys), (P, 1))
+          + (1 + arange(P * 3)).reshape(P, 3)`` when the connection gene carries
+          a ``historical_marker``, otherwise
+          ``enp.zeros((P, 3), dtype=evoxc.int32)``.
 
         Args:
             state (State): State carrying the population.
@@ -579,33 +630,33 @@ class NEAT(BaseAlgorithm):
             add at most three connections per genome.  Both maxima come from the
             genome helpers ``max_node_key``/``max_conn_marker``, which apply the
             padding encoding themselves; this module never infers validity from
-            NaN.  The ``+1`` is spelled as an int32 constant tensor because an
-            ``evoxc`` addition against a Python int promotes to int64, and the
-            gene key columns are int32.
+            NaN.  The ``+1`` offsets are baked into the ``int32`` arange
+            constants (``arange(1, P + 1)``, ``arange(1, 3P + 1)``) rather than
+            added as a separate rank-0 constant, so each allocation is a single
+            ``add`` and no ``int64`` promotion can creep in.
         """
-        one = enp.full((), 1, dtype=evoxc.int32)
         node_keys = state.pop.node_keys
-        node_base = evoxc.cast(
-            self.genome.max_node_key(state, node_keys), evoxc.int32
-        )
+        node_base = self.genome.max_node_key(state, node_keys)
+        if node_base.dtype != evoxc.int32:
+            # The genome documents ``(P,) int32``; cast only when it does not
+            # already hold that dtype, so the default path pays no ``cast`` op.
+            node_base = evoxc.cast(node_base, evoxc.int32)
+        # ``1 + arange(P)`` is one constant: the whole offset is baked in, so the
+        # allocation costs a single ``add`` against the base.
         new_node_keys = evoxc.add(
-            evoxc.add(node_base, one),
-            enp.arange(self._pop_size, dtype=evoxc.int32),
+            node_base, enp.arange(1, self._pop_size + 1, dtype=evoxc.int32)
         )
 
         if self.genome.conn_gene.uses_historical_marker:
-            conn_base = evoxc.reshape(
-                evoxc.cast(
-                    self.genome.max_conn_marker(state, state.pop.conn_keys),
-                    evoxc.int32,
-                ),
-                (self._pop_size, 1),
-            )
+            conn_base = self.genome.max_conn_marker(state, state.pop.conn_keys)
+            if conn_base.dtype != evoxc.int32:
+                conn_base = evoxc.cast(conn_base, evoxc.int32)
+            conn_base = evoxc.reshape(conn_base, (self._pop_size, 1))
             markers = evoxc.reshape(
-                enp.arange(self._pop_size * 3, dtype=evoxc.int32),
+                enp.arange(1, self._pop_size * 3 + 1, dtype=evoxc.int32),
                 (self._pop_size, 3),
             )
-            new_conn_markers = evoxc.add(evoxc.add(conn_base, one), markers)
+            new_conn_markers = evoxc.add(conn_base, markers)
         else:
             new_conn_markers = enp.zeros(
                 (self._pop_size, 3), dtype=evoxc.int32
