@@ -59,5 +59,6 @@ Verification used while implementing: attr-table checks (widths, sentinels, draw
 | Path | Responsibility |
 |---|---|
 | `./base.py` | `GeneAttr` and `BaseGene`: table-driven attrs, `column`/`hash_int32`, batched mutate/crossover/distance/hash, `from_attrs`, host `repr`/`to_dict`. |
+| `./blocks.py` | Block-shaped (whole-attribute-block) genetic operators: `init_attrs`, `mutate_attrs`, `crossover_attrs`, plus the static-operand builders `static_row`/`column_constant`/`_parameter_table`; `BaseGene`'s `new_random_attrs`/`mutate`/`crossover`/`_attr_row` are one-line delegations to it (one draw per participating column, one gate/`select`/`clip` cascade over the whole `(*shape, attr_width)` block, one `U[0,1)` block draw for the crossover pick). |
 | `./node/` | Node genes: key column, hit-window aggregation, combine, activation selection. |
 | `./conn/` | Conn genes: key columns (optional historical marker), per-edge message from (attrs, source value). |
