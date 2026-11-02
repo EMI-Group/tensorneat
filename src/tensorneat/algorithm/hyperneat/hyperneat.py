@@ -22,7 +22,9 @@ Why this module contains no ``vmap``
     in the pre-rewrite library.
 
 Notation used throughout (all sizes are static ints known at construction)
-    ``P`` = ``neat.pop_size``; ``Q`` = ``substrate.conns_cnt``; ``N`` = ``substrate.nodes_cnt``;
+    ``P`` = the decoded payload's leading dimension (``neat.pop_size`` in an evolution step, ``1``
+    for a single-individual ``Pipeline.show`` decode); ``Q`` = ``substrate.conns_cnt``;
+    ``N`` = ``substrate.nodes_cnt``;
     ``I`` = ``substrate.num_inputs`` (substrate input neurons *including* the trailing bias);
     ``O`` = ``substrate.num_outputs``;
     ``C`` = ``neat.num_inputs`` = ``substrate.query_coors.shape[1]`` = ``2 * CD`` (CPPN input width,
@@ -554,8 +556,13 @@ class HyperNEAT(BaseAlgorithm):
         """
         return evoxc.constant(evoxc.from_numpy(np.ascontiguousarray(array)))
 
-    def _query_coors(self) -> Any:
+    def _query_coors(self, pop_size: int) -> Any:
         """Materialise the substrate query coordinates as a batch-first query grid.
+
+        Args:
+            pop_size: Static batch size ``P`` of the *payload being decoded* -- normally
+                ``self.pop_size``, but any static batch (``Pipeline.show`` decodes a single
+                individual) is legal because it is read off the payload, not off the config.
 
         Returns:
             ``(P, Q, C)`` float32 graph tensor: row ``q`` of ``substrate.query_coors`` -- the
@@ -570,7 +577,6 @@ class HyperNEAT(BaseAlgorithm):
             to ``(1, Q, C)``; the coordinate row order is substrate-owned and must match
             ``substrate.conn_index`` 1:1.
         """
-        pop_size = self.pop_size
         conns_cnt = int(self.substrate.conns_cnt)
         width = int(np.asarray(self.substrate.query_coors).shape[1])
         table = self._graph_constant(self.substrate.query_coors)
@@ -578,12 +584,14 @@ class HyperNEAT(BaseAlgorithm):
             enp.reshape(table, (1, conns_cnt, width)), (pop_size, conns_cnt, width)
         )
 
-    def _expand_schedule(self, transformed: Any, n_query: int) -> Any:
+    def _expand_schedule(self, transformed: Any, n_query: int, pop_size: int) -> Any:
         """Repeat a per-individual schedule along a new query axis and fuse it into axis 0.
 
         Args:
             transformed: Batch-first schedule from ``self.neat.transform`` (individual on axis 0).
             n_query: Static query count ``Q``.
+            pop_size: Static batch size ``P`` of that schedule -- the payload's own leading
+                dimension, so a batch smaller than ``self.pop_size`` decodes correctly.
 
         Returns:
             The same pytree structure whose leaves carrying the population axis become
@@ -596,15 +604,17 @@ class HyperNEAT(BaseAlgorithm):
             ordering or key table) are left alone and broadcast inside the genome kernels; the walk is
             a static Python recursion over the pytree, legal at trace time because it is static.
         """
-        return evoxc.tree_map(lambda leaf: self._expand_leaf(leaf, n_query), transformed)
+        return evoxc.tree_map(lambda leaf: self._expand_leaf(leaf, n_query, pop_size), transformed)
 
-    def _expand_leaf(self, leaf: Any, n_query: int) -> Any:
+    def _expand_leaf(self, leaf: Any, n_query: int, pop_size: int) -> Any:
         """Repeat one batch-first leaf along a query axis and fuse both axes into axis 0.
 
         Args:
             leaf: One leaf of a batch-first pytree; either a tensor whose axis 0 is the population
                 or a tensor without that axis (a shared ordering or key table).
             n_query: Static query count ``Q``.
+            pop_size: Static batch size ``P`` of the batch being decoded -- the population axis
+                length to rewrite, taken from the payload rather than from ``self.pop_size``.
 
         Returns:
             ``(P * n_query, *leaf.shape[1:])`` when ``leaf`` carries the population axis, and
@@ -616,9 +626,8 @@ class HyperNEAT(BaseAlgorithm):
             line up.  ``enp.broadcast_to`` cannot expand a non-unit axis, so the leaf is reshaped to
             ``(P, 1, ...)`` first; the repetition stays a broadcast until a consumer materialises it.
         """
-        if not leaf.shape or int(leaf.shape[0]) != self.pop_size:
+        if not leaf.shape or int(leaf.shape[0]) != pop_size:
             return leaf
-        pop_size = self.pop_size
         trailing = tuple(int(size) for size in leaf.shape[1:])
         widened = enp.reshape(leaf, (pop_size, 1) + trailing)
         repeated = enp.broadcast_to(widened, (pop_size, n_query) + trailing)
@@ -629,7 +638,9 @@ class HyperNEAT(BaseAlgorithm):
 
         Args:
             state: Current algorithm state.
-            pop: CPPN population payload, individual on axis 0.
+            pop: CPPN population payload, individual on axis 0.  Its leading dimension is the batch
+                ``P`` -- normally ``self.pop_size``, but any static batch is accepted (``Pipeline.show``
+                decodes one individual), which is why ``P`` is read from the payload.
 
         Returns:
             ``(P, Q)`` float32 graph tensor of raw CPPN outputs.
@@ -649,13 +660,13 @@ class HyperNEAT(BaseAlgorithm):
             (``node_keys, node_attrs, conn_keys, conn_attrs``) is exactly ``genome.forward``'s
             parameter order after ``transformed``.
         """
-        pop_size = self.pop_size
+        pop_size = int(pop.node_keys.shape[0])
         n_query = int(self.substrate.conns_cnt)
         width = int(np.asarray(self.substrate.query_coors).shape[1])
         transformed_cppn = self.neat.transform(state, pop)
-        expanded = self._expand_schedule(transformed_cppn, n_query)
-        expanded_pop = evoxc.tree_map(lambda leaf: self._expand_leaf(leaf, n_query), pop)
-        queries = enp.reshape(self._query_coors(), (pop_size * n_query, width))
+        expanded = self._expand_schedule(transformed_cppn, n_query, pop_size)
+        expanded_pop = evoxc.tree_map(lambda leaf: self._expand_leaf(leaf, n_query, pop_size), pop)
+        queries = enp.reshape(self._query_coors(pop_size), (pop_size * n_query, width))
         out = self.neat.genome.forward(state, expanded, *expanded_pop, queries)
         return enp.reshape(out, (pop_size, n_query))
 
@@ -698,6 +709,8 @@ class HyperNEAT(BaseAlgorithm):
 
         Args:
             weights: ``(P, Q)`` float32 connection weights from :meth:`_weights_from_query`.
+                Its leading dimension is the batch ``P`` this payload is built for, so a decode of
+                fewer than ``self.pop_size`` individuals produces a matching ``(P, ...)`` payload.
 
         Returns:
             :class:`~tensorneat.genome.utils.GenomeTensors` with ``node_keys (P, N) int32``,
@@ -729,7 +742,7 @@ class HyperNEAT(BaseAlgorithm):
             substrate topology is dense (``max_nodes == nodes_cnt``, ``max_conns == conns_cnt``), so
             no row is padding and no NaN sentinel is produced here.
         """
-        pop_size = self.pop_size
+        pop_size = int(weights.shape[0])
         nodes_cnt = int(self.substrate.nodes_cnt)
         conns_cnt = int(self.substrate.conns_cnt)
         node_gene = self.hyper_genome.node_gene
