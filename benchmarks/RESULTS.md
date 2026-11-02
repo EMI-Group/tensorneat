@@ -2,7 +2,7 @@
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
 > `benchmarks/results/authoritative.json` at 2026-11-02T07:29:02+00:00. It must not be hand-edited:
-> Re-rendered from that same JSON at 2026-11-02T07:42:23+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-02T07:43:30+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 ## Headline: old vs new
