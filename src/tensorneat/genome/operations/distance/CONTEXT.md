@@ -23,6 +23,7 @@ Both `prepare` and `measure` are **plain traced helpers**, never `@evoxc.defn` (
 ## Digest fields (batch-first, static shapes)
 `node_keys (P, N) int64` / `conn_keys (P, E) int64` — **injective** packed composite per gene row, ascending with the padding sentinel last.
 `node_attrs (P, N, NA) float32` / `conn_attrs (P, E, CA) float32` — the attribute rows permuted into that same sorted order, so the merge gathers them positionally; absent rows keep their NaN attributes.
+A gene family with no attribute column (`attr_specs = ()`, e.g. an unweighted HyperNEAT/CPPN connection gene) contributes an empty `(P, M, 0)` block here: `_gather_rows` returns it unchanged (a zero-width row has exactly one permutation, itself) instead of tracing a `0`-step index block.
 `node_count (P,) int32` / `conn_count (P,) int32` — real genes per individual, i.e. the length of the valid prefix.
 `node_key_cols (P, N, NK) int32` / `conn_key_cols (P, E, CK) int32` — key columns permuted into the same order, the exact-match oracle for a gene whose key width exceeds `_FOLDED_KEYS`; for a narrower key the fold is already injective, so the field keeps the *unpermuted* key table (`key_rows`) and nothing reads it.
 `prepare` writes no RNG and touches no host memory, so a digest is valid for one generation and cacheable for the whole speciate pass.
