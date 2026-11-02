@@ -30,7 +30,7 @@ The one precondition of the merge is the payload's own uniqueness invariant: the
 - A gene without a homologue keeps parent 1's attributes exactly, and `gene.attr_width == 0` returns `attrs1` unchanged (a zero-width row would trip `batch_offsets`' positive-length validation).
 - Crossover never changes structure, never fills a padded row from parent 2's row at the same index, and never mixes an `I_INF` into a float array.
 - Errors: a parent shape mismatch raises `ConfigError` (`TensorNEATError`); `evoxc` errors propagate unchanged.
-- Files ≤ ~1000 lines (`base.py` ~130, `default.py` ~185; the aligner lives in `../alignment.py`, ~535 lines).
+- Files ≤ ~1000 lines (`base.py` ~130, `default.py` ~185; the aligner lives in `../alignment.py`, ~425 lines).
 
 ## Measured Cost (numpy reference backend, build excluded, median of 5)
 `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)` + `DefaultCrossover()`: **145 traced ops**, `4.7 / 16.6 / 34.7 ms` at pop 100 / 500 / 1000.
