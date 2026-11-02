@@ -67,7 +67,7 @@ A feedforward genome's add-conn can close a cycle, so that branch keeps the pred
 - Rank-0 constants and static index blocks are built **once** per stage (in `EditContext`, or as a folded `graph_constant`) and shared: a per-use `enp.full((), v, int32)` is one traced op each.
 - Zero-width attribute tables (`attr_width == 0`) work: the write path uses row-index selects, so nothing builds a `0`-stride arange.
 - Errors: configuration problems raise `ConfigError` (`TensorNEATError`); `evoxc` shape/backend errors propagate unchanged.
-- Files ≤ ~1000 lines: `base.py` (738) owns the key split, the gate draw, the context, the plan merge and the value stage; `default.py` (411) the four `DefaultMutation` plans, `_fetch_two` and the split validation; `recurrent.py` (279) the recurrent add-conn; `cycle.py` (291) the merge-join reachability predicate; `plan.py` (266) the plan datatypes, `EditContext` and the single writer; `arrays.py` (381) the flat-index primitives; `degree.py` (118) the diagnostic in-degree audit.
+- Files ≤ ~1000 lines: `base.py` (738) owns the key split, the gate draw, the context, the plan merge and the value stage; `default.py` (411) the four `DefaultMutation` plans, `_fetch_two` and the split validation; `recurrent.py` (279) the recurrent add-conn; `cycle.py` (291) the merge-join reachability predicate; `plan.py` (266) the plan datatypes, `EditContext` and the single writer; `arrays.py` (321) the flat-index primitives; `degree.py` (118) the diagnostic in-degree audit.
 
 ## Measured cost (numpy reference interpreter, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100)`, build excluded, one warmup + median of 5, RNG key created inside the trace)
 | kernel | pop | traced ops | ms |
