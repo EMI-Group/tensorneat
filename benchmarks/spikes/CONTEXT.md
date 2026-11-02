@@ -2,7 +2,7 @@
 ## Intent
 Keep the measurements that justify the rewrite's *design* (edge-proportional, depth-parallel forward) separate from the end-to-end benchmark, with their conditions spelled out so nobody has to trust a number without a method.
 `FORMULATION.md` is the record: it cites the frozen legacy per-node forward cost, the depth-unrolled prototype cost in both forms, the one-off build cost per unrolled depth, and a cross-reference to the measured end-to-end generation times in `../RESULTS.md` that says which rows do and do not explain them.
-`forward_micro.py` is the runnable micro-benchmark behind those numbers — it measures formulations, not libraries: the legacy side needs `jax` + `benchmarks/legacy_jax` on the path, the numpy prototype needs only `numpy` and never imports `jax` (the version is read from the installed metadata).
+`forward_micro.py` is the runnable micro-benchmark behind those numbers — it measures formulations, not libraries: the legacy side needs `jax` plus the frozen `benchmarks/legacy_jax` tree (the script inserts that directory on `sys.path` itself), the numpy prototype needs only `numpy` and never imports `jax` (the version is read from the installed metadata).
 `iree_probe.py` is the runnable evidence behind `../BACKENDS.md`: it builds the benchmark's own graphs on `backend="iree"` and exits 0/1 per probe, so a non-deterministic failure shows up as a pass/fail pattern over fresh processes.
 ## API Surface
 `python benchmarks/spikes/forward_micro.py --mode {legacy,unrolled,all} [--pop 1000] [--max-nodes 50] [--max-conns 150] [--depth 8] [--levels 4,8,16] [--window 0] [--iters 20] [--build-iters 5] [--seed 0]`.

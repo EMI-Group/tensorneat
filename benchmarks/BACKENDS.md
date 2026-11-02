@@ -2,7 +2,7 @@
 
 **Answer: no — not for a single case in the matrix, and not for a reason the benchmark protocol can work around.**
 Every `--backend iree` run dies inside `Pipeline.setup()` while lowering the generation-0 species table, before a single generation is timed.
-The failure is deterministic (40/40 fresh worker processes, identical message) and is an evoxc **exporter/capability gate**, not an IREE compile crash.
+The failure is deterministic — the committed record is 8/8 identical errors, and a scratch determinism batch of 40 fresh worker processes (8 cases × 5, not committed) reproduced the same message — and is an evoxc **exporter/capability gate**, not an IREE compile crash.
 The SIGSEGV the pipeline owner reported is real and does reproduce here, but it sits *downstream* of three gates TensorNEAT never gets past.
 No iree row carries a number; the CPU contract stays on the numpy reference backend.
 
@@ -19,6 +19,8 @@ No iree row carries a number; the CPU contract stays on the numpy reference back
 | numpy | 2.5.4 |
 | iree-base-compiler / iree-base-runtime | 3.11.0 / 3.11.0 (what `evoxc[iree]` resolves) |
 | sympy / networkx / matplotlib / pytest | 1.14.0 / 3.7 / 3.11.2 / 9.2.0 |
+
+The `$TMPDIR` paths in this report are examples from that measurement session, not committed or fetchable artifacts.
 
 ## What was installed
 
@@ -48,9 +50,9 @@ $TMPDIR/iree-venv/bin/python benchmarks/run_benchmark.py --impl new --backend ir
   --json $TMPDIR/iree.json --out $TMPDIR/iree.md
 ```
 
-Result: 4/4 rows `status="error"`, `VERDICT: INCOMPLETE`, CLI exit code 1, JSON and Markdown written in full.
+Result (a scratch run, not the committed record): 4/4 rows `status="error"`, `VERDICT: INCOMPLETE`, CLI exit code 1, JSON and Markdown written in full.
 
-Per-case status, each case additionally re-run **5 times in 5 fresh worker processes** (`benchmarks/harness/worker.py --impl new --backend iree --generations 3 --warmup 1 --seed 42`, records in `$TMPDIR/reps/*.json`):
+Per-case status, each case additionally re-run **5 times in 5 fresh worker processes** (`benchmarks/harness/worker.py --impl new --backend iree --generations 3 --warmup 1 --seed 42`, records in `$TMPDIR/reps/*.json` — an example scratch path, not committed):
 
 | Case | Pop | Build (`Pipeline.setup`) | Timed run | Status over 5 fresh processes | ms/gen | compile (s) | peak RSS |
 |---|---|---|---|---|---|---|---|
@@ -63,7 +65,7 @@ Per-case status, each case additionally re-run **5 times in 5 fresh worker proce
 | `custom_pagie_p500` | 500 | fail | not reached | error 5/5 (export gate) | — | — | — |
 | `cartpole_p100` | 100 | fail | not reached | error 5/5 (export gate) | — | — | — |
 
-All 40 runs produced `status="error"` with one identical signature; 0 crashes, 0 timeouts, 0 missing rows.
+All 40 scratch runs produced `status="error"` with one identical signature; 0 crashes, 0 timeouts, 0 missing rows.
 `compile_time_s`, `ms_per_generation`, `gens_per_second` and all three RSS fields are `null` in every record, because the run dies before the first timing sample starts.
 The same venv runs the same case on the numpy backend fine (`--backend numpy --cases xor_p100 --generations 3`: `ok`, 58.06 ms/gen, build 2.93 s, final best −0.2500), so this is iree-specific, not a broken environment.
 
@@ -75,7 +77,7 @@ python benchmarks/run_benchmark.py --impl new --backend iree --cases all \
   --json benchmarks/results/iree.json --out benchmarks/iree.md
 ```
 
-The failure is identical for all 8 cases — population, problem and fitness target do not change it — matching the per-case 5/5 fresh-process pattern above (`--generations 3`).
+The failure is identical for all 8 cases — population, problem and fitness target do not change it — matching the per-case 5/5 scratch fresh-process pattern above (`--generations 3`).
 
 ## Failure signature (deterministic, first gate)
 
@@ -190,15 +192,16 @@ The real pipeline gates are `python benchmarks/spikes/iree_probe.py --mode pipel
 
 ## Determinism and harness behaviour
 
-- 40 fresh worker processes (8 cases × 5) → 40 identical `status="error"` rows, worker exit code 1 each; no crash, no timeout, no missing row.
+- The scratch determinism batch — 40 fresh worker processes (8 cases × 5, not committed) — produced 40 identical `status="error"` rows, worker exit code 1 each; no crash, no timeout, no missing row.
 - A failure in one case is confined to that case's row: the 4-case CLI run above completed all four rows, wrote JSON and Markdown, and exited 1.
 - Verified for a *hard* crash too, not just an exception: a test-only `sitecustomize.py` in `$TMPDIR` that SIGSEGVs only the worker process for `xor3d_p100` produced a synthesised `status="error"` row (`error: [crashshim] segfaulting worker for xor3d_p100`) while the other two cases still ran and the report was written.
   The harness confines a SIGSEGV correctly (one worker process per run); no harness bug was found, and `run_benchmark.py` was not modified.
-- `benchmarks/RESULTS.md` was not regenerated or edited for this report; the full-matrix record and its report are committed as `benchmarks/results/iree.json` and `benchmarks/iree.md`, while the per-case repeat records (`reps/*.json`, `confine.json`) live in `$TMPDIR` and are reproducible with the commands above.
+- The committed evidence is `benchmarks/results/iree.json` (8 cases × 2 generations, 1 repeat, all `status="error"` with the identical scatter message) rendered as `benchmarks/iree.md`; `benchmarks/RESULTS.md` was not regenerated or edited for this report.
+- The per-case 5-fresh-process determinism reps (`reps/*.json`) and the confinement test (`confine.json`) were scratch runs in `$TMPDIR` and are not committed, so the durable evidence for determinism is the identical 8/8 message in the committed record plus the minimal reproducer, which anyone can re-run.
 
 ## Verdict
 
 iree rows are usable for **no** case (X/Y = ∅): no TensorNEAT graph reaches IREE's compiler, so there is no measured ms/gen, compile time or RSS to report for any of `xor_p100`, `xor_p500`, `xor_p1000`, `xor3d_p100`, `xor3d_p500`, `xor3d_p1000`, `custom_pagie_p500`, `cartpole_p100`.
-Those cases are unavailable because `Pipeline.setup()` cannot be lowered on iree — evoxc's stablehlo v1 exporter rejects the rank-3 species-centre scatter at `src/tensorneat/algorithm/neat/species.py:295` (reproducer above, 5/5 fresh processes, 40/40 harness workers), and the two gates behind it (`uint32` genome hash outside iree's declared dtype set, `tril` in the species prefix sum) would each still have to be lifted.
+Those cases are unavailable because `Pipeline.setup()` cannot be lowered on iree — evoxc's stablehlo v1 exporter rejects the rank-3 species-centre scatter at `src/tensorneat/algorithm/neat/species.py:295` (reproducer above, 5/5 per-case scratch processes, 40/40 scratch harness workers), and the two gates behind it (`uint32` genome hash outside iree's declared dtype set, `tril` in the species prefix sum) would each still have to be lifted.
 The pipeline owner's SIGSEGV is real and reproducible on TensorNEAT's own 6-carry `node_levels` while-loop (4/12 fresh processes at N=8, 2/5 at N=50/P=100), but it is the fourth blocker, not the first, and its "3–7 s per graph" compile figure was not reproduced (0.26–1.19 s for every graph that compiled; a crashing compile cost 1–68 s).
 Until `Pipeline` can be lowered on iree at all, `RESULTS.md` must not carry iree rows, and the CPU contract remains the numpy reference backend.
