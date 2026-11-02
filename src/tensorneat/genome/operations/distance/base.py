@@ -154,11 +154,12 @@ class BaseDistance(StatefulBaseClass):
         payload = (node_keys, node_attrs, conn_keys, conn_attrs)
         _validate_single(type(self).__name__, "prepare", payload)
         pool = consts if consts is not None else ConstantPool()
+        key_span = int(genome.key_span)
         node = _digest.prepare_family(
-            state, genome.node_gene, node_keys, node_attrs, consts=pool
+            state, genome.node_gene, node_keys, node_attrs, key_span=key_span, consts=pool
         )
         conn = _digest.prepare_family(
-            state, genome.conn_gene, conn_keys, conn_attrs, consts=pool
+            state, genome.conn_gene, conn_keys, conn_attrs, key_span=key_span, consts=pool
         )
         return DistanceDigest(
             node.keys,
@@ -169,6 +170,10 @@ class BaseDistance(StatefulBaseClass):
             conn.attrs,
             conn.count,
             conn.key_cols,
+            node.dense,
+            node.real,
+            conn.dense,
+            conn.real,
         )
 
     def measure(
@@ -213,10 +218,14 @@ class BaseDistance(StatefulBaseClass):
         payload = (node_keys, node_attrs, conn_keys, conn_attrs)
         _validate_single(type(self).__name__, "measure", payload)
         batch = _validate_digest(type(self).__name__, payload, digest)
+        pool = consts if consts is not None else ConstantPool()
+        if int(node_keys.shape[0]) == 1:
+            fast = self._measure_single_centre(pool, state, genome, payload, digest)
+            if fast is not None:
+                return fast
         if int(node_keys.shape[0]) != batch:
             payload = _broadcast_payload(payload, batch)
             node_keys, node_attrs, conn_keys, conn_attrs = payload
-        pool = consts if consts is not None else ConstantPool()
         node_distance = self._measure_family(
             pool,
             state,
@@ -240,6 +249,36 @@ class BaseDistance(StatefulBaseClass):
             digest.conn_key_cols,
         )
         return evoxc.add(node_distance, conn_distance)
+
+    def _measure_single_centre(
+        self,
+        pool: ConstantPool,
+        state: State,
+        genome: "BaseGenome",
+        payload: tuple,
+        digest: DistanceDigest,
+    ) -> evoxc.SymbolicTensor | None:
+        """Hook: distance of one batch-1 centre against the digest, or ``None``.
+
+        Args:
+            pool (ConstantPool): Per-trace rank-0 constant pool.
+            state (State): Immutable host configuration container.
+            genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene``.
+            payload (tuple): The four centre arrays, batch ``1``.
+            digest (DistanceDigest): Population digest from :meth:`prepare`.
+
+        Returns:
+            ``(P,) float32`` distances, or ``None`` when this operator has no single-centre
+            route — the caller then broadcasts the centre and runs the row-wise merge.
+
+        Notes:
+            A static capability decision, taken before any op of the row-wise route is
+            emitted, so a subclass either answers the whole call or none of it.  The base
+            contract has no dense table, so it answers ``None``; the shipped
+            :class:`~.default.DefaultDistance` answers with :mod:`.dense` while the gene
+            geometry fits that module's static gate.
+        """
+        return None
 
     def gene_measure(
         self,
@@ -454,6 +493,7 @@ def _validate_digest(name: str, payload: tuple, digest: DistanceDigest) -> int:
             f"{name}.measure: expected a DistanceDigest from prepare(), "
             f"got {type(digest).__name__}"
         )
+    batch = int(digest.node_count.shape[0])
     for (
         family,
         centre_keys,
@@ -462,6 +502,8 @@ def _validate_digest(name: str, payload: tuple, digest: DistanceDigest) -> int:
         digest_attrs,
         digest_count,
         digest_key_cols,
+        digest_dense,
+        digest_real,
     ) in (
         (
             "node",
@@ -471,6 +513,8 @@ def _validate_digest(name: str, payload: tuple, digest: DistanceDigest) -> int:
             digest.node_attrs,
             digest.node_count,
             digest.node_key_cols,
+            digest.node_dense,
+            digest.node_real,
         ),
         (
             "conn",
@@ -480,6 +524,8 @@ def _validate_digest(name: str, payload: tuple, digest: DistanceDigest) -> int:
             digest.conn_attrs,
             digest.conn_count,
             digest.conn_key_cols,
+            digest.conn_dense,
+            digest.conn_real,
         ),
     ):
         if int(digest_keys.shape[1]) != int(centre_keys.shape[1]):
@@ -506,7 +552,16 @@ def _validate_digest(name: str, payload: tuple, digest: DistanceDigest) -> int:
                 f"{int(digest_key_cols.shape[1])} gene rows but the centre's key array is "
                 f"{tuple(centre_keys.shape)}"
             )
-    batch = int(digest.node_count.shape[0])
+        for field, block in (("dense slot", digest_dense), ("real-gene mask", digest_real)):
+            if tuple(int(size) for size in block.shape) != (
+                batch,
+                int(centre_keys.shape[1]),
+            ):
+                raise ConfigError(
+                    f"{name}.measure: the {family} digest {field} is "
+                    f"{tuple(block.shape)} but the digest holds {batch} genomes of "
+                    f"{int(centre_keys.shape[1])} gene rows"
+                )
     if int(digest.conn_count.shape[0]) != batch:
         raise ConfigError(
             f"{name}.measure: the two digest families disagree on the population batch "

@@ -33,15 +33,17 @@ class ConstantPool:
     Attributes:
         _i32 (dict): ``int`` value to ``int32`` rank-0 tensor.
         _i64 (dict): ``int`` value to ``int64`` rank-0 tensor.
+        _u32 (dict): ``int`` value to ``uint32`` rank-0 tensor.
         _f32 (dict): ``repr`` of a float to ``float32`` rank-0 tensor.
     """
 
-    __slots__ = ("_i32", "_i64", "_f32")
+    __slots__ = ("_i32", "_i64", "_u32", "_f32")
 
     def __init__(self):
         """Start an empty pool for one traced entry point."""
         self._i32 = {}
         self._i64 = {}
+        self._u32 = {}
         self._f32 = {}
 
     def i32(self, value: int) -> evoxc.SymbolicTensor:
@@ -77,6 +79,27 @@ class ConstantPool:
         if tensor is None:
             tensor = enp.full((), value, dtype=evoxc.int64)
             self._i64[value] = tensor
+        return tensor
+
+    def u32(self, value: int) -> evoxc.SymbolicTensor:
+        """Return the pooled rank-0 ``uint32`` constant ``value``.
+
+        Args:
+            value: Static non-negative integer baked into the trace.
+
+        Returns:
+            Rank-0 ``uint32`` tensor — the bound of the dense table's per-column range test,
+            which a negative ``int32`` key fails after the unsigned cast.
+
+        Notes:
+            Separate from :meth:`i32`: ``evoxc`` compares like dtypes only, so a range test
+            against an ``int32`` bound would have to pay two comparisons per key column
+            (``>= 0`` and ``< S``) instead of one.
+        """
+        tensor = self._u32.get(value)
+        if tensor is None:
+            tensor = enp.full((), value, dtype=evoxc.uint32)
+            self._u32[value] = tensor
         return tensor
 
     def f32(self, value: float) -> evoxc.SymbolicTensor:
