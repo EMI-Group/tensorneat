@@ -164,7 +164,26 @@ def _scalar_constant(value, dtype):
 # --------------------------------------------------------------------------- #
 
 
-def _flat_index_block(x, idx, present, fallback):
+def _flat_shape(x):
+    """``(pop_size, row_len)`` of a flat-index target given as a tensor or a shape.
+
+    Args:
+        x: Batch-first tensor of shape ``(P, R)``, or a ``(P, R)`` pair of
+            Python ints when only the shape is known (an index block that is
+            built once and reused against a different tensor of the same
+            shape, e.g. a loop-invariant index inside ``while_loop``).
+
+    Returns:
+        tuple: ``(pop_size, row_len)`` as Python ints.
+    """
+    if isinstance(x, tuple):
+        pop_size, row_len = x
+    else:
+        pop_size, row_len = x.shape
+    return int(pop_size), int(row_len)
+
+
+def prepare_flat_index(x, idx, present=None, fallback=0):
     """Turn per-row column indices into flat 1-D indices into the flattened ``x``.
 
     ``idx`` holds one *column* per position; the flat index of position
@@ -181,8 +200,17 @@ def _flat_index_block(x, idx, present, fallback):
       (plain ``row * R + col`` arithmetic would land inside the array for
       ``R <= col < 2R``, and negative indices would wrap).
 
+    The result depends only on ``idx``, ``present`` and the static shape, so a
+    caller whose index block is **loop-invariant** (the relaxation in
+    :func:`~tensorneat.common.tensorization.node_levels`) builds it once
+    outside its ``while_loop`` and then only calls
+    :func:`flat_gather_prepared` inside. :func:`flat_gather` and
+    :func:`masked_flat_gather` are the one-shot spellings of the same pair, so
+    this function is the single owner of the index arithmetic.
+
     Args:
-        x: Batch-first destination/source of static shape ``(P, R)``.
+        x: Batch-first destination/source of static shape ``(P, R)``, or the
+            ``(P, R)`` shape pair when only the shape is needed.
         idx: ``(P, *shape)`` integer column indices.
         present: ``(P, *shape)`` bool mask broadcastable to ``idx``, or ``None``
             for "every position is real".
@@ -192,7 +220,7 @@ def _flat_index_block(x, idx, present, fallback):
     Returns:
         ``(P, n)`` integer flat indices, ``n`` the product of ``idx.shape[1:]``.
     """
-    pop_size, row_len = x.shape
+    pop_size, row_len = _flat_shape(x)
     if present is None:
         safe = idx
     else:
@@ -204,6 +232,31 @@ def _flat_index_block(x, idx, present, fallback):
         escaped, _scalar_constant(pop_size * row_len, idx.dtype), safe
     )
     return evoxc.reshape(safe, (pop_size, -1)) + batch_offsets(pop_size, row_len)
+
+
+def flat_gather_prepared(x, flat_idx, shape):
+    """Gather through an index block already built by :func:`prepare_flat_index`.
+
+    Args:
+        x: Batch-first source of shape ``(P, R)`` (any dtype), flattened
+            row-wise.
+        flat_idx: ``(P, n)`` ``int32`` flat indices from
+            :func:`prepare_flat_index` **for the same shape** ``(P, R)``.
+        shape (tuple): ``(P, *shape)`` result shape of the gather, i.e. the
+            index block reshaped back to its logical layout.
+
+    Returns:
+        ``(P, *shape)`` tensor with ``x``'s dtype.
+
+    Raises:
+        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged if a flat
+            index escapes the flattened payload.
+    """
+    pop_size, row_len = _flat_shape(x)
+    flat = evoxc.reshape(x, (pop_size * row_len,))
+    return evoxc.reshape(
+        evoxc.gather(flat, flat_idx, axis=0), tuple(int(d) for d in shape)
+    )
 
 
 def batch_offsets(pop_size, row_len):
@@ -273,11 +326,12 @@ def flat_gather(x, idx):
         ``row * R + col`` alone would land **inside** the array for
         ``R <= col < 2R`` (silently reading the next row) and numpy wraps
         negative indices; the redirected value makes the backend raise.
+        :func:`prepare_flat_index` builds the index block and
+        :func:`flat_gather_prepared` performs the gather, so a caller with a
+        loop-invariant index block can hoist the former.
     """
-    flat_idx = _flat_index_block(x, idx, None, 0)
-    pop_size, row_len = x.shape
-    flat = evoxc.reshape(x, (pop_size * row_len,))
-    return evoxc.reshape(evoxc.gather(flat, flat_idx, axis=0), tuple(idx.shape))
+    flat_idx = prepare_flat_index(x, idx)
+    return flat_gather_prepared(x, flat_idx, idx.shape)
 
 
 def masked_flat_gather(x, idx, mask=None, fill=float("nan")):
@@ -321,10 +375,8 @@ def masked_flat_gather(x, idx, mask=None, fill=float("nan")):
     present = evoxc.not_equal(idx, _scalar_constant(I_INF, idx.dtype))
     if mask is not None:
         present = evoxc.logical_and(present, mask)
-    flat_idx = _flat_index_block(x, idx, present, 0)
-    pop_size, row_len = x.shape
-    flat = evoxc.reshape(x, (pop_size * row_len,))
-    values = evoxc.reshape(evoxc.gather(flat, flat_idx, axis=0), tuple(idx.shape))
+    flat_idx = prepare_flat_index(x, idx, present, 0)
+    values = flat_gather_prepared(x, flat_idx, idx.shape)
     return evoxc.select(present, values, _scalar_constant(fill, x.dtype))
 
 
@@ -350,8 +402,8 @@ def flat_scatter(x, idx, updates):
         need accumulation must reduce first (see the ``K``-axis aggregation in
         ``functions``). Masked writes belong in :func:`masked_flat_scatter`.
     """
-    flat_idx = _flat_index_block(x, idx, None, 0)
-    pop_size, row_len = x.shape
+    flat_idx = prepare_flat_index(x, idx)
+    pop_size, row_len = _flat_shape(x)
     out = evoxc.scatter(
         evoxc.reshape(x, (pop_size * row_len,)),
         evoxc.reshape(flat_idx, (-1,)),
@@ -395,9 +447,9 @@ def masked_flat_scatter(x, idx, updates, mask):
         ``[0, key_span)`` — the caller's ``in_range`` mask, never an ``isnan``
         test, because canonical keys are ``int32``.
     """
-    pop_size, width = x.shape
+    pop_size, width = _flat_shape(x)
     dump_column = width - 1
-    flat_idx = _flat_index_block(x, idx, mask, dump_column)
+    flat_idx = prepare_flat_index(x, idx, mask, dump_column)
     out = evoxc.scatter(
         evoxc.reshape(x, (pop_size * width,)),
         evoxc.reshape(flat_idx, (-1,)),
