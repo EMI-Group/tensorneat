@@ -127,7 +127,7 @@ Remaining hot spot: the attribute term. A `measure` call is now ~65 ops per fami
 - The non-empty guard rides on the denominator: `maximum(float32(max(cnt1, cnt2)), 1.0)`, so an empty pair yields `0.0 / 1.0` with no second `select`.
 - Key tables are accepted as `(P, M)` or `(P, M, K)` via `alignment.key_rows`; rank-0 integer constants come from the pool (`enp.full((), v, dtype=...)` underneath) because a Python literal would widen an `int32` tensor to `int64`.
 - Errors: a parent shape mismatch, a wrong key width, a digest built for another gene axis, or a centre batch that is neither `1` nor `P` raises `ConfigError` (`TensorNEATError`); `evoxc` errors propagate unchanged.
-- Files ≤ ~1000 lines (`digest.py` 792, `base.py` 645, `default.py` 470, `dense.py` 300, `consts.py` 125).
+- Files ≤ ~1000 lines (`digest.py` 792, `base.py` 643, `default.py` 466, `dense.py` 336, `consts.py` 124).
 
 ## Bit-identity argument (three routes, one tail)
 `__call__`/`gene_distance`, `prepare`+`measure` (merge) and `prepare`+`measure` (dense) differ only in how the homologue table is produced — `alignment.find_homologous`, `digest.measure_alignment`, or the dense key table — and all three feed `_scalar_distance`.
