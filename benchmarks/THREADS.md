@@ -2,7 +2,7 @@
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
 > `benchmarks/results/threads1.json` at 2026-11-02T06:31:32+00:00. It must not be hand-edited:
-> Re-rendered from that same JSON at 2026-11-02T07:34:09+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-02T07:42:23+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *This is the thread-bound sensitivity run (`--threads 1`, the declared-contract condition) of the XOR family; the authoritative default-thread matrix is `RESULTS.md`.*
@@ -11,8 +11,8 @@
 
 | Case | Pop | Backend | Old ms/gen | New ms/gen | Speed-up | Speed-up range (best–worst) | Quality overlap | Old compile (s) | New compile (s) | Old peak RSS (MiB) | New peak RSS (MiB) | Old final best | New final best | Gens to target (old) | Gens to target (new) | Timing | Quality |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| xor_p100 | 100 | `numpy` | 35.79 | 53.92 | 0.66x | 0.56x–0.77x | inside | 2.816 | 0.539 | 578.4 | 145.3 | -0.0099 | -0.0303 | 77 | 97 | FAIL | FAIL |
-| xor_p500 | 500 | `numpy` | 127.71 | 360.12 | 0.35x | 0.28x–0.43x | new better | 2.713 | 1.469 | 615.9 | 1049.6 | -0.0000 | -0.0000 | 39 | 30 | FAIL | PASS |
+| xor_p100 | 100 | `numpy` | 35.79 | 53.92 | 0.66x | 0.56x–0.77x | inside | 2.816 | 0.539 | 578.4 | 145.3 | -0.0099 | -0.0303 | 78 | 98 | FAIL | FAIL |
+| xor_p500 | 500 | `numpy` | 127.71 | 360.12 | 0.35x | 0.28x–0.43x | new better | 2.713 | 1.469 | 615.9 | 1049.6 | -0.0000 | -0.0000 | 39 | 31 | FAIL | PASS |
 | xor_p1000 | 1000 | `numpy` | 252.06 | 665.46 | 0.38x | 0.37x–0.39x | inside | 2.689 | 2.163 | 627.5 | 1991.6 | -0.0000 | -0.0000 | 32 | 29 | FAIL | PASS |
 
 One row per case and new-side backend (the old side always runs on JAX). Speed-up is `old / new` per generation: above 1.00x the new side is faster. Speed-up range is `old_min/new_max` … `old_max/new_min` over the per-repeat medians, i.e. the best and worst case over the repeats. Quality overlap states where the new side's per-repeat final-best range sits against the old side's: `inside` when the ranges intersect (every new repeat inside the old range, or the ranges partially overlap), `new worse` when every new repeat is below the old range, `new better` when every new repeat is above it — an observation, never a replacement for the verdict. Timing PASS means new ms/generation is at or below the old one; quality PASS means the new final best stays within `max(10% × |old|, 0.001)` of the old one. Every cell comes from the aggregated JSON records of this run; `n/a (reason)` marks a cell that could not be reached (not run, skipped, error, or not recorded).
@@ -44,16 +44,15 @@ One row per case and new-side backend (the old side always runs on JAX). Speed-u
 | Timed generations | 150 |
 | Repeats (seed + r) | 2 (`seed + r`, seeds 42, 43) |
 | Thread pinning | `--threads 1` — exported to OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS and, on the old side, to `XLA_FLAGS` intra-op parallelism |
-| New-side build | inside the first `Pipeline.step` call (the evoxc build); the generation it consumes is recorded as `generations_consumed_before_timing` and excluded from the timed samples and from the quality curve — the untimed warmup is shortened by it so both sides time and record the same generation index |
+| New-side build | inside the first `Pipeline.step` call (the evoxc build); the generation it consumes is recorded as `generations_consumed_before_timing`, excluded from the timed samples and subtracted from the untimed warmup, so both sides' timing samples cover the same generation indices |
 | Compile time | reported separately as `compile_time_s` (old: `jax.jit(pipeline.step).lower(state).compile()`; new: the first `Pipeline.step` build) and never charged to a generation |
 | Scheduling | one worker process per run, strictly sequential — the two implementations never share a process |
 
 Metrics: `compile_time_s` (one-off build), `ms_per_generation` (median wall clock per generation
-after warmup, including host sync), `gens_per_second`, `peak_rss_mb`, and quality
+after warmup, including host sync), `gens_per_second`, `rss_final_mb`, and quality
 (`final_best_fitness`, `generations_to_target`, best-fitness curve).
-The new side's build generation is excluded from both the timing and the quality curve, and compile/build seconds are never charged to a generation.
+The build generation is also consumed from the new side's quality curve, so that curve starts one generation later than the old side's and records 152 generations against the old side's 153 — which is why an unreached target reads `>152` for new and `>153` for old. Compile/build seconds are never charged to a generation.
 Definitions, fairness rules and verdict rules live in `benchmarks/CONTEXT.md`.
-A thread-bound sensitivity run (`--threads 1`, XOR family, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
 
 ## Case matrix
 
@@ -69,15 +68,15 @@ A thread-bound sensitivity run (`--threads 1`, XOR family, same CLI) is recorded
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.816 | 35.79 | 27.94 | 578.4 | -0.0099 | 77 | 2 |
-| `new` tensorneat (evoxc) | `numpy` | 0.539 | 53.92 | 18.54 | 145.3 | -0.0303 | 97 | 2 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.816 | 35.79 | 27.94 | 578.4 | -0.0099 | 78 | 2 |
+| `new` tensorneat (evoxc) | `numpy` | 0.539 | 53.92 | 18.54 | 145.3 | -0.0303 | 98 | 2 |
 
 ### xor_p500
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
 | `old` tensorneat-legacy (JAX) | `jax` | 2.713 | 127.71 | 7.83 | 615.9 | -0.0000 | 39 | 2 |
-| `new` tensorneat (evoxc) | `numpy` | 1.469 | 360.12 | 2.78 | 1049.6 | -0.0000 | 30 | 2 |
+| `new` tensorneat (evoxc) | `numpy` | 1.469 | 360.12 | 2.78 | 1049.6 | -0.0000 | 31 | 2 |
 
 ### xor_p1000
 
@@ -132,7 +131,7 @@ By population size:
 Worst case: `xor_p1000` at 3.17x (1991.6 vs 627.5 MiB old, +1364 MiB).
 The new side's peak grows with the population in the XOR family (145.3 → 1049.6 → 1991.6 MiB at pop 100, 500, 1000), while the old row moves only from 578.4 to 627.5 MiB.
 
-Mechanism, as far as the numbers support it: the old side's floor is the JAX/XLA runtime itself (192.2–192.4 MiB right after import); the new side starts from 72.8–72.8 MiB. Beyond that floor the new peak follows the padded batch it materialises for the whole population (`max_nodes × max_nodes` per individual as explicit host tensors), whereas the legacy side vmaps fixed-shape arrays and lets XLA reuse its buffers — which is why the new peak tracks the population while the old peak stays close to its runtime floor.
+Mechanism, as far as these runs support one: the old side's floor is the JAX/XLA runtime itself (192.2–192.4 MiB right after import); the new side starts from 72.8 MiB. Beyond those floors the new peak tracks the population while the old peak stays close to its runtime floor, so the working set the numpy interpreter materialises per generation is what grows with `pop_size × max_nodes × max_conns`; these runs do not attribute that growth to a single dominant term.
 
 This section is written from the same `speedup` values as the headline and old-vs-new tables; it does not assume the new side is the winner. A rerun that changes those numbers changes this text with them.
 
@@ -152,10 +151,10 @@ The declared contract (51/109/157 ms/gen at pop 100/500/1000) was measured on a 
 |---|---|---|---|---|---|---|---|---|---|
 | `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.2507 | -0.2500 | -0.1929 | -0.0542 | -0.0000 | -0.0000 | 62 |
 | `old` tensorneat-legacy (JAX) | `jax` | 43 | -0.2519 | -0.2500 | -0.2364 | -0.1515 | -0.0198 | -0.0198 | 93 |
-| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43 | -0.2513 | -0.2500 | -0.2147 | -0.1028 | -0.0099 | -0.0099 | 77 |
+| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43 | -0.2513 | -0.2500 | -0.2147 | -0.1028 | -0.0099 | -0.0099 | 78 |
 | `new` tensorneat (evoxc) | `numpy` | 42 | -0.2502 | -0.2500 | -0.2205 | -0.0067 | -0.0000 | -0.0000 | 55 |
 | `new` tensorneat (evoxc) | `numpy` | 43 | -0.2505 | -0.2500 | -0.2500 | -0.2500 | -0.0606 | -0.0606 | 140 |
-| `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43 | -0.2504 | -0.2500 | -0.2352 | -0.1283 | -0.0303 | -0.0303 | 97 |
+| `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43 | -0.2504 | -0.2500 | -0.2352 | -0.1283 | -0.0303 | -0.0303 | 98 |
 
 ### xor_p500
 
@@ -166,7 +165,7 @@ The declared contract (51/109/157 ms/gen at pop 100/500/1000) was measured on a 
 | `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43 | -0.2505 | -0.2465 | -0.0973 | -0.0028 | -0.0000 | -0.0000 | 39 |
 | `new` tensorneat (evoxc) | `numpy` | 42 | -0.2500 | -0.2421 | -0.0235 | -0.0000 | -0.0000 | -0.0000 | 28 |
 | `new` tensorneat (evoxc) | `numpy` | 43 | -0.2500 | -0.2500 | -0.0496 | -0.0000 | -0.0000 | -0.0000 | 33 |
-| `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43 | -0.2500 | -0.2461 | -0.0365 | -0.0000 | -0.0000 | -0.0000 | 30 |
+| `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43 | -0.2500 | -0.2461 | -0.0365 | -0.0000 | -0.0000 | -0.0000 | 31 |
 
 ### xor_p1000
 
@@ -206,7 +205,7 @@ measured row.
 
 ```bash
 # regenerate the committed report: the literal command of this run
-python benchmarks/run_benchmark.py --impl both --backend numpy --cases xor_p100,xor_p500,xor_p1000 --generations 150 --warmup 3 --repeats 2 --threads 1 --json benchmarks/results/threads1.json --out benchmarks/THREADS.md --report-title TensorNEAT benchmark '—' thread-bound sensitivity '(XOR' family, --threads '1)' --report-note This is the thread-bound sensitivity run '(`--threads' '1`,' the declared-contract 'condition)' of the XOR 'family;' the authoritative default-thread matrix is '`RESULTS.md`.'
+python benchmarks/run_benchmark.py --impl both --backend numpy --cases xor_p100,xor_p500,xor_p1000 --generations 150 --warmup 3 --repeats 2 --threads 1 --json benchmarks/results/threads1.json --out benchmarks/THREADS.md --report-title 'TensorNEAT benchmark — thread-bound sensitivity (XOR family, --threads 1)' --report-note 'This is the thread-bound sensitivity run (`--threads 1`, the declared-contract condition) of the XOR family; the authoritative default-thread matrix is `RESULTS.md`.'
 
 # full matrix, both implementations on the primary backend
 python benchmarks/run_benchmark.py --impl both --backend numpy --cases all --generations 150 --warmup 3 --repeats 2 --threads 1
@@ -225,6 +224,6 @@ python benchmarks/run_benchmark.py --dry-run
 
 Interpreter used: /tmp/tn-venv/bin/python
 
-Cases: xor_p100, xor_p500, xor_p1000. Timed generations: 150, warmup generations (untimed): 3, repeats: 2 (seeds 42, 43), threads: `--threads 1`. Backend(s) of the new side: numpy; the old side always runs on JAX, once per case. `--out` defaults to `benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (scratch, git-ignored); the record this report was rendered from (`threads1.json`) is committed at `benchmarks/results/threads1.json` beside that default, so every table cell is traceable. A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
+Cases: xor_p100, xor_p500, xor_p1000. Timed generations: 150, warmup generations (untimed): 3, repeats: 2 (seeds 42, 43), threads: `--threads 1`. Backend(s) of the new side: numpy; the old side always runs on JAX, once per case. `--out` defaults to `benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (scratch, git-ignored); the record this report was rendered from (`threads1.json`) is committed at `benchmarks/results/threads1.json` beside that default, so every table cell is traceable.
 
 Generated from `benchmarks/results/threads1.json` into `benchmarks/THREADS.md` at 2026-11-02T06:31:32+00:00 — do not hand-edit.
