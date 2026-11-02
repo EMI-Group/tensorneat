@@ -95,6 +95,7 @@ Verification of this package currently goes through driving `Pipeline` end-to-en
 - NaN padding semantics of the pre-rewrite library are preserved (`test/parity/` depends on them); `select` chains stand in for `lax.switch`.
 - Errors: user/config validation raises `common.errors.TensorNEATError` (and its subclasses); tensor/backend errors are never caught and re-wrapped.
 - Files ≤ ~1000 lines; shared math lives in `common/`, never duplicated per genome/algorithm.
+- `pipeline.py` (1132 lines) is one job — the single compile site plus the design, caching, overflow and measured-cost documentation that belongs next to it — and is a deliberate exception to the line budget; the code is ~900 lines and the rest is the module docstring.
 
 ## Routing Table
 | Path | Responsibility |
