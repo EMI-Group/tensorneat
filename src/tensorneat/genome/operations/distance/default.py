@@ -29,10 +29,12 @@ from ...utils import valid_count
 from ..alignment import find_homologous, key_rows
 from .base import BaseDistance
 from .consts import ConstantPool
+from .dense import measure_centre
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...base import BaseGenome
     from ...gene import BaseGene
+    from .digest import DistanceDigest
 
 
 def _pool(consts) -> ConstantPool:
@@ -89,8 +91,17 @@ class DefaultDistance(BaseDistance):
         self,
         compatibility_disjoint: float = 1.0,
         compatibility_weight: float = 0.4,
+        dense_single_centre: bool = True,
     ):
-        """Store the two distance weights.
+        """Store the two distance weights and the single-centre route switch.
+
+        Args:
+            compatibility_disjoint (float): Weight of the non-homologous gene count.
+            compatibility_weight (float): Weight of the homologous attribute distance.
+            dense_single_centre (bool): Allow the dense key-table route for a batch-1 centre
+                (:mod:`.dense`).  ``False`` forces the row-wise merge everywhere — the shape
+                to choose while a caller's payload can hold gene keys outside
+                ``[0, genome.key_span)``, which the dense table cannot address.
 
         Raises:
             ConfigError: If either weight is negative or not finite (a ``ConfigError`` is a
@@ -100,6 +111,7 @@ class DefaultDistance(BaseDistance):
             compatibility_disjoint, "compatibility_disjoint"
         )
         self.compatibility_weight = _weight(compatibility_weight, "compatibility_weight")
+        self.dense_single_centre = bool(dense_single_centre)
 
     def __call__(
         self,
@@ -336,11 +348,6 @@ class DefaultDistance(BaseDistance):
         pop_size, count = int(attrs1.shape[0]), int(attrs1.shape[1])
         attr_width = int(attrs1.shape[-1])
 
-        non_homologous = evoxc.subtract(
-            evoxc.add(cnt1, cnt2),
-            evoxc.multiply(pool.i64(2), matched),
-        )
-
         attribute_distance = None
         if attr_width:
             # Attribute row of parent 2 behind every gene of parent 1: the row offset is
@@ -372,6 +379,43 @@ class DefaultDistance(BaseDistance):
                 evoxc.select(homologous, pair_distance, pool.f32(0.0)), axes=1
             )
 
+        return self._scalar_distance(cnt1, matched, cnt2, attribute_distance, pool)
+
+    def _scalar_distance(
+        self,
+        cnt1: evoxc.SymbolicTensor,
+        matched: evoxc.SymbolicTensor,
+        cnt2: evoxc.SymbolicTensor,
+        attribute_distance: evoxc.SymbolicTensor | None,
+        pool: ConstantPool,
+    ) -> evoxc.SymbolicTensor:
+        """The scalar tail shared by every route into this node.
+
+        Args:
+            cnt1 (evoxc.SymbolicTensor): ``(P,)`` real genes of the first genome.
+            matched (evoxc.SymbolicTensor): ``(P,)`` homologous gene count ``h``.
+            cnt2 (evoxc.SymbolicTensor): ``(P,)`` real genes of the second genome.
+            attribute_distance (evoxc.SymbolicTensor | None): ``(P,) float32`` summed
+                attribute distance over the homologous genes, or ``None`` when the gene
+                family has no attribute column at all.
+            pool (ConstantPool): Per-trace rank-0 constant pool.
+
+        Returns:
+            evoxc.SymbolicTensor: ``(P,) float32``
+            ``(non_homologous * compatibility_disjoint
+            + attribute_distance * compatibility_weight) / max(cnt1, cnt2)``, with the
+            denominator floored at ``1`` so an empty pair is ``0`` and never ``NaN``.
+
+        Notes:
+            Stated once so the pair-wise route (:meth:`distance_from_rows`), the row-wise
+            digest route (:meth:`distance_from_alignment`) and the dense single-centre route
+            (:func:`.dense.measure_centre`) cannot drift apart: the three differ only in how
+            ``matched`` and the aligned attribute rows are produced.
+        """
+        non_homologous = evoxc.subtract(
+            evoxc.add(cnt1, cnt2),
+            evoxc.multiply(pool.i64(2), matched),
+        )
         # Counts are small integers, so ``float32(max(cnt1, cnt2))`` is exact and the
         # maximum is cheaper on the integer dtypes than on two casts.
         denominator = evoxc.cast(evoxc.maximum(cnt1, cnt2), evoxc.float32)
@@ -382,13 +426,41 @@ class DefaultDistance(BaseDistance):
         if attribute_distance is not None:
             numerator = evoxc.add(
                 numerator,
-                evoxc.multiply(
-                    attribute_distance, pool.f32(self.compatibility_weight)
-                ),
+                evoxc.multiply(attribute_distance, pool.f32(self.compatibility_weight)),
             )
         return evoxc.divide(
             numerator, evoxc.maximum(denominator, pool.f32(1.0))
         )
+
+    def _measure_single_centre(
+        self,
+        pool: ConstantPool,
+        state: State,
+        genome: "BaseGenome",
+        payload: tuple,
+        digest: "DistanceDigest",
+    ) -> evoxc.SymbolicTensor | None:
+        """One batch-1 centre against the digest, by the dense key-table route.
+
+        Args:
+            pool (ConstantPool): Per-trace rank-0 constant pool.
+            state (State): Immutable host configuration container.
+            genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene``/``key_span``.
+            payload (tuple): The four centre arrays, batch ``1``.
+            digest ("DistanceDigest"): Population digest from :meth:`BaseDistance.prepare`.
+
+        Returns:
+            evoxc.SymbolicTensor | None: ``(P,) float32`` distances, or ``None`` when the
+            gene geometry does not fit the dense table's static gate — the caller then
+            broadcasts the centre and runs the row-wise merge.
+
+        Notes:
+            The decision is static (key span, attribute width, marker width), so one call
+            emits either the dense route or the merge route, never part of each.
+        """
+        if not self.dense_single_centre:
+            return None
+        return measure_centre(pool, state, genome, self, payload, digest)
 
 
 __all__ = ["DefaultDistance"]

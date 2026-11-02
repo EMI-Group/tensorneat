@@ -107,12 +107,20 @@ class FamilyDigest(NamedTuple):
             same order — the exact-match oracle for the columns the composite does not fold.
             Read only when ``K > _FOLDED_KEYS``; for a narrower key the fold is already
             injective, so this field keeps the *unpermuted* key table and nothing reads it.
+        dense (evoxc.SymbolicTensor): ``(P, M) int32`` dense key-table slot of each gene row, in
+            the same order as :attr:`keys` (the dump slot for an absent or out-of-range key).
+            Read only by the single-centre fast path (:mod:`.dense`).
+        real (evoxc.SymbolicTensor): ``(P, M) bool`` "this row is a real gene whose key lies in
+            ``[0, key_span)``" — the population side of the fast path's homology test.  Unlike
+            :attr:`count` it excludes out-of-range keys, which the dense table cannot address.
     """
 
     keys: evoxc.SymbolicTensor
     attrs: evoxc.SymbolicTensor
     count: evoxc.SymbolicTensor
     key_cols: evoxc.SymbolicTensor
+    dense: evoxc.SymbolicTensor
+    real: evoxc.SymbolicTensor
 
 
 class AlignedGenes(NamedTuple):
@@ -353,8 +361,79 @@ def _permute(
     return evoxc.gather(flat, index, axis=0)
 
 
+def dense_width(gene, key_span: int) -> int:
+    """Static width of one gene family's dense key table, dump slot included.
+
+    Args:
+        gene: Node or connection gene declaring ``key_width``.
+        key_span (int): Static key bound ``S`` of the payload's genome.
+
+    Returns:
+        int: ``S + 1`` for a one-column (node) key, ``S * S + 1`` for a two-or-more-column
+        (connection) key — one slot per key tuple, plus the trailing dump slot.
+
+    Notes:
+        The slot is an ``int32`` gather/scatter index, so a width beyond ``2**31 - 1`` (a key
+        span above ~46 000) is not addressable; the fast path's static gate checks that.
+    """
+    span = int(key_span)
+    return span + 1 if int(gene.key_width) == 1 else span * span + 1
+
+
+def dense_slot(
+    gene, key_span: int, keys: evoxc.SymbolicTensor, pool: ConstantPool
+) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+    """Map every gene row of one family to its dense key-table slot.
+
+    Args:
+        gene: Node or connection gene declaring ``key_width``.
+        key_span (int): Static key bound ``S``; a key outside ``[0, S)`` is not addressable and
+            lands in the dump slot.
+        keys (evoxc.SymbolicTensor): ``(P, M)`` or ``(P, M, K) int32`` key rows, ``I_INF``
+            padded.
+        pool (ConstantPool): Per-trace rank-0 constant pool.
+
+    Returns:
+        ``(slot (P, M) int32, real (P, M) bool)`` — the table slot of each row (the dump slot
+        ``D - 1`` for an absent or out-of-range key) and the row's real-gene mask.
+
+    Notes:
+        Node keys are their own slot; a connection slot is ``in_key * S + out_key``, so the
+        fold is injective for keys inside ``[0, S)`` and the trailing dump slot catches the
+        rest.  The range test is one ``cast`` to ``uint32`` plus one ``less`` per index column:
+        a negative key becomes a huge unsigned value, so it fails the same comparison
+        ``I_INF`` fails and no separate sentinel test is needed.
+        Trailing key columns (``OriginConn``'s ``historical_marker``) are *not* part of the
+        slot and are *not* range tested: a marker is a population-wide identity matched
+        exactly through its own table, not a key-space index.
+        A connection slot multiplies a possibly sentinel ``int32`` by ``S`` before the select
+        that discards it; the wrap is deterministic and never observed, and hoisting a
+        ``select`` in front of the product would cost an op on every real row to protect it.
+    """
+    span = int(key_span)
+    dump = dense_width(gene, span) - 1
+    if int(gene.key_width) == 1:
+        column = keys if len(keys.shape) == 2 else _column(keys, 0)
+        real = evoxc.less(evoxc.cast(column, evoxc.uint32), pool.u32(span))
+        return evoxc.select(real, column, pool.i32(dump)), real
+    first = _column(keys, 0)
+    second = _column(keys, 1)
+    real = evoxc.logical_and(
+        evoxc.less(evoxc.cast(first, evoxc.uint32), pool.u32(span)),
+        evoxc.less(evoxc.cast(second, evoxc.uint32), pool.u32(span)),
+    )
+    slot = evoxc.add(evoxc.multiply(first, pool.i32(span)), second)
+    return evoxc.select(real, slot, pool.i32(dump)), real
+
+
 def prepare_family(
-    state, gene, keys: evoxc.SymbolicTensor, attrs: evoxc.SymbolicTensor, *, consts=None
+    state,
+    gene,
+    keys: evoxc.SymbolicTensor,
+    attrs: evoxc.SymbolicTensor,
+    *,
+    key_span: int,
+    consts=None,
 ) -> FamilyDigest:
     """Sort one gene family of a population into a reusable digest.
 
@@ -364,6 +443,8 @@ def prepare_family(
         keys: ``(P, M)`` or ``(P, M, K) int32`` key array of the population, ``I_INF``
             padded.
         attrs: ``(P, M, A) float32`` attribute array of the population, NaN padded.
+        key_span (int): Static key bound ``S`` of the genome, the geometry of the dense
+            per-gene slot the single-centre fast path gathers (see :func:`dense_slot`).
         consts (ConstantPool | None): Pool to draw rank-0 constants from; ``None`` starts a
             private one.  Pass one pool for a whole ``prepare``/``measure`` call (or a whole
             generation) so identical constants cost one op instead of one per use site.
@@ -371,7 +452,8 @@ def prepare_family(
     Returns:
         FamilyDigest: the packed composites (population tag) in ascending order with the
         padding sentinel last, the attribute rows and key columns permuted into that order,
-        and the number of real genes per individual.
+        the number of real genes per individual, and the dense slot / real-gene pair the
+        single-centre fast path consumes.
 
     Notes:
         This is the phase that used to run once per distance call; it now runs once per
@@ -385,6 +467,8 @@ def prepare_family(
         A gene family with no attribute column (``attr_width == 0``) contributes an empty
         ``(P, M, 0)`` attribute block, which :func:`_gather_rows` returns unchanged: the
         digest carries it to the distance tail, which has no attribute term to compute.
+        The dense slot is permuted into the digest's own gene order, so the fast path pairs it
+        with :attr:`FamilyDigest.attrs` positionally and needs no second permutation.
     """
     pool = consts if consts is not None else ConstantPool()
     width = _key_width("prepare", gene, keys)
@@ -399,9 +483,15 @@ def prepare_family(
         if width > _FOLDED_KEYS
         else key_rows(keys)
     )
+    slot, real = dense_slot(gene, key_span, keys, pool)
     count = evoxc.cast(evoxc.reduce_sum(valid, axes=1), evoxc.int32)
     return FamilyDigest(
-        _permute(tagged, order, pool), attrs_sorted, count, key_cols_sorted
+        _permute(tagged, order, pool),
+        attrs_sorted,
+        count,
+        key_cols_sorted,
+        _permute(slot, order, pool),
+        _permute(real, order, pool),
     )
 
 
@@ -642,8 +732,8 @@ class DistanceDigest(NamedTuple):
     """Prepared population digest for both gene families, one generation of reuse.
 
     Flattened field-by-field (rather than nesting two :class:`FamilyDigest` tuples) so the
-    value is an ordinary tuple of eight tensors, the four payload arrays plus a count and a
-    sorted key block per family.
+    value is an ordinary tuple of twelve tensors, the four payload arrays plus a count, a
+    sorted key block, a dense slot block and a real-gene mask per family.
 
     Attributes:
         node_keys (evoxc.SymbolicTensor): ``(P, N) int64`` packed node-key composites.
@@ -659,6 +749,12 @@ class DistanceDigest(NamedTuple):
             individual.
         conn_key_cols (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection key columns in
             that order, the oracle for a ``historical_marker`` gene.
+        node_dense (evoxc.SymbolicTensor): ``(P, N) int32`` dense key-table slot of each node
+            gene, in the digest's order (read only by the single-centre fast path).
+        node_real (evoxc.SymbolicTensor): ``(P, N) bool`` in-range node-gene mask.
+        conn_dense (evoxc.SymbolicTensor): ``(P, E) int32`` dense key-table slot of each
+            connection gene.
+        conn_real (evoxc.SymbolicTensor): ``(P, E) bool`` in-range connection-gene mask.
     """
 
     node_keys: evoxc.SymbolicTensor
@@ -669,13 +765,17 @@ class DistanceDigest(NamedTuple):
     conn_attrs: evoxc.SymbolicTensor
     conn_count: evoxc.SymbolicTensor
     conn_key_cols: evoxc.SymbolicTensor
+    node_dense: evoxc.SymbolicTensor
+    node_real: evoxc.SymbolicTensor
+    conn_dense: evoxc.SymbolicTensor
+    conn_real: evoxc.SymbolicTensor
 
     @property
     def field_names(self) -> tuple[str, ...]:
         """Field names in payload order, for generic digest walks.
 
         Returns:
-            The eight field names of the digest, node family first.
+            The twelve field names of the digest, node family first.
         """
         return self._fields
 
@@ -684,6 +784,8 @@ __all__ = [
     "AlignedGenes",
     "DistanceDigest",
     "FamilyDigest",
+    "dense_slot",
+    "dense_width",
     "match_rows",
     "measure_alignment",
     "prepare_family",
