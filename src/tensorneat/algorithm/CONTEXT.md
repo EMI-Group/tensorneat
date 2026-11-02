@@ -5,7 +5,8 @@ The evolutionary layer: it owns the population, the ask → transform → forwar
 Everything here runs **inside an evoxc trace** — `pipeline.py` builds one graph per shape signature covering a whole generation — except the explicitly host-side helpers (`__init__` validation, `setup` on the host, `show_details`, substrate construction).
 This layer owns no network mathematics: genomes own `transform/forward/grad`, problems own `evaluate`, and the algorithm only shuffles whole populations with static shapes.
 Cost profile: O(species_size × pop_size) gene-row distance work in `speciate` + O(pop_size) selection/crossover/mutation per generation; no `max_nodes × max_nodes` tensor ever appears here.
-Measured with the real `DefaultGenome`/`XOR` (see `## Measured Cost`): ~300 / ~950 / ~2060 ms per generation at pop 100 / 500 / 1000 (`species_size=20`), against a legacy JAX baseline of 51 / 109 / 157 ms; `speciate`'s `2 × species_size` unconditional distance passes are the dominant algorithm-side cost (see `## Known Issues`).
+Measured with the real `DefaultGenome`/`XOR` (see `## Measured Cost`): ~97 / ~835 / ~1516 ms per generation at pop 100 / 500 / 1000 (`species_size=20`), against a legacy JAX baseline of 51 / 109 / 157 ms.
+`speciate` is 60 % / 88 % / 88 % of `tell`, and its cost is the `2 · species_size · pop_size` compatibility pair count times a genome-owned per-pair kernel — not a tensor this subtree can shrink (see `## Known Issues`).
 
 ## Kernel Contract (binding for this subtree)
 Batch-first: population is axis 0, always; a kernel is written once over the whole batch.
