@@ -52,7 +52,10 @@ python benchmarks/run_benchmark.py --impl old --cases xor_p100 --generations 30 
 python benchmarks/run_benchmark.py --impl new --backend numpy --cases xor_p100,xor_p1000
 python benchmarks/run_benchmark.py --impl new --backend iree --cases xor_p500
 python benchmarks/run_benchmark.py --render-from-json benchmarks/results/latest.json --out $TMPDIR/re-render.md
+# self-describing companion report (its own H1 + the one-line note under the banner)
+python benchmarks/run_benchmark.py --impl both --threads 1 --cases xor_p100,xor_p500,xor_p1000 --report-title "TensorNEAT thread-bound sensitivity — XOR family at --threads 1" --report-note "This document is the thread-bound sensitivity run (\`--threads 1\`) of the XOR family; the authoritative matrix is \`RESULTS.md\`." --out benchmarks/THREADS.md --json benchmarks/results/threads.json
 ```
+`--report-title TEXT` overrides the H1 and `--report-note TEXT` adds one italic line directly under the banner; both are stored as `meta.report_title`/`meta.report_note`, both are honoured by the measurement path and by `--render-from-json` (the flags win over the stored values), and passing neither renders the unchanged default `RESULTS.md`.
 The worker prepends `benchmarks/legacy_jax` (old side) or `src` (new side) to `sys.path`, so an installed `tensorneat` never shadows the tree under test; the legacy side needs the `bench` extra (`jax`), the new side only `evoxc` + `numpy`.
 `--json` (default `benchmarks/results/latest.json`) holds per-run and aggregated records; `--out` (default `benchmarks/RESULTS.md`) is the regenerated report; `--dry-run` prints the planned subprocess commands without running them.
 `--render-from-json PATH` re-renders `--out` from an existing run record only: it recomputes `aggregated` and `verdict` from the stored `runs`, rebuilds `meta` from the stored document where present, spawns no worker and never rewrites the JSON. It fails loudly (exit 2) on an unreadable file, a wrong/absent `schema` or a missing `runs` list — this is how the report text is iterated without re-measuring.
