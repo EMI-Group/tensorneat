@@ -1,0 +1,1468 @@
+{
+  "schema": "tensorneat-bench/1",
+  "generated_at": "2026-11-02T07:29:26+00:00",
+  "meta": {
+    "env": {
+      "python": "3.12.3",
+      "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+      "machine": "x86_64",
+      "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+      "cpu_count": 20,
+      "memory_mb": 241611,
+      "numpy": "2.5.4",
+      "jax": null,
+      "evoxc": "0.1.0",
+      "tensorneat": null,
+      "threads": 0,
+      "thread_env": {
+        "OMP_NUM_THREADS": null,
+        "MKL_NUM_THREADS": null,
+        "OPENBLAS_NUM_THREADS": null,
+        "NUMEXPR_NUM_THREADS": null,
+        "XLA_FLAGS": null
+      },
+      "loadavg": [
+        2.44,
+        3.65,
+        3.34
+      ],
+      "git_commit": "89f6200d6bba92a9cf685972761bfa65fa1c873c",
+      "git_dirty": false,
+      "git_dirty_paths": []
+    },
+    "cases": [
+      "xor_p100",
+      "xor_p500",
+      "xor_p1000",
+      "xor3d_p100",
+      "xor3d_p500",
+      "xor3d_p1000",
+      "custom_pagie_p500",
+      "cartpole_p100"
+    ],
+    "impls": [
+      "new"
+    ],
+    "backends": [
+      "iree"
+    ],
+    "protocol": {
+      "generations": 2,
+      "warmup": 1,
+      "repeats": 1,
+      "seed": 42,
+      "threads": 0,
+      "timeout": 3600
+    },
+    "command": "/tmp/genesis/task_d7be275380ce6fc0/iree-venv/bin/python benchmarks/run_benchmark.py --impl new --backend iree --cases all --generations 2 --warmup 1 --repeats 1 --json benchmarks/results/iree.json --out benchmarks/iree.md --report-title TensorNEAT benchmark \u2014 IREE backend attempt (llvm-cpu) --report-note Every case errors in `Pipeline.setup` before generation 0; see `BACKENDS.md` for the failure signature and the minimal reproducer. The measured CPU contract is `RESULTS.md` (numpy reference backend).",
+    "case_matrix": [
+      {
+        "name": "xor_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      {
+        "name": "xor_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      {
+        "name": "xor_p1000",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 1000,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      {
+        "name": "xor3d_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.05,
+        "seed": 42,
+        "notes": "",
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR3d",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {}
+      },
+      {
+        "name": "xor3d_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.05,
+        "seed": 42,
+        "notes": "",
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR3d",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {}
+      },
+      {
+        "name": "xor3d_p1000",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 1000,
+        "generation_limit": 150,
+        "fitness_target": -0.05,
+        "seed": 42,
+        "notes": "",
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR3d",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {}
+      },
+      {
+        "name": "custom_pagie_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.01,
+        "seed": 42,
+        "notes": "per-impl divergence: the legacy side seeds the global numpy RNG and vmaps a jax-typed func; the new side samples from default_rng(seed) with a numpy func \u2014 same distribution, different draws",
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "CustomFuncFit",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "CustomFuncFit",
+          "method": "sample",
+          "num_samples": 500,
+          "low_bounds": [
+            -1.0,
+            -1.0
+          ],
+          "upper_bounds": [
+            1.0,
+            1.0
+          ],
+          "func": "pagie"
+        },
+        "reference_ms_per_generation": {}
+      },
+      {
+        "name": "cartpole_p100",
+        "family": "rl",
+        "impls": [
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": 180.0,
+        "seed": 42,
+        "notes": "new-only: the legacy library has no equivalent problem",
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "CartPole",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 4,
+          "num_outputs": 2,
+          "max_nodes": 50,
+          "max_conns": 100
+        },
+        "problem_config": {
+          "class": "CartPole",
+          "max_step": 200,
+          "repeat_times": 1
+        },
+        "reference_ms_per_generation": {}
+      }
+    ],
+    "json_path": "benchmarks/results/iree.json",
+    "out_path": "benchmarks/iree.md",
+    "report_title": "TensorNEAT benchmark \u2014 IREE backend attempt (llvm-cpu)",
+    "report_note": "Every case errors in `Pipeline.setup` before generation 0; see `BACKENDS.md` for the failure signature and the minimal reproducer. The measured CPU contract is `RESULTS.md` (numpy reference backend)."
+  },
+  "runs": [
+    {
+      "case": "xor_p100",
+      "impl": "new",
+      "backend": "iree",
+      "repeat": 0,
+      "seed": 42,
+      "schema": "tensorneat-bench/1",
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/worker.py\", line 372, in main\n    state = adapter.setup(pipeline)\n            ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/adapters/new.py\", line 70, in setup\n    return pipeline.setup()\n           ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/pipeline.py\", line 576, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/neat.py\", line 318, in setup\n    executable = evoxc.build(\n                 ^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1599, in build\n    lowered = lower(graph, backend=backend, **options)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 475, in lower\n    return backend.lower(graph, dict(options))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/compiler.py\", line 369, in lower\n    mlir_text = export(graph, options=self._exporter_options(options))\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/__init__.py\", line 183, in export\n    return Writer(module, options=options).write()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 570, in write\n    lines.append(self._indent(self.write_function(fn), 1))\n                              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 586, in write_function\n    prelude, body = self._block_body_lines(entry, terminator=\"func.return\")\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4687, in _block_body_lines\n    units = self._block_units(block, terminator)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4707, in _block_units\n    text = self._emit_op(op)\n           ^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 705, in _emit_op\n    return self._emit_special(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 717, in _emit_special\n    return self._emit_scatter(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 1813, in _emit_scatter\n    raise BackendError(\nevoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not supported by the v1 exporter (numpy put_along_axis broadcast scatter is expressible for rank-1 axis=0 and rank-2 row/column writes; use the numpy backend for the general case)\n",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.1,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "xor_p100",
+        "notes": "",
+        "pop_size": 100,
+        "problem": "XOR",
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "1000": 157.0,
+          "500": 109.0
+        },
+        "seed": 42
+      },
+      "env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "89f6200d6bba92a9cf685972761bfa65fa1c873c",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": null,
+        "loadavg": [
+          2.48,
+          3.68,
+          3.35
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": null,
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "threads": 0
+      },
+      "protocol": {
+        "thread_env": {},
+        "threads": 0,
+        "timed_generations": 2,
+        "untimed_warmup_generations": 0,
+        "warmup_generations": 1
+      },
+      "compile_time_s": null,
+      "generations_consumed_before_timing": 0,
+      "generation_ms": [],
+      "ms_per_generation": null,
+      "ms_per_generation_mean": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "gens_per_second": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "loadavg_start": [
+        2.48,
+        3.68,
+        3.35
+      ],
+      "loadavg_end": [
+        2.48,
+        3.68,
+        3.35
+      ],
+      "quality": {}
+    },
+    {
+      "case": "xor_p500",
+      "impl": "new",
+      "backend": "iree",
+      "repeat": 0,
+      "seed": 42,
+      "schema": "tensorneat-bench/1",
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/worker.py\", line 372, in main\n    state = adapter.setup(pipeline)\n            ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/adapters/new.py\", line 70, in setup\n    return pipeline.setup()\n           ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/pipeline.py\", line 576, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/neat.py\", line 318, in setup\n    executable = evoxc.build(\n                 ^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1599, in build\n    lowered = lower(graph, backend=backend, **options)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 475, in lower\n    return backend.lower(graph, dict(options))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/compiler.py\", line 369, in lower\n    mlir_text = export(graph, options=self._exporter_options(options))\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/__init__.py\", line 183, in export\n    return Writer(module, options=options).write()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 570, in write\n    lines.append(self._indent(self.write_function(fn), 1))\n                              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 586, in write_function\n    prelude, body = self._block_body_lines(entry, terminator=\"func.return\")\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4687, in _block_body_lines\n    units = self._block_units(block, terminator)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4707, in _block_units\n    text = self._emit_op(op)\n           ^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 705, in _emit_op\n    return self._emit_special(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 717, in _emit_special\n    return self._emit_scatter(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 1813, in _emit_scatter\n    raise BackendError(\nevoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not supported by the v1 exporter (numpy put_along_axis broadcast scatter is expressible for rank-1 axis=0 and rank-2 row/column writes; use the numpy backend for the general case)\n",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.1,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "xor_p500",
+        "notes": "",
+        "pop_size": 500,
+        "problem": "XOR",
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "1000": 157.0,
+          "500": 109.0
+        },
+        "seed": 42
+      },
+      "env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "89f6200d6bba92a9cf685972761bfa65fa1c873c",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": null,
+        "loadavg": [
+          2.48,
+          3.68,
+          3.35
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": null,
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "threads": 0
+      },
+      "protocol": {
+        "thread_env": {},
+        "threads": 0,
+        "timed_generations": 2,
+        "untimed_warmup_generations": 0,
+        "warmup_generations": 1
+      },
+      "compile_time_s": null,
+      "generations_consumed_before_timing": 0,
+      "generation_ms": [],
+      "ms_per_generation": null,
+      "ms_per_generation_mean": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "gens_per_second": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "loadavg_start": [
+        2.48,
+        3.68,
+        3.35
+      ],
+      "loadavg_end": [
+        2.48,
+        3.68,
+        3.35
+      ],
+      "quality": {}
+    },
+    {
+      "case": "xor_p1000",
+      "impl": "new",
+      "backend": "iree",
+      "repeat": 0,
+      "seed": 42,
+      "schema": "tensorneat-bench/1",
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/worker.py\", line 372, in main\n    state = adapter.setup(pipeline)\n            ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/adapters/new.py\", line 70, in setup\n    return pipeline.setup()\n           ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/pipeline.py\", line 576, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/neat.py\", line 318, in setup\n    executable = evoxc.build(\n                 ^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1599, in build\n    lowered = lower(graph, backend=backend, **options)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 475, in lower\n    return backend.lower(graph, dict(options))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/compiler.py\", line 369, in lower\n    mlir_text = export(graph, options=self._exporter_options(options))\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/__init__.py\", line 183, in export\n    return Writer(module, options=options).write()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 570, in write\n    lines.append(self._indent(self.write_function(fn), 1))\n                              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 586, in write_function\n    prelude, body = self._block_body_lines(entry, terminator=\"func.return\")\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4687, in _block_body_lines\n    units = self._block_units(block, terminator)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4707, in _block_units\n    text = self._emit_op(op)\n           ^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 705, in _emit_op\n    return self._emit_special(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 717, in _emit_special\n    return self._emit_scatter(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 1813, in _emit_scatter\n    raise BackendError(\nevoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not supported by the v1 exporter (numpy put_along_axis broadcast scatter is expressible for rank-1 axis=0 and rank-2 row/column writes; use the numpy backend for the general case)\n",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.1,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "xor_p1000",
+        "notes": "",
+        "pop_size": 1000,
+        "problem": "XOR",
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "1000": 157.0,
+          "500": 109.0
+        },
+        "seed": 42
+      },
+      "env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "89f6200d6bba92a9cf685972761bfa65fa1c873c",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": null,
+        "loadavg": [
+          2.48,
+          3.68,
+          3.35
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": null,
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "threads": 0
+      },
+      "protocol": {
+        "thread_env": {},
+        "threads": 0,
+        "timed_generations": 2,
+        "untimed_warmup_generations": 0,
+        "warmup_generations": 1
+      },
+      "compile_time_s": null,
+      "generations_consumed_before_timing": 0,
+      "generation_ms": [],
+      "ms_per_generation": null,
+      "ms_per_generation_mean": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "gens_per_second": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "loadavg_start": [
+        2.48,
+        3.68,
+        3.35
+      ],
+      "loadavg_end": [
+        2.48,
+        3.68,
+        3.35
+      ],
+      "quality": {}
+    },
+    {
+      "case": "xor3d_p100",
+      "impl": "new",
+      "backend": "iree",
+      "repeat": 0,
+      "seed": 42,
+      "schema": "tensorneat-bench/1",
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/worker.py\", line 372, in main\n    state = adapter.setup(pipeline)\n            ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/adapters/new.py\", line 70, in setup\n    return pipeline.setup()\n           ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/pipeline.py\", line 576, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/neat.py\", line 318, in setup\n    executable = evoxc.build(\n                 ^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1599, in build\n    lowered = lower(graph, backend=backend, **options)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 475, in lower\n    return backend.lower(graph, dict(options))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/compiler.py\", line 369, in lower\n    mlir_text = export(graph, options=self._exporter_options(options))\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/__init__.py\", line 183, in export\n    return Writer(module, options=options).write()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 570, in write\n    lines.append(self._indent(self.write_function(fn), 1))\n                              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 586, in write_function\n    prelude, body = self._block_body_lines(entry, terminator=\"func.return\")\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4687, in _block_body_lines\n    units = self._block_units(block, terminator)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4707, in _block_units\n    text = self._emit_op(op)\n           ^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 705, in _emit_op\n    return self._emit_special(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 717, in _emit_special\n    return self._emit_scatter(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 1813, in _emit_scatter\n    raise BackendError(\nevoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not supported by the v1 exporter (numpy put_along_axis broadcast scatter is expressible for rank-1 axis=0 and rank-2 row/column writes; use the numpy backend for the general case)\n",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.05,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "xor3d_p100",
+        "notes": "",
+        "pop_size": 100,
+        "problem": "XOR3d",
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {},
+        "seed": 42
+      },
+      "env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "89f6200d6bba92a9cf685972761bfa65fa1c873c",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": null,
+        "loadavg": [
+          2.48,
+          3.68,
+          3.35
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": null,
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "threads": 0
+      },
+      "protocol": {
+        "thread_env": {},
+        "threads": 0,
+        "timed_generations": 2,
+        "untimed_warmup_generations": 0,
+        "warmup_generations": 1
+      },
+      "compile_time_s": null,
+      "generations_consumed_before_timing": 0,
+      "generation_ms": [],
+      "ms_per_generation": null,
+      "ms_per_generation_mean": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "gens_per_second": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "loadavg_start": [
+        2.48,
+        3.68,
+        3.35
+      ],
+      "loadavg_end": [
+        2.48,
+        3.68,
+        3.35
+      ],
+      "quality": {}
+    },
+    {
+      "case": "xor3d_p500",
+      "impl": "new",
+      "backend": "iree",
+      "repeat": 0,
+      "seed": 42,
+      "schema": "tensorneat-bench/1",
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/worker.py\", line 372, in main\n    state = adapter.setup(pipeline)\n            ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/adapters/new.py\", line 70, in setup\n    return pipeline.setup()\n           ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/pipeline.py\", line 576, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/neat.py\", line 318, in setup\n    executable = evoxc.build(\n                 ^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1599, in build\n    lowered = lower(graph, backend=backend, **options)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 475, in lower\n    return backend.lower(graph, dict(options))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/compiler.py\", line 369, in lower\n    mlir_text = export(graph, options=self._exporter_options(options))\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/__init__.py\", line 183, in export\n    return Writer(module, options=options).write()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 570, in write\n    lines.append(self._indent(self.write_function(fn), 1))\n                              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 586, in write_function\n    prelude, body = self._block_body_lines(entry, terminator=\"func.return\")\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4687, in _block_body_lines\n    units = self._block_units(block, terminator)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4707, in _block_units\n    text = self._emit_op(op)\n           ^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 705, in _emit_op\n    return self._emit_special(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 717, in _emit_special\n    return self._emit_scatter(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 1813, in _emit_scatter\n    raise BackendError(\nevoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not supported by the v1 exporter (numpy put_along_axis broadcast scatter is expressible for rank-1 axis=0 and rank-2 row/column writes; use the numpy backend for the general case)\n",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.05,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "xor3d_p500",
+        "notes": "",
+        "pop_size": 500,
+        "problem": "XOR3d",
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {},
+        "seed": 42
+      },
+      "env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "89f6200d6bba92a9cf685972761bfa65fa1c873c",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": null,
+        "loadavg": [
+          2.48,
+          3.68,
+          3.35
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": null,
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "threads": 0
+      },
+      "protocol": {
+        "thread_env": {},
+        "threads": 0,
+        "timed_generations": 2,
+        "untimed_warmup_generations": 0,
+        "warmup_generations": 1
+      },
+      "compile_time_s": null,
+      "generations_consumed_before_timing": 0,
+      "generation_ms": [],
+      "ms_per_generation": null,
+      "ms_per_generation_mean": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "gens_per_second": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "loadavg_start": [
+        2.48,
+        3.68,
+        3.35
+      ],
+      "loadavg_end": [
+        2.48,
+        3.68,
+        3.35
+      ],
+      "quality": {}
+    },
+    {
+      "case": "xor3d_p1000",
+      "impl": "new",
+      "backend": "iree",
+      "repeat": 0,
+      "seed": 42,
+      "schema": "tensorneat-bench/1",
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/worker.py\", line 372, in main\n    state = adapter.setup(pipeline)\n            ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/adapters/new.py\", line 70, in setup\n    return pipeline.setup()\n           ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/pipeline.py\", line 576, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/neat.py\", line 318, in setup\n    executable = evoxc.build(\n                 ^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1599, in build\n    lowered = lower(graph, backend=backend, **options)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 475, in lower\n    return backend.lower(graph, dict(options))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/compiler.py\", line 369, in lower\n    mlir_text = export(graph, options=self._exporter_options(options))\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/__init__.py\", line 183, in export\n    return Writer(module, options=options).write()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 570, in write\n    lines.append(self._indent(self.write_function(fn), 1))\n                              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 586, in write_function\n    prelude, body = self._block_body_lines(entry, terminator=\"func.return\")\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4687, in _block_body_lines\n    units = self._block_units(block, terminator)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4707, in _block_units\n    text = self._emit_op(op)\n           ^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 705, in _emit_op\n    return self._emit_special(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 717, in _emit_special\n    return self._emit_scatter(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 1813, in _emit_scatter\n    raise BackendError(\nevoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not supported by the v1 exporter (numpy put_along_axis broadcast scatter is expressible for rank-1 axis=0 and rank-2 row/column writes; use the numpy backend for the general case)\n",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.05,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "xor3d_p1000",
+        "notes": "",
+        "pop_size": 1000,
+        "problem": "XOR3d",
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {},
+        "seed": 42
+      },
+      "env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "89f6200d6bba92a9cf685972761bfa65fa1c873c",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": null,
+        "loadavg": [
+          2.44,
+          3.65,
+          3.34
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": null,
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "threads": 0
+      },
+      "protocol": {
+        "thread_env": {},
+        "threads": 0,
+        "timed_generations": 2,
+        "untimed_warmup_generations": 0,
+        "warmup_generations": 1
+      },
+      "compile_time_s": null,
+      "generations_consumed_before_timing": 0,
+      "generation_ms": [],
+      "ms_per_generation": null,
+      "ms_per_generation_mean": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "gens_per_second": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "loadavg_start": [
+        2.48,
+        3.68,
+        3.35
+      ],
+      "loadavg_end": [
+        2.44,
+        3.65,
+        3.34
+      ],
+      "quality": {}
+    },
+    {
+      "case": "custom_pagie_p500",
+      "impl": "new",
+      "backend": "iree",
+      "repeat": 0,
+      "seed": 42,
+      "schema": "tensorneat-bench/1",
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/worker.py\", line 372, in main\n    state = adapter.setup(pipeline)\n            ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/adapters/new.py\", line 70, in setup\n    return pipeline.setup()\n           ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/pipeline.py\", line 576, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/neat.py\", line 318, in setup\n    executable = evoxc.build(\n                 ^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1599, in build\n    lowered = lower(graph, backend=backend, **options)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 475, in lower\n    return backend.lower(graph, dict(options))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/compiler.py\", line 369, in lower\n    mlir_text = export(graph, options=self._exporter_options(options))\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/__init__.py\", line 183, in export\n    return Writer(module, options=options).write()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 570, in write\n    lines.append(self._indent(self.write_function(fn), 1))\n                              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 586, in write_function\n    prelude, body = self._block_body_lines(entry, terminator=\"func.return\")\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4687, in _block_body_lines\n    units = self._block_units(block, terminator)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4707, in _block_units\n    text = self._emit_op(op)\n           ^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 705, in _emit_op\n    return self._emit_special(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 717, in _emit_special\n    return self._emit_scatter(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 1813, in _emit_scatter\n    raise BackendError(\nevoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not supported by the v1 exporter (numpy put_along_axis broadcast scatter is expressible for rank-1 axis=0 and rank-2 row/column writes; use the numpy backend for the general case)\n",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.01,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "custom_pagie_p500",
+        "notes": "per-impl divergence: the legacy side seeds the global numpy RNG and vmaps a jax-typed func; the new side samples from default_rng(seed) with a numpy func \u2014 same distribution, different draws",
+        "pop_size": 500,
+        "problem": "CustomFuncFit",
+        "problem_config": {
+          "class": "CustomFuncFit",
+          "func": "pagie",
+          "low_bounds": [
+            -1.0,
+            -1.0
+          ],
+          "method": "sample",
+          "num_samples": 500,
+          "upper_bounds": [
+            1.0,
+            1.0
+          ]
+        },
+        "reference_ms_per_generation": {},
+        "seed": 42
+      },
+      "env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "89f6200d6bba92a9cf685972761bfa65fa1c873c",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": null,
+        "loadavg": [
+          2.44,
+          3.65,
+          3.34
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": null,
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "threads": 0
+      },
+      "protocol": {
+        "thread_env": {},
+        "threads": 0,
+        "timed_generations": 2,
+        "untimed_warmup_generations": 0,
+        "warmup_generations": 1
+      },
+      "compile_time_s": null,
+      "generations_consumed_before_timing": 0,
+      "generation_ms": [],
+      "ms_per_generation": null,
+      "ms_per_generation_mean": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "gens_per_second": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "loadavg_start": [
+        2.44,
+        3.65,
+        3.34
+      ],
+      "loadavg_end": [
+        2.44,
+        3.65,
+        3.34
+      ],
+      "quality": {}
+    },
+    {
+      "case": "cartpole_p100",
+      "impl": "new",
+      "backend": "iree",
+      "repeat": 0,
+      "seed": 42,
+      "schema": "tensorneat-bench/1",
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/worker.py\", line 372, in main\n    state = adapter.setup(pipeline)\n            ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/benchmarks/harness/adapters/new.py\", line 70, in setup\n    return pipeline.setup()\n           ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/pipeline.py\", line 576, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/neat.py\", line 318, in setup\n    executable = evoxc.build(\n                 ^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1599, in build\n    lowered = lower(graph, backend=backend, **options)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 475, in lower\n    return backend.lower(graph, dict(options))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/compiler.py\", line 369, in lower\n    mlir_text = export(graph, options=self._exporter_options(options))\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/__init__.py\", line 183, in export\n    return Writer(module, options=options).write()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 570, in write\n    lines.append(self._indent(self.write_function(fn), 1))\n                              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 586, in write_function\n    prelude, body = self._block_body_lines(entry, terminator=\"func.return\")\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4687, in _block_body_lines\n    units = self._block_units(block, terminator)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 4707, in _block_units\n    text = self._emit_op(op)\n           ^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 705, in _emit_op\n    return self._emit_special(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 717, in _emit_special\n    return self._emit_scatter(op)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/genesis/task_d7be275380ce6fc0/iree-venv/lib/python3.12/site-packages/evoxc/backends/stablehlo/writer.py\", line 1813, in _emit_scatter\n    raise BackendError(\nevoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not supported by the v1 exporter (numpy put_along_axis broadcast scatter is expressible for rank-1 axis=0 and rank-2 row/column writes; use the numpy backend for the general case)\n",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "rl",
+        "fitness_target": 180.0,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 4,
+          "num_outputs": 2
+        },
+        "impls": [
+          "new"
+        ],
+        "name": "cartpole_p100",
+        "notes": "new-only: the legacy library has no equivalent problem",
+        "pop_size": 100,
+        "problem": "CartPole",
+        "problem_config": {
+          "class": "CartPole",
+          "max_step": 200,
+          "repeat_times": 1
+        },
+        "reference_ms_per_generation": {},
+        "seed": 42
+      },
+      "env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "89f6200d6bba92a9cf685972761bfa65fa1c873c",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": null,
+        "loadavg": [
+          2.44,
+          3.65,
+          3.34
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": null,
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "threads": 0
+      },
+      "protocol": {
+        "thread_env": {},
+        "threads": 0,
+        "timed_generations": 2,
+        "untimed_warmup_generations": 0,
+        "warmup_generations": 1
+      },
+      "compile_time_s": null,
+      "generations_consumed_before_timing": 0,
+      "generation_ms": [],
+      "ms_per_generation": null,
+      "ms_per_generation_mean": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "gens_per_second": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "loadavg_start": [
+        2.44,
+        3.65,
+        3.34
+      ],
+      "loadavg_end": [
+        2.44,
+        3.65,
+        3.34
+      ],
+      "quality": {}
+    }
+  ],
+  "aggregated": [
+    {
+      "case": "xor_p100",
+      "impl": "new",
+      "backend": "iree",
+      "n_repeats": 1,
+      "seeds": [
+        42
+      ],
+      "status": "error",
+      "ms_per_generation": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "ms_per_generation_mean": null,
+      "gens_per_second": null,
+      "compile_time_s": null,
+      "compile_time_s_min": null,
+      "compile_time_s_max": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "final_best_fitness": null,
+      "final_best_fitness_min": null,
+      "final_best_fitness_max": null,
+      "generations_to_target": null,
+      "gens_to_target_all": [
+        null
+      ],
+      "n_errors": 1,
+      "errors": [
+        "evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026"
+      ]
+    },
+    {
+      "case": "xor_p500",
+      "impl": "new",
+      "backend": "iree",
+      "n_repeats": 1,
+      "seeds": [
+        42
+      ],
+      "status": "error",
+      "ms_per_generation": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "ms_per_generation_mean": null,
+      "gens_per_second": null,
+      "compile_time_s": null,
+      "compile_time_s_min": null,
+      "compile_time_s_max": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "final_best_fitness": null,
+      "final_best_fitness_min": null,
+      "final_best_fitness_max": null,
+      "generations_to_target": null,
+      "gens_to_target_all": [
+        null
+      ],
+      "n_errors": 1,
+      "errors": [
+        "evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026"
+      ]
+    },
+    {
+      "case": "xor_p1000",
+      "impl": "new",
+      "backend": "iree",
+      "n_repeats": 1,
+      "seeds": [
+        42
+      ],
+      "status": "error",
+      "ms_per_generation": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "ms_per_generation_mean": null,
+      "gens_per_second": null,
+      "compile_time_s": null,
+      "compile_time_s_min": null,
+      "compile_time_s_max": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "final_best_fitness": null,
+      "final_best_fitness_min": null,
+      "final_best_fitness_max": null,
+      "generations_to_target": null,
+      "gens_to_target_all": [
+        null
+      ],
+      "n_errors": 1,
+      "errors": [
+        "evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026"
+      ]
+    },
+    {
+      "case": "xor3d_p100",
+      "impl": "new",
+      "backend": "iree",
+      "n_repeats": 1,
+      "seeds": [
+        42
+      ],
+      "status": "error",
+      "ms_per_generation": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "ms_per_generation_mean": null,
+      "gens_per_second": null,
+      "compile_time_s": null,
+      "compile_time_s_min": null,
+      "compile_time_s_max": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "final_best_fitness": null,
+      "final_best_fitness_min": null,
+      "final_best_fitness_max": null,
+      "generations_to_target": null,
+      "gens_to_target_all": [
+        null
+      ],
+      "n_errors": 1,
+      "errors": [
+        "evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026"
+      ]
+    },
+    {
+      "case": "xor3d_p500",
+      "impl": "new",
+      "backend": "iree",
+      "n_repeats": 1,
+      "seeds": [
+        42
+      ],
+      "status": "error",
+      "ms_per_generation": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "ms_per_generation_mean": null,
+      "gens_per_second": null,
+      "compile_time_s": null,
+      "compile_time_s_min": null,
+      "compile_time_s_max": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "final_best_fitness": null,
+      "final_best_fitness_min": null,
+      "final_best_fitness_max": null,
+      "generations_to_target": null,
+      "gens_to_target_all": [
+        null
+      ],
+      "n_errors": 1,
+      "errors": [
+        "evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026"
+      ]
+    },
+    {
+      "case": "xor3d_p1000",
+      "impl": "new",
+      "backend": "iree",
+      "n_repeats": 1,
+      "seeds": [
+        42
+      ],
+      "status": "error",
+      "ms_per_generation": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "ms_per_generation_mean": null,
+      "gens_per_second": null,
+      "compile_time_s": null,
+      "compile_time_s_min": null,
+      "compile_time_s_max": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "final_best_fitness": null,
+      "final_best_fitness_min": null,
+      "final_best_fitness_max": null,
+      "generations_to_target": null,
+      "gens_to_target_all": [
+        null
+      ],
+      "n_errors": 1,
+      "errors": [
+        "evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026"
+      ]
+    },
+    {
+      "case": "custom_pagie_p500",
+      "impl": "new",
+      "backend": "iree",
+      "n_repeats": 1,
+      "seeds": [
+        42
+      ],
+      "status": "error",
+      "ms_per_generation": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "ms_per_generation_mean": null,
+      "gens_per_second": null,
+      "compile_time_s": null,
+      "compile_time_s_min": null,
+      "compile_time_s_max": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "final_best_fitness": null,
+      "final_best_fitness_min": null,
+      "final_best_fitness_max": null,
+      "generations_to_target": null,
+      "gens_to_target_all": [
+        null
+      ],
+      "n_errors": 1,
+      "errors": [
+        "evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026"
+      ]
+    },
+    {
+      "case": "cartpole_p100",
+      "impl": "new",
+      "backend": "iree",
+      "n_repeats": 1,
+      "seeds": [
+        42
+      ],
+      "status": "error",
+      "ms_per_generation": null,
+      "ms_per_generation_min": null,
+      "ms_per_generation_max": null,
+      "ms_per_generation_mean": null,
+      "gens_per_second": null,
+      "compile_time_s": null,
+      "compile_time_s_min": null,
+      "compile_time_s_max": null,
+      "rss_after_import_mb": null,
+      "rss_after_compile_mb": null,
+      "rss_final_mb": null,
+      "final_best_fitness": null,
+      "final_best_fitness_min": null,
+      "final_best_fitness_max": null,
+      "generations_to_target": null,
+      "gens_to_target_all": [
+        null
+      ],
+      "n_errors": 1,
+      "errors": [
+        "evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026"
+      ]
+    }
+  ],
+  "verdict": {
+    "status": "INCOMPLETE",
+    "timing": "n/a",
+    "quality": "n/a",
+    "reasons": [
+      "xor_p100/new/iree: error \u2014 evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026",
+      "xor_p500/new/iree: error \u2014 evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026",
+      "xor_p1000/new/iree: error \u2014 evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026",
+      "xor3d_p100/new/iree: error \u2014 evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026",
+      "xor3d_p500/new/iree: error \u2014 evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026",
+      "xor3d_p1000/new/iree: error \u2014 evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026",
+      "custom_pagie_p500/new/iree: error \u2014 evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026",
+      "cartpole_p100/new/iree: error \u2014 evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not\u2026",
+      "no old-vs-new comparison available"
+    ],
+    "comparisons": []
+  }
+}
