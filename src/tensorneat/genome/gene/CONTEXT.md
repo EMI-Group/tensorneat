@@ -10,7 +10,7 @@ Nothing here imports `jax`/`torch`, and no hook on the compute path runs eager N
 - class data: `fixed_attrs: tuple[str, ...]` (int32 key columns), `attr_specs: tuple[GeneAttr, ...]` (float32 attribute columns in row order), `labels: dict[str, str]` (short render names; `repr`/`to_dict` fall back to the declared name).
 - `key_width` / `attr_width` (`len(fixed_attrs)` / `len(attr_specs)`), `length = key_width + attr_width` (display only).
 - `setup(state=None)` validates the table (`_validate_specs`: non-empty names, unique names, wide-enough int option lists, `init_std >= 0`, `lower <= upper`) and registers the gene; violations raise `common.errors.ConfigError`.
-- `attr_index(name)` / `key_index(name)` (host ints, `ConfigError` if unknown), `attr_column(attrs, name)` / `key_column(keys, name)` (trace-time column read through `column`).
+- `attr_index(name)` / `key_index(name)` (host ints, `ConfigError` if unknown), `attr_column(attrs, name)` / `key_column(keys, name)` (trace-time column read through `column`), `has_attr(name)` (host bool, for the zero-width table).
 - `new_random_attrs(state, key, shape) -> (*shape, attr_width)` — one batched `evoxc.random` draw per spec, clipped into the spec bounds; `shape=()` is supported (draws `(1,)` then reshapes).
 - `new_identity_attrs(state)` — floats at their init mean, ints at their first option; `new_zero_attrs(state)` — zeros, ints at their first option. Both return `(attr_width,)` and are rebuilt inside the graph (`enp` constants, never eager `np`).
 - `mutate(state, key, attrs)` — batched over leading axes: floats `mutate_float` noise `mutate_rate` of the time and `replace_rate` re-init from the spec distribution, ints re-drawn uniformly over the option list with `replace_rate`.
@@ -35,6 +35,14 @@ Family dispatch calls the authoritative `common.functions` signatures: `apply_ag
 `DefaultConn` / `OriginConn`: `weight` in column 0 (`attr_width = 1`).
 `-1` in an activation column means identity and is never an option index; aggregation has no `-1`.
 `test/support/oracle.py` (`default_node_attrs_of`, `default_conn_attr_of`) reads exactly this order.
+
+## Zero attribute width (`attr_specs = ()`, `attr_width == 0`)
+A gene may declare no float columns at all (a HyperNEAT/CPPN conn gene is the motivating case), so every `*_attrs` array is `(*shape, 0)` float32 and no attribute column can be read.
+`BaseGene.has_attr(name)` is the host predicate; `attr_column`/`key_column`/`attr_index` still raise `ConfigError` for an unknown name, and `column_of(attrs, name, default)` returns `float(default)` when the column is absent and no default is given it raises that same `ConfigError` instead of fabricating a column.
+The neutral fallbacks are fixed and shared by the traced and host paths: aggregation = option `0` (`AGG.sum`), activation = `ACT_IDENTITY`, node `bias = 0` / `response = 1`, conn `weight = 1.0`, `distance = 0`.
+`_normalize_attrs` accepts only `(*shape, 0)` (or the bare `shape`) in this case and raises `ConfigError` for a non-empty attr array; `_attr_row` returns `static_row(())`; `blocks.crossover_attrs` early-returns `attrs1` because `evoxc.random.uniform` rejects a zero-numel shape.
+`execute_mutation`/`execute_crossover` pass a `(P, max_conns, 0)` block through unchanged, and `from_attrs` accepts `None`, `(*shape, 0)` and the per-row `(*shape,)` spelling.
+Still broken **outside** this node for `attr_width == 0`: `../operations/distance/digest.py::_gather_rows` and `../operations/distance/default.py::distance_from_alignment` build `enp.arange(..., step=count * width)` with `width == 0` (`ZeroDivisionError`), so `prepare_distance`/`measure_distance` — and therefore `Pipeline.step` with a zero-width gene — raise until those two guards land.
 
 ## Constraints
 - Attribute order in `attr_specs` *is* the column order of `*_attrs`; never reorder without changing every consumer, and consumers read `attr_specs`/`fixed_attrs`, never hardcoded indices.

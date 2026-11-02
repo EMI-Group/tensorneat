@@ -60,8 +60,12 @@ class OriginConn(DefaultConn):
 
         Returns:
             Child attribute rows, ``(*shape, attr_width)`` float32, each row copied
-            verbatim from one parent.
+            verbatim from one parent; a family with no attribute column
+            (``attr_width == 0``) has nothing to recombine, so the first parent's empty
+            rows are returned without tracing a draw.
         """
+        if not self.attr_specs:
+            return attrs1
         batch_shape = tuple(attrs1.shape[:-1])
         draw = evoxc.random.normal(
             key, (*batch_shape, 1), 0.0, 1.0, dtype=evoxc.float32

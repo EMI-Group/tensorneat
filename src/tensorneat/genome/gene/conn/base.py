@@ -198,17 +198,35 @@ class BaseConn(BaseGene):
             columns.append(evoxc.select(evoxc.isnan(values), zero, values))
         return ConnOperands(tuple(columns), zero)
 
-    def column_of(self, attrs: Any, name: str) -> evoxc.SymbolicTensor:
+    def column_of(
+        self, attrs: Any, name: str, default: float | None = None
+    ) -> evoxc.SymbolicTensor:
         """Read one named attribute column of a raw batch or of a prepared bundle.
 
         Args:
             attrs: ``(..., CA)`` float32 attribute rows, or the :class:`ConnOperands`
                 bundle of :meth:`prepare`.
             name: Spec name of the column, resolved through ``attr_specs``.
+            default: Value of the whole column when the table declares no such
+                attribute (a family with ``attr_width == 0``, whose every message then
+                carries that neutral value). A Python float is a scalar operand of every
+                evoxc op, so it broadcasts over ``(...,)`` at no traced cost; ``None``
+                keeps the strict behaviour and raises.
 
         Returns:
-            ``(...,)`` float32 column values.
+            ``(...,)`` float32 column values, or the ``default`` scalar when the column
+            is absent.
+
+        Raises:
+            tensorneat.common.errors.ConfigError: If the table declares no such column
+                and no ``default`` was given.
         """
+        if not self.has_attr(name):
+            if default is None:
+                raise ConfigError(
+                    f"{type(self).__name__} declares no attribute {name!r}"
+                )
+            return float(default)
         if isinstance(attrs, ConnOperands):
             return attrs.columns[self.attr_index(name)]
         return self.attr_column(attrs, name)

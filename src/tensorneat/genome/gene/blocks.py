@@ -519,9 +519,13 @@ def crossover_attrs(
         attrs2: Key-aligned attribute rows of the second parent, same shape.
 
     Returns:
-        ``(*shape, attr_width)`` float32 child attribute rows.
+        ``(*shape, attr_width)`` float32 child attribute rows; a gene with no
+        attribute column (``attr_width == 0``) has nothing to recombine, so the
+        first parent's empty rows are returned without tracing a draw.
     """
     shape = tuple(attrs1.shape)
+    if shape and int(shape[-1]) == 0:  # no attribute column to recombine
+        return attrs1
     # The numpy reference backend rejects a 0-d random output, so a rank-0 row is
     # drawn as shape ``(1,)`` and reshaped back (see ``..base.BaseGene``).
     draw = evoxc.random.uniform(key, shape or (1,), 0.0, 1.0, dtype=evoxc.float32)

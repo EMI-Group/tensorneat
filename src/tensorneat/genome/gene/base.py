@@ -315,6 +315,23 @@ class BaseGene(StatefulBaseClass):
     # column addressing
     # ------------------------------------------------------------------ #
 
+    def has_attr(self, name: str) -> bool:
+        """Whether the table declares an attribute column named ``name``.
+
+        A gene family may declare no attribute column at all (``attr_specs = ()``,
+        e.g. a CPPN connection gene whose weight lives elsewhere), in which case
+        every ``*_attrs`` array is ``(*shape, 0)``. Callers that can proceed with a
+        neutral column value ask this first and fall back instead of failing on
+        :meth:`attr_index`.
+
+        Args:
+            name: Attribute-column name to look up.
+
+        Returns:
+            ``True`` iff a spec in ``attr_specs`` carries that name.
+        """
+        return any(spec.name == name for spec in self.attr_specs)
+
     def attr_index(self, name: str) -> int:
         """Return the attribute-column index of ``name``.
 
@@ -403,6 +420,12 @@ class BaseGene(StatefulBaseClass):
         """
         shape = tuple(shape)
         if self.attr_width == 0:  # a family without evolvable attributes
+            if attrs is not None and tuple(attrs.shape) not in ((*shape, 0), shape):
+                raise ConfigError(
+                    f"{name}: {type(self).__name__} declares no attribute column, so "
+                    f"its attribute rows must be empty {(*shape, 0)} (or the per-row "
+                    f"spelling {shape}), got {tuple(attrs.shape)}"
+                )
             return enp.zeros((*shape, 0), dtype=evoxc.float32)
         if attrs is None:
             return enp.zeros((*shape, self.attr_width), dtype=evoxc.float32)
@@ -562,13 +585,30 @@ class BaseGene(StatefulBaseClass):
     def _attr_row(self, values: Sequence[float]) -> evoxc.SymbolicTensor:
         """Build one ``(attr_width,)`` float32 attribute row from static values.
 
+        The row is the neutral/identity row of a *single* gene, so a family with no
+        attribute column (``attr_width == 0``) has exactly one legal row: the empty
+        one. A family that hands in a different number of values than its table
+        declares would otherwise build a row of the wrong width that only fails much
+        later, inside ``evoxc``, so that mismatch is reported here.
+
         Args:
             values: One Python float per attribute column, in ``attr_specs`` order.
 
         Returns:
             ``(attr_width,)`` float32 row; an empty row when the family has no
             evolvable attributes.
+
+        Raises:
+            tensorneat.common.errors.ConfigError: If the number of values does not
+                match the declared attribute width.
         """
+        if self.attr_width == 0:
+            return static_row(())
+        if len(values) != self.attr_width:
+            raise ConfigError(
+                f"{type(self).__name__} declares {self.attr_width} attribute "
+                f"column(s) but its identity/zero row carries {len(values)} value(s)"
+            )
         return static_row(values)
 
     @staticmethod
@@ -662,8 +702,12 @@ class BaseGene(StatefulBaseClass):
             attrs2: Attribute rows of the second, key-aligned gene, same shape.
 
         Returns:
-            ``(*shape,)`` float32 distances, one per aligned pair.
+            ``(*shape,)`` float32 distances, one per aligned pair; a gene with no
+            attribute column has no attribute distance at all, so every pair is
+            ``0`` there (its compatibility distance is structural only).
         """
+        if not self.attr_specs:  # no column to compare: the attribute distance is 0
+            return enp.zeros(tuple(attrs1.shape[:-1]), dtype=evoxc.float32)
         total = None
         for index, spec in enumerate(self.attr_specs):
             first, second = column(attrs1, index), column(attrs2, index)
