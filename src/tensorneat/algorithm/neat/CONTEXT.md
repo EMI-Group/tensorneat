@@ -127,23 +127,24 @@ Keys are rank-0 scalars, so a batched kernel takes one key and draws its own pop
 `pipeline`: creates `randkey` with `evoxc.random.key(seed)`, calls `setup` on the host, drives `ask → transform → forward/evaluate → tell`, and calls `show_details` on host-readable values.
 
 ## Measured Cost (numpy backend, real `DefaultGenome(max_nodes=50, max_conns=100)`, XOR, `species_size=20`, seed 42)
-Protocol: one configuration per fresh process, 5 setup steps, then one warmup and 5 timed runs; phases timed as *separate executables* traced on one snapshot state (`step` is the pipeline's own graph), so a generation's phase sum slightly over-counts. Interleaved A/B against the pre-change tree (`git worktree` at the parent commit, its own venv), same box, medians (minimums in parentheses), ms:
+Protocol: one configuration per fresh process, 4 setup generations, then one warmup and 4 timed runs; phases timed as *separate executables* traced on one snapshot state (`step` is the pipeline's own graph), so a generation's phase sum slightly over-counts. Medians, ms, this box (it drifts ±30 % between sessions, so read ratios, not absolute milliseconds):
 
-| P | evaluate | update_species | breed | speciate | tell | `Pipeline.step` | peak RSS |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 100 | 10.2 (10.0) | 1.20 (1.18) | 31.2 (30.4) → 30.3 (30.0) | 39.4 (38.6) → **26.9 (26.7)** | 71.8 (70.2) → 58.4 (57.8) | 90.4 (84.8) → **73.7 (71.6)** | 242 → 216 MiB |
-| 500 | 24.8 (24.5) | 1.57 (1.36) | 77.0 (71.9) → 83.9 (76.3) | 577.0 (569.3) → **307.1 (311.4)** | 655.5 (642.6) → 392.5 (389.1) | 956.1 (938.9) → **443.7 (440.8)** | 638 → 1562 MiB |
-| 1000 | 45.4 (44.6) | 2.07 (2.04) | 143.4 (140.1) → 148.5 (141.9) | 1095.5 (1088.4) → **581.3 (577.1)** | 1240.8 (1230.4) → 731.8 (721.1) | 1813.2 (1800.7) → **833.8 (789.7)** | 1118 → 2958 MiB |
+| P | evaluate | update_species | breed (`update_species` + `_create_next_generation`) | speciate | tell | `Pipeline.step` |
+| --- | --- | --- | --- | --- | --- | --- |
+| 100 | 8.5 | 1.3 | 21.9 | 28.6 (26.8 before the wave) | 50.3 (50.5) | 58.9 (58.9) |
+| 500 | 41.1 | 1.8 | 60.5 | **230.0** (237.1) | 294.1 (304.4) | 335.2 (354.2) |
+| 1000 | 96.3 | 2.2 | 116.7 | **388.1** (439.6) | 511.8 (562.5) | 608.1 (618.5) |
 
-`speciate` −32 % / −47 % / −47 % and the whole step −18 % / −54 % / −54 %; the breed column is unchanged within this box's ±7 % run-to-run drift (the algorithm-owned part of breed is ~0.6 % of its op count — see below).
-`tell` is now `speciate` 46 % / 78 % / 79 %, breeding 52 % / 21 % / 20 %, species update ~2 %.
-Against the declared legacy JAX baseline (51 / 109 / 157 ms per generation) the cycle is ~1.4x / ~4.1x / ~5.3x over budget at `P=100 / 500 / 1000` (was ~1.8x / ~8.8x / ~11.6x).
-Live species slots in the measured states: 3 / 20 / 20 at `P=100 / 500 / 1000` — the sparse gate is what keeps `P=100` on the lazy path.
-Graph build: `build_tell` 2.7 / 4.3 / 4.8 s and the pipeline's one-off build 3.2 / 3.9 / 4.5 s (before: 3.3 / 4.4 / 4.7 s); grouping the wide calls kept the build flat.
-`genome.measure_distance` costs 0.8 / 6.5 / 11.3 ms per call (7.9 / 13.0 / 11.3 µs per pair) against `execute_distance`'s earlier ~25–48 µs per pair, which is the digest win this node now consumes.
-Breeding split at `P=100` (separate executables): mutation kernel 24.8 ms, crossover kernel 5.1 ms, `_new_gene_keys` 0.08 ms, elite select 0.13 ms, parent gathers 0.09 ms.
-`breed`'s graph (`update_species` + `_create_next_generation`) is 2014 IR ops at every population size, of which `genome.execute_mutation` is 1359 (67 %), `genome.execute_crossover` 432 (21 %), this node's `update_species` 189 (9 %, of which `_kernels.pair_parents` 38, `spawn_from_target` 26, `_stagnation` 19, `block_layout` 16, `const` 15, `spawn_numbers_by_rank` 15) and `neat.py` itself 29 (1.4 %: `_create_next_generation` 17 = 8 parent gathers + 3 key-split + 4 elite `select` + 2 rank reshapes, `_new_gene_keys` 9, `_sanitize_fitness` 5).
-Timed as separate executables: `update_species` 1.31 / 1.83 / 2.23 ms and `_create_next_generation` 21.95 / 55.06 / 105.73 ms at `P=100 / 500 / 1000`, while the algorithm-owned half of the latter (the 8 gathers plus the elite `select`s, genome calls removed) is 0.19 / 0.45 / 0.75 ms — i.e. under 1 % of breed, so the breed cost is genome-kernel bound and no algorithm-owned op removal can move it.
+`tell` is `speciate` 57 % / 78 % / 76 % and breeding 43 % / 21 % / 23 %; the species update is ~1 %.
+The pipeline's own graph (`benchmarks/run_benchmark.py --impl new --backend numpy --cases xor_p100,xor_p500,xor_p1000 --generations 20`, one repeat, warmup 3) reports **63.6 / 334.2 / 571.6 ms per generation**, i.e. the same numbers as `Pipeline.step`.
+Against the declared legacy JAX baseline (51 / 109 / 157 ms per generation) the cycle is ~1.2x / ~3.1x / ~3.9x over budget at `P=100 / 500 / 1000`.
+Live species slots in the measured states: 3 / 20 / 20 at `P=100 / 500 / 1000` — the sparse gate is what keeps `P=100` on the `cond` path.
+The generation's distance work is `2 · species_size · pop_size` = 4 000 / 20 000 / 40 000 pairs at 6.7 / 11.5 / 9.7 µs per pair; that product, not the dispatch count, is what `speciate` measures.
+Kernel width scaling at `P=1000` (`prepare_distance` + one `measure_distance` call, tiled digest and tiled centres, per-pair µs): 1 000 rows/call 13.0, 2 000 10.3, 4 000 **9.7**, 10 000 10.3, 20 000 13.8 — the 4-centre optimum and the 13.0 µs of the current one-centre-per-call shape bracket `speciate`'s 388 ms, and the whole-table call is the slowest option.
+Dressed static gene geometry is the dominant cost driver at `P=1000` (whole `Pipeline.step`, same algorithm, largest real genome 6 nodes / 5 connections): `max_nodes/max_conns` 50/100 → 593.6 ms, 20/40 → 279.9, 10/16 → 178.3, 6/8 → 147.2 — i.e. the padded gene axis (`max_conns` wide in `measure_distance`, `max_nodes` wide in the node family) multiplies every per-pair op, and a 2.4x smaller static geometry is worth 3.3x end to end.
+Graph build: the pipeline's one-off whole-generation build is 3.2 / 3.9 / 4.5 s; the speciate graph alone is 1 377 IR ops (build 0.17 s) and the breed graph 2 014.
+`breed`'s 2 014 IR ops at every population size: `genome.execute_mutation` 1 359 (67 %), `genome.execute_crossover` 432 (21 %), this node's `update_species` 189 (9 %: `_kernels.pair_parents` 38, `spawn_from_target` 26, `_stagnation` 19, `block_layout` 16, `const` 15, `spawn_numbers_by_rank` 15), `neat.py` itself 29 (1.4 %: `_create_next_generation` 17 = 8 parent gathers + 3 key-split + 4 elite `select` + 2 rank reshapes, `_new_gene_keys` 9, `_sanitize_fitness` 5).
+Timed as separate executables: `update_species` 1.31 / 1.83 / 2.23 ms and `_create_next_generation` 21.95 / 55.06 / 105.73 ms at `P=100 / 500 / 1000`, while the algorithm-owned half of the latter (the 8 gathers plus the elite `select`s, genome calls removed) is 0.19 / 0.45 / 0.75 ms — under 1 % of breed, so breed is genome-kernel bound and no algorithm-owned op removal can move it.
 `tell` increments `generation` through `_as_scalar_f32`, which emits the `cast`/`reshape` only when the static dtype/rank need one, so the 0-d `float32` counter costs one `add` and no no-op op.
 
 ## Known Issues
