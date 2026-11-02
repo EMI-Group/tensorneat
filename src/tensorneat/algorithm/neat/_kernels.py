@@ -138,18 +138,6 @@ def prefix_sum_exclusive(values: Any) -> Any:
     return evoxc.reshape(evoxc.dot(triangular, enp.expand_dims(values, 1)), (length,))
 
 
-def slice_axis0(values: Any, start: int, length: int) -> Any:
-    """Static ``values[start:start + length]`` along axis ``0`` of any rank.
-
-    ``evoxc.slice`` wants one start/length per axis, so the trailing axes are
-    spelled out as ``0``/their full extent here instead of at every call site.
-    """
-    trailing = tuple(values.shape[1:])
-    return evoxc.slice(
-        values, (start,) + (0,) * len(trailing), (length,) + trailing
-    )
-
-
 def membership(species_keys: Any, idx2species: Any) -> Any:
     """``(S, P)`` mask ``member[i, p] = idx2species[p] == species_keys[i]``.
 
@@ -412,172 +400,6 @@ def read_population(state: Any, pop: Any = None) -> Any:
     )
 
 
-#: Species slots per liveness-gated chunk of a compatibility table (see
-#: :func:`chunk_slots_for`).
-#:
-#: The compatibility kernel is row-independent, so a ``(k * P)`` batch returns
-#: exactly the same floats as ``k`` batches of ``P`` -- but not at the same cost.
-#: Measured on this machine with the real gene payload shapes and
-#: ``genome.execute_distance`` as the kernel: a fixed ~2.5 ms of interpreter
-#: dispatch per call plus ~48 us per ``(centre, genome)`` pair, flat from 100 to
-#: 20 000 rows in isolation -- yet *in situ* a chunk of 2 slots (~1000-2000 rows)
-#: is consistently the cheapest, because the bigger the broadcast batch the more
-#: bytes the graph materialises (a 20-slot call at ``pop_size=1000`` also embeds
-#: multi-megabyte ``I_INF`` padding constants).  Total steady-state cost is
-#: ``table_rows * per_row + calls * dispatch`` while the *build* cost is
-#: ``chunks * per_chunk`` (each chunk duplicates the kernel body in the graph, a
-#: one-off ~0.33 s per copy), so narrow chunks trade build time for run time.
-#:
-#: Measured steady-state ``speciate`` at the benchmark configuration
-#: (``species_size=20``, pop 100 / 500 / 1000, 3 / 20 / 20 live slots, separate
-#: phase executables built and timed in one process):
-#:
-#: ============ ========= ========= ========== ======================
-#: chunk slots  pop 100   pop 500   pop 1000   build, pop 100/500/1000
-#: ============ ========= ========= ========== ======================
-#: per-slot 1   34.9 ms   584.8 ms  1031.7 ms  14.1 / 15.2 / 16.0 s
-#: **2**        **30.0**  **530.1** **1005.5** **7.8 / 8.4 / 9.3 s**
-#: 4            37.8      533.6     1201.4     4.4 / 5.0 / 5.7 s
-#: 5            41.6      593.8     1255.4     3.7 / 4.3 / 5.2 s
-#: 10           63.3      883.2     1687.8     2.4 / 3.0 / 3.8 s
-#: 20           195.6     978.5     1804.8     1.7 / 2.3 / 3.0 s
-#: ============ ========= ========= ========== ======================
-#:
-#: ``2`` is the optimum of the steady state at every population size, so the rule
-#: needs no dependence on ``pop_size``.  The pre-change per-slot-in-scan code
-#: measured 164.5 / 562.9 / 1186.6 ms with a 1.2 / 1.4 / 1.7 s build: the win
-#: comes from the slots a gated chunk can skip (few live species at small
-#: populations) and the graph-build price is what that costs -- each chunk is a
-#: separate ``if`` region, so the kernel body is traced once per chunk.
-#:
-#: Whole-generation ``Pipeline.step`` in fresh processes, before -> after:
-#: 246.1 -> 103.5 ms (pop 100), 849.0 -> ~1000 ms (pop 500),
-#: 2004.2 -> 1936.5 ms (pop 1000), at the price of a 3.4 / 4.0 / 4.6 s ->
-#: 10.1 / 11.2 / 12.6 s graph build.  At ``pop_size >= 500`` every species slot is
-#: alive, so no row can be skipped and the duplicated kernel bodies are a small
-#: net loss; at ``pop_size=100`` (3 live slots) they are a 2.4x win.
-#:
-#: It is a module constant rather than a constructor argument so the public
-#: ``NEAT`` signature is unchanged.
-CHUNK_SLOTS = 2
-
-
-def chunk_slots_for(species_size: int) -> int:
-    """Static number of species slots per gated chunk of a distance table."""
-    return max(1, min(CHUNK_SLOTS, species_size))
-
-
-def distance_table(
-    state: Any,
-    template: Any,
-    centres: Any,
-    population: Any,
-    pop_size: int,
-    species_size: int,
-    distance_fn: Callable,
-) -> Any:
-    """``(species_size, pop_size)`` compatibility distances in one batched call.
-
-    ``centres`` and ``population`` are the four split payload arrays.  Every centre
-    row is broadcast against the whole population and the resulting
-    ``species_size * pop_size`` pairs are handed to ``distance_fn`` as a single
-    batch, so the per-call dispatch cost is paid once instead of once per species
-    slot.
-
-    Bit-identity: the compatibility kernel is strictly row-independent (elementwise
-    per-pair ops plus per-row reductions over the gene axis, one sorted alignment
-    per row), so one ``(k * P)`` batch yields exactly the same per-row floats as
-    ``k`` batches of ``P``.
-    """
-    rows = species_size * pop_size
-    tiled_centres = []
-    for field in centres:
-        rest = tuple(field.shape[1:])
-        full = enp.broadcast_to(enp.expand_dims(field, 1), (species_size, pop_size) + rest)
-        tiled_centres.append(evoxc.reshape(full, (rows,) + rest))
-    tiled_population = []
-    for field in population:
-        rest = tuple(field.shape[1:])
-        full = enp.broadcast_to(enp.expand_dims(field, 0), (species_size, pop_size) + rest)
-        tiled_population.append(evoxc.reshape(full, (rows,) + rest))
-    distances = distance_fn(
-        state,
-        payload_like(template, *tiled_centres),
-        payload_like(template, *tiled_population),
-    )
-    return evoxc.reshape(distances, (species_size, pop_size))
-
-
-def chunked_distance_table(
-    state: Any,
-    template: Any,
-    centres: Any,
-    population: Any,
-    pop_size: int,
-    species_size: int,
-    distance_fn: Callable,
-    chunk_slots: int,
-    live: Any,
-) -> Any:
-    """``(species_size, pop_size)`` distances in liveness-gated static chunks.
-
-    The species axis is split into static chunks of ``chunk_slots`` slots (a
-    short final chunk when ``species_size % chunk_slots != 0``; every bound is a
-    Python int, unrolled at trace time).  Each chunk becomes
-
-    ``evoxc.cond(any_live_in_chunk, compute_chunk, zeros, centres_chunk, population)``
-
-    where ``compute_chunk`` is :func:`distance_table` over that chunk's centre
-    rows and the false branch returns a zero block of the same shape.  A chunk
-    whose slots are all dead therefore never runs the compatibility kernel, and
-    the ``if`` region is selected (not executed) by the backend.
-
-    Bit-identity: no reader ever consumes a dead slot's row -- scan 1 gates its
-    ``claim`` on liveness and scan 2 gates its ``take`` on ``live or create``,
-    with a creating slot taking its row from the lazy per-slot branch instead of
-    the table -- so substituting zeros for a dead row cannot change a result.
-    ``live`` is the ``(species_size,)`` bool mask ``~isnan(species_keys)``, which
-    is the same for both scans: scan 1 never touches the key array and scan 2
-    only ever *creates* on a dead slot.
-    """
-    population_fields = tuple(population)
-    parts = []
-    start = 0
-    while start < species_size:
-        rows = min(chunk_slots, species_size - start)
-        chunk = tuple(slice_axis0(field, start, rows) for field in centres)
-        any_live = evoxc.greater(
-            evoxc.reduce_max(
-                evoxc.cast(slice_axis0(live, start, rows), evoxc.int32), axes=0
-            ),
-            int_const(0),
-        )
-
-        def compute_chunk(chunk_fields, population_fields, rows=rows):
-            """Distance table of one live chunk of the species axis."""
-            return distance_table(
-                state,
-                template,
-                chunk_fields,
-                population_fields,
-                pop_size,
-                rows,
-                distance_fn,
-            )
-
-        def empty_chunk(chunk_fields, population_fields, rows=rows):
-            """Zero block standing in for an all-dead chunk (never read)."""
-            return enp.zeros((rows, pop_size), dtype=evoxc.float32)
-
-        parts.append(
-            evoxc.cond(any_live, compute_chunk, empty_chunk, chunk, population_fields)
-        )
-        start += rows
-    if len(parts) == 1:
-        return parts[0]
-    return enp.concatenate(parts, 0)
-
-
 def speciate(
     state: Any,
     species_state: Any,
@@ -603,18 +425,36 @@ def speciate(
     iteration with nothing to do performs no write, which reproduces the legacy
     early-exit ``while_loop`` on a static trip count.
 
-    Scan 1's distance rows are hoisted: iteration ``slot`` reads the centre row it
-    inherited and only ever writes *its own* row, so the whole
-    ``(species_size, pop_size)`` table is the same before the scan starts and is
-    computed by :func:`chunked_distance_table` (see :data:`CHUNK_SLOTS`).  Scan 2's
-    rows cannot be hoisted as a whole: a *created* species takes the first
-    unassigned genome as its centre, so the row a dead slot needs depends on the
-    assignments made by every earlier iteration (and the row of *that* genome is
-    not in any precomputable table short of a ``pop_size x pop_size`` one).  Scan 2
-    therefore reads its live rows from a second chunked table built from the
-    centres scan 1 leaves behind, and computes the row of a *creating* slot lazily
-    behind an ``evoxc.cond`` -- that branch is the only place where the legacy
-    unconditional per-slot ``distance_fn`` call survives.
+    Distance rows are computed **lazily, one slot at a time, behind a single
+    ``evoxc.cond`` per scan iteration**, the predicate being exactly the mask
+    that lets that iteration write:
+
+    * scan 1: ``live and any_pending`` -- a dead slot, or one reached after every
+      genome has been claimed, can never claim anything;
+    * scan 2: ``live or create`` -- a dead slot that does not materialise a
+      species can never take a member.
+
+    A skipped iteration reads a zero row, which its own write mask (``claim`` in
+    scan 1, ``take`` in scan 2) discards, so the substitution is bit-identical:
+    no reader ever consumes the row of a slot that is not allowed to write.  The
+    centre of a scan-2 row is selected *before* the ``cond`` -- the carry row for
+    a live slot, ``pop[seed]`` for a creating one -- so a created species needs
+    no branch of its own.
+
+    The gate is a *select* between two single branch bodies, not a copy of the
+    kernel: exactly two compatibility-kernel copies exist in the whole graph, one
+    per scan, which keeps the per-generation graph at the ungated size.  That
+    matters because the saving depends on how sparse the species table is: at
+    ``pop_size=100`` only ~3 of the 20 slots are live, so 14-17 of the 20 passes
+    per phase never run, while at ``pop_size >= 500`` every slot is live, nothing
+    is skippable and the gated path costs exactly what the ungated one costs --
+    which is why no table of precomputed rows (and no chunking of one) is
+    materialised here.
+
+    Bit-identity also holds across *batch width*: the compatibility kernel is
+    row-independent (elementwise per-pair ops plus per-row reductions over the
+    gene axis, one sorted alignment per row), so one ``(k * P)`` batch returns
+    exactly the floats ``k`` batches of ``P`` do.
     """
     keys_ext = enp.concatenate(
         [species_state.species_keys, enp.reshape(species_state.next_species_key, (1,))],
@@ -629,61 +469,90 @@ def speciate(
         species_state.center_conn_keys,
         species_state.center_conn_attrs,
     )
-    # Phase-1 distances are fully precomputable: iteration ``slot`` reads the
-    # centre row it inherited and writes only its OWN row, so no earlier iteration
-    # can change row ``slot``.  The table is built in liveness-gated chunks, so an
-    # all-dead chunk never runs the compatibility kernel (bit-identical: a dead
-    # slot never reads its row, see ``chunked_distance_table``).
-    chunk_slots = chunk_slots_for(species_size)
-    live = evoxc.logical_not(evoxc.isnan(species_state.species_keys))
-    first_distances = chunked_distance_table(
-        state,
-        population,
-        (
-            species_state.center_node_keys,
-            species_state.center_node_attrs,
-            species_state.center_conn_keys,
-            species_state.center_conn_attrs,
-        ),
-        tuple(population),
-        pop_size,
-        species_size,
-        distance_fn,
-        chunk_slots,
-        live,
-    )
+    population_fields = tuple(population)
 
+    def centre_payload(rows):
+        """Broadcast one centre row per split array to a ``(P, ...)`` batch.
 
-    def centre_payload(node_keys, node_attrs, conn_keys, conn_attrs, slot):
-        """Broadcast one centre row to a population-shaped payload."""
+        ``rows`` are 1-D (one centre row per gene array), so a row's own shape is
+        its trailing shape.  The broadcast happens *inside* the ``cond`` branch,
+        so a skipped slot never materialises the ``(P, max_nodes)`` /
+        ``(P, max_conns, W)`` tile it would not read.
+        """
         return payload_like(
             population,
-            enp.broadcast_to(
-                evoxc.gather(node_keys, slot, axis=0),
-                (pop_size,) + tuple(node_keys.shape[1:]),
-            ),
-            enp.broadcast_to(
-                evoxc.gather(node_attrs, slot, axis=0),
-                (pop_size,) + tuple(node_attrs.shape[1:]),
-            ),
-            enp.broadcast_to(
-                evoxc.gather(conn_keys, slot, axis=0),
-                (pop_size,) + tuple(conn_keys.shape[1:]),
-            ),
-            enp.broadcast_to(
-                evoxc.gather(conn_attrs, slot, axis=0),
-                (pop_size,) + tuple(conn_attrs.shape[1:]),
+            *(
+                enp.broadcast_to(row, (pop_size,) + tuple(row.shape))
+                for row in rows
             ),
         )
+
+    def gated_row(active, compute_row, operands):
+        """One ``(pop_size,)`` compatibility row, computed only when ``active``.
+
+        ``compute_row`` is the single true-branch body of the ``if``; the false
+        branch returns zeros, which every caller's write mask discards.
+        """
+
+        def zero_row(*_skipped):
+            """Row of a skipped slot: zeros, never read."""
+            return enp.zeros((pop_size,), dtype=evoxc.float32)
+
+        return evoxc.cond(active, compute_row, zero_row, *operands)
 
     def reserve(carry, slot):
         """Scan 1: claim the nearest unassigned genome for one live slot."""
         assign, dist, keys_ext, node_keys, node_attrs, conn_keys, conn_attrs = carry
         key_slot = evoxc.gather(keys_ext, slot, axis=0)
         live = evoxc.logical_not(evoxc.isnan(key_slot))
-        distances = evoxc.gather(first_distances, slot, axis=0)
         pending = evoxc.isnan(assign)
         any_pending = evoxc.reduce_max(pending, axes=0)
+        claim = evoxc.logical_and(live, any_pending)
+
+        def compute_row(
+            centre_node_keys,
+            centre_node_attrs,
+            centre_conn_keys,
+            centre_conn_attrs,
+            centre_slot,
+            pop_node_keys,
+            pop_node_attrs,
+            pop_conn_keys,
+            pop_conn_attrs,
+        ):
+            """Distance row of the carry centre ``centre_slot``, ``(P,)`` floats.
+
+            The payload is built *in here* from the four carry arrays, so a
+            skipped slot pays neither the gather-and-broadcast nor the
+            compatibility kernel.
+            """
+            return distance_fn(
+                state,
+                centre_payload(
+                    tuple(
+                        evoxc.gather(field, centre_slot, axis=0)
+                        for field in (
+                            centre_node_keys,
+                            centre_node_attrs,
+                            centre_conn_keys,
+                            centre_conn_attrs,
+                        )
+                    )
+                ),
+                payload_like(
+                    population,
+                    pop_node_keys,
+                    pop_node_attrs,
+                    pop_conn_keys,
+                    pop_conn_attrs,
+                ),
+            )
+
+        distances = gated_row(
+            claim,
+            compute_row,
+            (node_keys, node_attrs, conn_keys, conn_attrs, slot) + population_fields,
+        )
         # ``argmin_with_mask`` folds "nothing left to claim" into the ``I_INF``
         # sentinel index, which is clamped to row ``0`` before it is used.
         closest = evoxc.reshape(
@@ -695,7 +564,6 @@ def speciate(
         closest = evoxc.select(
             evoxc.equal(closest, int_const(I_INF)), int_const(0), closest
         )
-        claim = evoxc.logical_and(live, any_pending)
         onehot = evoxc.logical_and(evoxc.equal(iota_i32(pop_size), closest), claim)
         assign = evoxc.select(onehot, key_slot, assign)
         dist = evoxc.select(onehot, const(0.0), dist)
@@ -745,23 +613,6 @@ def speciate(
             conn_attrs,
         ), assign
 
-    def create_row(population_fields, seed, table, slot):
-        """Row of a *creating* slot: the seed genome as centre, ``(P,)`` floats.
-
-        This is the legacy per-slot ``distance_fn`` call, kept behind the
-        ``create`` predicate: the row of a freshly materialised species is
-        ``distance(pop[seed], pop)``, which no precomputed table can supply.
-        """
-        return distance_fn(
-            state,
-            centre_payload(*population_fields, seed),
-            payload_like(population, *population_fields),
-        )
-
-    def lazy_row(population_fields, seed, table, slot):
-        """Row of a live (or dead non-creating) slot, taken from the table."""
-        return evoxc.gather(table, slot, axis=0)
-
     def assign_members(carry, slot):
         """Scan 2: threshold membership, materialising a dead slot on demand."""
         assign, dist, keys_ext, node_keys, node_attrs, conn_keys, conn_attrs = carry
@@ -775,6 +626,20 @@ def speciate(
         # gather below is unconditional, so the sentinel is clamped to row ``0``.
         seed = evoxc.reshape(fetch_first(enp.expand_dims(unassigned, 0)), ())
         seed = evoxc.select(evoxc.equal(seed, int_const(I_INF)), int_const(0), seed)
+        # The centre of this slot's row, selected before the ``cond`` so the
+        # branch body exists once: ``pop[seed]`` for a creating slot, the carry
+        # row otherwise (which the scatters below leave untouched when
+        # ``create`` is false).
+        centre = tuple(
+            evoxc.select(
+                create,
+                evoxc.gather(field, seed, axis=0),
+                evoxc.gather(centre_field, slot, axis=0),
+            )
+            for field, centre_field in zip(
+                population_fields, (node_keys, node_attrs, conn_keys, conn_attrs)
+            )
+        )
         key_slot = evoxc.select(create, counter, key_slot)
         keys_ext = evoxc.scatter(keys_ext, slot, key_slot)
         keys_ext = evoxc.scatter(
@@ -819,10 +684,38 @@ def speciate(
             ),
         )
 
-        distances = evoxc.cond(
-            create, create_row, lazy_row, tuple(population), seed, second_distances, slot
-        )
+        def compute_row(
+            centre_node_keys,
+            centre_node_attrs,
+            centre_conn_keys,
+            centre_conn_attrs,
+            pop_node_keys,
+            pop_node_attrs,
+            pop_conn_keys,
+            pop_conn_attrs,
+        ):
+            """Distance row of this slot's centre, ``(P,)`` floats."""
+            return distance_fn(
+                state,
+                centre_payload(
+                    (
+                        centre_node_keys,
+                        centre_node_attrs,
+                        centre_conn_keys,
+                        centre_conn_attrs,
+                    )
+                ),
+                payload_like(
+                    population,
+                    pop_node_keys,
+                    pop_node_attrs,
+                    pop_conn_keys,
+                    pop_conn_attrs,
+                ),
+            )
+
         active = evoxc.logical_or(live, create)
+        distances = gated_row(active, compute_row, centre + population_fields)
         closer = evoxc.logical_or(unassigned, evoxc.less(distances, dist))
         within = evoxc.less(distances, float(compatibility_threshold))
         take = evoxc.logical_and(evoxc.logical_and(active, within), closer)
@@ -839,22 +732,6 @@ def speciate(
         ), create
 
     carry, _ = evoxc.scan(reserve, carry, iota_i32(species_size))
-    # Phase-2 distances: the live rows are the ones the centres scan 1 leaves
-    # behind define, so the table is rebuilt from the *post*-phase-1 centre arrays
-    # (bit-identical to the old per-slot gather of exactly those rows).  A dead
-    # slot's row is only ever needed when that slot *creates* a species, and that
-    # row is computed lazily inside the scan (``create_row``).
-    second_distances = chunked_distance_table(
-        state,
-        population,
-        (carry[3], carry[4], carry[5], carry[6]),
-        tuple(population),
-        pop_size,
-        species_size,
-        distance_fn,
-        chunk_slots,
-        live,
-    )
     carry, created = evoxc.scan(assign_members, carry, iota_i32(species_size))
     assign, dist, keys_ext, node_keys, node_attrs, conn_keys, conn_attrs = carry
     del dist

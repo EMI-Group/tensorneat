@@ -489,18 +489,19 @@ class SpeciesController(StatefulBaseClass):
             two fields.
 
         Note:
-            **Both scans read liveness-gated distance tables.**  A scan-1
-            iteration reads the centre row it inherited and only ever writes its own
-            row, so every row is final before the scan starts; the whole ``(S, P)``
-            table is therefore built up front by ``chunked_distance_table``, which
-            splits the species axis into static ``CHUNK_SLOTS``-sized chunks and
-            skips an all-dead chunk with an ``evoxc.cond`` (``_kernels.py``).
-            Scan 2's live rows are a second such table, built from the centres
-            scan 1 leaves behind.  A *created* species is different: it takes the
-            first unassigned genome as its centre, so its row depends on the
-            assignments of every earlier iteration and is computed lazily inside
-            the scan, behind the same ``create`` predicate.  A dead slot's row is
-            never read, which is what makes both substitutions bit-identical.
+            **Both scans compute their distance row lazily, behind one
+            ``evoxc.cond`` per iteration.**  The predicate is the mask that lets
+            the iteration write -- ``live and any-pending`` for scan 1,
+            ``live or create`` for scan 2 -- so a slot that cannot claim a
+            genome (scan 1) or take a member (scan 2) never runs the
+            compatibility kernel.  The skipped branch yields zeros, which the
+            iteration's own write mask discards, so no reader ever consumes a
+            row that was not computed: the substitution is bit-identical.  Two
+            branch bodies exist in the whole graph, one per scan, so a species
+            table in which every slot is live (``pop_size >= 500``) costs exactly
+            what the ungated per-slot call costs, while the sparse
+            small-population case (``pop_size=100``: ~3 live of 20 slots) skips
+            14-17 of the 20 passes per phase (``_kernels.speciate``).
         """
         population = self._population(state, pop)
         values = _kernels.speciate(
