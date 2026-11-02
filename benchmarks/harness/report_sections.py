@@ -1,14 +1,18 @@
-"""Data-derived report sections: the headline comparison and the win/lose narrative.
+"""Data-derived report sections: the headline comparison, the win/lose narrative and the reproduce block.
 
-Both sections read the aggregated records and the verdict's comparison pairs; nothing is
+The comparison sections read the aggregated records and the verdict's comparison pairs; the
+reproduce block reads ``meta`` (the recorded command and protocol settings). Nothing is
 measured here and no direction is assumed. Each sentence is written from the same numbers
 as the tables, so a re-run that flips a case rewrites the prose with it.
 
 Imports are stdlib plus ``harness.protocol`` (verdict rules) and ``harness.report_format``
-(null-safe cells); the module never formats a number or a path on its own.
+(null-safe cells, path relativisation); the module never formats a number or a path on its own.
 """
 
 from __future__ import annotations
+
+import shlex
+from pathlib import Path
 
 from harness.protocol import (
     QUALITY_ABS_TOL,
@@ -25,6 +29,7 @@ from harness.report_format import (
     first_error,
     fitness,
     gens_to_target,
+    json_path,
     meta,
     mib,
     ms,
@@ -33,13 +38,14 @@ from harness.report_format import (
     plain,
     protocol_meta,
     recorded_lengths,
+    repo_relative,
     seconds,
     table,
     text,
     verdict_cell,
 )
 
-__all__ = ["headline_section", "winlose_section"]
+__all__ = ["has_old_side", "headline_section", "reproduce_section", "winlose_section"]
 
 HEADLINE_HEADERS = [
     "Case",
@@ -81,12 +87,24 @@ def _pairs(doc: dict) -> list[dict]:
 
 
 def _case_info(doc: dict) -> dict[str, dict]:
-    """Declared case metadata (``pop_size``, ``reference_ms_per_generation``, ...) by name."""
+    """Declared case metadata (``pop_size``, ``impls``, ``reference_ms_per_generation``, ...) by name."""
     return {
         text(entry.get("name"), ""): entry
         for entry in meta(doc).get("case_matrix") or []
         if entry.get("name")
     }
+
+
+def has_old_side(doc: dict) -> bool:
+    """Whether the document holds any old-side row at all (aggregated or per-run).
+
+    An all-new-side document (an ``--impl new`` run, e.g. the IREE attempt) must not claim
+    that "the old side always runs on JAX": no old row exists there.
+    """
+    for record in list(doc.get("runs") or []) + list(doc.get("aggregated") or []):
+        if isinstance(record, dict) and record.get("impl") == "old":
+            return True
+    return False
 
 
 def _old_by_case(doc: dict) -> dict[str, dict]:
@@ -107,10 +125,17 @@ def _new_by_case(doc: dict) -> dict[str, list[dict]]:
     return out
 
 
-def _side_cell(record, key: str, formatter) -> str:
+def _missing_cell(declared, impl: str) -> str:
+    """Why a side has no record: the case never had one, or it was simply not run."""
+    if impl not in declared:
+        return f"n/a (no {impl}-side equivalent)"
+    return "n/a (not run)"
+
+
+def _side_cell(record, key: str, formatter, missing: str = "n/a (not run)") -> str:
     """One side's metric, or ``n/a`` with the reason it cannot be read."""
     if record is None:
-        return "n/a (not run)"
+        return missing
     status = text(record.get("status"), STATUS_OK)
     if status != STATUS_OK:
         return f"n/a ({status})"
@@ -119,10 +144,12 @@ def _side_cell(record, key: str, formatter) -> str:
     return formatter(record.get(key))
 
 
-def _gens_cell(record, case: str, impl: str, backend: str, lengths, fallback) -> str:
+def _gens_cell(
+    record, case: str, impl: str, backend: str, lengths, fallback, missing="n/a (not run)"
+) -> str:
     """Generations-to-target of one side, indexed against its recorded curve length."""
     if record is None:
-        return "n/a (not run)"
+        return missing
     status = text(record.get("status"), STATUS_OK)
     if status != STATUS_OK:
         return f"n/a ({status})"
@@ -170,6 +197,9 @@ def _headline_rows(doc: dict):
     rows, notes = [], []
     for case in case_order(doc, extra):
         case_info = info.get(case) or {}
+        declared = [str(impl) for impl in (case_info.get("impls") or [])] or ["old", "new"]
+        old_missing = _missing_cell(declared, "old")
+        new_missing = _missing_cell(declared, "new")
         old = old_by_case.get(case)
         old_backend = text((old or {}).get("backend"), "jax")
         new_records = new_by_case.get(case) or [None]
@@ -181,19 +211,19 @@ def _headline_rows(doc: dict):
                     case,
                     plain(case_info.get("pop_size")),
                     f"`{backend}`" if backend != "n/a" else "n/a",
-                    _side_cell(old, "ms_per_generation", ms),
-                    _side_cell(new, "ms_per_generation", ms),
+                    _side_cell(old, "ms_per_generation", ms, old_missing),
+                    _side_cell(new, "ms_per_generation", ms, new_missing),
                     num(pair.get("speedup"), 2, "x") if pair else "n/a (needs both sides)",
                     _speedup_range_cell(pair, old, new),
                     _overlap_cell(pair, old, new),
-                    _side_cell(old, "compile_time_s", seconds),
-                    _side_cell(new, "compile_time_s", seconds),
-                    _side_cell(old, "rss_final_mb", mib),
-                    _side_cell(new, "rss_final_mb", mib),
-                    _side_cell(old, "final_best_fitness", fitness),
-                    _side_cell(new, "final_best_fitness", fitness),
-                    _gens_cell(old, case, "old", old_backend, lengths, fallback),
-                    _gens_cell(new, case, "new", backend, lengths, fallback),
+                    _side_cell(old, "compile_time_s", seconds, old_missing),
+                    _side_cell(new, "compile_time_s", seconds, new_missing),
+                    _side_cell(old, "rss_final_mb", mib, old_missing),
+                    _side_cell(new, "rss_final_mb", mib, new_missing),
+                    _side_cell(old, "final_best_fitness", fitness, old_missing),
+                    _side_cell(new, "final_best_fitness", fitness, new_missing),
+                    _gens_cell(old, case, "old", old_backend, lengths, fallback, old_missing),
+                    _gens_cell(new, case, "new", backend, lengths, fallback, new_missing),
                     verdict_cell(pair.get("timing_pass")) if pair else "n/a",
                     verdict_cell(pair.get("quality_pass")) if pair else "n/a",
                 ]
@@ -218,8 +248,13 @@ def headline_section(doc: dict) -> str:
     rows, notes = _headline_rows(doc)
     if not rows:
         return "## Headline: old vs new\n\nno run records are available"
+    old_side_text = (
+        "the old side always runs on JAX"
+        if has_old_side(doc)
+        else "this document records no old-side row, so every case here is new-side only"
+    )
     note = (
-        "One row per case and new-side backend (the old side always runs on JAX). "
+        f"One row per case and new-side backend ({old_side_text}). "
         "Speed-up is `old / new` per generation: above 1.00x the new side is faster. "
         "Speed-up range is `old_min/new_max` … `old_max/new_min` over the per-repeat medians, "
         "i.e. the best and worst case over the repeats. Quality overlap states where the new "
@@ -372,14 +407,22 @@ def _contract_lines(pairs: list[dict], info: dict, doc: dict) -> list[str]:
     return lines
 
 
+def _span(values) -> str:
+    """A ``min–max`` span in MiB, collapsed to a single value when both ends render alike."""
+    low, high = mib(min(values)), mib(max(values))
+    return low if low == high else f"{low}–{high}"
+
+
 def _memory_lines(doc: dict) -> list[str]:
     """The generated memory paragraph: per-case new/old ratio, the worst case, the mechanism.
 
     Every number is the aggregated ``rss_final_mb`` (a high-water mark, so it is a max over
     the repeats) and the aggregated ``rss_after_import_mb`` floor. The mechanism sentence is
-    added last and only describes what those numbers show: the old side starts from a large
-    runtime floor, the new peak moves with the population (i.e. with the padded batch it
-    materialises) while the old peak stays near its floor.
+    added last and states only what those numbers show: the old side starts from a large
+    runtime floor, the new peak moves with the population while the old peak stays near its
+    floor, and the working set the numpy interpreter materialises per generation is what
+    scales with ``pop_size × max_nodes × max_conns`` — the dominant term is not attributable
+    from these runs, so no arithmetic beyond that is claimed.
     """
     info = _case_info(doc)
     old_by_case = _old_by_case(doc)
@@ -468,27 +511,25 @@ def _memory_lines(doc: dict) -> list[str]:
     if old_imports:
         clauses.append(
             f"the old side's floor is the JAX/XLA runtime itself "
-            f"({mib(min(old_imports))}–{mib(max(old_imports))} MiB right after import)"
+            f"({_span(old_imports)} MiB right after import)"
         )
     if new_imports:
-        clauses.append(
-            f"the new side starts from {mib(min(new_imports))}–{mib(max(new_imports))} MiB"
-        )
+        clauses.append(f"the new side starts from {_span(new_imports)} MiB")
     floor = (" " + "; ".join(clauses) + ".") if clauses else ""
+    growth = (
+        "Beyond those floors the new peak tracks the population while the old peak stays "
+        "close to its runtime floor"
+        if grows
+        else "Beyond those floors the new peak stays within the range above while the old "
+        "peak stays close to its runtime floor"
+    )
     lines.append("")
     lines.append(
-        "Mechanism, as far as the numbers support it:"
+        "Mechanism, as far as these runs support one:"
         + floor
-        + " Beyond that floor the new peak follows the padded batch it materialises for the "
-        "whole population (`max_nodes × max_nodes` per individual as explicit host tensors), "
-        "whereas the legacy side vmaps fixed-shape arrays and lets XLA reuse its buffers — "
-        + (
-            "which is why the new peak tracks the population while the old peak stays close "
-            "to its runtime floor."
-            if grows
-            else "so the new peak is set by population × padding while the old one is set by "
-            "its runtime floor."
-        )
+        + f" {growth}, so the working set the numpy interpreter materialises per generation "
+        "is what grows with `pop_size × max_nodes × max_conns`; these runs do not attribute "
+        "that growth to a single dominant term."
     )
     return lines
 
@@ -565,3 +606,181 @@ def winlose_section(doc: dict) -> str:
         lines.extend(["", "Where the new side lands relative to the declared contract:", ""])
         lines.extend(contract)
     return "\n".join(lines)
+
+
+# --- How to reproduce -------------------------------------------------------------------
+
+
+def _requote_meta_value(tokens: list[str], flag: str, value) -> list[str]:
+    """Collapse the space-split tokens of ``flag``'s value back into the single stored value.
+
+    ``meta.command`` is written by ``shlex.join`` and round-trips exactly, so this is a no-op
+    for it. A record written before that change stored ``" ".join(argv)``, which loses the
+    boundaries of an argument containing spaces (``--report-title``, ``--report-note``); the
+    exact value is still in ``meta``, so its token span is found and re-joined into one token.
+    """
+    expected = text(value, "").strip()
+    if not expected or flag not in tokens:
+        return tokens
+    start = tokens.index(flag) + 1
+    for end in range(start + 1, len(tokens) + 1):
+        if " ".join(tokens[start:end]) == expected:
+            return tokens[:start] + [expected] + tokens[end:]
+    return tokens
+
+
+def _command_tokens(doc: dict) -> list[str]:
+    """``meta["command"]`` split back into argv tokens (empty for a missing command)."""
+    text_command = str(meta(doc).get("command") or "").strip()
+    if not text_command:
+        return []
+    try:
+        tokens = shlex.split(text_command)
+    except ValueError:
+        tokens = text_command.split()
+    tokens = _requote_meta_value(tokens, "--report-title", meta(doc).get("report_title"))
+    return _requote_meta_value(tokens, "--report-note", meta(doc).get("report_note"))
+
+
+def _reproduce_command(doc: dict) -> tuple[str, str]:
+    """``(portable command, interpreter used)`` for the reproduce block.
+
+    The recorded command starts with the absolute interpreter path of the machine that
+    produced the run, which must not become the documented way to reproduce it: the
+    first command is the portable ``python benchmarks/run_benchmark.py <flags...>`` and
+    the interpreter that actually ran is stated on its own line.
+    """
+    tokens = _command_tokens(doc)
+    if not tokens:
+        return "python benchmarks/run_benchmark.py", "n/a"
+    interpreter = repo_relative(tokens[0]) or tokens[0]
+    arguments = [repo_relative(token) or token for token in tokens[1:]]
+    if not arguments:
+        arguments = ["benchmarks/run_benchmark.py"]
+    return shlex.join(["python", *arguments]), interpreter
+
+
+def _protocol_flags(proto: dict) -> str:
+    """``--generations/--warmup/--repeats/--threads`` as recorded, for the variant commands."""
+    flags = []
+    for name in ("generations", "warmup", "repeats", "threads"):
+        value = proto.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            flags.extend([f"--{name}", str(value)])
+    return " ".join(flags)
+
+
+def _variant(arguments: str) -> str:
+    """One ``python benchmarks/run_benchmark.py ...`` command line."""
+    return "python benchmarks/run_benchmark.py " + arguments
+
+
+COMMITTED_RECORD_DIR = "benchmarks/results/"  # git-ignored except the names its .gitignore re-includes
+
+
+def _committed_record_names() -> frozenset[str]:
+    """Basenames ``results/.gitignore`` re-includes; an unreadable manifest means none."""
+    manifest = Path(__file__).resolve().parents[1] / "results" / ".gitignore"
+    try:
+        lines = manifest.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return frozenset()
+    names = (line.strip()[1:] for line in lines if line.strip().startswith("!"))
+    return frozenset(name for name in names if name)
+
+
+def _record_sentence(doc: dict) -> str:
+    """Where this report's numbers came from, and whether that record is committed evidence.
+
+    ``--json`` defaults to the scratch ``benchmarks/results/latest.json``; the committed
+    reports are rendered from a record that ``results/.gitignore`` re-includes, so every
+    table cell is traceable.
+    """
+    path = json_path(doc)
+    name = Path(path).name
+    names = _committed_record_names()
+    committed = path.startswith(COMMITTED_RECORD_DIR) and name != "latest.json" and name in names
+    if committed:
+        return (
+            f"the record this report was rendered from (`{name}`) is committed at `{path}` "
+            "beside that default, so every table cell is traceable"
+        )
+    return (
+        f"this report was rendered from `{path}`, a scratch record that is not committed: "
+        "copy it next to the report before sharing it"
+    )
+
+
+def reproduce_section(doc: dict, companions: dict | None = None) -> str:
+    """Portable command line, the interpreter that produced the run, and its settings."""
+    doc_meta = meta(doc)
+    proto = protocol_meta(doc)
+    command, interpreter = _reproduce_command(doc)
+    backends = [text(name) for name in (doc_meta.get("backends") or []) if name]
+    primary = backends[0] if backends else "numpy"
+    flags = _protocol_flags(proto)
+    cases = ", ".join(text(name) for name in (doc_meta.get("cases") or []))
+    threads = proto.get("threads")
+    thread_text = (
+        "runtime defaults (`--threads 0`)" if threads == 0 else f"`--threads {plain(threads)}`"
+    )
+    repeats, seed = proto.get("repeats"), proto.get("seed")
+    seed_text = ""
+    if isinstance(repeats, int) and isinstance(seed, int) and repeats >= 1:
+        seed_text = " (seeds " + ", ".join(str(seed + offset) for offset in range(repeats)) + ")"
+
+    lines = [
+        "```bash",
+        "# regenerate the committed report: the literal command of this run",
+        command,
+        "",
+        "# full matrix, both implementations on the primary backend",
+        _variant(f"--impl both --backend {primary} --cases all {flags}".rstrip()),
+        "",
+        "# baseline only (frozen JAX)",
+        _variant(f"--impl old --cases all {flags}".rstrip()),
+        "",
+        "# candidate only, one backend at a time",
+    ]
+    for backend in backends or [primary]:
+        lines.append(_variant(f"--impl new --backend {backend} --cases all {flags}".rstrip()))
+    if "iree" not in backends:
+        lines.append(
+            _variant(f"--impl new --backend iree --cases xor_p500 {flags}".rstrip())
+            + "   # informational; errors cleanly when the IREE runtime is absent"
+        )
+    lines.extend(
+        [
+            "",
+            "# inspect the matrix and the planned worker commands (no run, no report)",
+            "python benchmarks/run_benchmark.py --list",
+            "python benchmarks/run_benchmark.py --dry-run",
+            "```",
+        ]
+    )
+    old_side_text = (
+        "the old side always runs on JAX, once per case"
+        if has_old_side(doc)
+        else "no old-side row is recorded in this document, so every case here is new-side only"
+    )
+    note = (
+        f"Cases: {cases or 'all declared cases'}. Timed generations: "
+        f"{plain(proto.get('generations'))}, warmup generations (untimed): "
+        f"{plain(proto.get('warmup'))}, repeats: {plain(proto.get('repeats'))}{seed_text}, "
+        f"threads: {thread_text}. Backend(s) of the new side: {backends and ', '.join(backends) or 'n/a'}; "
+        f"{old_side_text}. `--out` defaults to "
+        "`benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` "
+        f"(scratch, git-ignored); {_record_sentence(doc)}."
+    )
+    if (companions or {}).get("threads"):
+        note += (
+            " A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is "
+            "recorded in `benchmarks/THREADS.md` next to this report."
+        )
+    return (
+        "## How to reproduce\n\n"
+        + "\n".join(lines)
+        + "\n\n"
+        + f"Interpreter used: {interpreter}\n\n"
+        + note
+    )

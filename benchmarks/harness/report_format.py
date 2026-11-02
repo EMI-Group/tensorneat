@@ -400,8 +400,13 @@ def fitness_at(curve, index: int) -> str:
 
 
 def gens_to_target(value, length) -> str:
-    """Reached generation, or ``>N`` when the target was not reached within the N recorded ones."""
+    """Reached generation, or ``>N`` when the target was not reached within the N recorded ones.
+
+    The aggregated value is a median over the repeats, so it can be fractional (``77.5``);
+    the rendered integer rounds half up (``77.5 -> 78``) instead of truncating. The raw value
+    stays untouched in the JSON.
+    """
     numeric = number(value)
     if numeric is not None and not math.isinf(numeric):
-        return str(int(numeric))
+        return str(int(math.floor(numeric + 0.5)))
     return f">{length}" if isinstance(length, int) and length > 0 else "n/a"
