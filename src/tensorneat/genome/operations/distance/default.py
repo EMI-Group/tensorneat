@@ -388,6 +388,8 @@ class DefaultDistance(BaseDistance):
         cnt2: evoxc.SymbolicTensor,
         attribute_distance: evoxc.SymbolicTensor | None,
         pool: ConstantPool,
+        *,
+        consts: tuple | None = None,
     ) -> evoxc.SymbolicTensor:
         """The scalar tail shared by every route into this node.
 
@@ -412,25 +414,48 @@ class DefaultDistance(BaseDistance):
             (:func:`.dense.measure_centre`) cannot drift apart: the three differ only in how
             ``matched`` and the aligned attribute rows are produced.
         """
+        disjoint, weight, one = (
+            consts if consts else (None, None, None)
+        )
+        if disjoint is None:
+            disjoint, weight, one = (
+                pool.f32(self.compatibility_disjoint),
+                pool.f32(self.compatibility_weight),
+                pool.f32(1.0),
+            )
+        # ``2 * matched`` as an integer add rather than a multiply by an ``int64`` literal: the
+        # product is exact either way (the counts are small), and the add needs no constant.
         non_homologous = evoxc.subtract(
             evoxc.add(cnt1, cnt2),
-            evoxc.multiply(pool.i64(2), matched),
+            evoxc.add(matched, matched),
         )
         # Counts are small integers, so ``float32(max(cnt1, cnt2))`` is exact and the
         # maximum is cheaper on the integer dtypes than on two casts.
         denominator = evoxc.cast(evoxc.maximum(cnt1, cnt2), evoxc.float32)
         numerator = evoxc.multiply(
             evoxc.cast(non_homologous, evoxc.float32),
-            pool.f32(self.compatibility_disjoint),
+            disjoint,
         )
         if attribute_distance is not None:
             numerator = evoxc.add(
                 numerator,
-                evoxc.multiply(attribute_distance, pool.f32(self.compatibility_weight)),
+                evoxc.multiply(attribute_distance, weight),
             )
-        return evoxc.divide(
-            numerator, evoxc.maximum(denominator, pool.f32(1.0))
-        )
+        return evoxc.divide(numerator, evoxc.maximum(denominator, one))
+
+    def _tail_constants(self) -> tuple[float, float, float] | None:
+        """The three constants :meth:`_scalar_distance` multiplies by.
+
+        Returns:
+            tuple[float, float, float] | None: ``(compatibility_disjoint,
+            compatibility_weight, 1.0)``.
+
+        Notes:
+            :meth:`~.base.BaseDistance.prepare` hoists them into the digest so the ``2 *
+            species_size`` dense ``measure`` calls of a generation share one rank-0 constant each
+            — on the reference interpreter every constant is one traced op.
+        """
+        return (self.compatibility_disjoint, self.compatibility_weight, 1.0)
 
     def _measure_single_centre(
         self,

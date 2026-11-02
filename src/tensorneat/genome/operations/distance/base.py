@@ -21,6 +21,7 @@ import evoxc
 import evoxc.numpy as enp
 
 from ....common import ConfigError, I_INF, State, StatefulBaseClass
+from . import dense as _dense
 from . import digest as _digest
 from .consts import ConstantPool
 from .digest import DistanceDigest
@@ -155,11 +156,47 @@ class BaseDistance(StatefulBaseClass):
         _validate_single(type(self).__name__, "prepare", payload)
         pool = consts if consts is not None else ConstantPool()
         key_span = int(genome.key_span)
+        # The single-centre fast path's statics are built here, once, instead of once per
+        # ``measure`` call.  The gate is the same static predicate the route itself checks, so a
+        # digest never carries statics its consumer would not use, and a merge-only
+        # configuration (a large ``key_span``) never materialises the big table bases.
+        dense = _dense.enabled(genome.node_gene, genome) and _dense.enabled(
+            genome.conn_gene, genome
+        )
+        tail = self._tail_constants()
         node = _digest.prepare_family(
-            state, genome.node_gene, node_keys, node_attrs, key_span=key_span, consts=pool
+            state,
+            genome.node_gene,
+            node_keys,
+            node_attrs,
+            key_span=key_span,
+            consts=pool,
+            dense=dense,
+            tail=tail,
         )
         conn = _digest.prepare_family(
-            state, genome.conn_gene, conn_keys, conn_attrs, key_span=key_span, consts=pool
+            state,
+            genome.conn_gene,
+            conn_keys,
+            conn_attrs,
+            key_span=key_span,
+            consts=pool,
+            dense=dense,
+            tail=tail,
+        )
+        # The fast path's ``cnt2`` pair, stacked once per generation instead of once per
+        # ``measure`` call (the route traces its scalar tail once for both families).
+        rows = int(node.count.shape[0])
+        tail_counts = (
+            evoxc.concatenate(
+                (
+                    evoxc.reshape(node.count, (1, rows)),
+                    evoxc.reshape(conn.count, (1, rows)),
+                ),
+                axis=0,
+            )
+            if dense
+            else enp.zeros((0, 0), dtype=evoxc.int32)
         )
         return DistanceDigest(
             node.keys,
@@ -174,6 +211,9 @@ class BaseDistance(StatefulBaseClass):
             node.real,
             conn.dense,
             conn.real,
+            node.layout,
+            conn.layout,
+            tail_counts,
         )
 
     def measure(
@@ -427,6 +467,23 @@ class BaseDistance(StatefulBaseClass):
             state, gene, attrs1, attrs2, rows_inf, cnt1, cnt2
         )
 
+
+
+    def _tail_constants(self) -> tuple[float, float, float] | None:
+        """Constants the scalar tail multiplies by, or ``None`` for an operator without them.
+
+        Returns:
+            tuple[float, float, float] | None: ``(compatibility_disjoint, compatibility_weight,
+            1.0)`` when the subclass has a fixed scalar tail, else ``None``.
+
+        Notes:
+            Hoisted through the digest so ``2 * species_size`` dense measures of a generation
+            share one rank-0 constant each instead of emitting three per call: ``evoxc`` never
+            deduplicates constants, and on the reference interpreter a rank-0 constant costs one
+            traced op like any other.  The row-wise routes keep reading them off the pool, which
+            is the same thing for a single call.
+        """
+        return None
 
 
 def _validate_single(name: str, caller: str, payload: tuple) -> None:
