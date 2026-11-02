@@ -18,8 +18,8 @@ This node therefore offers the same arithmetic in three shapes, all ending in on
 `DefaultDistance(compatibility_disjoint=1.0, compatibility_weight=0.4, dense_single_centre=True)` — both weights must be finite and non-negative (`ConfigError` at construction); `dense_single_centre=False` forces the row-wise merge everywhere.
 `DefaultDistance._scalar_distance(cnt1, matched, cnt2, attribute_distance, pool)` is the single scalar tail (`dense_single_centre` irrelevant): the pair-wise route, the row-wise digest route and the dense route all call it, which is what makes them bit-identical rather than merely close.
 `DistanceDigest(node_keys, node_attrs, node_count, node_key_cols, conn_keys, conn_attrs, conn_count, conn_key_cols, node_dense, node_real, conn_dense, conn_real)` and `FamilyDigest(keys, attrs, count, key_cols, dense, real)` live in `digest.py` (pytrees of twelve / six tensors, `field_names` property).
-`digest.prepare_family(state, gene, keys, attrs, *, key_span, consts=None)`, `digest.measure_alignment(gene, keys, digest_keys, digest_key_cols, *, consts=None) -> AlignedGenes`, `digest.dense_width(gene, key_span)`, `digest.dense_slot(gene, key_span, keys, pool) -> (slot, in_range)` and `digest.match_rows(...)` are the per-family entry points.
-`dense.enabled(gene, genome) -> bool` and `dense.measure_centre(pool, state, genome, distance, payload, digest) -> (P,) float32 | None` are the fast path.
+`digest.prepare_family(state, gene, keys, attrs, *, key_span, consts=None, dense=False, tail=None)`, `digest.measure_alignment(gene, keys, digest_keys, digest_key_cols, *, consts=None) -> AlignedGenes`, `digest.dense_width(gene, key_span)`, `digest.dense_slot(gene, key_span, keys, pool) -> (slot, in_range)` and `digest.match_rows(...)` are the per-family entry points.
+`dense.enabled(gene, genome) -> bool` and `dense.measure_centre(pool, state, genome, distance, payload, digest) -> (P,) float32 | None` are the fast path, whose per-generation statics travel in `digest.<family>_layout` (`DenseLayout`) and whose `cnt2` pair travels in `digest.tail_counts (2, P) int32`.
 `AlignedGenes(rows, homologous, count, matched)` is what the merge returns: `rows (P, M) int32` already redirected to `0` where a gene has no homologue, `homologous (P, M) bool`, `count (P,)` the centre's real genes, `matched (P,)` its homologue count.
 `consts` is an optional `ConstantPool`: pass one per top-level kernel entry so identical rank-0 constants cost one op instead of one per use site.
 Both `prepare` and `measure` are **plain traced helpers**, never `@evoxc.defn` (a defn cannot call a defn), so the caller's own graph owns them; a digest is a pytree and may be captured in a closure across a trace.
@@ -97,17 +97,22 @@ Stability also *pins* tie order to input order and matches a compiled backend's 
 
 | kernel | P=100 | P=500 | P=1000 |
 |---|---|---|---|
-| `prepare` (dense fields included) | 102 ops / 0.83 ms | 102 / 2.00 | 102 / 3.38 |
-| `measure`, batch-1 centre, **dense** | 141 ops / 0.99 ms (9.9 µs/pair) | 141 / 1.69 (3.4) | 141 / 2.45 (2.45) |
-| `measure`, batch-1 centre, **merge** | 155 ops / 1.38 ms (13.8 µs/pair) | 155 / 3.18 (6.4) | 155 / 5.55 (5.6) |
-| `measure`, batch-`P` centre (merge only) | 151 ops / 1.41 ms | 151 / 2.79 | 151 / 5.15 |
-| `execute_distance` | 221 ops / 2.10 ms | 221 / 5.45 | 221 / 10.20 |
-| `Pipeline.step` (5-generation run, last step) | 37 ms | 201 | 341 (373 with the merge) |
+| `prepare` (dense fields included) | 128 ops / 0.9 ms | 128 / 2.0 | 128 / 3.75 |
+| `measure`, batch-1 centre, **dense** | 111 ops / 1.13 ms (11.3 µs/pair) | 111 / 1.56 (3.1) | 111 / 2.25 (2.25) |
+| `measure`, batch-`P` centre (merge only) | 150 ops | 150 | 150 / 5.2–5.6 |
+| `execute_distance` (unchanged) | 218 ops | 218 | 218 / 9.8 |
+| `Pipeline.step` (5-generation run, last step) | — | — | 341 (merge 373) |
 
-Same-session before → after for the speciation route: `measure` **1.38 → 0.99 / 3.18 → 1.69 / 5.55 → 2.45 ms** (1.4× / 1.9× / 2.3×), i.e. **13.8 → 9.9 / 6.4 → 3.4 / 5.6 → 2.45 µs/pair**.
-`prepare` pays the dense fields once per generation: 64 → **102 ops** (0.6 → 0.8 / 1.4 → 2.0 / 2.4 → 3.4 ms), against ~40 `measure` calls that each save 0.4 / 1.5 / 3.1 ms — a net win from the first generation on, and the exact opposite trade at pop 100.
-The box drifts ±30 % between sessions; only same-session pairs are comparable, and the op counts are the deterministic half of the result.
-Remaining hot spot: the attribute term. A `measure` call is now ~65 ops per family of dispatch plus the `(P, M, A)` attribute pass (`gene.distance` on the gathered centre attributes, the reorder scatter, one `reduce_sum`), so its wall clock scales with `P × max_nodes × attr_width` and no longer with a sort — the next lever is the number of attribute columns/rows touched, and it lives in `../../gene/base.py`.
+Round-2 same-session before → after: `measure` **141 → 111 ops**, wall clock inside drift at pop 1000 (2.43 → 2.25 ms median, minima 2.20), i.e. **2.45 → 2.25 µs/pair**; `prepare` 102 → **128 ops** (+26, once per generation against ~40 calls).
+Per-phase op attribution of the old 141 (recursive op walk + per-phase graphs, pop 1000): `dense_slot`/`slot` 8, owner scatter+gather+matched 3, per-family counts 4, attribute table pair 3, `gene.distance` **27 (node) / 6 (conn)**, reorder 5 + slice 1 + reduce 1, scalar tail **15 per family**, final `add` 1.
+The round-2 shape removes the owner redirect (−1/family), flattens the centre key table once (−1 conn), and stacks the two families' tail inputs on a leading axis so the tail is traced **once** (15+15+1 → 11+9 stacking ops+1 combine), landing at 111.
+
+### The 1.0 µs/pair target is out of reach on this backend, and the arithmetic says why
+`measure(batch 1)` needs ≤ ~50 traced ops for ≤1.0 ms at an ~20 µs mean marginal op cost (pop 1000).
+The measured floor of this formulation is ~100: `gene.distance` alone is 33 ops (20 of the 111 are its column reads — `gene/base.py::column` is a `slice`+`reshape` pair per side per column, 5 attribute columns over two families), the two slot/owner/count blocks are ~25, the attribute table pair + reorder + reduce is ~20, and the stacked tail is 21.
+Element volume is already minimal (`P × M` per family, the alignment is a scatter/gather, never a sort), so the remaining levers are cross-node: a one-op column read in `gene/base.py::column` (~0.3 ms/family) and a centre-batched `measure` API in `algorithm/` (40 calls/generation each pay the full tail and slot machinery).
+Round-2 rejects, measured or arithmetically excluded: fusing the per-column arithmetic into one `(P, M, A)` block pass (`gene/base.py` measured it 3.3× slower — element volume, not op count, is the currency on block ops); a gather-based inverse permutation instead of the reorder scatter (one extra 3-D index build, no op saved); folding `abs`/`not_equal` into one masked block pair (block ops cost ~3× a column op, and the left-to-right column chain must stay byte-exact).
+Remaining hot spot: `gene.distance` (33 ops) plus the two attribute block gathers; the wall clock still scales with `P × M × attr_width`, not with real gene counts.
 
 ## Constraints
 - Trace-time kernels only: no `jax`/`torch`/`numpy.random`, no `vmap`/`scan`/`while_loop`/`cond`, no Python loop over individuals or over pairs, no eager NumPy. Nothing here is differentiable and nothing draws RNG, so repeated calls are bit-identical.
@@ -165,7 +170,8 @@ A **scatter-derived inverse permutation** instead of `argsort(order)`: behind on
 |---|---|
 | `./base.py` | `BaseDistance`: pair-wise `__call__`, the two-phase `prepare` / `measure` drivers, the `_measure_single_centre` hook, `_measure_family`, `gene_measure`, the `distance_from_alignment` adapter, and payload/digest validation (`_validate_single`, `_validate_digest`, `_broadcast_payload`). |
 | `./default.py` | `DefaultDistance`: weights, the `dense_single_centre` switch, `_measure_single_centre` (delegates to `./dense.py`), `gene_distance` (pair-wise alignment hook), `distance_from_alignment` (the aligned attribute gather), `distance_from_rows` (its row-table spelling) and `_scalar_distance` (the one scalar tail all three routes share). |
-| `./dense.py` | The single-centre fast path: `enabled` (the static `_DENSE_MAX_BYTES`/`int32` gate) and `measure_centre` / `_family_distance` (scatter the centre into a key-indexed table, gather it at the digest's dense block, reorder into centre order, reduce), plus `_present` and the flat `_reorder` scatter. |
+| `./dense.py` | The single-centre fast path: `enabled` (the static `_DENSE_MAX_BYTES`/`int32` gate), `measure_centre` (stacks both families' tail inputs and calls the shared tail once) and `_family_terms` (`FamilyTerms`: centre count, homologue count, summed attribute distance), plus the marker table and `_stack`. |
+| `./layout.py` | `DenseLayout` — the fast path's per-generation statics (owner/attribute table bases, centre row index, flat reorder offsets and buffer, count/zeros/padding/dump/span scalars, the tail constants) built once in `prepare`, and `reorder` (the flat scatter that writes per-population-gene values into centre order). |
 | `./digest.py` | `FamilyDigest`/`DistanceDigest`, the injective `2**31` composite fold (`_pack`, `_tagged`, tags, padding sentinels), the per-column/permutation helpers (`_column`, `_gather_rows`, `_permute`), `dense_width`/`dense_slot` (key → table slot, dump slot for absent or out-of-range rows), `prepare_family`, `measure_alignment`/`AlignedGenes` (the merge, both sorts `stable=True`) and `match_rows`. |
 | `./consts.py` | `ConstantPool`: per-trace rank-0 constant memoisation (`i32`/`i64`/`u32`/`f32`), the reason constants are not deduplicated by evoxc. |
 | `./__init__.py` | Re-exports `BaseDistance`, `DefaultDistance`, `DistanceDigest`, `FamilyDigest`. |
