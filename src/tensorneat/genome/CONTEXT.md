@@ -74,8 +74,9 @@ Cost is `O((depth+1) × max_nodes × K)` with only elementwise/reduce/gather ops
 | `transform` (schedule) | 6.4 ms | 12.4 ms | 28.1 ms |
 | `forward(P)` | 2.0 ms | 3.0 ms | 7.9 ms |
 | `forward(4P)` — the tiled XOR batch the pipeline evaluates | 4.5 ms | 9.9 ms | 26.8 ms |
-| `Pipeline.step` end-to-end | 255 ms | 975 ms | 1849 ms |
-The forward is no longer the genome node's bottleneck (`transform` is, at `P≥500`), and neither is the genome node in `Pipeline.step` — `algorithm`'s ask/tell dominates it (≈97 % at `P=1000`).
+| `Pipeline.step` end-to-end | 61 ms | 370 ms | 610 ms |
+`execute_mutation` is 1360 traced ops (13.9 / 36.5 / 65.7 ms) and `execute_crossover` 433 (5.5 / 16.7 / 30.5 ms) — together `breed` at pop 1000 is 96 ms; `measure_distance` is 232 ops / 7.5 µs per pair.
+The forward is no longer the genome node's bottleneck (`transform` is, at `P≥500`), and neither is the genome node in `Pipeline.step` — `algorithm`'s distance work dominates it.
 `transform` is 391 traced ops of which `../common/tensorization.py::node_levels` is 64 % (a 55-op `while_loop` body relaxing `level`/`reach`, 3 innermost-axis `reduce_max` per iteration, 4–5 iterations) — see "Outside this node".
 
 ## Forward algebra (recurrent)
