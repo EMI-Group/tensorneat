@@ -67,6 +67,16 @@ All 40 runs produced `status="error"` with one identical signature; 0 crashes, 0
 `compile_time_s`, `ms_per_generation`, `gens_per_second` and all three RSS fields are `null` in every record, because the run dies before the first timing sample starts.
 The same venv runs the same case on the numpy backend fine (`--backend numpy --cases xor_p100 --generations 3`: `ok`, 58.06 ms/gen, build 2.93 s, final best −0.2500), so this is iree-specific, not a broken environment.
 
+The committed evidence is the full 8-case matrix: `benchmarks/results/iree.json` holds the record and `benchmarks/iree.md` its rendered report (8/8 rows `status="error"`, verdict `INCOMPLETE`), reproducible with
+
+```
+python benchmarks/run_benchmark.py --impl new --backend iree --cases all \
+  --generations 2 --warmup 1 --repeats 1 \
+  --json benchmarks/results/iree.json --out benchmarks/iree.md
+```
+
+The failure is identical for all 8 cases — population, problem and fitness target do not change it — matching the per-case 5/5 fresh-process pattern above (`--generations 3`).
+
 ## Failure signature (deterministic, first gate)
 
 ```
@@ -184,7 +194,7 @@ The real pipeline gates are `python benchmarks/spikes/iree_probe.py --mode pipel
 - A failure in one case is confined to that case's row: the 4-case CLI run above completed all four rows, wrote JSON and Markdown, and exited 1.
 - Verified for a *hard* crash too, not just an exception: a test-only `sitecustomize.py` in `$TMPDIR` that SIGSEGVs only the worker process for `xor3d_p100` produced a synthesised `status="error"` row (`error: [crashshim] segfaulting worker for xor3d_p100`) while the other two cases still ran and the report was written.
   The harness confines a SIGSEGV correctly (one worker process per run); no harness bug was found, and `run_benchmark.py` was not modified.
-- `benchmarks/RESULTS.md` was not regenerated or edited for this report; all records referenced here live in `$TMPDIR` (`iree.json`, `reps/*.json`, `confine.json`) and are reproducible with the commands above.
+- `benchmarks/RESULTS.md` was not regenerated or edited for this report; the full-matrix record and its report are committed as `benchmarks/results/iree.json` and `benchmarks/iree.md`, while the per-case repeat records (`reps/*.json`, `confine.json`) live in `$TMPDIR` and are reproducible with the commands above.
 
 ## Verdict
 
