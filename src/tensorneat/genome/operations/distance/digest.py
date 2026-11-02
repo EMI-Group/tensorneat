@@ -34,7 +34,6 @@ from typing import NamedTuple
 
 import evoxc
 import evoxc.numpy as enp
-import numpy as np
 
 from ....common import I_INF, ConfigError, flat_gather, flat_scatter
 from ..alignment import key_rows
@@ -207,12 +206,13 @@ def _pack(
         "real gene" mask (the leading key column is not ``I_INF``).
 
     Notes:
-        Wide key tables are folded positionally: one weighted ``multiply`` against a rank-3
-        constant followed by a ``reduce_sum`` over the key axis, which is exact because the
-        reduction is integer.
-        Absent rows are first zeroed as a whole, so the fold can neither overflow on the
-        ``I_INF`` digits nor depend on whatever an absent row happens to hold — their
-        composites are then replaced by the side's sentinel by the caller.
+        Key columns are folded positionally, most significant first, as one
+        ``multiply``/``add`` pair per column: an innermost-axis integer ``reduce_sum`` over
+        the key axis costs an order of magnitude more than those elementwise ops, and the
+        fold is exact either way because the arithmetic is integer.
+        Each digit is ``select``-ed against ``valid`` before it enters the fold, so an
+        absent row can neither overflow on its ``I_INF`` digits nor depend on whatever it
+        happens to hold — the caller then replaces its composite with the side's sentinel.
     """
     leading = _column(table, 0)
     valid = evoxc.not_equal(leading, _i32(I_INF))
@@ -329,7 +329,9 @@ def match_rows(
         evoxc.ShapeError: Propagated unchanged if the concatenation disagrees on shapes.
 
     Notes:
-        One sort of the ``2 * M`` concatenation plus one adjacency comparison:
+        One sort of the ``2 * M`` concatenation, one flat gather of its permutation (the
+        sorted block for free, instead of a second comparison sort) and one adjacency
+        comparison:
         because the composites are injective and the two sides carry different padding
         sentinels, ``right == left + 1`` holds exactly on ``(centre gene, population gene)``
         pairs with equal key rows, so no key-row gather and no ``reduce_min`` is needed.
