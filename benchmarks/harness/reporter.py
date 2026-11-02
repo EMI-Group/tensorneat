@@ -10,7 +10,6 @@ Imports are stdlib plus those modules; it never touches numpy, jax, evoxc or ten
 
 from __future__ import annotations
 
-import shlex
 from pathlib import Path
 
 from harness.protocol import (
@@ -24,6 +23,7 @@ from harness.protocol import (
     median_curve,
 )
 from harness.report_format import (
+    COMPANION_FILES,
     CURVE_HEADERS,
     IMPL_LABELS,
     by_case,
@@ -47,7 +47,6 @@ from harness.report_format import (
     plain,
     protocol_meta,
     recorded_lengths,
-    repo_relative,
     run_flag,
     seconds,
     sort_key,
@@ -57,7 +56,11 @@ from harness.report_format import (
     timestamp,
     verdict_cell,
 )
-from harness.report_sections import headline_section, winlose_section
+from harness.report_sections import (
+    headline_section,
+    reproduce_section,
+    winlose_section,
+)
 
 __all__ = ["render_report", "write_report", "IMPL_LABELS"]
 
@@ -220,6 +223,36 @@ def _threads_text(threads) -> str:
     )
 
 
+def _quality_lengths(doc: dict) -> tuple[int | None, int | None]:
+    """Recorded quality-curve lengths of the old and the new side (first seen), else ``None``."""
+    lengths = recorded_lengths(doc)
+    old = next((n for (_, impl, _), n in lengths.items() if impl == "old"), None)
+    new = next((n for (_, impl, _), n in lengths.items() if impl == "new"), None)
+    return old, new
+
+
+def _generation_index_text(doc: dict) -> str:
+    """How the new side's consumed build generation shifts its quality curve by one.
+
+    The timed samples cover the same generation indices on both sides, but the build
+    generation is consumed from the new side's quality curve, so that curve starts one
+    generation later and holds one fewer generation — which is what an unreached target's
+    ``>N`` bound shows. The counts are read from the records, never hard-coded.
+    """
+    old_length, new_length = _quality_lengths(doc)
+    sentence = (
+        "The build generation is also consumed from the new side's quality curve, so that "
+        "curve starts one generation later than the old side's"
+    )
+    if old_length and new_length and new_length != old_length:
+        sentence += (
+            f" and records {new_length} generations against the old side's {old_length} — "
+            f"which is why an unreached target reads `>{new_length}` for new and "
+            f"`>{old_length}` for old"
+        )
+    return sentence + ". Compile/build seconds are never charged to a generation."
+
+
 def _protocol_section(doc: dict, companions: dict | None = None) -> str:
     """Protocol table plus the metric definitions the template states."""
     doc_meta = meta(doc)
@@ -234,9 +267,9 @@ def _protocol_section(doc: dict, companions: dict | None = None) -> str:
         [
             "New-side build",
             "inside the first `Pipeline.step` call (the evoxc build); the generation it "
-            "consumes is recorded as `generations_consumed_before_timing` and excluded from "
-            "the timed samples and from the quality curve — the untimed warmup is shortened "
-            "by it so both sides time and record the same generation index",
+            "consumes is recorded as `generations_consumed_before_timing`, excluded from the "
+            "timed samples and subtracted from the untimed warmup, so both sides' timing "
+            "samples cover the same generation indices",
         ],
         [
             "Compile time",
@@ -253,10 +286,9 @@ def _protocol_section(doc: dict, companions: dict | None = None) -> str:
     lines = [
         "Metrics: `compile_time_s` (one-off build), `ms_per_generation` (median wall clock "
         "per generation",
-        "after warmup, including host sync), `gens_per_second`, `peak_rss_mb`, and quality",
+        "after warmup, including host sync), `gens_per_second`, `rss_final_mb`, and quality",
         "(`final_best_fitness`, `generations_to_target`, best-fitness curve).",
-        "The new side's build generation is excluded from both the timing and the quality "
-        "curve, and compile/build seconds are never charged to a generation.",
+        _generation_index_text(doc),
         "Definitions, fairness rules and verdict rules live in `benchmarks/CONTEXT.md`.",
     ]
     if (companions or {}).get("threads"):
@@ -746,157 +778,18 @@ def _not_compared_section(doc: dict, companions: dict | None = None) -> str:
     )
 
 
-# --- How to reproduce ---------------------------------------------------------------------
+# --- Companion evidence ---------------------------------------------------------------
 
 
-def _command_tokens(command) -> list[str]:
-    """``meta["command"]`` split back into argv tokens (empty for a missing command)."""
-    text_command = str(command or "").strip()
-    if not text_command:
-        return []
-    try:
-        return shlex.split(text_command)
-    except ValueError:
-        return text_command.split()
+def _companions(doc: dict, report_path=None) -> dict[str, bool]:
+    """Companion evidence files that sit next to this report and are *not* this report.
 
-
-def _reproduce_command(doc: dict) -> tuple[str, str]:
-    """``(portable command, interpreter used)`` for the reproduce block.
-
-    The recorded command starts with the absolute interpreter path of the machine that
-    produced the run, which must not become the documented way to reproduce it: the
-    first command is the portable ``python benchmarks/run_benchmark.py <flags...>`` and
-    the interpreter that actually ran is stated on its own line.
+    A companion document must never point at itself: rendering ``THREADS.md`` drops the
+    ``THREADS.md`` pointer while the other companions (``BACKENDS.md``) keep theirs.
     """
-    tokens = _command_tokens(meta(doc).get("command"))
-    if not tokens:
-        return "python benchmarks/run_benchmark.py", "n/a"
-    interpreter = repo_relative(tokens[0]) or tokens[0]
-    arguments = [repo_relative(token) or token for token in tokens[1:]]
-    if not arguments:
-        arguments = ["benchmarks/run_benchmark.py"]
-    return shlex.join(["python", *arguments]), interpreter
-
-
-def _protocol_flags(proto: dict) -> str:
-    """``--generations/--warmup/--repeats/--threads`` as recorded, for the variant commands."""
-    flags = []
-    for name in ("generations", "warmup", "repeats", "threads"):
-        value = proto.get(name)
-        if isinstance(value, int) and not isinstance(value, bool):
-            flags.extend([f"--{name}", str(value)])
-    return " ".join(flags)
-
-
-def _variant(arguments: str) -> str:
-    """One ``python benchmarks/run_benchmark.py ...`` command line."""
-    return "python benchmarks/run_benchmark.py " + arguments
-
-
-COMMITTED_RECORD_DIR = "benchmarks/results/"  # git-ignored except the names its .gitignore re-includes
-
-
-def _committed_record_names() -> frozenset[str]:
-    """Basenames ``results/.gitignore`` re-includes; an unreadable manifest means none."""
-    manifest = Path(__file__).resolve().parents[1] / "results" / ".gitignore"
-    try:
-        lines = manifest.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return frozenset()
-    names = (line.strip()[1:] for line in lines if line.strip().startswith("!"))
-    return frozenset(name for name in names if name)
-
-
-def _record_sentence(doc: dict) -> str:
-    """Where this report's numbers came from, and whether that record is committed evidence.
-
-    ``--json`` defaults to the scratch ``benchmarks/results/latest.json``; the committed
-    reports are rendered from a record that ``results/.gitignore`` re-includes, so every
-    table cell is traceable.
-    """
-    path = json_path(doc)
-    name = Path(path).name
-    names = _committed_record_names()
-    committed = path.startswith(COMMITTED_RECORD_DIR) and name != "latest.json" and name in names
-    if committed:
-        return (
-            f"the record this report was rendered from (`{name}`) is committed at `{path}` "
-            "beside that default, so every table cell is traceable"
-        )
-    return (
-        f"this report was rendered from `{path}`, a scratch record that is not committed: "
-        "copy it next to the report before sharing it"
-    )
-
-
-def _reproduce_section(doc: dict, companions: dict | None = None) -> str:
-    """Portable command line, the interpreter that produced the run, and its settings."""
-    doc_meta = meta(doc)
-    proto = protocol_meta(doc)
-    command, interpreter = _reproduce_command(doc)
-    backends = [text(name) for name in (doc_meta.get("backends") or []) if name]
-    primary = backends[0] if backends else "numpy"
-    flags = _protocol_flags(proto)
-    cases = ", ".join(text(name) for name in (doc_meta.get("cases") or []))
-    threads = proto.get("threads")
-    thread_text = (
-        "runtime defaults (`--threads 0`)" if threads == 0 else f"`--threads {plain(threads)}`"
-    )
-    repeats, seed = proto.get("repeats"), proto.get("seed")
-    seed_text = ""
-    if isinstance(repeats, int) and isinstance(seed, int) and repeats >= 1:
-        seed_text = " (seeds " + ", ".join(str(seed + offset) for offset in range(repeats)) + ")"
-
-    lines = [
-        "```bash",
-        "# regenerate the committed report: the literal command of this run",
-        command,
-        "",
-        "# full matrix, both implementations on the primary backend",
-        _variant(f"--impl both --backend {primary} --cases all {flags}".rstrip()),
-        "",
-        "# baseline only (frozen JAX)",
-        _variant(f"--impl old --cases all {flags}".rstrip()),
-        "",
-        "# candidate only, one backend at a time",
-    ]
-    for backend in backends or [primary]:
-        lines.append(_variant(f"--impl new --backend {backend} --cases all {flags}".rstrip()))
-    if "iree" not in backends:
-        lines.append(
-            _variant(f"--impl new --backend iree --cases xor_p500 {flags}".rstrip())
-            + "   # informational; errors cleanly when the IREE runtime is absent"
-        )
-    lines.extend(
-        [
-            "",
-            "# inspect the matrix and the planned worker commands (no run, no report)",
-            "python benchmarks/run_benchmark.py --list",
-            "python benchmarks/run_benchmark.py --dry-run",
-            "```",
-        ]
-    )
-    note = (
-        f"Cases: {cases or 'all declared cases'}. Timed generations: "
-        f"{plain(proto.get('generations'))}, warmup generations (untimed): "
-        f"{plain(proto.get('warmup'))}, repeats: {plain(proto.get('repeats'))}{seed_text}, "
-        f"threads: {thread_text}. Backend(s) of the new side: {backends and ', '.join(backends) or 'n/a'}; "
-        "the old side always runs on JAX, once per case. `--out` defaults to "
-        "`benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` "
-        f"(scratch, git-ignored); {_record_sentence(doc)}."
-    )
-    if (companions or {}).get("threads"):
-        note += (
-            " A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is "
-            "recorded in `benchmarks/THREADS.md` next to this report."
-        )
-    return (
-        "## How to reproduce\n\n"
-        + "\n".join(lines)
-        + "\n\n"
-        + f"Interpreter used: {interpreter}\n\n"
-        + note
-    )
+    present = companion_files(doc, report_path)
+    own_name = Path(report_path).name if report_path else Path(out_path(doc)).name
+    return {key: found and COMPANION_FILES[key] != own_name for key, found in present.items()}
 
 
 # --- Entry points -------------------------------------------------------------------------
@@ -965,7 +858,7 @@ def render_report(doc: dict, report_path=None) -> str:
         ``meta.report_note`` the output is exactly the default ``RESULTS.md``.
     """
     document = doc or {}
-    companions = companion_files(document, report_path)
+    companions = _companions(document, report_path)
     blocks = [
         _title(document),
         _banner(document),
@@ -981,7 +874,7 @@ def render_report(doc: dict, report_path=None) -> str:
         _curves_section(document),
         _reference_section(document),
         _not_compared_section(document, companions),
-        _reproduce_section(document, companions),
+        reproduce_section(document, companions),
         _footer(document),
     ]
     return (

@@ -2,7 +2,7 @@
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
 > `benchmarks/results/iree.json` at 2026-11-02T07:29:26+00:00. It must not be hand-edited:
-> Re-rendered from that same JSON at 2026-11-02T07:34:09+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-02T07:43:30+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *Every case errors in `Pipeline.setup` before generation 0; see `BACKENDS.md` for the failure signature and the minimal reproducer. The measured CPU contract is `RESULTS.md` (numpy reference backend).*
@@ -18,9 +18,9 @@
 | xor3d_p500 | 500 | `iree` | n/a (not run) | n/a (error) | n/a (needs both sides) | n/a (needs both sides) | n/a (needs both sides) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a | n/a |
 | xor3d_p1000 | 1000 | `iree` | n/a (not run) | n/a (error) | n/a (needs both sides) | n/a (needs both sides) | n/a (needs both sides) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a | n/a |
 | custom_pagie_p500 | 500 | `iree` | n/a (not run) | n/a (error) | n/a (needs both sides) | n/a (needs both sides) | n/a (needs both sides) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a | n/a |
-| cartpole_p100 | 100 | `iree` | n/a (not run) | n/a (error) | n/a (needs both sides) | n/a (needs both sides) | n/a (needs both sides) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a (not run) | n/a (error) | n/a | n/a |
+| cartpole_p100 | 100 | `iree` | n/a (no old-side equivalent) | n/a (error) | n/a (needs both sides) | n/a (needs both sides) | n/a (needs both sides) | n/a (no old-side equivalent) | n/a (error) | n/a (no old-side equivalent) | n/a (error) | n/a (no old-side equivalent) | n/a (error) | n/a (no old-side equivalent) | n/a (error) | n/a | n/a |
 
-One row per case and new-side backend (the old side always runs on JAX). Speed-up is `old / new` per generation: above 1.00x the new side is faster. Speed-up range is `old_min/new_max` … `old_max/new_min` over the per-repeat medians, i.e. the best and worst case over the repeats. Quality overlap states where the new side's per-repeat final-best range sits against the old side's: `inside` when the ranges intersect (every new repeat inside the old range, or the ranges partially overlap), `new worse` when every new repeat is below the old range, `new better` when every new repeat is above it — an observation, never a replacement for the verdict. Timing PASS means new ms/generation is at or below the old one; quality PASS means the new final best stays within `max(10% × |old|, 0.001)` of the old one. Every cell comes from the aggregated JSON records of this run; `n/a (reason)` marks a cell that could not be reached (not run, skipped, error, or not recorded).
+One row per case and new-side backend (this document records no old-side row, so every case here is new-side only). Speed-up is `old / new` per generation: above 1.00x the new side is faster. Speed-up range is `old_min/new_max` … `old_max/new_min` over the per-repeat medians, i.e. the best and worst case over the repeats. Quality overlap states where the new side's per-repeat final-best range sits against the old side's: `inside` when the ranges intersect (every new repeat inside the old range, or the ranges partially overlap), `new worse` when every new repeat is below the old range, `new better` when every new repeat is above it — an observation, never a replacement for the verdict. Timing PASS means new ms/generation is at or below the old one; quality PASS means the new final best stays within `max(10% × |old|, 0.001)` of the old one. Every cell comes from the aggregated JSON records of this run; `n/a (reason)` marks a cell that could not be reached (not run, skipped, error, or not recorded).
 
 - `xor_p100` / `new` / `iree`: **error** — evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not…
 - `xor_p500` / `new` / `iree`: **error** — evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at /root/tensorneat/.genesis/workers/worker_T1_A293/src/tensorneat/algorithm/neat/species.py:295 on a rank-3 operand along axis 0 is not…
@@ -58,14 +58,14 @@ One row per case and new-side backend (the old side always runs on JAX). Speed-u
 | Timed generations | 2 |
 | Repeats (seed + r) | 1 (`seed + r`, seeds 42) |
 | Thread pinning | `--threads 0` — runtime defaults (as users run it), nothing exported |
-| New-side build | inside the first `Pipeline.step` call (the evoxc build); the generation it consumes is recorded as `generations_consumed_before_timing` and excluded from the timed samples and from the quality curve — the untimed warmup is shortened by it so both sides time and record the same generation index |
+| New-side build | inside the first `Pipeline.step` call (the evoxc build); the generation it consumes is recorded as `generations_consumed_before_timing`, excluded from the timed samples and subtracted from the untimed warmup, so both sides' timing samples cover the same generation indices |
 | Compile time | reported separately as `compile_time_s` (old: `jax.jit(pipeline.step).lower(state).compile()`; new: the first `Pipeline.step` build) and never charged to a generation |
 | Scheduling | one worker process per run, strictly sequential — the two implementations never share a process |
 
 Metrics: `compile_time_s` (one-off build), `ms_per_generation` (median wall clock per generation
-after warmup, including host sync), `gens_per_second`, `peak_rss_mb`, and quality
+after warmup, including host sync), `gens_per_second`, `rss_final_mb`, and quality
 (`final_best_fitness`, `generations_to_target`, best-fitness curve).
-The new side's build generation is excluded from both the timing and the quality curve, and compile/build seconds are never charged to a generation.
+The build generation is also consumed from the new side's quality curve, so that curve starts one generation later than the old side's. Compile/build seconds are never charged to a generation.
 Definitions, fairness rules and verdict rules live in `benchmarks/CONTEXT.md`.
 A thread-bound sensitivity run (`--threads 1`, XOR family, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
 
@@ -201,7 +201,7 @@ measured row.
 
 ```bash
 # regenerate the committed report: the literal command of this run
-python benchmarks/run_benchmark.py --impl new --backend iree --cases all --generations 2 --warmup 1 --repeats 1 --json benchmarks/results/iree.json --out benchmarks/iree.md --report-title TensorNEAT benchmark '—' IREE backend attempt '(llvm-cpu)' --report-note Every case errors in '`Pipeline.setup`' before generation '0;' see '`BACKENDS.md`' for the failure signature and the minimal reproducer. The measured CPU contract is '`RESULTS.md`' '(numpy' reference 'backend).'
+python benchmarks/run_benchmark.py --impl new --backend iree --cases all --generations 2 --warmup 1 --repeats 1 --json benchmarks/results/iree.json --out benchmarks/iree.md --report-title 'TensorNEAT benchmark — IREE backend attempt (llvm-cpu)' --report-note 'Every case errors in `Pipeline.setup` before generation 0; see `BACKENDS.md` for the failure signature and the minimal reproducer. The measured CPU contract is `RESULTS.md` (numpy reference backend).'
 
 # full matrix, both implementations on the primary backend
 python benchmarks/run_benchmark.py --impl both --backend iree --cases all --generations 2 --warmup 1 --repeats 1 --threads 0
@@ -219,6 +219,6 @@ python benchmarks/run_benchmark.py --dry-run
 
 Interpreter used: /tmp/genesis/task_d7be275380ce6fc0/iree-venv/bin/python
 
-Cases: xor_p100, xor_p500, xor_p1000, xor3d_p100, xor3d_p500, xor3d_p1000, custom_pagie_p500, cartpole_p100. Timed generations: 2, warmup generations (untimed): 1, repeats: 1 (seeds 42), threads: runtime defaults (`--threads 0`). Backend(s) of the new side: iree; the old side always runs on JAX, once per case. `--out` defaults to `benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (scratch, git-ignored); the record this report was rendered from (`iree.json`) is committed at `benchmarks/results/iree.json` beside that default, so every table cell is traceable. A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
+Cases: xor_p100, xor_p500, xor_p1000, xor3d_p100, xor3d_p500, xor3d_p1000, custom_pagie_p500, cartpole_p100. Timed generations: 2, warmup generations (untimed): 1, repeats: 1 (seeds 42), threads: runtime defaults (`--threads 0`). Backend(s) of the new side: iree; no old-side row is recorded in this document, so every case here is new-side only. `--out` defaults to `benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (scratch, git-ignored); the record this report was rendered from (`iree.json`) is committed at `benchmarks/results/iree.json` beside that default, so every table cell is traceable. A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
 
 Generated from `benchmarks/results/iree.json` into `benchmarks/iree.md` at 2026-11-02T07:29:26+00:00 — do not hand-edit.

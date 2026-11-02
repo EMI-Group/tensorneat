@@ -2,21 +2,21 @@
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
 > `benchmarks/results/authoritative.json` at 2026-11-02T07:29:02+00:00. It must not be hand-edited:
-> Re-rendered from that same JSON at 2026-11-02T07:34:09+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-02T07:43:30+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 ## Headline: old vs new
 
 | Case | Pop | Backend | Old ms/gen | New ms/gen | Speed-up | Speed-up range (best–worst) | Quality overlap | Old compile (s) | New compile (s) | Old peak RSS (MiB) | New peak RSS (MiB) | Old final best | New final best | Gens to target (old) | Gens to target (new) | Timing | Quality |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| xor_p100 | 100 | `numpy` | 31.35 | 58.02 | 0.54x | 0.28x–0.74x | inside | 2.744 | 0.558 | 587.1 | 145.4 | -0.0198 | -0.0000 | 77 | 55 | FAIL | PASS |
+| xor_p100 | 100 | `numpy` | 31.35 | 58.02 | 0.54x | 0.28x–0.74x | inside | 2.744 | 0.558 | 587.1 | 145.4 | -0.0198 | -0.0000 | 78 | 55 | FAIL | PASS |
 | xor_p500 | 500 | `numpy` | 157.01 | 357.25 | 0.44x | 0.28x–0.47x | inside | 2.822 | 1.520 | 634.6 | 1049.8 | -0.0000 | -0.0000 | 37 | 33 | FAIL | PASS |
 | xor_p1000 | 1000 | `numpy` | 246.76 | 671.73 | 0.37x | 0.34x–0.39x | inside | 2.759 | 2.185 | 631.3 | 1992.1 | -0.0000 | -0.0000 | 35 | 27 | FAIL | PASS |
 | xor3d_p100 | 100 | `numpy` | 19.59 | 69.48 | 0.28x | 0.27x–0.50x | inside | 2.716 | 0.575 | 591.3 | 151.9 | -0.0915 | -0.2358 | 149 | >152 | FAIL | FAIL |
 | xor3d_p500 | 500 | `numpy` | 81.42 | 380.42 | 0.21x | 0.20x–0.38x | inside | 2.890 | 1.538 | 650.6 | 1081.9 | -0.0652 | -0.0072 | 93 | 101 | FAIL | PASS |
 | xor3d_p1000 | 1000 | `numpy` | 141.18 | 698.15 | 0.20x | 0.16x–0.35x | inside | 2.855 | 2.198 | 655.1 | 2055.9 | -0.0000 | -0.0179 | 81 | 59 | FAIL | FAIL |
 | custom_pagie_p500 | 500 | `numpy` | 371.83 | 3443.44 | 0.11x | 0.09x–0.14x | inside | 2.876 | 4.688 | 756.0 | 6041.7 | -0.0064 | -0.0221 | 121 | 77 | FAIL | FAIL |
-| cartpole_p100 | 100 | `numpy` | n/a (not run) | 412.02 | n/a (needs both sides) | n/a (needs both sides) | n/a (needs both sides) | n/a (not run) | 0.916 | n/a (not run) | 137.0 | n/a (not run) | 200.0000 | n/a (not run) | 1 | n/a | n/a |
+| cartpole_p100 | 100 | `numpy` | n/a (no old-side equivalent) | 412.02 | n/a (needs both sides) | n/a (needs both sides) | n/a (needs both sides) | n/a (no old-side equivalent) | 0.916 | n/a (no old-side equivalent) | 137.0 | n/a (no old-side equivalent) | 200.0000 | n/a (no old-side equivalent) | 1 | n/a | n/a |
 
 One row per case and new-side backend (the old side always runs on JAX). Speed-up is `old / new` per generation: above 1.00x the new side is faster. Speed-up range is `old_min/new_max` … `old_max/new_min` over the per-repeat medians, i.e. the best and worst case over the repeats. Quality overlap states where the new side's per-repeat final-best range sits against the old side's: `inside` when the ranges intersect (every new repeat inside the old range, or the ranges partially overlap), `new worse` when every new repeat is below the old range, `new better` when every new repeat is above it — an observation, never a replacement for the verdict. Timing PASS means new ms/generation is at or below the old one; quality PASS means the new final best stays within `max(10% × |old|, 0.001)` of the old one. Every cell comes from the aggregated JSON records of this run; `n/a (reason)` marks a cell that could not be reached (not run, skipped, error, or not recorded).
 
@@ -47,14 +47,14 @@ One row per case and new-side backend (the old side always runs on JAX). Speed-u
 | Timed generations | 150 |
 | Repeats (seed + r) | 3 (`seed + r`, seeds 42, 43, 44) |
 | Thread pinning | `--threads 0` — runtime defaults (as users run it), nothing exported |
-| New-side build | inside the first `Pipeline.step` call (the evoxc build); the generation it consumes is recorded as `generations_consumed_before_timing` and excluded from the timed samples and from the quality curve — the untimed warmup is shortened by it so both sides time and record the same generation index |
+| New-side build | inside the first `Pipeline.step` call (the evoxc build); the generation it consumes is recorded as `generations_consumed_before_timing`, excluded from the timed samples and subtracted from the untimed warmup, so both sides' timing samples cover the same generation indices |
 | Compile time | reported separately as `compile_time_s` (old: `jax.jit(pipeline.step).lower(state).compile()`; new: the first `Pipeline.step` build) and never charged to a generation |
 | Scheduling | one worker process per run, strictly sequential — the two implementations never share a process |
 
 Metrics: `compile_time_s` (one-off build), `ms_per_generation` (median wall clock per generation
-after warmup, including host sync), `gens_per_second`, `peak_rss_mb`, and quality
+after warmup, including host sync), `gens_per_second`, `rss_final_mb`, and quality
 (`final_best_fitness`, `generations_to_target`, best-fitness curve).
-The new side's build generation is excluded from both the timing and the quality curve, and compile/build seconds are never charged to a generation.
+The build generation is also consumed from the new side's quality curve, so that curve starts one generation later than the old side's and records 152 generations against the old side's 153 — which is why an unreached target reads `>152` for new and `>153` for old. Compile/build seconds are never charged to a generation.
 Definitions, fairness rules and verdict rules live in `benchmarks/CONTEXT.md`.
 A thread-bound sensitivity run (`--threads 1`, XOR family, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
 
@@ -77,7 +77,7 @@ A thread-bound sensitivity run (`--threads 1`, XOR family, same CLI) is recorded
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.744 | 31.35 | 31.90 | 587.1 | -0.0198 | 77 | 3 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.744 | 31.35 | 31.90 | 587.1 | -0.0198 | 78 | 3 |
 | `new` tensorneat (evoxc) | `numpy` | 0.558 | 58.02 | 17.24 | 145.4 | -0.0000 | 55 | 3 |
 
 ### xor_p500
@@ -192,7 +192,7 @@ By population size:
 Worst case: `custom_pagie_p500` at 7.99x (6041.7 vs 756.0 MiB old, +5286 MiB).
 The new side's peak grows with the population in the XOR family (145.4 → 1049.8 → 1992.1 MiB at pop 100, 500, 1000), while the old row moves only from 587.1 to 634.6 MiB.
 
-Mechanism, as far as the numbers support it: the old side's floor is the JAX/XLA runtime itself (193.8–193.9 MiB right after import); the new side starts from 72.9–72.9 MiB. Beyond that floor the new peak follows the padded batch it materialises for the whole population (`max_nodes × max_nodes` per individual as explicit host tensors), whereas the legacy side vmaps fixed-shape arrays and lets XLA reuse its buffers — which is why the new peak tracks the population while the old peak stays close to its runtime floor.
+Mechanism, as far as these runs support one: the old side's floor is the JAX/XLA runtime itself (193.8–193.9 MiB right after import); the new side starts from 72.9 MiB. Beyond those floors the new peak tracks the population while the old peak stays close to its runtime floor, so the working set the numpy interpreter materialises per generation is what grows with `pop_size × max_nodes × max_conns`; these runs do not attribute that growth to a single dominant term.
 
 This section is written from the same `speedup` values as the headline and old-vs-new tables; it does not assume the new side is the winner. A rerun that changes those numbers changes this text with them.
 
@@ -213,7 +213,7 @@ The declared contract (51/109/157 ms/gen at pop 100/500/1000) was measured on a 
 | `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.2507 | -0.2500 | -0.1929 | -0.0542 | -0.0000 | -0.0000 | 62 |
 | `old` tensorneat-legacy (JAX) | `jax` | 43 | -0.2519 | -0.2500 | -0.2364 | -0.1515 | -0.0198 | -0.0198 | 93 |
 | `old` tensorneat-legacy (JAX) | `jax` | 44 | -0.2549 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | >153 |
-| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43, 44 | -0.2519 | -0.2500 | -0.2364 | -0.1515 | -0.0198 | -0.0198 | 77 |
+| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43, 44 | -0.2519 | -0.2500 | -0.2364 | -0.1515 | -0.0198 | -0.0198 | 78 |
 | `new` tensorneat (evoxc) | `numpy` | 42 | -0.2502 | -0.2500 | -0.2205 | -0.0067 | -0.0000 | -0.0000 | 55 |
 | `new` tensorneat (evoxc) | `numpy` | 43 | -0.2505 | -0.2500 | -0.2500 | -0.2500 | -0.0606 | -0.0606 | 140 |
 | `new` tensorneat (evoxc) | `numpy` | 44 | -0.2501 | -0.2476 | -0.1375 | -0.0182 | -0.0000 | -0.0000 | 47 |

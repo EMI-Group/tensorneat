@@ -488,7 +488,7 @@ def _build_document(
                 "threads": args.threads,
                 "timeout": args.timeout,
             },
-            "command": " ".join([sys.executable, *sys.argv]),
+            "command": shlex.join([sys.executable, *sys.argv]),
             "case_matrix": [case.as_dict() for case in selected],
             "json_path": str(json_path),
             "out_path": str(Path(args.out)),
