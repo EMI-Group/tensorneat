@@ -141,6 +141,8 @@ The next levers here are therefore op count (`_pack`'s per-column slice+reshape,
 `algorithm/neat/_distance.py` (`DistanceRows`, 188 generation ops) and `genome/base.py::prepare_distance/measure_distance` should thread **one `ConstantPool` per generation** into `prepare`/`measure`; the pool already accepts it, and the ~163 constants the distance files still emit per generation would collapse to the handful of distinct values (~150 ops).
 `genome/gene/base.py:50` reads attribute columns with one kept-axis slice plus one reshape per column: 132 + 132 traced ops per generation at pop 500/1000 (264 of the 485 that file contributes), which a single rank-3 pipeline would remove without touching the arithmetic.
 `operations/alignment.py` still embeds full-size graph constants and a private `_scalar`; its `find_homologous` is only on the pair-wise route now, so it inherits nothing from this node.
+`operations/alignment.py::_flat_row_index` (line ~241) builds `batch_offsets(pop_size, count * width)` and would raise a `ConfigError` on a `0`-wide row: its only caller `gather_attr_rows` is reached solely from `operations/crossover/default.py:179`, which is guarded by `if gene.attr_width == 0: return attrs1` — a new caller of `gather_attr_rows` must keep that guard.
+A zero-attribute regression test belongs in `test/unit/genome/test_distance.py` (read-only for this node): a `DefaultConn` subclass with `attr_specs = ()`, `prepare`/`measure` and the pair-wise call inside one trace, and `measure` == `execute_distance` on the same pairs.
 
 ## Routing Table
 | File | Responsibility |
