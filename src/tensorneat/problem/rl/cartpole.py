@@ -21,9 +21,14 @@ _ACTION_DIM = 2
 class _CartPoleConstants(NamedTuple):
     """The physics bundle of one ``CartPole`` configuration, as graph scalars.
 
-    Every field is a float32 rank-0 ``SymbolicTensor`` created inside the
-    active trace with ``enp.full((), value)``, so no Python float (which would
+    Every field is a rank-0 ``SymbolicTensor`` created inside the active trace
+    with ``enp.full((), value)``, so no Python literal (a float would
     materialize as f64 on the stablehlo/iree path) ever reaches an op.
+
+    The bundle is built **once per rollout, outside the timestep loop**, so a
+    constant the dynamics needs every step (``four_thirds``, ``neg_force_mag``,
+    the NaN scalar) is one Constant op per run instead of one per timestep --
+    the reference interpreter pays per traced op, not per element.
 
     Attributes:
         gravity: Gravity constant.
@@ -33,10 +38,17 @@ class _CartPoleConstants(NamedTuple):
         total_mass: ``masscart + masspole``.
         length: Half-pole length.
         force_mag: Magnitude of the applied force.
+        neg_force_mag: ``-force_mag``, the push-left force (precomputed so the
+            loop never negates a constant).
         dt: Euler integration step.
         x_threshold: ``|x|`` limit.
         theta_threshold: ``|theta|`` limit in **radians**.
         reset_scale: Half-width of the uniform reset distribution.
+        neg_reset_scale: ``-reset_scale``, the lower bound of the reset draw.
+        four_thirds: The ``4/3`` of the pole-moment denominator.
+        nan: A float32 NaN, the poison value accumulated into the return.
+        one_step: The int32 ``1`` the loop counter advances by.
+        horizon: The int32 ``max_step`` the loop counter is compared against.
     """
 
     gravity: Any
@@ -46,10 +58,16 @@ class _CartPoleConstants(NamedTuple):
     total_mass: Any
     length: Any
     force_mag: Any
+    neg_force_mag: Any
     dt: Any
     x_threshold: Any
     theta_threshold: Any
     reset_scale: Any
+    neg_reset_scale: Any
+    four_thirds: Any
+    nan: Any
+    one_step: Any
+    horizon: Any
 
 
 def _to_numpy(value: Any) -> np.ndarray:
@@ -208,31 +226,30 @@ class CartPole(BaseProblem):
            ``p``.
         2. Initial states come from **one** draw,
            ``evoxc.random.uniform(keys, (B, 4), low=-reset_scale,
-           high=reset_scale)``; the key is not threaded through the scan and
+           high=reset_scale)``; the key is not threaded through the loop and
            ``np.random`` is never used.
-        3. One ``evoxc.scan`` over ``max_step`` timesteps with
-           ``xs = enp.zeros((max_step, 1))`` and carry ``(obs (B, 4),
-           alive (B,))``.
+        3. One ``evoxc.while_loop`` over ``max_step`` timesteps, carry
+           ``(obs (B, 4), alive (B,), total (B,), step ())``: the return
+           accumulator rides in the carry instead of being gathered from a
+           scan output stack, which is what keeps the per-timestep cost free of
+           any ``B * max_step`` array traffic.
         4. Step body: forward the policy, convert the two logits into a
-           ``(B, 1)`` ``+/-force_mag`` force, reward ``alive`` **before** the
-           transition (the failing step still scores, as in Gym), integrate with
-           Euler, mark death on ``|x| > x_threshold or |theta| >
-           theta_threshold``, then freeze the state with
-           ``enp.where(enp.expand_dims(alive, 1), next_obs, obs)`` so no
-           ``cond`` and no data-dependent trip count is needed (a traced tensor
-           has no ``__getitem__``, so the rank-1 mask is broadcast with
+           ``(B, 1)`` ``+/-force_mag`` force, add ``alive`` to ``total``
+           **before** the transition (the failing step still scores, as in
+           Gym), integrate with Euler, mark death on ``|x| > x_threshold or
+           |theta| > theta_threshold``, then freeze the state with
+           ``enp.where(enp.expand_dims(alive, 1), next_obs, obs)`` (a traced
+           tensor has no ``__getitem__``, so the rank-1 mask is broadcast with
            ``expand_dims``).
-        5. The scan emits the rank-1 ``alive`` mask as its output; a rank-3
-           stacked output would need a ``scatter`` the stablehlo exporter
-           rejects.
-        6. Fitness = mean over the ``repeat_times`` axis of the summed reward
-           (a return in ``[0, max_step]`` per episode), then
+        5. Fitness = mean over the ``repeat_times`` axis of the episode return
+           (a count in ``[0, max_step]`` per episode), then
            ``finalize_fitness``.
 
         A NaN logit still acts as "push left" inside the rollout (``enp.greater``
-        is false against NaN), but the scan carries a poison flag for it, so any
-        individual whose policy produced a NaN logit at any step gets a NaN
-        fitness, which ``finalize_fitness`` maps to ``-inf``.
+        is false against NaN), but the step accumulates a NaN into ``total``
+        instead of a live reward, so any individual whose policy produced a NaN
+        logit at any step gets a NaN fitness -- which survives the mean over
+        ``repeat_times`` and is mapped to ``-inf`` by ``finalize_fitness``.
 
         Trace hygiene: every arithmetic constant is an in-trace
         ``enp.full((), v)`` so it stays float32 on the stablehlo/iree path, and
@@ -254,11 +271,10 @@ class CartPole(BaseProblem):
                 axis (raised by :func:`static_batch_size`).
         """
         pop_size = static_batch_size(transformed)
-        returns, _, poisoned = self._rollout(keys, act_fn, pop_size)
-        fitness = self._finish(returns, pop_size, self.repeat_times)
-        poisoned_individual = self._any_repeat(poisoned, pop_size, self.repeat_times)
-        nan = enp.full((), float("nan"))
-        return finalize_fitness(evoxc.select(poisoned_individual, nan, fitness))
+        total, _ = self._rollout(keys, act_fn, pop_size)
+        return finalize_fitness(
+            enp.mean(self._returns_of(total, pop_size), axis=1)
+        )
 
     def show(
         self,
@@ -273,9 +289,9 @@ class CartPole(BaseProblem):
         the total return and the final state of one episode.
 
         The report runs its own graph of one individual -- one data argument
-        (the rank-0 key) and ``pop_size = 1`` -- and takes the final
-        observation out of the scan's **carry**, so no extra stacked output is
-        needed.
+        (the rank-0 key) and ``pop_size = 1`` -- and reads both the return and
+        the final observation out of the rollout carry, so no extra stacked
+        output is needed.
 
         Args:
             state: Host container with configuration.
@@ -297,8 +313,8 @@ class CartPole(BaseProblem):
             Returns:
                 ``(returns (R,), final_obs (R, 4))`` for the single individual.
             """
-            returns, final_obs, _ = self._rollout(key_value, act_fn, 1)
-            return returns, final_obs
+            total, final_obs = self._rollout(key_value, act_fn, 1)
+            return enp.reshape(total, (self.repeat_times,)), final_obs
 
         executable = evoxc.build(report, key_spec)
         returns, final_obs = evoxc.run(executable, key)
@@ -323,13 +339,14 @@ class CartPole(BaseProblem):
         keys: Any,
         act_fn: Callable,
         pop_size: int,
-    ) -> tuple[Any, Any, Any]:
+    ) -> tuple[Any, Any]:
         """Roll out ``pop_size * repeat_times`` episodes for one key.
 
         Must be called inside the active trace: it draws the initial states with
-        ``evoxc.random.uniform`` and runs the ``evoxc.scan`` over
-        ``max_step`` steps, carry ``(obs (B, 4), alive (B,), poisoned (B,))``
-        with ``B = pop_size * repeat_times`` in individual-major order.
+        ``evoxc.random.uniform`` and runs one ``evoxc.while_loop`` over
+        ``max_step`` timesteps, carry ``(obs (B, 4), alive (B,), total (B,),
+        step ())`` with ``B = pop_size * repeat_times`` in individual-major
+        order.
 
         Args:
             keys: One rank-0 evoxc key for the single reset draw.
@@ -338,39 +355,76 @@ class CartPole(BaseProblem):
             pop_size: Number of individuals ``P`` (static).
 
         Returns:
-            The triple ``(returns (B,), final_obs (B, 4), poisoned (B,))``,
-            where ``returns`` is the summed reward of each episode (an integer
-            in ``[0, max_step]``), ``final_obs`` the last observation the carry
-            holds (the state before death once the episode is over) and
-            ``poisoned`` marks the episodes whose policy emitted a NaN logit.
+            The pair ``(total (B,), final_obs (B, 4))``, where ``total`` is the
+            accumulated reward of each episode (a count in ``[0, max_step]``,
+            NaN once that episode's policy emitted a NaN logit) and
+            ``final_obs`` the last observation the carry holds (the state before
+            death once the episode is over).
         """
         consts = self._constants()
         batch = pop_size * self.repeat_times
         obs0 = evoxc.random.uniform(
             keys,
             (batch, _OBS_DIM),
-            low=enp.negative(consts.reset_scale),
+            low=consts.neg_reset_scale,
             high=consts.reset_scale,
         )
         init = (
             obs0,
             enp.ones((batch,), dtype=evoxc.bool_),
-            enp.zeros((batch,), dtype=evoxc.bool_),
+            enp.zeros((batch,), dtype=evoxc.float32),
+            enp.zeros((), dtype=evoxc.int32),
         )
-        xs = enp.zeros((self.max_step, 1))
-        carry, rewards = evoxc.scan(self._scan_body(act_fn, consts), init, xs)
-        obs, _, poisoned = carry
-        returns = enp.sum(rewards, axis=0)
-        return returns, obs, poisoned
+        obs, _, total, _ = evoxc.while_loop(
+            self._loop_cond(consts),
+            self._loop_body(act_fn, consts),
+            init,
+        )
+        return total, obs
 
-    def _scan_body(self, act_fn: Callable, consts: _CartPoleConstants) -> Callable:
-        """Build the per-timestep body of the rollout scan.
+    def _loop_cond(self, consts: _CartPoleConstants) -> Callable:
+        """Build the trip condition of the rollout loop.
+
+        The horizon is static config, so the loop runs exactly ``max_step``
+        iterations: the condition counts up from ``0`` instead of testing
+        whether any episode is still alive, which would make the cost depend on
+        the population's behaviour and the reported per-horizon numbers
+        meaningless.
+
+        Args:
+            consts: The bundle from :meth:`_constants`.
+
+        Returns:
+            ``cond(carry) -> () bool`` -- true while ``step < max_step``.
+        """
+
+        def cond(carry):
+            """Test the loop counter against the static horizon.
+
+            Args:
+                carry: ``(obs, alive, total, step)``.
+
+            Returns:
+                The rank-0 boolean ``step < max_step``.
+            """
+            return enp.less(carry[3], consts.horizon)
+
+        return cond
+
+    def _loop_body(
+        self, act_fn: Callable, consts: _CartPoleConstants
+    ) -> Callable:
+        """Build the per-timestep body of the rollout loop.
 
         One step rewards the still-alive episodes, converts the policy's logits
         into a signed force, integrates, updates the alive mask and freezes the
-        state of every episode that just died, so the carry types stay constant
-        across iterations (what ``evoxc.scan``'s ``while_loop`` desugaring
-        requires).
+        state of every episode that just died, so the carried types stay
+        constant across iterations (what ``evoxc.while_loop`` requires).
+
+        The return accumulator rides in the carry rather than being emitted as
+        a scan output, so no ``(max_step, B)`` stack is ever allocated or
+        scattered into; a NaN logit poisons the accumulator instead of a
+        separate flag, which is why no post-loop poison reduction is needed.
 
         Args:
             act_fn: Callable mapping ``(B, 4)`` observations to ``(B, 2)``
@@ -378,33 +432,49 @@ class CartPole(BaseProblem):
             consts: The bundle from :meth:`_constants`.
 
         Returns:
-            ``step(carry, _) -> ((obs, alive, poisoned), reward)`` with
-            ``reward`` of shape ``(B,)`` float32 -- the rank-1 scan output.
+            ``step(carry) -> (obs, alive, total, step)`` -- the next carry.
         """
 
-        def step(carry, _):
+        def step(carry):
             """Advance every episode by one timestep.
 
             Args:
-                carry: ``(obs (B, 4), alive (B,), poisoned (B,))``.
-                _: The unused scan input slice (the scan only counts steps).
+                carry: ``(obs (B, 4), alive (B,), total (B,), step ())``.
 
             Returns:
-                The next carry and the ``(B,)`` float32 reward of this step.
+                The next carry, same tree and leaf types.
             """
-            obs, alive, poisoned = carry
+            obs, alive, total, index = carry
             logits = act_fn(obs)
             force = self._force_from_logits(logits, consts)
-            nan_rows = self._nan_rows(logits)
-            reward = enp.astype(alive, evoxc.float32)
-            next_obs = self._euler_step(obs, force, consts)
-            dead = self._terminated(next_obs, consts)
+            next_obs, dead = self._advance(obs, force, consts)
+            reward = enp.where(
+                self._nan_rows(logits),
+                consts.nan,
+                enp.astype(alive, evoxc.float32),
+            )
+            total = total + reward
             alive = enp.logical_and(alive, enp.logical_not(dead))
             obs = enp.where(enp.expand_dims(alive, 1), next_obs, obs)
-            poisoned = enp.logical_or(poisoned, nan_rows)
-            return (obs, alive, poisoned), reward
+            return (obs, alive, total, index + consts.one_step)
 
         return step
+
+    def _returns_of(self, total: Any, pop_size: int) -> Any:
+        """Group per-episode returns into one row of ``repeat_times`` per individual.
+
+        The episodes are individual-major, so reshaping ``(B,)`` to
+        ``(P, R)`` puts repeat ``r`` of individual ``p`` at ``[p, r]``.
+
+        Args:
+            total: Per-episode returns of shape ``(B,)``.
+            pop_size: Population size ``P``.
+
+        Returns:
+            ``(P, R)`` returns; ``evaluate`` means over axis 1, ``show`` reads
+            row 0 of the ``P = 1`` case.
+        """
+        return enp.reshape(total, (pop_size, self.repeat_times))
 
     def _constants(self) -> _CartPoleConstants:
         """Bundle the physics constants as float32 graph scalars.
@@ -413,13 +483,20 @@ class CartPole(BaseProblem):
         constructor, and a bare Python float would materialize as f64 on the
         stablehlo path and break iree type unification.
 
+        The caller builds this bundle **once per rollout**, outside the timestep
+        loop, so the derived scalars the loop needs every step
+        (``neg_force_mag``, ``four_thirds``, ``nan``) cost one Constant op per
+        run rather than one per timestep.
+
         Returns:
             A structure holding ``gravity``, ``masscart``, ``masspole``,
             ``polemass_length`` (``masspole * length``), ``total_mass``
-            (``masscart + masspole``), ``length``, ``force_mag``, ``dt``,
-            ``x_threshold``, ``theta_threshold`` (in radians) and
-            ``reset_scale``, all float32 -- the reset bounds are float32 graph
-            scalars too, so ``evoxc.random.uniform`` never sees an f64 constant.
+            (``masscart + masspole``), ``length``, ``force_mag``,
+            ``neg_force_mag``, ``dt``, ``x_threshold``, ``theta_threshold`` (in
+            radians), ``reset_scale``, ``neg_reset_scale``, ``four_thirds``,
+            ``nan`` (all float32), plus the int32 loop scalars ``one_step`` and
+            ``horizon`` -- so neither the reset draw nor the trip condition ever
+            sees an f64 constant.
         """
         return _CartPoleConstants(
             gravity=enp.full((), self.gravity),
@@ -429,14 +506,20 @@ class CartPole(BaseProblem):
             total_mass=enp.full((), self.masscart + self.masspole),
             length=enp.full((), self.length),
             force_mag=enp.full((), self.force_mag),
+            neg_force_mag=enp.full((), -self.force_mag),
             dt=enp.full((), self.dt),
             x_threshold=enp.full((), self.x_threshold),
             theta_threshold=enp.full((), float(np.deg2rad(self.theta_threshold))),
             reset_scale=enp.full((), self.reset_scale),
+            neg_reset_scale=enp.full((), -self.reset_scale),
+            four_thirds=enp.full((), 4.0 / 3.0),
+            nan=enp.full((), float("nan")),
+            one_step=enp.full((), 1, dtype=evoxc.int32),
+            horizon=enp.full((), self.max_step, dtype=evoxc.int32),
         )
 
-    def _euler_step(self, obs: Any, force: Any, consts: Any) -> Any:
-        """Advance the ``(B, 4)`` observations by one Euler step.
+    def _advance(self, obs: Any, force: Any, consts: Any) -> tuple[Any, Any]:
+        """Advance the ``(B, 4)`` observations by one Euler step and test death.
 
         With ``c = cos(theta)``, ``s = sin(theta)`` and
         ``temp = (force + polemass_length * theta_dot**2 * s) / total_mass``,
@@ -449,13 +532,18 @@ class CartPole(BaseProblem):
         - ``x_dot' = x_dot + dt * xacc``, ``theta_dot' = theta_dot + dt *
           thetaacc``
 
+        The death test is folded in here because the transition already has
+        ``x'`` and ``theta'`` in hand: testing them separately would split the
+        same observation row a second time per timestep.
+
         Args:
             obs: Current observations of shape ``(B, 4)``.
             force: Applied force of shape ``(B, 1)``.
             consts: The bundle from ``_constants``.
 
         Returns:
-            The next observations, shape ``(B, 4)``.
+            ``(next_obs (B, 4), dead (B,))`` -- the Euler step and the death
+            mask of the *resulting* state.
         """
         x, x_dot, theta, theta_dot = enp.split(obs, _OBS_DIM, axis=1)
         cos = enp.cos(theta)
@@ -463,27 +551,53 @@ class CartPole(BaseProblem):
         temp = (
             force + consts.polemass_length * enp.square(theta_dot) * sin
         ) / consts.total_mass
-        four_thirds = enp.full((), 4.0 / 3.0)
         thetaacc = (consts.gravity * sin - cos * temp) / (
             consts.length
-            * (four_thirds - consts.masspole * enp.square(cos) / consts.total_mass)
+            * (consts.four_thirds - consts.masspole * enp.square(cos) / consts.total_mass)
         )
         xacc = temp - consts.polemass_length * thetaacc * cos / consts.total_mass
-        return enp.concatenate(
+        next_x = x + consts.dt * x_dot
+        next_theta = theta + consts.dt * theta_dot
+        next_obs = enp.concatenate(
             (
-                x + consts.dt * x_dot,
+                next_x,
                 x_dot + consts.dt * xacc,
-                theta + consts.dt * theta_dot,
+                next_theta,
                 theta_dot + consts.dt * thetaacc,
             ),
             axis=1,
         )
+        dead = enp.reshape(
+            self._death_mask(next_x, next_theta, consts), (obs.shape[0],)
+        )
+        return next_obs, dead
 
-    def _terminated(self, obs: Any, consts: Any) -> Any:
-        """Return the death mask after a transition.
+    def _death_mask(self, x: Any, theta: Any, consts: Any) -> Any:
+        """The failure predicate shared by ``_advance`` and ``_terminated``.
 
         An episode is dead when ``|x| > x_threshold`` or ``|theta| >
-        theta_threshold`` (radians).
+        theta_threshold`` (radians), both strict.
+
+        Args:
+            x: Cart position of shape ``(B, 1)``.
+            theta: Pole angle in radians of shape ``(B, 1)``.
+            consts: The bundle from ``_constants``.
+
+        Returns:
+            ``(B, 1)`` boolean mask, ``True`` where the episode has failed.
+        """
+        too_far = enp.greater(enp.abs(x), consts.x_threshold)
+        too_tilted = enp.greater(enp.abs(theta), consts.theta_threshold)
+        return enp.logical_or(too_far, too_tilted)
+
+    def _terminated(self, obs: Any, consts: Any) -> Any:
+        """Return the death mask of an observation.
+
+        An episode is dead when ``|x| > x_threshold`` or ``|theta| >
+        theta_threshold`` (radians). The rollout does not call this on its own
+        transitions -- :meth:`_advance` tests the components it already has --
+        but the predicate stays available (and rank-1, as documented) for
+        host-side introspection and tests.
 
         Args:
             obs: Observations of shape ``(B, 4)``.
@@ -493,10 +607,9 @@ class CartPole(BaseProblem):
             ``(B,)`` boolean mask, ``True`` where the episode has failed.
         """
         x, _, theta, _ = enp.split(obs, _OBS_DIM, axis=1)
-        too_far = enp.greater(enp.abs(x), consts.x_threshold)
-        too_tilted = enp.greater(enp.abs(theta), consts.theta_threshold)
-        dead = enp.logical_or(too_far, too_tilted)
-        return enp.reshape(dead, (obs.shape[0],))
+        return enp.reshape(
+            self._death_mask(x, theta, consts), (obs.shape[0],)
+        )
 
     def _force_from_logits(self, logits: Any, consts: Any) -> Any:
         """Turn two logits per row into a signed force.
@@ -519,14 +632,17 @@ class CartPole(BaseProblem):
         """
         left, right = enp.split(logits, _ACTION_DIM, axis=1)
         push_right = enp.greater(right, left)
-        return enp.where(push_right, consts.force_mag, enp.negative(consts.force_mag))
+        return enp.where(push_right, consts.force_mag, consts.neg_force_mag)
 
     def _nan_rows(self, logits: Any) -> Any:
         """Mark the rows of ``logits`` that contain a NaN.
 
         ``evoxc`` has no ``isnan`` in the traced-op namespace, so the test comes
-        from the top-level ``evoxc.isnan`` and is folded over the two logit
-        columns.
+        from the top-level ``evoxc.isnan``, applied to the row sum: NaN is
+        absorbing under addition, so a row sum is NaN iff either logit is NaN.
+        That is one reduce plus one unary op, where splitting the NaN mask into
+        two columns and folding them costs two slices, a boolean or and a
+        reshape.
 
         Args:
             logits: Policy outputs of shape ``(B, 2)``.
@@ -534,49 +650,7 @@ class CartPole(BaseProblem):
         Returns:
             ``(B,)`` boolean mask, ``True`` where either logit is NaN.
         """
-        left, right = enp.split(evoxc.isnan(logits), _ACTION_DIM, axis=1)
-        return enp.reshape(enp.logical_or(left, right), (logits.shape[0],))
-
-    def _any_repeat(self, flags: Any, pop_size: int, repeat_times: int) -> Any:
-        """Reduce a per-episode flag to one flag per individual.
-
-        The episodes are individual-major, so reshaping ``(P * R,)`` to
-        ``(P, R)`` and summing over axis 1 yields a count of poisoned repeats
-        that is positive exactly when one of them was poisoned.
-
-        Args:
-            flags: Per-episode boolean flags of shape ``(P * R,)``.
-            pop_size: Population size ``P``.
-            repeat_times: Repeats ``R`` per individual.
-
-        Returns:
-            ``(P,)`` boolean mask, ``True`` where any repeat was flagged.
-        """
-        floats = enp.astype(flags, evoxc.float32)
-        grouped = enp.reshape(floats, (pop_size, repeat_times))
-        return enp.greater(enp.sum(grouped, axis=1), enp.full((), 0.0))
-
-    def _finish(
-        self,
-        returns: Any,
-        pop_size: int,
-        repeat_times: int,
-    ) -> Any:
-        """Average the episode returns of each individual.
-
-        Reshapes ``(P * R,)`` to ``(P, R)`` and means over axis 1.
-
-        Args:
-            returns: Per-episode returns of shape ``(P * R,)`` in
-                individual-major order.
-            pop_size: Population size ``P``.
-            repeat_times: Repeats ``R`` per individual.
-
-        Returns:
-            ``(P,)`` mean return, one entry per individual.
-        """
-        grouped = enp.reshape(returns, (pop_size, repeat_times))
-        return enp.mean(grouped, axis=1)
+        return evoxc.isnan(enp.sum(logits, axis=1))
 
     @staticmethod
     def _require_positive_int(name: str, value: Any) -> int:
