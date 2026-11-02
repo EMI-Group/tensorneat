@@ -54,7 +54,8 @@ Dead species slots are addressed solely by the `isnan(species_keys)` mask; the c
 - both phases are guarded: an iteration with no unassigned genome, or with a dead slot in phase 1, performs no writes (mask first, `scatter` once), so a fixed-length scan is equivalent to the legacy early-terminating `while_loop`.
 - post-pass: still-unassigned genomes join the last species key, newly created slots get `best_fitness = -inf` / `last_improved = generation`, and `member_count` is a masked compare-sum `(species_size, pop_size)` reduce.
 Rationale for scans instead of the legacy data-dependent `while_loop`: evoxc de-sugars `scan` to `while` + gather/scatter, so trip counts must stay static to codegen on compiler backends, and iree aborts on wide `while` carries (`select` plus ≥3–4 carried values).
-Each scan iteration calls `distance_fn` unconditionally, even for a dead or already-satisfied slot — the source of the `2 × species_size` passes counted under `## Measured Cost`.
+Each scan iteration needs exactly one `(P,)` distance row, and the two phases need `2 · species_size` genuinely different centres, so the pair count is fixed.
+Below `GATED_ROWS = 6000` (`species_size * pop_size`) the row is computed lazily behind one `evoxc.cond` whose predicate is the very mask that permits the iteration to write, so a dead slot pays neither the broadcast nor the compatibility kernel; above the gate the row is computed unconditionally, because an always-taken `if` region costs ~26 % of a generation while skipping nothing (see `./neat/CONTEXT.md` `## Lazy Distance Rows`).
 
 ## Randomness Budget
 Per generation the algorithm performs exactly two `evoxc.random.split`s, yielding three subkeys consumed in this order: parent selection, crossover, mutation — the advanced parent key is stored back into `state.randkey`.
