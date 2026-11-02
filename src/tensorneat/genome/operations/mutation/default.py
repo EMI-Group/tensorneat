@@ -54,14 +54,18 @@ def _fetch_two(
     Returns:
         ``(chosen, all_hit)``: ``(P, k) int32`` chosen column indices (``0`` where a slice has
         no ``True`` entry) and ``(P,) bool`` "every slice of this individual has an eligible
-        entry" — one reduce over both mask axes instead of a per-slice flag plus an ``and``.
+        entry" — ``any`` over each slice's candidates, folded with ``all`` over the slices.
     """
     draw = evoxc.random.uniform(
         key, tuple(masks.shape), 0.0, 1.0, dtype=evoxc.float32
     )
     weights = evoxc.multiply(draw, evoxc.cast(masks, evoxc.float32))
     chosen = evoxc.cast(evoxc.argmax(weights, axis=2), evoxc.int32)
-    return chosen, evoxc.reduce_min(masks, axes=(1, 2))
+    # ``any`` over each slice's candidates, then ``all`` over the slices: the two reduces
+    # compose, because a single reduce over both axes would ask "is every node eligible",
+    # which is false for any genome with a node outside a slice.
+    slice_hit = evoxc.reduce_max(masks, axes=2)
+    return chosen, evoxc.reduce_min(slice_hit, axes=1)
 
 
 class DefaultMutation(BaseMutation):
