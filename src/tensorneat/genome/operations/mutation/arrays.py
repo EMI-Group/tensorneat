@@ -27,7 +27,6 @@ __all__ = [
     "masked_random_row",
     "random_row",
     "row_offsets",
-    "scatter_rows",
     "take_block",
     "take_block_at",
     "take_rows",
@@ -320,62 +319,3 @@ def write_rows(
         enp.reshape(rows, (rows.shape[0],) + (1,) * (len(x.shape) - 1)),
     )
     return evoxc.select(mask, values, x)
-
-
-def scatter_rows(
-    x: evoxc.SymbolicTensor,
-    rows: evoxc.SymbolicTensor,
-    values: evoxc.SymbolicTensor,
-    dump_row: int,
-) -> evoxc.SymbolicTensor:
-    """Write one trailing-column-per-individual block of rows into a payload.
-
-    The payload is extended with a trailing **dump row** per individual, so a row index of
-    ``dump_row`` absorbs a "no write" update instead of corrupting a real row (a scatter can
-    never be a per-individual no-op) and the caller needs no per-array ``select`` guard.
-    Rows are written in flat traversal order, so a later slot overwrites an earlier one at
-    the same row — the documented duplicate-index contract of ``evoxc.scatter``.
-
-    Args:
-        x: ``(P, M, R)`` or ``(P, M)`` payload to write into.
-        rows: ``(P, k)`` ``int32`` destination rows in ``[0, M]``, ``M`` meaning the dump
-            row, ``k`` the number of row slots per individual.
-        values: ``(P, k, R)`` (or ``(P, k)``) values, ``x``'s dtype.
-        dump_row: ``M``, the index of the trailing dump row.
-
-    Returns:
-        ``(P, M, R)`` / ``(P, M)`` tensor: ``x`` with the ``k`` rows written.
-
-    Raises:
-        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
-    """
-    pop_size, row_count = x.shape[0], x.shape[1]
-    two_dimensional = len(x.shape) == 2
-    width = 1 if two_dimensional else x.shape[2]
-    if two_dimensional:
-        dump = enp.zeros((pop_size, 1), dtype=x.dtype)
-    else:
-        dump = enp.zeros((pop_size, 1, width), dtype=x.dtype)
-    extended = enp.concatenate([x, dump], axis=1)
-    offsets = row_offsets(pop_size, (row_count + 1) * width)
-    # A flat index needs the batch stride added per individual; the stride block must carry
-    # the same rank as the span it is added to, or the broadcast would pair two axes and
-    # multiply the index count by `P`.
-    if two_dimensional:
-        index = enp.reshape(evoxc.add(rows, offsets), (-1,))
-    else:
-        columns = graph_constant(np.arange(width, dtype=np.int32).reshape(1, 1, width))
-        span = evoxc.add(
-            evoxc.multiply(enp.reshape(rows, (pop_size, rows.shape[1], 1)), i32(width)),
-            columns,
-        )
-        index = enp.reshape(
-            evoxc.add(span, enp.reshape(offsets, (pop_size, 1, 1))), (-1,)
-        )
-    written = enp.reshape(
-        evoxc.scatter(flatten(extended), index, flatten(values), axis=0),
-        (pop_size, row_count + 1, width),
-    )
-    if two_dimensional:
-        written = enp.reshape(written, (pop_size, row_count + 1))
-    return evoxc.slice(written, (0, 0, 0)[: len(x.shape)], tuple(x.shape))
