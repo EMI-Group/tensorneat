@@ -117,3 +117,8 @@ The trajectory gate is the 5-generation seed-42 XOR fitness history at pop 100 p
 | `./plan.py` | Plan `NamedTuple`s, `EditContext`, `Edit` and the single `apply` writer. |
 | `./arrays.py` | Flat-index toolkit: row fetches, block gathers, row writes, static index blocks, `i32`. |
 | `./degree.py` | Diagnostic in-degree audit of a post-write payload (never in the hot path). |
+
+## Graph constants
+`ghost`/`never` sentinels, the identity/zero rows, the elided-plan fallback and the cycle predicate's scatter targets are all `...window.fill(...)` (one element plus `broadcast_to`), not materialised `(pop_size, …)` fills.
+`execute_mutation` bakes 6 735 / 17 935 / 31 935 B at P=100/500/1000 (was 649 221 / 3 230 821 / 6 457 821) at 427 traced ops (was 408) and 5.08 / 12.86 / 22.13 ms (was 4.95 / 12.88 / 22.62).
+`fill` is a real traced broadcast: a shape feeding `reshape` or `scatter` must be passed exactly, while symmetric-broadcast consumers (`select`, `clip`, arithmetic) may still grow it.

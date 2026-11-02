@@ -93,3 +93,9 @@ Verification used while implementing: attr-table checks (widths, sentinels, draw
 | `./blocks.py` | Block-shaped (whole-attribute-block) genetic operators: `init_attrs`, `mutate_attrs`, `crossover_attrs`, plus the static-operand builders `static_row`/`column_constant`/`_parameter_table`; `BaseGene`'s `new_random_attrs`/`mutate`/`crossover`/`_attr_row` are one-line delegations to it (one draw per participating column, one gate/`select`/`clip` cascade over the whole `(*shape, attr_width)` block, one `U[0,1)` block draw for the crossover pick). |
 | `./node/` | Node genes: key column, hit-window aggregation, combine, activation selection. |
 | `./conn/` | Conn genes: key columns (optional historical marker), per-edge message from (attrs, source value). |
+
+## Graph constants (measured)
+Every population-scaled fill here is one element plus `..window.fill`'s `broadcast_to`, never a materialised `enp.full`.
+`blocks.column_constant` and `blocks._parameter_table` were the largest per-graph constants (`(P, max_nodes, attr_width)` float32 = 4.03 MB at `P=1000`, `max_nodes=50`, `attr_width=4`).
+Measured A/B (`DefaultMutation` at P=1000, 15 repeats): materialised 4.03 MB / 22.13 ms versus broadcast 31 935 B / 23.26 ms — the broadcast version ships (constant budget is the goal, the medians are inside the ±30 % box drift and the minima agree at 21.9 ms), so `execute_mutation` now bakes 6 735 / 17 935 / 31 935 B at P=100/500/1000.
+A static `(1, N)` table or a rank-0 literal keeps its direct `enp.full`/`evoxc.constant`; only fills whose shape carries the population go through `fill`.

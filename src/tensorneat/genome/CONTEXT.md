@@ -27,6 +27,9 @@ Raising `key_span` from 150 to 2000 turns `examples/func_fit/xor.py` from a flat
 The shared window step is `_hit_conn_attrs` + `_node_step` + `_output_values`; `_hit_conn_attrs` returns a `_StepStatics` bundle (gathered conn attributes as `ConnOperands`, the block-shaped value-window gather index, the present mask, the rank-0 NaN fill and output-row mask, and the `NodeOperands` built on the first step) because node/conn attributes are constant during a forward pass, so every loop-invariant operand is derived once and a level pays only value-dependent ops.
 - `initialize(state, key, pop_size) -> GenomeTensors` — `key` is a rank-0 `evoxc.random` key and randomness is drawn once per tensor with the batched output shape, so individual `i` gets an independent stream from one call.
 - `transform(state, node_keys, conn_keys) -> Transformed` — schedule derivation, delegated to `../common/tensorization.py`; pure tensor ops, no host round-trip.
+It passes the **derived** `acyclic` static (`self.network_type == "feedforward"`, the last of 11 positional statics to `derive_schedule.fn`), never a constructor kwarg, so the shape signature and `_static_state` are unchanged.
+With `acyclic=True` the cycle-detection relaxation, its in-graph test and the `evoxc.cond` fallback are not traced at all (`transform` 390 → 280 traced ops, 16.25 → 10.54 ms at P=1000, bit-identical `Transformed` on every evolved payload); `RecurrentGenome` keeps `False` and its `level == I_INF`-on-a-cycle contract.
+Consequence to know: a *cyclic* payload handed to a feedforward genome now gets levels saturated at `max_nodes` instead of `I_INF`, so the forward's `_depth_limit` clamps to `max_depth` and the loop runs to the ceiling — no unit or parity test hands one there (mutation refuses cycle-closing edges).
 - `forward(state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, inputs) -> (P, num_outputs)` — trace-time kernel; `inputs` may carry any batch (`P·Q` substrate queries), verified equal to `Q` independent `P`-sized passes for both the feedforward and the recurrent genome.
 - `grad(state, transformed, node_*, conn_*, inputs, loss_fn) -> evoxc.Graph` — **graph factory** (like `evoxc.grad`), not a trace-time kernel: it traces its own graph and returns it for the Pipeline to cache/compile/run, and its body is `grad.build_grad(self, ...)`; every call returns a **distinct** graph (the caller caches).
 - `execute_mutation(state, key, genome, new_node_keys (P,), new_conn_keys (P,3)) -> GenomeTensors`
@@ -65,7 +68,7 @@ Loop body (`level` carried, starts at 1) is one `_node_step` with `update_mask =
 5. `update = update_mask & any_slot(live)`; `values = select(update, z, values)` — a node with no live incoming edge keeps NaN, and its descendants lose their only live source: the legacy NaN poisoning, reproduced exactly.
 Read out `gather(values, output_idx, axis=1) -> (P, num_outputs)`, then `output_transform`.
 Cost is `O((depth+1) × max_nodes × K)` with only elementwise/reduce/gather ops: work scales with real depth and real in-degree, never `max_depth` and never `max_nodes²`.
-**Graph shape**: 79 entry ops + a 31-op body + a 2-op condition = **112 traced ops**, independent of `P`; the body runs `depth+1` times — measured **4 / 2 / 3** trips on the populations after 8 generations at P=100/500/1000 and **4 / 3 / 3** at generation 5, i.e. the per-level work dominates and the header is amortised.
+**Graph shape**: 80 entry ops + a 31-op body + a 2-op condition = **113 traced ops**, independent of `P`; the body runs `depth+1` times — measured **4 / 2 / 3** trips on the populations after 8 generations at P=100/500/1000 and **4 / 3 / 3** at generation 5, i.e. the per-level work dominates and the header is amortised.
 ## Forward algebra (recurrent)
 Same window machinery, no levels: unroll `activate_time` ticks in **Python** (the recurrent path keeps its tick loop; the level `while_loop` is feedforward-only).
 Each tick: re-inject `input_transform`-free inputs into the input rows, compute every node from the previous tick's values (Jacobi/synchronous), then `values = select(node_exists & valid_count > 0, z, values)`.
@@ -119,15 +122,15 @@ The attribute term is a reduced sum over the aligned rows; `measure_distance` is
 
 | kernel | P=100 | P=500 | P=1000 |
 |---|---|---|---|
-| `transform` | 451 (391 top) / 6.4 ms | 451 / 15.8 ms | 451 / 25.0 ms |
-| `forward` (tiled `4P` batch) | 112 / 3.6 ms | 112 / 15.0 ms | 112 / 27.4 ms |
-| `execute_mutation` (`DefaultMutation`) | 408 (397 top) / 4.6 ms | 408 / 12.0 ms | 408 / 22.1 ms |
+| `transform` (`acyclic=True`) | 280 / 3.1 ms | 280 / 6.7 ms | 280 / 10.5 ms |
+| `forward` (tiled `4P` batch) | 113 / 1.8 ms | 113 / 4.5 ms | 113 / 7.7 ms |
+| `execute_mutation` (`DefaultMutation`) | 427 / 5.2 ms | 427 / 12.9 ms | 427 / 22.1 ms |
 | `execute_crossover` | 145 / 1.9 ms | 145 / 5.9 ms | 145 / 12.1 ms |
-| `prepare_distance` | 64 / 0.56 ms | 64 / 1.30 ms | 64 / 2.38 ms |
+| `prepare_distance` | 64 / 0.60 ms | 64 / 1.37 ms | 64 / 2.43 ms |
 | `measure_distance` (1 centre vs P) | 155 / 1.42 ms (14.2 µs/pair) | 155 / 2.99 ms (6.0 µs/pair) | 155 / 5.38 ms (5.4 µs/pair) |
 | `execute_distance` | 221 / 1.96 ms | 221 / 5.59 ms | 221 / 9.44 ms |
 | `Pipeline.step` end-to-end | 43.8 ms | 252.6 ms | 455.5 ms |
-| `Pipeline.build_seconds` | 0.30 s | 0.63 s | 0.89 s |
+| `Pipeline.build_seconds` | 0.27 s | 0.33 s | 0.48 s |
 | legacy JAX baseline (ms/gen) | 51 | 109 | 157 |
 
 The box drifts ±30 % between sessions, so the ratio against the frozen legacy baseline is the load-bearing number, never the absolute milliseconds: **0.86× / 2.3× / 2.9×** of legacy at pop 100/500/1000.
@@ -165,7 +168,22 @@ The five failing `test/unit/algorithm/` tests (4 stale `xfail(strict=True)` mark
 6. `../common/functions/agg.py`'s `sum`/`mean`/`max`/`min`/`product` and `count` are innermost-axis reduces over `(P, N, K)` (a `K`-slice fold measured -20 % of `forward(P)`, bit-identical on numpy); `../common/functions/act.py` still emits the sigmoid body plus one `select` per configured option per level.
 7. `../common/tools.py::fetch_random`/`fetch_first` pay two sentinel `select`s each (11/6 ops); `operations/mutation/arrays.py`'s `(row, hit)` primitive is the cheaper pair, and `common` should adopt it.
 8. `test/support/oracle.py::schedule` still passes a `level=` keyword that `Transformed` no longer declares (`node_level`), so oracle-based forward checks cannot run.
-9. `enp.zeros/full((P, …))` calls inside a traced graph are still baked as graph constants (1.2–3.6 MB warnings at pop ≥ 500); those belong on the graph boundary as inputs.
+9. **Graph constants are one element plus a broadcast.** `window.fill(shape, value)` is `enp.broadcast_to(enp.full((1,)*rank, value), shape)` and every population-shaped seed in this node goes through it: the `forward` NaN seed, the recurrent `values` block, `execute_mutation`'s sentinels/identity/zero rows, the mutation cycle scatter targets, `gene/blocks.py::column_constant`/`_parameter_table` and `base.py`'s padding / `max_node_key` / `max_conn_marker` seeds.
+A `(1, max_nodes)`-shaped mask or a genuinely static table keeps its `enp.full` — only population-scaled fills were routed through `fill`.
+Measured baked constant bytes (walking every `constant` op of the built graph, population-scale XOR payload, gen 5):
+
+| graph | P=100 before → after | P=500 | P=1000 |
+|---|---|---|---|
+| `transform` | 814 571 → 778 473 | 4 064 571 → 3 884 473 | 8 127 071 → 7 766 973 |
+| `forward` | 20 154 → **958** | 100 154 → **4 158** | 200 154 → **8 158** |
+| `execute_mutation` | 649 221 → **6 735** | 3 230 821 → **17 935** | 6 457 821 → **31 935** |
+| `execute_crossover` | 1 796 (unchanged) | 8 196 | 16 196 |
+| `prepare_distance` | 1 664 (unchanged) | 8 064 | 16 064 |
+
+Largest single constant: `forward`'s `(1000, 48)` float32 NaN seed 192 000 B → a `(1000, 1, 1, 1)` sentinel 4 000 B.
+`Pipeline.build_seconds` 0.288 / 0.423 / 0.564 s → 0.271 / 0.328 / 0.480 s; wall clock per kernel is unchanged within drift (`forward` 1.81/4.71/7.91 → 1.82/4.49/7.65 ms, `execute_mutation` 4.95/12.88/22.62 → 5.08/12.86/22.13 ms, `execute_crossover` 1.98/6.44/12.15 → 2.05/6.12/11.82 ms).
+`transform`'s remaining 7.8 MB lives in `../common/tensorization.py` (its own `(P, …)` tables, `(P, 201)` int32 = 804 000 B in two copies) — outside this node, reported upward.
+The four `(P, N, attr_width)` mutation parameter tables were measured both ways: materialised 4.03 MB / 22.13 ms and broadcast 31 935 B / 23.26 ms at P=1000 (medians of 15, minima 21.87 vs 21.99 ms); the broadcast version is kept because the constant budget is the wave's goal and its per-generation cost is inside drift while it removes 4 MB and ~0.09 s of build.
 10. `../pipeline.py`, `../CONTEXT.md` and the root `CONTEXT.md` still quote the pre-wave numbers (`execute_mutation` 1360 ops, `measure_distance` 7.5 µs/pair, `Pipeline.step` 642 ms at pop 1000, "unit tests are skip stubs"); the table above is the current truth for this node.
 ## Test Strategy
 `test/unit/genome/` — numpy backend, 95 tests: payload layout and padding sentinels, mutation invariants (`max_nodes`/`max_conns`/`max_in_degree`, refusal no-ops, ≤1 structural change), crossover alignment and order-sensitivity, distance vs its digest twin, forward values/NaN patterns, the `grad` FD check, `attr_width == 0`, and the host helpers.
@@ -184,7 +202,7 @@ The five failing `test/unit/algorithm/` tests (4 stale `xfail(strict=True)` mark
 | `./operations/crossover/` | Key-alignment crossover (`DefaultCrossover`): parent-1 structure, block attribute inheritance. |
 | `./operations/distance/` | Compatibility distance: `execute_distance`, the digest pair (`prepare_distance`/`measure_distance`), `ConstantPool` (`consts.py`). |
 | `./operations/alignment.py` | The one packed-identity homology/alignment implementation (`row_identity`, `find_homologous`, `gather_attr_rows`, `key_rows`) shared by crossover and distance (424 lines). |
-| `./window.py` | Per-pass window machinery: `_slot_index` (block-shaped flat index), `_row_offsets`, `_column_index`/`_column_mask` (conn-attribute gather), `_gather_prepared` (flatten + flat gather + NaN fill), `any_slot` (the "any live slot" fold + `_WINDOW_FOLD_LIMIT`), `_iinf` (rank-0 sentinel), `_i32` (274 lines). |
+| `./window.py` | Per-pass window machinery: `_slot_index` (block-shaped flat index), `_row_offsets`, `_column_index`/`_column_mask` (conn-attribute gather), `_gather_prepared` (flatten + flat gather + NaN fill), `any_slot` (the "any live slot" fold + `_WINDOW_FOLD_LIMIT`), `_iinf` (rank-0 sentinel), `_i32`, and `fill` (the one-element-plus-broadcast constructor that keeps population-scaled fills out of the graph constant pool) (310 lines). |
 | `./base.py` | `BaseGenome`: configuration, `initialize`, `transform`, `_hit_conn_attrs`/`_node_step`/`_StepStatics`, `_padding_safe_attrs`, `_output_row_mask`/`_is_output_row`/`_output_values`, the `grad` entry point that delegates to `./grad.py`, abstract `sympy_func`/`visualize` hooks (1348 lines). |
 | `./grad.py` | The exact gradient path and why it exists: `build_grad` (the `evoxc.grad` graph factory), `dense_grad_plan` (host statics), `dense_forward`, `dense_node_step`, `_DenseGradPlan`, `_sanitize_attrs`/`_graph_constant`/`_tensor_spec` — the dense-weight twin of the window forward that sidesteps evoxc 0.1.0's put-semantics `gather` VJP (498 lines). |
 | `./host.py` | `BaseGenomeHost` mixin: host-only helpers (`network_dict`, `_get_node_dict`, `_get_conn_dict`, `repr`, `hash`, `_row_hashes`, `get_input_idx`, `get_output_idx`, `_individual`), `HASH_QUANT_SCALE`, `_row_slice` (348 lines). |
