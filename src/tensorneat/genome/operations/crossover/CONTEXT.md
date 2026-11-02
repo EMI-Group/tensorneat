@@ -51,4 +51,3 @@ Verified evidence until those bodies land: a scratch oracle (`{key tuple: row}` 
 |---|---|
 | `./base.py` | `BaseCrossover`: shape validation, per-family key split, generic recombination driver, `key_rows` misuse guard. |
 | `./default.py` | `DefaultCrossover`: `find_homologous` delegation and `crossover_gene_attrs` (homologue gather + single batched gene crossover). |
-| `./align.py` | The rank merge: `row_identity` (packed key prefix), `find_homologous`, `_confirm_rows`, `gather_attr_rows`, `_gather_rows`, `_flat_row_index`, `_pad_identity`. |
