@@ -80,6 +80,30 @@ def _finite_bound(dtype: Any) -> Any:
     return enp.full((), np.finfo(np_dtype).max, dtype=dtype)
 
 
+def _as_scalar_f32(value: Any) -> Any:
+    """Return ``value`` as a 0-d ``float32`` tensor, adding no op when it already is.
+
+    Args:
+        value (Any): Traced tensor, typically ``state.generation``.
+
+    Returns:
+        Any: The same value cast to ``float32`` and reshaped to ``()`` -- or the
+        argument itself when its static dtype and rank already satisfy that, so
+        the ``cast``/``reshape`` are emitted only when they can do work.
+
+    Note:
+        The static check is a Python ``if`` over the trace-time dtype/shape, not a
+        predicate on tensor contents: it specializes the graph per input type, and
+        both branches produce bit-identical values.  ``state.generation`` is a 0-d
+        ``float32`` by construction (see :meth:`NEAT.setup`), so the default path
+        costs zero ops.
+    """
+    if value.dtype != evoxc.float32:
+        value = evoxc.cast(value, evoxc.float32)
+    if tuple(value.shape) != ():
+        value = evoxc.reshape(value, ())
+    return value
+
 def _sanitize_fitness(fitness: Any, pop_size: int) -> Any:
     """Map NaN and infinite fitness to ``-inf``.
 
@@ -469,7 +493,10 @@ class NEAT(BaseAlgorithm):
            selection.
         2. **Advance the counter**: ``generation += 1`` *before* the species
            update, matching the legacy order -- stagnation is therefore judged
-           against the generation that produced the fitness just consumed.
+           against the generation that produced the fitness just consumed.  The
+           increment goes through :func:`_as_scalar_f32`, which emits a ``cast``
+           or a ``reshape`` only when the static dtype/rank need one, so the
+           0-d ``float32`` counter costs a single ``add``.
         3. **Species bookkeeping**: ``SpeciesController.update_species`` returns
            the updated state plus the parent pairs ``(winner, loser,
            elite_mask)``; it also consumes the *first* of the generation's
@@ -514,7 +541,7 @@ class NEAT(BaseAlgorithm):
         """
         fitness = _sanitize_fitness(fitness, self._pop_size)
         generation = evoxc.add(
-            evoxc.reshape(evoxc.cast(state.generation, evoxc.float32), ()),
+            _as_scalar_f32(state.generation),
             enp.full((), 1.0, evoxc.float32),
         )
         state = state.update(generation=generation)
@@ -551,6 +578,15 @@ class NEAT(BaseAlgorithm):
             ``SpeciesController._pair_parents`` is preserved verbatim.
             Only the mutation is scan-chunked by ``pop_batch_size``; crossover
             runs once over the whole population.
+            **Op budget.**  This method contributes 17 traced ops at any
+            population size: four ``gather``\\ s for the winner payload, four for
+            the loser payload, the ``split_n`` that separates the crossover /
+            mutation / next-generation keys, and one ``select`` per payload field
+            plus one broadcast reshape per distinct field rank for the elitism
+            merge.  The broadcast masks are built once per rank (four fields, two
+            ranks), never once per field, and every remaining op in the breed
+            graph belongs to ``genome.execute_crossover`` /
+            ``genome.execute_mutation``.
         """
         payload = state.pop
         winners = GenomeTensors(
@@ -768,6 +804,11 @@ class NEAT(BaseAlgorithm):
             counted by the genome helpers (``node_exists``/``conn_exists``)
             inside a small graph cached per payload shape, never by re-testing
             the padding encoding here.
+            The helpers are called with the **key array only** -- their signature
+            is ``node_exists(node_keys)`` / ``conn_exists(conn_keys)`` and they
+            derive the padding sentinel themselves, so no ``state`` argument may
+            be threaded through (passing one raises ``TypeError`` inside the
+            trace).
         """
         node_counts, conn_counts = self._gene_counts(state, state.pop)
         # NaN marks a dead species slot; ``NaN > 0`` is False, so the filter
@@ -787,10 +828,18 @@ class NEAT(BaseAlgorithm):
 
         Args:
             state (State): State used to recover the genome's static config.
-            payload (GenomeTensors): Population payload to count.
+            payload (GenomeTensors): Population payload to count -- one
+                population axis, so ``node_keys`` is ``(P, N)`` and ``conn_keys``
+                is ``(P, E, CK)``.
 
         Returns:
             tuple: ``(node_counts (P,) numpy, conn_counts (P,) numpy)`` int32.
+
+        Note:
+            The count runs as a compiled graph (see
+            :meth:`_gene_count_executable`) instead of host ``numpy`` so the
+            padding encoding stays genome-owned: this module never compares a key
+            against a sentinel itself.
         """
         executable = self._gene_count_executable(state, payload)
         node_counts, conn_counts = evoxc.run(
@@ -808,6 +857,12 @@ class NEAT(BaseAlgorithm):
         Returns:
             Any: An ``evoxc`` executable mapping
             ``(node_keys, conn_keys)`` to ``(node_counts, conn_counts)``.
+
+        Note:
+            ``_count_kernel`` calls the genome helpers with the key array only
+            (``node_exists(node_key_rows)``, ``conn_exists(conn_key_rows)``);
+            they take no ``state``, so nothing but the two traced arrays crosses
+            into the graph.
         """
         node_keys = payload.node_keys
         conn_keys = payload.conn_keys
