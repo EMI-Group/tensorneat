@@ -65,6 +65,7 @@ At `max_nodes=16`, pop 100, seed 42 that plateau resolves before generation 150 
 
 ## Test Strategy
 Covered by `test/unit/genome/` (payload layout, forward vs `test/support/oracle.py`, mutate/crossover/distance invariants) and `test/parity/genome/` (kernel parity against `benchmarks/legacy_jax`).
+`PYTHONPATH=src python -m pytest test/unit/genome test/parity test/release_gate_no_jax.py -q` reports 152 passed in ~31 s (95 unit/genome, 53 parity, 4 release gate), and `import tensorneat` loads none of `jax`/`torch`/`brax`/`gymnax`/`mujoco`.
 Verification used while implementing: attr-table checks (widths, sentinels, draw shapes/ranges, identity/zero rows, self-distance 0, per-column vs whole-row crossover), a hand-built chain payload driven through `common.tensorization.derive_schedule` and compared against `test/support/oracle.forward` — default options `max|diff| 4.5e-08`, mixed aggregation×activation (including `-1` identity and `max`/`mean` neutral slots) `max|diff| 8.0e-08` — and `evoxc.grad` on the node/conn attrs (`max|AD-FD| 4.8e-04`, int-column gradients exactly 0, `-inf`/NaN source slots 0 gradient).
 
 ## Routing Table
