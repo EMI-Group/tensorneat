@@ -10,7 +10,9 @@ Nothing here ships: the harness never imports both implementations in one proces
 - `spikes/` — measured formulation evidence behind the depth-parallel design (`FORMULATION.md` + runnable micro-benchmark).
 - `legacy_jax/` — frozen pre-rewrite JAX implementation; the timing baseline and numerical oracle (read-only, see its `CONTEXT.md`).
 - `results/` — machine-readable run records; `latest.json` is what the committed `RESULTS.md` was rendered from (git-ignored).
-- `RESULTS.md` — the generated report: environment fingerprint, protocol, headline old-vs-new table, per-case tables, verdict, win/lose narrative, quality curves, declared baseline, non-comparisons, how to reproduce.
+- `RESULTS.md` — the generated report: environment fingerprint, protocol, headline old-vs-new table (median speed-up plus the per-repeat range and quality overlap), per-case tables, verdict, win/lose narrative with the generated memory paragraph, per-repeat quality curves, declared baseline, non-comparisons, how to reproduce.
+- `BACKENDS.md` — measured accelerator evidence: `iree` cannot lower a single case in the matrix, so the numpy reference backend is the only measured backend; the report points at it only when the file sits next to the report.
+- `THREADS.md` — measured `--threads 1` sensitivity run of the XOR family from the same CLI (not committed until that run exists; the report points at it only when the file sits next to the report).
 ## Metric Protocol
 Every number comes from one worker run of one `(case, impl, backend, repeat)` tuple.
 - `compile_time_s` — one-off build/compile of the generation step: on the old side `jax.jit(pipeline.step).lower(state).compile()`; on the new side the first `Pipeline.step` call, which performs the evoxc build (it also advances the state by one generation, reported as `generations_consumed_before_timing`).
@@ -20,6 +22,8 @@ Every number comes from one worker run of one `(case, impl, backend, repeat)` tu
 - `peak_rss_mb` — `resource.getrusage(RUSAGE_SELF).ru_maxrss` sampled after import, after compile and at process end; because it is a high-water mark, the three samples attribute memory to phases.
 - quality — from the same timed run: per-generation `best_fitness` / `mean_fitness` / `valid_count` curves, `final_best_fitness`, and `generations_to_target` (first generation whose best fitness reaches the case's `fitness_target`; `null` means "not within the budget", rendered as `>N`).
 - repeats — repeat `r` uses `seed + r`, so repeats sample timing noise *and* search variance; per-case values are medians over repeats with min/max kept in JSON.
+- load — measured conditions, never a verdict input: each worker records `os.getloadavg()` at start and end (`loadavg_start`/`loadavg_end`, optional keys) and `protocol.env_report()` records the document-build load average; the report prints them so a shared box is visible instead of implied.
+- repeat spread — the headline prints the speed-up range `old_min/new_max … old_max/new_min` over the per-repeat medians next to the median, and `## Quality curves` prints one row per repeat plus the element-wise-median aggregate row: per-repeat spread is the honest uncertainty measure, a median alone is not.
 ## Fairness Rules (binding)
 1. One implementation per process: the old side loads JAX, the new side asserts `jax`/`torch` never entered `sys.modules` after `import tensorneat` (a built-in release-gate check).
 2. Runs are strictly sequential — never two benchmark processes at once, one fresh interpreter per run.
@@ -36,7 +40,9 @@ Every number comes from one worker run of one `(case, impl, backend, repeat)` tu
 - CartPole against the legacy side: the pre-rewrite library has no evoxc CartPole (its RL problems are gym/brax/mujoco based and need extra dependencies), so that case is new-only and marked `n/a` for old.
 ## Verdict Rules
 - timing PASS when `new_ms_per_generation <= old_ms_per_generation` for every case both sides ran (speed-up >= 1.00x).
-- quality PASS when `new_final_best >= old_final_best - 0.10 * |old_final_best|` for every such case.
+- quality PASS when `new_final_best >= old_final_best - max(QUALITY_TOLERANCE_REL * |old_final_best|, QUALITY_ABS_TOL)` for every such case, with `QUALITY_TOLERANCE_REL = 0.10` and `QUALITY_ABS_TOL = 1e-3` owned by `harness/protocol.py`.
+- The absolute floor exists because the relative rule degenerates at the optimum: for an old final best of `-7.9e-15` it demands the new side beat `-8.7e-16`, so two runs that are both at the optimum fail on float noise (that was the `xor_p1000/numpy` quality FAIL). `1e-3` means "both at the optimum within 1e-3" and keeps every case whose old fitness is meaningfully below the optimum on the relative rule, so a real gap (`xor_p100` `-0.0099` vs `-0.0303`, `xor3d_p100` `-0.1389` vs `-0.2429`, `custom_pagie_p500` `-0.0052` vs `-0.0139`) still fails.
+- The verdict renders the active tolerance (`max(10% × |old|, 0.001)`) in each quality-failure reason and in the `Sub-verdicts` line, and the report prints it in the headline and old-vs-new notes.
 - overall PASS when both pass; `INCOMPLETE` while any run is `error`/`skipped` (listing them); otherwise FAIL with the offending rows named.
 ## How To Run
 ```
@@ -45,16 +51,22 @@ python benchmarks/run_benchmark.py                                    # both imp
 python benchmarks/run_benchmark.py --impl old --cases xor_p100 --generations 30 --repeats 1
 python benchmarks/run_benchmark.py --impl new --backend numpy --cases xor_p100,xor_p1000
 python benchmarks/run_benchmark.py --impl new --backend iree --cases xor_p500
+python benchmarks/run_benchmark.py --render-from-json benchmarks/results/latest.json --out $TMPDIR/re-render.md
 ```
 The worker prepends `benchmarks/legacy_jax` (old side) or `src` (new side) to `sys.path`, so an installed `tensorneat` never shadows the tree under test; the legacy side needs the `bench` extra (`jax`), the new side only `evoxc` + `numpy`.
 `--json` (default `benchmarks/results/latest.json`) holds per-run and aggregated records; `--out` (default `benchmarks/RESULTS.md`) is the regenerated report; `--dry-run` prints the planned subprocess commands without running them.
+`--render-from-json PATH` re-renders `--out` from an existing run record only: it recomputes `aggregated` and `verdict` from the stored `runs`, rebuilds `meta` from the stored document where present, spawns no worker and never rewrites the JSON. It fails loudly (exit 2) on an unreadable file, a wrong/absent `schema` or a missing `runs` list — this is how the report text is iterated without re-measuring.
+`--list`, `--dry-run` and `--render-from-json` all run on a numpy-free interpreter (`/usr/bin/python3`).
 ## Notes for Agents
-- `--list` and `--dry-run` must work on an interpreter without numpy: `cases.py` is stdlib-only at module scope and `harness/protocol.py` guards its numpy import (`np = None`), so keep new module-scope imports on the numpy-free paths clean.
+- `--list`, `--dry-run` and `--render-from-json` must work on an interpreter without numpy: `cases.py` is stdlib-only at module scope and `harness/protocol.py` guards its numpy import (`np = None`), so keep new module-scope imports on the numpy-free paths clean.
 - A failing run is always an `error`/`skipped` row, never a missing row: `harness/worker.py` writes its record even on a traceback, and the CLI synthesises a row when a worker dies without writing one.
-- `benchmarks/.gitignore` keeps `results/*.json` untracked; `RESULTS.md` is committed evidence and is only ever rewritten by `run_benchmark.py`.
-- The committed `RESULTS.md` currently carries the old-side baseline only (7 cases, 150 timed generations, 2 repeats, verdict `INCOMPLETE`) in the pre-headline template; the next measurement run rewrites it with both sides, the environment fingerprint (CPU model, cores, RAM, versions, git SHA + dirty flag, thread settings), the headline table and the data-derived win/lose narrative. It stays generated evidence.
+- `benchmarks/.gitignore` keeps `results/*.json` untracked; `RESULTS.md` is committed evidence and is only ever rewritten by `run_benchmark.py` (or by `--render-from-json`, which only re-renders from the existing JSON — the authoritative regeneration still comes from one measurement run).
+- The committed `RESULTS.md` is the old report template; the next measurement run rewrites it with both sides, the environment fingerprint (CPU model, cores, RAM, versions, git SHA + dirty flag, thread settings, load average), the headline table (median speed-up, per-repeat speed-up range, quality overlap), the data-derived win/lose narrative with the generated memory paragraph, per-repeat quality curves and the companion-file pointers. It stays generated evidence.
+- `loadavg_start`/`loadavg_end` are optional per-run keys: JSON written before they existed still aggregates and renders (`loadavg_summary` reports `n_runs = 0` and the report says `n/a (not recorded)`), and the schema stays `tensorneat-bench/1`.
+- The `## Environment` table always carries the shared-box caveat sentence: measurement conditions are stated, and repeat spread is the uncertainty measure — never drop the caveat or replace a spread with a single median.
 - A backend whose runtime is absent (for example `iree` without `iree-base-compiler`/`iree-base-runtime`) becomes an `error` row with the backend's message; the rest of the matrix still runs and the verdict stays `INCOMPLETE`, never a crash.
-- The `## Why the new side wins and loses` section reads the measured speed-ups: it states which side won each case and each population, and rewrites its mechanism paragraph accordingly. Never hard-code the new side as the winner.
+- The `## What is not compared` section states that no accelerator row exists and points at `BACKENDS.md` only when that file is next to the report (`iree` cannot lower a single case, so numpy is the only measured backend); `## Protocol` / `## How to reproduce` point at `THREADS.md` under the same rule. Both checks use `os.path.exists` on the report directory, so a checkout without those files stays truthful.
+- The `## Why the new side wins and loses` section reads the measured speed-ups: it states which side won each case and each population, and rewrites its mechanism paragraph accordingly. Never hard-code the new side as the winner. The memory paragraph is generated the same way from the aggregated `rss_final_mb` (per-case new/old ratio, worst case, XOR growth, the import floor, then the mechanism).
 - A case's `fitness_target` must be unreachable by the initial population, or `generations_to_target` reads 1 for every run and the column carries no information: XOR3d's `-0.05` sits below the trivial linear-baseline fitness of `-0.25`, and Pagie's `-0.01` sits below the ~`-0.049` the legacy first generation already reaches (its measured final best is ~`-0.005`).
 - Bench environment: `jax` only on the old side, `evoxc` on the new side; the verdict compares the old row measured on the same box, never the declared 51/109/157 ms contract numbers.
 ## Constraints
@@ -69,7 +81,9 @@ There is no pytest suite in this node (`test/` is a sibling, read-only); its ver
 - Old-side smoke: `--impl old --cases xor_p100 --generations 5 --warmup 2 --repeats 1` gives one `ok` row (~30 ms/gen at pop 100) and the verdict `INCOMPLETE` because no new-side row exists.
 - New-side failure path: `--impl new --cases xor_p100 --generations 2 --repeats 1` must render `status="error"` rows with the exception line and exit 1 — the CLI never crashes on a broken implementation.
 - Unavailable-backend smoke (no IREE runtime): `--impl new --backend iree,numpy --cases xor_p100 --generations 2 --warmup 1 --repeats 1 --out $TMPDIR/x.md --json $TMPDIR/x.json` records the `iree` row as `error` and still measures and reports the `numpy` row; the matrix never aborts.
-- Report smoke: `--impl both --backend numpy --cases xor_p100 --generations 2 --warmup 1 --repeats 1 --out $TMPDIR/report.md --json $TMPDIR/report.json` renders the headline, environment fingerprint and win/lose sections from those records, and both files are valid; write them into `$TMPDIR` so a smoke run never clobbers the committed `RESULTS.md`.
+- Report smoke: `--impl both --backend numpy --cases xor_p100 --generations 2 --warmup 1 --repeats 1 --out $TMPDIR/report.md --json $TMPDIR/report.json` renders the headline, environment fingerprint and win/lose sections from those records, and both files are valid; write them into `$TMPDIR` so a smoke run never clobbers the committed `RESULTS.md`. The JSON must carry `loadavg_start`/`loadavg_end` on every run and the report's `Load average (1/5/15 min)` row must show them next to the document-build load.
+- Re-render smoke: `--render-from-json <json> --out $TMPDIR/re-render.md` reproduces the whole report (headline with the range/overlap columns, per-repeat quality curves, memory paragraph, verdict) without spawning a worker, and the rewritten verdict matches the stored one except for the quality floor; a wrong schema, an unreadable file and a document without `runs` each exit 2 with a named error. `--list`/`--dry-run`/`--render-from-json` all run on `/usr/bin/python3` (no numpy).
+- Companion pointers: a report rendered into `$TMPDIR` (no `BACKENDS.md`/`THREADS.md` next to it) must omit both pointers; copy the files next to it and the same render must include them. This is an `os.path.exists` check on the report directory, never a hard-coded claim.
 - `python benchmarks/spikes/forward_micro.py --mode unrolled` runs numpy-only, asserts the two prototype forms agree to `1e-5` and reproduces `FORMULATION.md` within ~±5%.
 - Regression rule: a harness change must leave the old-side rows within ~10% of the committed `RESULTS.md`; a larger shift means the protocol moved and `RESULTS.md` is regenerated in the same commit.
 ## Routing Table
@@ -81,5 +95,7 @@ There is no pytest suite in this node (`test/` is a sibling, read-only); its ver
 | `./spikes` | Measured formulation evidence for the depth-parallel design. |
 | `./legacy_jax` | Frozen pre-rewrite JAX implementation: timing baseline and numerical oracle (read-only). |
 | `./results` | Generated JSON run records (`latest.json`); git-ignored, safe to delete. |
-| `./RESULTS.md` | Generated report: environment fingerprint, protocol, headline old-vs-new, per-case tables, verdict, win/lose narrative, quality curves, non-comparisons, how to reproduce. |
+| `./RESULTS.md` | Generated report: environment fingerprint (with load), protocol, headline old-vs-new (median, per-repeat range, quality overlap), per-case tables, verdict, win/lose narrative with memory paragraph, per-repeat quality curves, non-comparisons, how to reproduce. |
+| `./BACKENDS.md` | Measured accelerator evidence (`iree` cannot lower any case → numpy is the only measured backend); referenced by the report only when present next to it. |
+| `./THREADS.md` | Measured `--threads 1` sensitivity run of the XOR family from the same CLI; referenced by the report only when present next to it. |
 | `../test/parity` | Numerical-fidelity suite using `./legacy_jax` as the oracle (sibling — read-only, escalate writes to parent). |

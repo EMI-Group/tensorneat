@@ -10,7 +10,14 @@ Imports are stdlib plus ``harness.protocol`` (verdict rules) and ``harness.repor
 
 from __future__ import annotations
 
-from harness.protocol import QUALITY_TOLERANCE_REL, STATUS_OK, comparisons
+from harness.protocol import (
+    QUALITY_ABS_TOL,
+    QUALITY_TOLERANCE_REL,
+    STATUS_OK,
+    comparisons,
+    quality_overlap,
+    speedup_bounds,
+)
 from harness.report_format import (
     case_order,
     cell,
@@ -22,6 +29,7 @@ from harness.report_format import (
     mib,
     ms,
     num,
+    number,
     plain,
     protocol_meta,
     recorded_lengths,
@@ -40,6 +48,8 @@ HEADLINE_HEADERS = [
     "Old ms/gen",
     "New ms/gen",
     "Speed-up",
+    "Speed-up range (best–worst)",
+    "Quality overlap",
     "Old compile (s)",
     "New compile (s)",
     "Old peak RSS (MiB)",
@@ -51,7 +61,12 @@ HEADLINE_HEADERS = [
     "Timing",
     "Quality",
 ]
-"""The headline table: per case, the two sides side by side and the per-case verdicts."""
+"""The headline table: per case, the two sides side by side and the per-case verdicts.
+
+``Speed-up`` is the median ratio; ``Speed-up range`` is ``old_min/new_max … old_max/new_min``
+over the per-repeat medians (best and worst case over the repeats), and ``Quality overlap``
+says whether the new side's per-repeat final-best range falls inside the old side's range.
+"""
 
 
 # --- Shared lookups -----------------------------------------------------------------------
@@ -115,6 +130,31 @@ def _gens_cell(record, case: str, impl: str, backend: str, lengths, fallback) ->
     return gens_to_target(record.get("generations_to_target"), length)
 
 
+def _speedup_range_cell(pair, old, new) -> str:
+    """``best–worst`` speed-up over the repeats, or ``n/a`` without a two-sided timing.
+
+    Best is the fastest old repeat against the slowest new repeat, worst the opposite, so the
+    pair is the honest envelope around the median ``Speed-up`` and not a second median.
+    """
+    bounds = (pair or {}).get("speedup_range")
+    if not isinstance(bounds, dict):
+        bounds = speedup_bounds(old, new) if old is not None and new is not None else {}
+    best, worst = bounds.get("best"), bounds.get("worst")
+    if best is None or worst is None:
+        return "n/a (needs both sides)"
+    if abs(best - worst) < 5e-3:
+        return num(best, 2, "x")
+    return f"{num(best, 2, 'x')}–{num(worst, 2, 'x')}"
+
+
+def _overlap_cell(pair, old, new) -> str:
+    """Where the new side's per-repeat final-best range sits inside the old side's range."""
+    value = (pair or {}).get("quality_overlap")
+    if value is None and old is not None and new is not None:
+        value = quality_overlap(old, new)
+    return text(value, "n/a (needs both sides)")
+
+
 # --- Headline -----------------------------------------------------------------------------
 
 
@@ -144,6 +184,8 @@ def _headline_rows(doc: dict):
                     _side_cell(old, "ms_per_generation", ms),
                     _side_cell(new, "ms_per_generation", ms),
                     num(pair.get("speedup"), 2, "x") if pair else "n/a (needs both sides)",
+                    _speedup_range_cell(pair, old, new),
+                    _overlap_cell(pair, old, new),
                     _side_cell(old, "compile_time_s", seconds),
                     _side_cell(new, "compile_time_s", seconds),
                     _side_cell(old, "rss_final_mb", mib),
@@ -179,8 +221,15 @@ def headline_section(doc: dict) -> str:
     note = (
         "One row per case and new-side backend (the old side always runs on JAX). "
         "Speed-up is `old / new` per generation: above 1.00x the new side is faster. "
+        "Speed-up range is `old_min/new_max` … `old_max/new_min` over the per-repeat medians, "
+        "i.e. the best and worst case over the repeats. Quality overlap states where the new "
+        "side's per-repeat final-best range sits against the old side's: `inside` when the "
+        "ranges intersect (every new repeat inside the old range, or the ranges partially "
+        "overlap), `new worse` when every new repeat is below the old range, `new better` when "
+        "every new repeat is above it — an observation, never a replacement for the verdict. "
         "Timing PASS means new ms/generation is at or below the old one; quality PASS means "
-        f"the new final best stays within {QUALITY_TOLERANCE_REL:.0%} of the old one. "
+        "the new final best stays within "
+        f"`max({QUALITY_TOLERANCE_REL:.0%} × |old|, {QUALITY_ABS_TOL:g})` of the old one. "
         "Every cell comes from the aggregated JSON records of this run; `n/a (reason)` marks "
         "a cell that could not be reached (not run, skipped, error, or not recorded)."
     )
@@ -323,6 +372,127 @@ def _contract_lines(pairs: list[dict], info: dict, doc: dict) -> list[str]:
     return lines
 
 
+def _memory_lines(doc: dict) -> list[str]:
+    """The generated memory paragraph: per-case new/old ratio, the worst case, the mechanism.
+
+    Every number is the aggregated ``rss_final_mb`` (a high-water mark, so it is a max over
+    the repeats) and the aggregated ``rss_after_import_mb`` floor. The mechanism sentence is
+    added last and only describes what those numbers show: the old side starts from a large
+    runtime floor, the new peak moves with the population (i.e. with the padded batch it
+    materialises) while the old peak stays near its floor.
+    """
+    info = _case_info(doc)
+    old_by_case = _old_by_case(doc)
+    new_by_case = _new_by_case(doc)
+    entries: list[dict] = []
+    for case, records in new_by_case.items():
+        old = old_by_case.get(case)
+        if old is None:
+            continue
+        old_rss = number(old.get("rss_final_mb"))
+        if old_rss is None or old_rss <= 0:
+            continue
+        for new in records:
+            new_rss = number(new.get("rss_final_mb"))
+            if new_rss is None:
+                continue
+            entries.append(
+                {
+                    "case": case,
+                    "pop": plain((info.get(case) or {}).get("pop_size")),
+                    "backend": text(new.get("backend")),
+                    "old": old_rss,
+                    "new": new_rss,
+                    "ratio": new_rss / old_rss,
+                    "old_import": number(old.get("rss_after_import_mb")),
+                    "new_import": number(new.get("rss_after_import_mb")),
+                }
+            )
+    if not entries:
+        return []
+    entries.sort(key=lambda entry: -entry["ratio"])
+    worst = entries[0]
+
+    lines = [
+        "**Memory.** Peak RSS (`rss_final_mb`, the timed worker's high-water mark, taken as "
+        "the max over the repeats) from the same runs, new vs old:",
+        "",
+    ]
+    for entry in entries:
+        comparison = (
+            "more" if entry["ratio"] > 1 else ("less" if entry["ratio"] < 1 else "the same")
+        )
+        lines.append(
+            f"- `{entry['case']}` (pop {entry['pop']}, `{entry['backend']}`): "
+            f"{mib(entry['new'])} MiB vs {mib(entry['old'])} MiB — "
+            f"{num(entry['ratio'], 2, 'x')} (the new side uses {comparison} memory)."
+        )
+    lines.append("")
+    lines.append(
+        f"Worst case: `{worst['case']}` at {num(worst['ratio'], 2, 'x')} "
+        f"({mib(worst['new'])} vs {mib(worst['old'])} MiB old, "
+        f"{num(worst['new'] - worst['old'], 0, ' MiB', signed=True)})."
+    )
+
+    xor = [
+        entry
+        for entry in entries
+        if (info.get(entry["case"]) or {}).get("problem") == "XOR"
+    ]
+    xor.sort(key=lambda entry: number((info.get(entry["case"]) or {}).get("pop_size")) or 0)
+    grows = False
+    if len(xor) >= 2:
+        new_values = [entry["new"] for entry in xor]
+        old_values = [entry["old"] for entry in xor]
+        grows = all(
+            later >= earlier for earlier, later in zip(new_values, new_values[1:])
+        )
+        pops = ", ".join(entry["pop"] for entry in xor)
+        if grows:
+            lines.append(
+                f"The new side's peak grows with the population in the XOR family "
+                f"({' → '.join(mib(value) for value in new_values)} MiB at pop {pops}), "
+                f"while the old row moves only from {mib(min(old_values))} to "
+                f"{mib(max(old_values))} MiB."
+            )
+        else:
+            lines.append(
+                f"Across the XOR family (pop {pops}) the new peak ranges "
+                f"{mib(min(new_values))}–{mib(max(new_values))} MiB against "
+                f"{mib(min(old_values))}–{mib(max(old_values))} MiB on the old side."
+            )
+
+    old_imports = [entry["old_import"] for entry in entries if entry["old_import"] is not None]
+    new_imports = [entry["new_import"] for entry in entries if entry["new_import"] is not None]
+    clauses = []
+    if old_imports:
+        clauses.append(
+            f"the old side's floor is the JAX/XLA runtime itself "
+            f"({mib(min(old_imports))}–{mib(max(old_imports))} MiB right after import)"
+        )
+    if new_imports:
+        clauses.append(
+            f"the new side starts from {mib(min(new_imports))}–{mib(max(new_imports))} MiB"
+        )
+    floor = (" " + "; ".join(clauses) + ".") if clauses else ""
+    lines.append("")
+    lines.append(
+        "Mechanism, as far as the numbers support it:"
+        + floor
+        + " Beyond that floor the new peak follows the padded batch it materialises for the "
+        "whole population (`max_nodes × max_nodes` per individual as explicit host tensors), "
+        "whereas the legacy side vmaps fixed-shape arrays and lets XLA reuse its buffers — "
+        + (
+            "which is why the new peak tracks the population while the old peak stays close "
+            "to its runtime floor."
+            if grows
+            else "so the new peak is set by population × padding while the old one is set by "
+            "its runtime floor."
+        )
+    )
+    return lines
+
+
 def winlose_section(doc: dict) -> str:
     """Per-case and per-population direction, tie-flip honest, plus the mechanism."""
     all_pairs = _pairs(doc)
@@ -379,6 +549,10 @@ def winlose_section(doc: dict) -> str:
             f"**Ties:** {len(ties)} case(s) measured the same ms/generation on both sides, so "
             "neither mechanism dominates there."
         )
+        lines.append("")
+    memory = _memory_lines(doc)
+    if memory:
+        lines.extend(memory)
         lines.append("")
     lines.append(
         "This section is written from the same `speedup` values as the headline and old-vs-new "

@@ -12,11 +12,13 @@ interpreter that runs ``--list``/``--dry-run``.
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
-from harness.protocol import NO_ERROR_TEXT, short_error
+from harness.protocol import NO_ERROR_TEXT, REPO_ROOT, short_error
 
 __all__ = [
+    "COMPANION_FILES",
     "CURVE_HEADERS",
     "HEADINGS",
     "IMPL_LABELS",
@@ -24,6 +26,7 @@ __all__ = [
     "by_case",
     "case_order",
     "cell",
+    "companion_files",
     "declared_length",
     "display_path",
     "fitness",
@@ -73,6 +76,13 @@ CURVE_HEADERS = [
 
 HEADINGS = ("## ", "### ")
 """The heading levels this report emits; :func:`spaced_headings` keeps their spacing uniform."""
+
+COMPANION_FILES = {"backends": "BACKENDS.md", "threads": "THREADS.md"}
+"""Evidence files the report cross-references only when they sit next to it.
+
+A fresh checkout without them must not claim they exist, so the sections render the pointer
+only when :func:`companion_files` finds the file in the report's own directory.
+"""
 
 
 # --- Null-safe cell formatters ------------------------------------------------------------
@@ -353,6 +363,32 @@ def declared_length(doc: dict) -> int | None:
 def pct_index(length: int, fraction: float) -> int:
     """Index of generation ``round(fraction * length)`` (1-based generation, clamped)."""
     return max(0, min(length - 1, int(round(fraction * length)) - 1))
+
+
+def report_dir(doc: dict, report_path=None) -> Path:
+    """Directory the report is (or will be) written to, for companion-file probes.
+
+    The explicit ``report_path`` wins — that is where ``write_report`` is about to put the
+    file, and it is the only correct place for a ``--render-from-json --out $TMPDIR/x.md``
+    smoke. Without it, the recorded absolute ``meta.out_path`` names the directory, and a
+    document that records nothing falls back to ``benchmarks/`` of this checkout.
+    """
+    if report_path:
+        return Path(report_path).expanduser().resolve().parent
+    recorded = meta(doc).get("out_path")
+    if recorded:
+        path = Path(str(recorded))
+        return path.parent if path.is_absolute() else (REPO_ROOT / path).parent
+    return REPO_ROOT / "benchmarks"
+
+
+def companion_files(doc: dict, report_path=None) -> dict[str, bool]:
+    """Which companion evidence files exist next to the report (``backends``/``threads``)."""
+    directory = report_dir(doc, report_path)
+    return {
+        key: os.path.exists(os.path.join(directory, name))
+        for key, name in COMPANION_FILES.items()
+    }
 
 
 def fitness_at(curve, index: int) -> str:
