@@ -170,14 +170,14 @@ No `.at[]`, no `cumsum` on the compute path (prefix sums are triangular `dot`), 
 Shapes are static: `P`, `S`, `max_nodes`, `max_conns` are fixed at build time; a change forces a rebuild by the pipeline.
 Errors: configuration validation raises `common.errors.TensorNEATError` with a named message; trace/shape/backend errors propagate unchanged and are never re-wrapped or silently fallen back.
 State keys touched: `randkey`, `pop_size`, `pop`, `generation`, `species`, plus the genome/problem keys documented above — nothing else.
-Files stay under 1000 lines: `species.py` (966) the species algebra, `_kernels.py` (898) the graph helpers, `_distance.py` (315) the digest-backed rows, `_validation.py` (128) the host validators, `neat.py` (905) the population cycle.
+Files stay under 1000 lines: `species.py` (959) the species algebra, `_kernels.py` (817) the graph helpers, `_distance.py` (289) the digest-backed rows, `_validation.py` (128) the host validators, `neat.py` (961) the population cycle.
 
 ## Known Risks
 `evoxc.random.randint` needs a symbolic `high` that stays ≥ 1 at runtime — guaranteed by `max(survive_size, 1)`, which also removes the legacy NaN case.
 `evoxc.scatter` is replacement-only, so every "accumulate" update is restructured as reduce-then-scatter-once (spawn residual, stale-write elimination in the speciation scans).
 Wide `while`/`scan` carries plus `select` can crash iree codegen (`AffinityAnalysis`), hence the packed-carry convention; the numpy reference backend is unaffected.
 Reading a dead slot's centre rows would return stale integers, not NaN — always gate centre reads behind `isnan(species_keys)`.
-`DistanceRows`' tiling is a `broadcast_to` + `reshape`, i.e. a real copy: at `P=1000` one block of 4 centres materialises ~4k rows per digest leaf, and the memo keeps each width's tiled digest alive for the rest of the trace.
+`DistanceRows`' tiling is a `broadcast_to` + `reshape`, i.e. a real copy: one population-shaped row materialises `P` copies of that centre across every digest leaf (`P=1000` × 8 leaves × the padded gene width), and it is the only avoidable piece of array traffic left in `speciate` at `P <= 500`.
 
 ## Test Strategy
 Tests live in the sibling `test/` tree (read-only from here): `test/unit/algorithm/` covers the spawn/selection/stagnation algebra, the block layout and the speciation scans on fixed payloads.
