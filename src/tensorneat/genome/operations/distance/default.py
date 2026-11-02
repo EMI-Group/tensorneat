@@ -326,6 +326,11 @@ class DefaultDistance(BaseDistance):
             exactly ``0.0`` there, while a non-empty pair's ``max(cnt1, cnt2)`` is at least
             ``1`` (counts are integers), so raising the denominator to ``1.0`` yields
             ``0.0 / 1.0 == 0.0`` instead of ``NaN`` — no second ``select`` over the result.
+            A gene family with no attribute column (``attr_width == 0``, a zero-weight
+            connection gene) has no attribute term at all: the gather is skipped and the
+            distance is the structural ``disjoint/excess`` count alone.  Skipping is required,
+            not an optimisation — a zero-width row stride is a ``0``-step ``arange``, which
+            raises on the reference backend.
         """
         pool = _pool(consts)
         pop_size, count = int(attrs1.shape[0]), int(attrs1.shape[1])
@@ -336,47 +341,51 @@ class DefaultDistance(BaseDistance):
             evoxc.multiply(pool.i64(2), matched),
         )
 
-        # Attribute row of parent 2 behind every gene of parent 1: the row offset is
-        # ``row * A`` and the ``(P, M, A)`` block adds the within-row column.  ``rows`` is
-        # already redirected to row ``0`` where a gene has no homologue, so no ``I_INF`` index
-        # reaches the backend and the flat index needs no range check of its own.
-        row_offsets = enp.reshape(
-            evoxc.multiply(rows, pool.i32(attr_width)), (pop_size, count, 1)
-        )
-        columns = enp.arange(0, attr_width, dtype=evoxc.int32)
-        # Row stride as a ``(P, 1, 1)`` block: ``batch_offsets`` returns ``(P, 1)``, which would
-        # broadcast against the last two axes of the ``(P, M, A)`` index block instead of the
-        # leading one.
-        rows_stride = enp.reshape(
-            enp.arange(
-                0, pop_size * count * attr_width, count * attr_width, dtype=evoxc.int32
-            ),
-            (pop_size, 1, 1),
-        )
-        index = evoxc.add(evoxc.add(row_offsets, columns), rows_stride)
-        homologous_attrs = evoxc.reshape(
-            evoxc.gather(
-                evoxc.reshape(attrs2, (pop_size * count * attr_width,)), index, axis=0
-            ),
-            (pop_size, count, attr_width),
-        )
-        pair_distance = gene.distance(state, attrs1, homologous_attrs)
-        attribute_distance = evoxc.reduce_sum(
-            evoxc.select(homologous, pair_distance, pool.f32(0.0)), axes=1
-        )
+        attribute_distance = None
+        if attr_width:
+            # Attribute row of parent 2 behind every gene of parent 1: the row offset is
+            # ``row * A`` and the ``(P, M, A)`` block adds the within-row column.  ``rows`` is
+            # already redirected to row ``0`` where a gene has no homologue, so no ``I_INF``
+            # index reaches the backend and the flat index needs no range check of its own.
+            row_offsets = enp.reshape(
+                evoxc.multiply(rows, pool.i32(attr_width)), (pop_size, count, 1)
+            )
+            columns = enp.arange(0, attr_width, dtype=evoxc.int32)
+            # Row stride as a ``(P, 1, 1)`` block: ``batch_offsets`` returns ``(P, 1)``, which
+            # would broadcast against the last two axes of the ``(P, M, A)`` index block
+            # instead of the leading one.
+            rows_stride = enp.reshape(
+                enp.arange(
+                    0, pop_size * count * attr_width, count * attr_width, dtype=evoxc.int32
+                ),
+                (pop_size, 1, 1),
+            )
+            index = evoxc.add(evoxc.add(row_offsets, columns), rows_stride)
+            homologous_attrs = evoxc.reshape(
+                evoxc.gather(
+                    evoxc.reshape(attrs2, (pop_size * count * attr_width,)), index, axis=0
+                ),
+                (pop_size, count, attr_width),
+            )
+            pair_distance = gene.distance(state, attrs1, homologous_attrs)
+            attribute_distance = evoxc.reduce_sum(
+                evoxc.select(homologous, pair_distance, pool.f32(0.0)), axes=1
+            )
 
         # Counts are small integers, so ``float32(max(cnt1, cnt2))`` is exact and the
         # maximum is cheaper on the integer dtypes than on two casts.
         denominator = evoxc.cast(evoxc.maximum(cnt1, cnt2), evoxc.float32)
-        numerator = evoxc.add(
-            evoxc.multiply(
-                evoxc.cast(non_homologous, evoxc.float32),
-                pool.f32(self.compatibility_disjoint),
-            ),
-            evoxc.multiply(
-                attribute_distance, pool.f32(self.compatibility_weight)
-            ),
+        numerator = evoxc.multiply(
+            evoxc.cast(non_homologous, evoxc.float32),
+            pool.f32(self.compatibility_disjoint),
         )
+        if attribute_distance is not None:
+            numerator = evoxc.add(
+                numerator,
+                evoxc.multiply(
+                    attribute_distance, pool.f32(self.compatibility_weight)
+                ),
+            )
         return evoxc.divide(
             numerator, evoxc.maximum(denominator, pool.f32(1.0))
         )

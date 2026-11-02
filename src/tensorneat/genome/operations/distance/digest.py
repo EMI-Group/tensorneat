@@ -296,12 +296,27 @@ def _gather_rows(
     Returns:
         ``(P, M, W)`` permuted block.
 
+    Raises:
+        ConfigError: If a zero-width block is not already ``(P, M, 0)`` — the shape the
+            unchanged return below relies on.
+
     Notes:
         One flat gather with a ``row * W + column`` index block.  ``common.tools.flat_gather``
         would add its out-of-range escape checks on top, which are dead weight here: ``order``
         is a permutation of ``[0, M)``, so no index can escape.
+        A zero-width block (a gene family with ``attr_specs = ()``, i.e. no evolvable
+        attribute column) has exactly one permutation — itself — so it is returned unchanged:
+        the ``(P, M, 0)`` shape and the dtype already satisfy the contract, and the index
+        arithmetic below would divide by ``count * width == 0``.
     """
     pop_size, count = int(order.shape[0]), int(order.shape[1])
+    if width == 0:
+        if tuple(int(size) for size in rows.shape) != (pop_size, count, 0):
+            raise ConfigError(
+                f"_gather_rows: a zero-width block must be {(pop_size, count, 0)}, "
+                f"got {tuple(rows.shape)}"
+            )
+        return rows
     flat = evoxc.reshape(rows, (pop_size * count * width,))
     offsets = enp.reshape(evoxc.multiply(order, pool.i32(width)), (pop_size, count, 1))
     columns = enp.arange(0, width, dtype=evoxc.int32)
@@ -367,6 +382,9 @@ def prepare_family(
         timsort path measured 1.51 → 1.25 ms (node) and 1.43 → 1.22 ms (conn) at ``P = 1000``.
         Ties are padding rows only (real keys are unique inside a genome), so the digest's
         eight leaves are byte-identical either way.
+        A gene family with no attribute column (``attr_width == 0``) contributes an empty
+        ``(P, M, 0)`` attribute block, which :func:`_gather_rows` returns unchanged: the
+        digest carries it to the distance tail, which has no attribute term to compute.
     """
     pool = consts if consts is not None else ConstantPool()
     width = _key_width("prepare", gene, keys)
