@@ -88,19 +88,20 @@ Gene payload encoding is genome-owned and opaque here — in particular evoxc ha
 `problem`: `evaluate(state, keys, act_fn, transformed)` where `act_fn` is `algorithm.forward` partially applied — the problem owns the dataset tiling into the population axis.
 
 ## Measured Cost (numpy reference backend, real `DefaultGenome` + `XOR`)
-`DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, one compiled graph per generation, 5 generations timed after the first.
+`DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, `XOR()`, seed 42, `backend="numpy"`; one compiled graph per shape signature, one configuration per fresh process, median of 5 timed steps after a warmup step and 5 setup steps.
 Legacy JAX baseline on the same machine: 51 / 109 / 157 ms per generation at pop 100 / 500 / 1000.
 
-| pop | ms/gen (steady state) | legacy | ratio |
-| --- | --- | --- | --- |
-| 100 | ~300 | 51 | ~5.9× |
-| 500 | ~950 | 109 | ~8.7× |
-| 1000 | ~2060 | 157 | ~13× |
+| pop | ms/gen | legacy | ratio | live species slots |
+| --- | --- | --- | --- | --- |
+| 100 | ~97 | 51 | ~1.9× | 3 |
+| 500 | ~835 | 109 | ~7.4× | 20 |
+| 1000 | ~1516 | 157 | ~9.4× | 20 |
 
-The first generation costs 4.2 / 5.4 / 7.1 s because it includes the one-off `evoxc.build` of the whole cycle; `NEAT.setup` is ~40 ms.
-Phase split at pop 100 / 500, measured as separate executables (so the sum exceeds the single-graph figure): evaluation 48 / 232 ms, `tell` 289 / 1002 ms, of which `speciate` 223 / 614 ms, crossover+mutation+elite 33 / 89 ms and `update_species` ~1.5 ms.
-One `execute_distance` pass (one centre against the whole population) costs 5.7 / 17.1 ms, and `speciate` runs `2 × species_size` of them unconditionally, which accounts for its entire cost.
-Evaluation alone (48 ms at pop 100) already exceeds the legacy per-generation budget, so the genome/problem side is over budget as well as this subtree.
+The first step costs 4.0 / 5.3 / 7.0 s because it includes the one-off `evoxc.build` of the whole cycle; `NEAT.setup` is ~40 ms.
+Phase split, measured as separate executables at pop 100 / 500 / 1000 (so the sum over-counts one generation): `evaluate` (`transform` + `forward` + `evaluate`) 30 / 135 / 280 ms, crossover+mutation+elite 29 / 76 / 142 ms, `update_species` 1.1 / 1.5 / 1.9 ms, `speciate` 46 / 576 / 1032 ms.
+`tell` is therefore 77 / 653 / 1176 ms: `speciate` 60 % / 88 % / 88 %, breeding 37 % / 12 % / 12 % (at pop 100 the breeding kernel is now the second hot spot).
+One `genome.execute_distance` row (one centre against the whole population) costs ~2.5 ms of dispatch plus ~48 µs per pair, so ~5.7 ms at pop 100 and ~33 ms at pop 1000; `speciate`'s cost is that row cost times `2 · species_size`.
+Evaluation alone (30 / 135 / 280 ms) still exceeds the legacy per-generation budget at every size, so the genome/problem side is over budget as well as this subtree.
 
 ## Known Issues
 The repo-level performance contract is missed by ~5.9× / ~8.7× / ~13× at pop 100 / 500 / 1000 (see `## Measured Cost`).
