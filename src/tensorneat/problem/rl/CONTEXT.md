@@ -47,7 +47,7 @@ Rollout component only (`CartPole.evaluate` traced alone, no genome forward, toy
 | 1000 | 50 | 1 | 20.6 | 7.3 | 2.8× |
 
 Build is one-off per shape: **0.06 s** on numpy, **0.87–1.24 s** on iree (flat in `pop`/`max_step`/`repeat`).
-Cost is linear in the horizon on both backends (500 steps ≈ 3.4× the 150-step-free 200-step figure at the same pop) and sub-linear in `pop` (10× the population costs ≤1.2× on numpy, ≈3× on iree).
+Cost is linear in the horizon on both backends (200 → 500 steps is 2.5× the cost at either population) and sub-linear in `pop` (10× the population costs ≈1.15× on numpy and ≈3.6× on iree).
 No crossover was measured: iree wins every cell, by 2.7–8.5× on the rollout component; the box drifts ±30 % between processes, so the ratios are the load-bearing numbers and single-run medians can move by 2× under contention.
 
 Pipeline level (`/tmp/tnscratch/bench.py --case cartpole … --share`, numpy, `pop_batch_size` unset, one generation per `step`): `step` median, the same `step` with `problem.evaluate` monkeypatched to zeros, and the difference (the evaluate share).
