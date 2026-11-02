@@ -11,14 +11,45 @@ from typing import TYPE_CHECKING
 import evoxc
 import evoxc.numpy as enp
 
-from ....common import I_INF, ConfigError, State, fetch_first, flat_gather, masked_flat_gather
-from .arrays import i32
+from ....common import ConfigError, State
+from .arrays import first_row, i32, row_offsets, take_rows
 from .cycle import closes_cycle
 from .default import DefaultMutation
 from .plan import AddConnPlan
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...base import BaseGenome
+
+
+def _pick_cell(
+    table: evoxc.SymbolicTensor,
+    index: evoxc.SymbolicTensor,
+    pop_size: int,
+    width: int,
+) -> evoxc.SymbolicTensor:
+    """Gather one cell per individual out of a ``(P, width)`` table with a flat index.
+
+    The index block is built once by the caller (``row_offsets`` of the same width plus the
+    chosen column) and shared by every picked table, so a second and third pick pay only the
+    flatten, the gather and the reshape — never another index computation.
+
+    Args:
+        table (evoxc.SymbolicTensor): ``(P, width)`` source table.
+        index (evoxc.SymbolicTensor): ``(P,) int32`` flat index into the flattened table,
+            already in ``[0, pop_size * width)`` by construction.
+        pop_size (int): Population size ``P`` (static).
+        width (int): Row width of ``table`` (static).
+
+    Returns:
+        evoxc.SymbolicTensor: ``(P,)`` tensor of ``table``'s dtype holding the picked cells.
+
+    Raises:
+        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
+    """
+    return enp.reshape(
+        evoxc.gather(enp.reshape(table, (pop_size * width,)), index, axis=0),
+        (pop_size,),
+    )
 
 
 class RecurrentMutation(DefaultMutation):
@@ -104,14 +135,22 @@ class RecurrentMutation(DefaultMutation):
         ``evoxc.random.randint(key, (P, max_conn_tries, 2), 0, N)`` draw supplies the
         endpoint *rows* of all attempts of all individuals (no per-attempt Python loop over
         individuals and no per-individual key split), the rows are turned into node keys with
-        one flat gather each, and one ``uniform(key, (P, max_conn_tries))`` draw decides
-        which attempts *must* close a cycle.
+        **one** flat gather of the interleaved ``(src, dst)`` pair, and one
+        ``uniform(key, (P, max_conn_tries))`` draw decides which attempts *must* close a
+        cycle.
 
         An attempt is accepted when both endpoints exist, the destination is not an input
         row, the ``(in_key, out_key)`` pair does not already exist, the destination's
         in-degree stays below ``genome.max_in_degree``, and — when its ``p_recur`` decision
         fired — the edge closes a cycle.  The *first* accepted attempt wins, selected with a
         reduce over the attempt axis rather than a ``cond`` region.
+
+        Padding never enters the two connection-table slabs: a padded row is ``I_INF`` in
+        *every* key column, while an accepted candidate endpoint is finite by construction
+        (``exists``), so key equality alone excludes padded rows and the ``present_conn``
+        factor the :class:`~.default.DefaultMutation` plan needs is redundant here.  An
+        attempt whose endpoint *is* ``I_INF`` may match a padded row in the slabs, but every
+        decision that reads them is already gated by ``exists``.
 
         Args:
             state (State): Immutable host configuration container.
@@ -135,54 +174,49 @@ class RecurrentMutation(DefaultMutation):
         rows = evoxc.random.randint(
             attempt_key, (pop_size, tries, 2), 0, node_count, dtype=evoxc.int32
         )
-        source_rows = evoxc.slice(rows, (0, 0, 0), (pop_size, tries, 1))
-        destination_rows = evoxc.slice(rows, (0, 0, 1), (pop_size, tries, 1))
-        source = enp.reshape(source_rows, (pop_size, tries))
-        destination = enp.reshape(destination_rows, (pop_size, tries))
-        in_keys = flat_gather(node_keys, source)
-        out_keys = flat_gather(node_keys, destination)
-        present_edges = enp.reshape(
-            context.present_conn, (pop_size, 1, edge_count)
+        # One flat gather of the whole `(P, tries, 2)` endpoint block: the drawn rows are
+        # node rows in `[0, N)`, so they index the stage's already-flattened node keys
+        # without a range check, and both key columns come out of a single gather.
+        endpoints = take_rows(context.node_flat, context.node_offsets, rows)
+        in_keys = enp.reshape(
+            evoxc.slice(endpoints, (0, 0, 0), (pop_size, tries, 1)), (pop_size, tries)
         )
-        existing_in = enp.reshape(conn_keys[:, :, 0], (pop_size, 1, edge_count))
-        existing_out = enp.reshape(conn_keys[:, :, 1], (pop_size, 1, edge_count))
-        in_column = enp.reshape(in_keys, (pop_size, tries, 1))
+        out_keys = enp.reshape(
+            evoxc.slice(endpoints, (0, 0, 1), (pop_size, tries, 1)), (pop_size, tries)
+        )
+        # Duplicate and in-degree slabs, both against the same `(P, tries, E)` output-key
+        # comparison so the second `2 M`-element pass of the previous formulation is gone.
         out_column = enp.reshape(out_keys, (pop_size, tries, 1))
+        same_out = evoxc.equal(
+            enp.reshape(conn_keys[:, :, 1], (pop_size, 1, edge_count)), out_column
+        )
         duplicate = evoxc.reduce_max(
             evoxc.logical_and(
-                present_edges,
-                evoxc.logical_and(
-                    evoxc.equal(existing_in, in_column),
-                    evoxc.equal(existing_out, out_column),
+                same_out,
+                evoxc.equal(
+                    enp.reshape(conn_keys[:, :, 0], (pop_size, 1, edge_count)),
+                    enp.reshape(in_keys, (pop_size, tries, 1)),
                 ),
             ),
             axes=2,
         )
-        in_degree = evoxc.cast(
-            evoxc.reduce_sum(
-                evoxc.cast(
-                    evoxc.logical_and(
-                        present_edges, evoxc.equal(existing_out, out_column)
-                    ),
-                    evoxc.int32,
-                ),
-                axes=2,
-            ),
-            evoxc.int32,
+        in_degree = evoxc.cast(evoxc.reduce_sum(same_out, axes=2), evoxc.int32)
+        destination = enp.reshape(
+            evoxc.slice(rows, (0, 0, 1), (pop_size, tries, 1)), (pop_size, tries)
         )
         accepted = evoxc.logical_and(
             evoxc.logical_and(
-                evoxc.not_equal(in_keys, i32(I_INF)),
-                evoxc.not_equal(out_keys, i32(I_INF)),
+                evoxc.not_equal(in_keys, context.sentinel),
+                evoxc.not_equal(out_keys, context.sentinel),
             ),
             evoxc.logical_and(
                 # Input rows are the first `num_inputs` rows and never take an in-edge.
                 evoxc.greater_equal(destination, i32(genome.num_inputs)),
-                evoxc.logical_not(duplicate),
+                evoxc.logical_and(
+                    evoxc.logical_not(duplicate),
+                    evoxc.less(in_degree, context.in_degree_limit),
+                ),
             ),
-        )
-        accepted = evoxc.logical_and(
-            accepted, evoxc.less(in_degree, i32(genome.max_in_degree))
         )
         required = None
         if genome.network_type == "recurrent" and self.p_recur > 0.0:
@@ -192,22 +226,20 @@ class RecurrentMutation(DefaultMutation):
                 ),
                 enp.full((), self.p_recur, dtype=evoxc.float32),
             )
-        attempt = evoxc.reduce_min(
-            evoxc.select(
-                accepted,
-                enp.reshape(enp.arange(0, tries, dtype=evoxc.int32), (1, tries)),
-                i32(I_INF),
-            ),
-            axes=1,
+        # The first accepted attempt: `argmax` of a boolean row is exactly its first `True`
+        # (and `0` for an empty row, which `chosen` gates), so no `I_INF` sentinel and no
+        # index sanitisation are needed — the index is always in `[0, tries)`.
+        attempt = evoxc.cast(evoxc.argmax(accepted, axis=1), evoxc.int32)
+        chosen = evoxc.reduce_max(accepted, axes=1)
+        conn_row, has_room = first_row(context.free_conn)
+        allowed = evoxc.logical_and(evoxc.logical_and(gate, has_room), chosen)
+        # One index block, shared by every picked cell: `p * tries + attempt`.
+        pick = enp.reshape(
+            evoxc.add(enp.reshape(attempt, (pop_size, 1)), row_offsets(pop_size, tries)),
+            (pop_size,),
         )
-        chosen = evoxc.not_equal(attempt, i32(I_INF))
-        conn_row = fetch_first(context.free_conn)
-        allowed = evoxc.logical_and(
-            gate,
-            evoxc.logical_and(chosen, evoxc.not_equal(conn_row, i32(I_INF))),
-        )
-        in_key = masked_flat_gather(in_keys, attempt, mask=chosen, fill=I_INF)
-        out_key = masked_flat_gather(out_keys, attempt, mask=chosen, fill=I_INF)
+        in_key = _pick_cell(in_keys, pick, pop_size, tries)
+        out_key = _pick_cell(out_keys, pick, pop_size, tries)
         # One cycle query for the *chosen* edge instead of one per attempt: the reachability
         # relaxation is the most expensive predicate here (a loop region), and a rejected
         # attempt costs a later one nothing but a re-draw.
@@ -220,13 +252,11 @@ class RecurrentMutation(DefaultMutation):
             allowed = evoxc.logical_and(
                 allowed,
                 evoxc.logical_or(
-                    evoxc.logical_not(
-                        masked_flat_gather(
-                            required, attempt, mask=chosen, fill=False
-                        )
-                    ),
+                    evoxc.logical_not(_pick_cell(required, pick, pop_size, tries)),
                     closes,
                 ),
             )
         return AddConnPlan(allowed, conn_row, in_key, out_key)
+
+
 __all__ = ["RecurrentMutation"]
