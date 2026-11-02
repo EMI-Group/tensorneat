@@ -19,15 +19,19 @@ import evoxc
 import evoxc.numpy as enp
 
 __all__ = [
+    "column_base",
     "first_row",
     "flatten",
     "graph_constant",
     "i32",
+    "masked_random_row",
     "random_row",
     "row_offsets",
     "scatter_rows",
     "take_block",
+    "take_block_at",
     "take_rows",
+    "write_rows",
 ]
 
 
@@ -76,6 +80,29 @@ def row_offsets(pop_size: int, width: int) -> evoxc.SymbolicTensor:
     """
     return graph_constant(
         np.arange(0, pop_size * width, width, dtype=np.int32).reshape(pop_size, 1)
+    )
+
+
+def column_base(pop_size: int, row_count: int, width: int) -> np.ndarray:
+    """Flat offset of every cell of a ``(P, row_count, width)`` block, as ``(P, 1, width)``.
+
+    ``base[p, 0, c] = p * row_count * width + c`` is the batch stride of individual ``p``
+    plus the column index, so one row of that block starts at ``base + row * width`` and a
+    gather with that index returns the ``(P, 1, width)`` block directly.
+
+    Args:
+        pop_size: Population size ``P`` (static).
+        row_count: Number of rows per individual ``R`` (static).
+        width: Row width ``W`` of the flattened array (static).
+
+    Returns:
+        ``(P, 1, W) int32`` host array for :func:`graph_constant`.
+    """
+    rows = np.arange(pop_size, dtype=np.int32).reshape(pop_size, 1, 1) * np.int32(
+        row_count * width
+    )
+    return (rows + np.arange(width, dtype=np.int32).reshape(1, 1, width)).astype(
+        np.int32
     )
 
 
@@ -139,12 +166,38 @@ def random_row(
         ``(row, hit)``: ``(P,) int32`` chosen column (``0`` where the row is empty) and
         ``(P,) bool`` "this row has a ``True`` entry".
     """
+    hit = evoxc.reduce_max(mask, axes=1)
+    return masked_random_row(key, evoxc.cast(mask, evoxc.float32), hit)
+
+
+def masked_random_row(
+    key: evoxc.SymbolicTensor,
+    weights: evoxc.SymbolicTensor,
+    hit: evoxc.SymbolicTensor,
+) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+    """Draw one sampled column out of an already masked weight block.
+
+    The float copy of an eligibility mask and its "any entry" flag are both
+    mask-only values: when two operations draw against the *same* mask (add-node
+    and delete-connection both sample the present connections) the stage builds
+    them once and passes them in, so this helper is the bare draw, its
+    restriction and the ``argmax`` — the only per-call work left.
+
+    Args:
+        key: Rank-0 ``evoxc.random`` key; the whole batch comes from this one key.
+        weights: ``(P, L) float32`` eligibility mask, ``1.0`` where eligible and
+            ``0.0`` elsewhere.
+        hit: ``(P,) bool`` "this row has an eligible entry" (``any(mask, axis=1)``).
+
+    Returns:
+        ``(row, hit)``: ``(P,) int32`` chosen column (``0`` where the row is empty) and the
+        ``hit`` flag passed in.
+    """
     draws = evoxc.random.uniform(
-        key, tuple(mask.shape), 0.0, 1.0, dtype=evoxc.float32
+        key, tuple(weights.shape), 0.0, 1.0, dtype=evoxc.float32
     )
-    weights = evoxc.multiply(draws, evoxc.cast(mask, evoxc.float32))
-    row = evoxc.cast(evoxc.argmax(weights, axis=1), evoxc.int32)
-    return row, evoxc.reduce_max(mask, axes=1)
+    row = evoxc.cast(evoxc.argmax(evoxc.multiply(draws, weights), axis=1), evoxc.int32)
+    return row, hit
 
 
 def take_rows(
@@ -199,6 +252,74 @@ def take_block(
     )
     index = enp.reshape(evoxc.add(span, offsets), (-1,))
     return enp.reshape(evoxc.gather(x_flat, index, axis=0), (rows.shape[0], width))
+
+
+def take_block_at(
+    x_flat: evoxc.SymbolicTensor,
+    base: evoxc.SymbolicTensor,
+    rows_column: evoxc.SymbolicTensor,
+    width: evoxc.SymbolicTensor,
+) -> evoxc.SymbolicTensor:
+    """Gather the ``width`` cells of one row per individual, out of a flattened payload.
+
+    The flat index of every cell is ``base + row * width``: ``base`` carries the
+    batch stride *and* the column index of each cell, so the block comes out in
+    one broadcast ``add`` and the gather returns the ``(P, 1, width)`` block
+    directly — no index reshape and no output reshape.  Two reads of the same row
+    (connection keys and connection attributes) share ``rows_column`` and each
+    costs three traced ops.
+
+    Args:
+        x_flat: ``(P * R * width,)`` flattened batch-first source.
+        base: ``(P, 1, width) int32`` constant ``p * R * width + column``.
+        rows_column: ``(P, 1, 1) int32`` row indices in ``[0, R)`` (rank 3 so the
+            broadcast pairs the row axis, not the population axis).
+        width: Rank-0 ``int32`` row width ``width``.
+
+    Returns:
+        ``(P, 1, width)`` tensor of ``x``'s dtype.  An index outside ``[0, R)`` raises in
+        the backend — this helper does not sanitize, because its callers own the domains.
+
+    Raises:
+        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
+    """
+    return evoxc.gather(
+        x_flat, evoxc.add(base, evoxc.multiply(rows_column, width)), axis=0
+    )
+
+
+def write_rows(
+    x: evoxc.SymbolicTensor,
+    row_index: evoxc.SymbolicTensor,
+    rows: evoxc.SymbolicTensor,
+    values: evoxc.SymbolicTensor,
+) -> evoxc.SymbolicTensor:
+    """Overwrite one row per individual with a ``select`` on a row-index comparison.
+
+    A row index equal to ``x``'s own row count matches no row, which is exactly
+    the "no write" slot the plan uses; no dump row, no flattening and no
+    out-of-range index is needed, and an individual whose plan writes nothing
+    keeps its row bit-for-bit (``-0.0`` and ``NaN`` included).
+
+    Args:
+        x: ``(P, R)`` or ``(P, R, W)`` payload to write into.
+        row_index: ``(1, R)`` (rank 2) or ``(1, R, 1)`` (rank 3) ``int32`` constant
+            ``[0, 1, ..., R-1]`` — the rank sets the rank of the written values.
+        rows: ``(P,) int32`` destination rows, ``R`` meaning "no write".
+        values: Written value, broadcastable to ``x``'s shape (``(P, 1)`` for a rank-2
+            payload, ``(P, 1, W)`` for a rank-3 one, or a rank-0 constant).
+
+    Returns:
+        ``x`` with ``rows`` overwritten, same shape and dtype.
+
+    Raises:
+        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
+    """
+    mask = evoxc.equal(
+        row_index,
+        enp.reshape(rows, (rows.shape[0],) + (1,) * (len(x.shape) - 1)),
+    )
+    return evoxc.select(mask, values, x)
 
 
 def scatter_rows(

@@ -23,7 +23,14 @@ import evoxc.numpy as enp
 
 from ....common import I_INF, ConfigError, State, StatefulBaseClass
 from ...utils import GenomeTensors
-from .arrays import flatten, graph_constant, i32 as _int32, row_offsets
+from .arrays import (
+    column_base,
+    first_row,
+    flatten,
+    graph_constant,
+    i32 as _int32,
+    row_offsets,
+)
 from .plan import (
     AddConnPlan,
     AddNodePlan,
@@ -50,19 +57,17 @@ def _broadcast_row(row: evoxc.SymbolicTensor, pop_size: int) -> evoxc.SymbolicTe
     ``(W,)`` row because the values are static, while the payload writers take a
     ``(P, W)`` block; ``broadcast_to`` expresses that in one traced op, where an
     elementwise add against a ``(1, W)`` view would cost a full-size ``zeros`` constant
-    plus an ``add``.  The row is reshaped first: a gene factory may return either a
-    ``(W,)`` or a ``(1, W)`` row, and ``broadcast_to`` alone cannot unify the two.
+    plus an ``add``.  ``broadcast_to`` also normalizes a ``(1, W)`` row, so a gene factory
+    returning either rank costs the same single op — no intermediate ``reshape``.
 
     Args:
-        row: ``(W,)`` attribute row of one gene.
+        row: ``(W,)`` or ``(1, W)`` attribute row of one gene.
         pop_size: Population size ``P`` (static).
 
     Returns:
         ``(P, W)`` tensor whose every row equals ``row``.
     """
-    return enp.broadcast_to(
-        enp.reshape(row, (1, row.shape[-1])), (pop_size, row.shape[-1])
-    )
+    return enp.broadcast_to(row, (pop_size,) + tuple(row.shape[-1:]))
 
 
 def _edge_key_row(
@@ -90,23 +95,20 @@ def _edge_key_row(
         genome ("BaseGenome"): Genome whose ``conn_gene`` decides whether the column exists.
 
     Returns:
-        ``(P, 1, CK) int32`` block holding the single key row.
+        ``(P, 1, CK) int32`` block holding the single key row.  The row is stacked from the
+        ``(P,)`` columns and then treated as a one-row block, which is one ``stack`` plus one
+        ``reshape`` instead of one reshape per column plus a concatenate.
     """
     pop_size = src_keys.shape[0]
-    columns = [
-        enp.reshape(src_keys, (pop_size, 1, 1)),
-        enp.reshape(dst_keys, (pop_size, 1, 1)),
-    ]
+    columns = [src_keys, dst_keys]
     if genome.conn_gene.uses_historical_marker:
         columns.append(
             enp.reshape(
-                evoxc.slice(
-                    new_conn_keys, (0, marker_column), (pop_size, 1)
-                ),
-                (pop_size, 1, 1),
+                evoxc.slice(new_conn_keys, (0, marker_column), (pop_size, 1)),
+                (pop_size,),
             )
         )
-    return enp.concatenate(columns, axis=2)
+    return enp.reshape(enp.stack(columns, axis=1), (pop_size, 1, key_width))
 
 
 def _gated(
@@ -323,15 +325,15 @@ class BaseMutation(StatefulBaseClass):
             state,
             genome,
             plans,
-            node_keys,
-            conn_keys,
-            conn_attrs,
+            context,
             new_node_keys,
             new_conn_keys,
             pop_size,
             node_attrs.shape[2],
+            conn_keys.shape[2],
+            conn_attrs.shape[2],
         )
-        return apply(edit, node_keys, node_attrs, conn_keys, conn_attrs)
+        return apply(edit, context, node_keys, node_attrs, conn_keys, conn_attrs)
 
     def mutate_values(
         self,
@@ -467,47 +469,68 @@ class BaseMutation(StatefulBaseClass):
         key_width = conn_keys.shape[2]
         attr_width = conn_attrs.shape[2]
         sentinel = _int32(I_INF)
-        free_node = evoxc.equal(node_keys, sentinel)
-        present_node = evoxc.logical_not(free_node)
+        present_node = evoxc.not_equal(node_keys, sentinel)
         row_index = graph_constant(
             np.arange(node_count, dtype=np.int32).reshape(1, node_count)
         )
-        present_conn = evoxc.not_equal(conn_keys[:, :, 0], sentinel)
+        conn_row_index = graph_constant(
+            np.arange(edge_count, dtype=np.int32).reshape(1, edge_count)
+        )
+        conn_src = conn_keys[:, :, 0]
+        conn_dst = conn_keys[:, :, 1]
+        present_conn = evoxc.not_equal(conn_src, sentinel)
+        # The row ranges no structural operation may move: inputs first, outputs last.
+        hidden_start = _int32(genome.num_inputs)
+        after_inputs = evoxc.greater_equal(row_index, hidden_start)
+        present_conn_float = evoxc.cast(present_conn, evoxc.float32)
+        free_conn_row, free_conn_any = first_row(
+            evoxc.logical_not(present_conn)
+        )
         return EditContext(
             node_row_index=row_index,
-            conn_row_index=graph_constant(
-                np.arange(edge_count, dtype=np.int32).reshape(1, edge_count)
+            node_row_column=graph_constant(
+                np.arange(node_count, dtype=np.int32).reshape(1, node_count, 1)
             ),
-            conn_key_columns=graph_constant(
-                np.arange(key_width, dtype=np.int32).reshape(1, key_width)
+            conn_row_index=conn_row_index,
+            conn_row_column=graph_constant(
+                np.arange(edge_count, dtype=np.int32).reshape(1, edge_count, 1)
             ),
-            conn_attr_columns=graph_constant(
-                np.arange(attr_width, dtype=np.int32).reshape(1, attr_width)
-            ),
+            conn_src=conn_src,
+            conn_dst=conn_dst,
             present_node=present_node,
-            free_node=free_node,
+            free_node=evoxc.equal(node_keys, sentinel),
             deletable_node=evoxc.logical_and(
+                after_inputs,
                 evoxc.logical_and(
                     present_node,
-                    evoxc.greater_equal(row_index, _int32(genome.num_inputs)),
+                    evoxc.less(row_index, _int32(node_count - genome.num_outputs)),
                 ),
-                evoxc.less(row_index, _int32(node_count - genome.num_outputs)),
             ),
-            targetable_node=evoxc.logical_and(
-                present_node,
-                evoxc.greater_equal(row_index, _int32(genome.num_inputs)),
-            ),
+            targetable_node=evoxc.logical_and(present_node, after_inputs),
             present_conn=present_conn,
             free_conn=evoxc.logical_not(present_conn),
+            present_conn_float=present_conn_float,
+            present_conn_any=evoxc.reduce_max(present_conn, axes=1),
+            free_conn_row=free_conn_row,
+            free_conn_any=free_conn_any,
             sentinel=sentinel,
             zero=_int32(0),
+            nan_fill=enp.full((), float("nan"), dtype=evoxc.float32),
             in_degree_limit=_int32(genome.max_in_degree),
+            node_row_limit=_int32(node_count),
+            conn_row_limit=_int32(edge_count),
             node_flat=flatten(node_keys),
             node_offsets=row_offsets(pop_size, node_count),
             conn_key_flat=flatten(conn_keys),
-            conn_key_offsets=row_offsets(pop_size, edge_count * key_width),
+            conn_key_base=graph_constant(
+                column_base(pop_size, edge_count, key_width)
+            ),
             conn_attr_flat=flatten(conn_attrs),
-            conn_attr_offsets=row_offsets(pop_size, edge_count * attr_width),
+            conn_attr_base=graph_constant(
+                column_base(pop_size, edge_count, attr_width)
+            ),
+            key_width=_int32(key_width),
+            attr_width=_int32(attr_width),
         )
 
     def _plan_operations(
@@ -572,7 +595,7 @@ class BaseMutation(StatefulBaseClass):
                 ghost,
                 ghost,
                 ghost,
-                enp.zeros((pop_size, attr_width), dtype=evoxc.float32),
+                enp.zeros((pop_size, 1, attr_width), dtype=evoxc.float32),
             )
         )
         delete_node = (
@@ -603,42 +626,44 @@ class BaseMutation(StatefulBaseClass):
         state: State,
         genome: "BaseGenome",
         plans: tuple,
-        node_keys: evoxc.SymbolicTensor,
-        conn_keys: evoxc.SymbolicTensor,
-        conn_attrs: evoxc.SymbolicTensor,
+        context: EditContext,
         new_node_keys: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
         pop_size: int,
         node_attr_width: int,
+        key_width: int,
+        conn_attr_width: int,
     ) -> Edit:
-        """Merge the four mutually exclusive plans into one per-array write.
+        """Merge the four mutually exclusive plans into one write per payload-array slot.
 
         Each array slot is filled by a small ``select`` chain in the order the operations
         run — node deletion after node split, delete-connection after add-connection — with
-        the array's own length as the "no write" row (absorbed by the dump row of
-        :func:`~.plan.apply`).  Because only one gate is true per individual, the chain is a
+        the array's own length as the "no write" row, which matches no row in
+        :func:`~.plan.apply`.  Because only one gate is true per individual, the chain is a
         priority encoder, not a blend.
+
+        A slot that only ever writes the "cleared" value (connection slot 0, whose row is the
+        consumed or the deleted connection) carries the shared rank-0 ``I_INF``/NaN constant
+        instead of a full-size block, and a slot whose row means "no write" whenever its
+        value is meaningless (connection slot 2) carries the block unguarded — the row
+        comparison already suppresses the write.
 
         Args:
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome owning the gene attribute factories.
             plans (tuple): the four plans from :meth:`_plan_operations`.
-            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys.
-            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
-            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` connection attributes.
+            context (EditContext): Shared constants, masks and flat index blocks.
             new_node_keys (evoxc.SymbolicTensor): ``(P,) int32`` allocated node keys.
             new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated connection keys.
             pop_size (int): Population size ``P`` (static).
             node_attr_width (int): ``NA``.
+            key_width (int): ``CK``, the connection gene's key width.
+            conn_attr_width (int): ``CA``.
 
         Returns:
             Edit: the plan to hand to :func:`~.plan.apply`.
         """
         add_node, delete_node, add_conn, delete_conn = plans
-        node_count = node_keys.shape[1]
-        edge_count = conn_keys.shape[1]
-        key_width = conn_keys.shape[2]
-        attr_width = conn_attrs.shape[2]
         if self.node_add > 0.0:
             node_identity = _broadcast_row(
                 genome.node_gene.new_identity_attrs(state), pop_size
@@ -650,33 +675,30 @@ class BaseMutation(StatefulBaseClass):
         node_rows = evoxc.select(
             add_node.ok,
             add_node.node_row,
-            evoxc.select(delete_node.ok, delete_node.node_row, _int32(node_count)),
+            evoxc.select(delete_node.ok, delete_node.node_row, context.node_row_limit),
         )
-        node_key_values = evoxc.select(
-            add_node.ok, new_node_keys, _int32(I_INF)
-        )
+        node_key_values = evoxc.select(add_node.ok, new_node_keys, context.sentinel)
         node_attr_values = evoxc.select(
-            enp.reshape(add_node.ok, (pop_size, 1)),
-            node_identity,
-            enp.full((), float("nan"), dtype=evoxc.float32),
+            enp.reshape(add_node.ok, (pop_size, 1)), node_identity, context.nan_fill
         )
-        conn_row_0 = evoxc.select(
-            add_node.ok,
-            add_node.delete_row,
-            evoxc.select(delete_conn.ok, delete_conn.conn_row, _int32(edge_count)),
-        )
-        conn_row_1 = evoxc.select(
-            add_node.ok,
-            add_node.identity_row,
-            evoxc.select(add_conn.ok, add_conn.conn_row, _int32(edge_count)),
-        )
-        conn_row_2 = evoxc.select(add_node.ok, add_node.copy_row, _int32(edge_count))
-        conn_rows = enp.stack([conn_row_0, conn_row_1, conn_row_2], axis=1)
-        padding_keys = enp.full(
-            (pop_size, 1, key_width), I_INF, dtype=conn_keys.dtype
+        conn_rows = (
+            evoxc.select(
+                add_node.ok,
+                add_node.delete_row,
+                evoxc.select(
+                    delete_conn.ok, delete_conn.conn_row, context.conn_row_limit
+                ),
+            ),
+            evoxc.select(
+                add_node.ok,
+                add_node.identity_row,
+                evoxc.select(
+                    add_conn.ok, add_conn.conn_row, context.conn_row_limit
+                ),
+            ),
+            evoxc.select(add_node.ok, add_node.copy_row, context.conn_row_limit),
         )
         add_node_column = enp.reshape(add_node.ok, (pop_size, 1, 1))
-        add_conn_column = enp.reshape(add_conn.ok, (pop_size, 1, 1))
         identity_keys = _edge_key_row(
             add_node.in_key, new_node_keys, new_conn_keys, 0, key_width, genome
         )
@@ -686,56 +708,31 @@ class BaseMutation(StatefulBaseClass):
         add_keys = _edge_key_row(
             add_conn.in_key, add_conn.out_key, new_conn_keys, 2, key_width, genome
         )
-        conn_key_slot_1 = evoxc.select(
-            add_node_column,
-            identity_keys,
-            evoxc.select(add_conn_column, add_keys, padding_keys),
-        )
-        conn_key_slot_2 = evoxc.select(add_node_column, copy_keys, padding_keys)
-        conn_key_values = enp.concatenate(
-            [padding_keys, conn_key_slot_1, conn_key_slot_2], axis=1
-        )
-        padding_attrs = enp.full(
-            (pop_size, 1, attr_width), float("nan"), dtype=conn_attrs.dtype
-        )
         if self.node_add > 0.0:
             conn_identity = _broadcast_row(
                 genome.conn_gene.new_identity_attrs(state), pop_size
             )
         else:
-            conn_identity = enp.zeros((pop_size, attr_width), dtype=evoxc.float32)
+            conn_identity = enp.zeros((pop_size, conn_attr_width), dtype=evoxc.float32)
         if self.conn_add > 0.0:
             conn_zero = _broadcast_row(
                 genome.conn_gene.new_zero_attrs(state), pop_size
             )
         else:
-            conn_zero = enp.zeros((pop_size, attr_width), dtype=evoxc.float32)
+            conn_zero = enp.zeros((pop_size, conn_attr_width), dtype=evoxc.float32)
         conn_attr_slot_1 = evoxc.select(
             add_node_column,
-            enp.reshape(conn_identity, (pop_size, 1, attr_width)),
-            evoxc.select(
-                add_conn_column,
-                enp.reshape(conn_zero, (pop_size, 1, attr_width)),
-                padding_attrs,
-            ),
-        )
-        conn_attr_slot_2 = evoxc.select(
-            add_node_column,
-            enp.reshape(add_node.copy_attrs, (pop_size, 1, attr_width)),
-            padding_attrs,
-        )
-        conn_attr_values = enp.concatenate(
-            [padding_attrs, conn_attr_slot_1, conn_attr_slot_2], axis=1
+            enp.reshape(conn_identity, (pop_size, 1, conn_attr_width)),
+            enp.reshape(conn_zero, (pop_size, 1, conn_attr_width)),
         )
         return Edit(
             node_rows,
             node_key_values,
             node_attr_values,
             conn_rows,
-            conn_key_values,
-            conn_attr_values,
+            (context.sentinel, evoxc.select(add_node_column, identity_keys, add_keys), copy_keys),
+            (context.nan_fill, conn_attr_slot_1, add_node.copy_attrs),
             delete_node.drop,
         )
-
 
 __all__ = ["BaseMutation"]
