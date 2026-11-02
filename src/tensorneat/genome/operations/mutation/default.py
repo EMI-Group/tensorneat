@@ -7,9 +7,14 @@ genome's ``max_in_degree`` are never exceeded, a refused add is a no-op for that
 (never a silent repair), and new rows go to ``first_free_row`` in the same layout for keys
 and attributes.
 
-The gate draw, the operation ordering and the value mutation are shared and live in
-:class:`~.base.BaseMutation`; this module supplies the four probabilities and the four
-per-operation helpers.
+Because the four operations are mutually exclusive, this module **plans** them instead of
+applying them one after another: each helper resolves one operation's candidate rows and
+values, and :meth:`.base.BaseMutation.mutate_structure` merges the four plans into a single
+per-array write (see :mod:`~.plan`).  That keeps the traced-op count of the stage
+proportional to the number of distinct accesses rather than to the number of intermediate
+whole-array rewrites.  The gate draw, the merge and the value mutation are shared and live
+in :class:`~.base.BaseMutation`; this module supplies the four probabilities and the four
+per-operation plans.
 """
 
 from typing import TYPE_CHECKING
@@ -17,90 +22,40 @@ from typing import TYPE_CHECKING
 import evoxc
 import evoxc.numpy as enp
 
-from ....common import I_INF, ConfigError, State, masked_flat_gather
-from ...utils import (
-    GenomeTensors,
-    add_conn,
-    add_node,
-    delete_conn_by_pos,
-    delete_conns_by_key,
-    delete_node_by_pos,
-    fetch_random_index,
-    first_free_row,
-    valid_count,
-)
-from .base import BaseMutation, _broadcast_row, _gated, _int32
+from ....common import ConfigError, State
+from .arrays import first_row, i32, random_row, take_block, take_rows
+from .base import BaseMutation
+from .cycle import closes_cycle
+from .plan import AddConnPlan, AddNodePlan, DeleteConnPlan, DeleteNodePlan
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...base import BaseGenome
 
 
-def _edge_keys(
-    src_keys: evoxc.SymbolicTensor,
-    dst_keys: evoxc.SymbolicTensor,
-    new_conn_keys: evoxc.SymbolicTensor,
-    marker_column: int,
-    genome: "BaseGenome",
-) -> evoxc.SymbolicTensor:
-    """Build the ``(P, CK)`` key row of one new connection.
+def _fetch_two(
+    key: evoxc.SymbolicTensor, masks: evoxc.SymbolicTensor
+) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+    """Draw one uniformly chosen ``True`` entry per row of a ``(P, k, L)`` mask block.
 
-    The key row is ``(in_key, out_key)`` plus the ``historical_marker`` column when — and
-    only when — the connection gene declares one.  The marker is not a node reference but
-    an identity, so it comes from the caller-allocated innovation column of
-    ``new_conn_keys``; the branch is a static Python ``if`` on the gene's specification,
-    because a ``CK`` of ``2`` and one of ``3`` are different static shapes.
+    The ``k`` choices (the source and the destination of a new edge) come from *one* batched
+    draw and *one* ``argmax``: the maximiser of i.i.d. uniforms restricted to the ``True``
+    set is uniform over that set, and the ``k`` slices are drawn from independent uniforms,
+    so the choices stay independent of each other.
 
     Args:
-        src_keys: ``(P,) int32`` source node keys.
-        dst_keys: ``(P,) int32`` destination node keys.
-        new_conn_keys: ``(P, 3) int32`` allocated connection keys.
-        marker_column: Column of ``new_conn_keys`` used as the ``historical_marker``.
-        genome ("BaseGenome"): Genome whose ``conn_gene`` decides whether the column exists.
+        key: Rank-0 ``evoxc.random`` key; the whole batch and every choice come from it.
+        masks: ``(P, k, L) bool`` eligibility masks.
 
     Returns:
-        ``(P, CK) int32`` key rows, ``CK`` being ``conn_gene.key_width``.
+        ``(chosen, hit)``, both ``(P, k)``: the chosen column index (``0`` where a slice has
+        no ``True`` entry) and the per-slice eligibility flag.
     """
-    columns = [src_keys, dst_keys]
-    if genome.conn_gene.uses_historical_marker:
-        columns.append(
-            evoxc.reshape(
-                new_conn_keys[:, marker_column : marker_column + 1],
-                (new_conn_keys.shape[0],),
-            )
-        )
-    return enp.stack(columns, axis=-1)
-
-
-def _attribute_row(
-    attrs: evoxc.SymbolicTensor, rows: evoxc.SymbolicTensor
-) -> evoxc.SymbolicTensor:
-    """Gather one attribute row per individual out of a ``(P, M, W)`` table.
-
-    Used by the node split, which has to carry the attributes of the connection it deletes
-    over to its copy edge.  Rows are resolved through flat indices because
-    ``evoxc.gather`` replaces the indexed axis instead of indexing it per row, and the
-    ``I_INF`` "no row" sentinel is redirected to ``0`` *after* the mask is applied, so the
-    backend never sees it.
-
-    Args:
-        attrs: ``(P, M, W) float32`` attribute table.
-        rows: ``(P,) int32`` row per individual, ``I_INF`` for "absent" (yielding NaN).
-
-    Returns:
-        ``(P, W) float32`` attribute rows, NaN where ``rows`` is ``I_INF``.
-    """
-    pop_size, row_count, width = attrs.shape
-    present = evoxc.not_equal(rows, _int32(I_INF))
-    safe = evoxc.select(present, rows, _int32(0))
-    columns = enp.reshape(safe, (pop_size, 1)) * _int32(width) + enp.arange(
-        0, width, dtype=evoxc.int32
+    draw = evoxc.random.uniform(
+        key, tuple(masks.shape), 0.0, 1.0, dtype=evoxc.float32
     )
-    return masked_flat_gather(
-        enp.reshape(attrs, (pop_size, row_count * width)),
-        columns,
-        mask=enp.reshape(present, (pop_size, 1)),
-        fill=float("nan"),
-    )
+    weights = evoxc.multiply(draw, evoxc.cast(masks, evoxc.float32))
+    chosen = evoxc.cast(evoxc.argmax(weights, axis=2), evoxc.int32)
+    return chosen, evoxc.reduce_max(masks, axes=2)
 
 
 class DefaultMutation(BaseMutation):
@@ -109,8 +64,9 @@ class DefaultMutation(BaseMutation):
     The four probabilities are independent per individual and per generation, but at most
     one structural mutation is applied per individual: one shared
     ``evoxc.random.uniform(key, (4, P))`` draw gates all of them and the first operation
-    that hits wins.  A probability of ``0`` therefore removes its operation from the
-    draw's reach entirely (an all-``False`` row).
+    that hits wins.  A probability of ``0`` therefore removes its operation from the draw's
+    reach entirely (an all-``False`` row) — and, because the plan is built per operation,
+    from the traced graph as well.
 
     Args:
         conn_add (float): Probability per individual of attempting to add one connection.
@@ -174,222 +130,188 @@ class DefaultMutation(BaseMutation):
             )
         return probability
 
-    def _mutate_add_node(
+    def plan_add_node(
         self,
         state: State,
         genome: "BaseGenome",
         key: evoxc.SymbolicTensor,
+        context: object,
         node_keys: evoxc.SymbolicTensor,
-        node_attrs: evoxc.SymbolicTensor,
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
         new_node_keys: evoxc.SymbolicTensor,
-        new_conn_keys: evoxc.SymbolicTensor,
         gate: evoxc.SymbolicTensor,
-    ) -> GenomeTensors:
-        """Split one connection per individual with a new node, preserving network output.
+    ) -> AddNodePlan:
+        """Resolve one node split per individual, preserving the network's output.
 
-        The chosen connection is deleted, the new node is written at ``first_free_row`` with
-        the node gene's identity attributes, then two connections are added: an identity one
-        from the old source (``conn_gene.new_identity_attrs``) and a copy of the original one
-        into the old destination (with the recorded original attributes).
+        The chosen connection is consumed, the new node goes to ``first_free_row`` of the node
+        table with the node gene's identity attributes, and two connections are created: an
+        identity one from the old source (``conn_gene.new_identity_attrs``) and a copy of the
+        consumed one into the old destination (with the recorded original attributes).  The
+        two connection rows are the *first* and *second* free rows once the consumed row
+        counts as free, which is exactly what the sequential formulation produced.
 
-        No-op for an individual when ``gate`` is false, when :meth:`choose_connection_key`
-        finds no connection (``I_INF``), when ``first_free_row`` finds no free node row, or
-        when fewer than two connection rows are free.
+        No candidate when ``gate`` is false, when there is no connection to consume, when the
+        node table is full, or when fewer than two connection rows are free.
 
         Args:
             state (State): Immutable host configuration container.
-            genome ("BaseGenome"): Genome providing the identity attribute factories.
-            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this helper.
+            genome ("BaseGenome"): Genome providing the identity attribute factory.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this operation's draw.
+            context (EditContext): Shared masks and flat index blocks of the stage.
             node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
-            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
-            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
-            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
+            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` connection attributes.
             new_node_keys (evoxc.SymbolicTensor): ``(P,) int32`` allocated node keys.
-            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated conn keys;
-                ``[:, 0]``/``[:, 1]`` become the ``historical_marker`` of the identity/copy
-                edge when the conn gene declares one.
-            gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected the
-                add-node operation" mask from the shared gate draw.
+            gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected add-node".
 
         Returns:
-            GenomeTensors: the four payload arrays; an individual that cannot split is unchanged.
+            AddNodePlan: the candidate rows and values; ``ok`` is false for a refused split.
         """
         pop_size = node_keys.shape[0]
-        edge_count = conn_keys.shape[1]
-        in_keys, out_keys, rows = self.choose_connection_key(key, conn_keys)
-        original_attrs = _attribute_row(conn_attrs, rows)
-        node_row = first_free_row(node_keys)
-        # Two free connection rows are needed: the split deletes one and writes two.
-        free_conns = _int32(edge_count) - valid_count(conn_keys)
-        splittable = evoxc.logical_and(
-            evoxc.logical_and(
-                gate, evoxc.not_equal(rows, _int32(I_INF))
-            ),
-            evoxc.logical_and(
-                evoxc.not_equal(node_row, _int32(I_INF)),
-                evoxc.greater_equal(free_conns, _int32(2)),
+        key_width = conn_keys.shape[2]
+        attr_width = conn_attrs.shape[2]
+        delete_row, has_connection = random_row(key, context.present_conn)
+        key_row = take_block(
+            context.conn_key_flat,
+            context.conn_key_offsets,
+            delete_row,
+            context.conn_key_columns,
+            key_width,
+        )
+        copy_attrs = take_block(
+            context.conn_attr_flat,
+            context.conn_attr_offsets,
+            delete_row,
+            context.conn_attr_columns,
+            attr_width,
+        )
+        node_row, has_node = first_row(context.free_node)
+        # The two new edges take the first two rows that are free *before* the split, which
+        # is exactly the documented "refused unless two connection rows are free" rule: the
+        # second ``first_row`` has no hit when only one row was free.
+        identity_row, _ = first_row(context.free_conn)
+        remaining = evoxc.logical_and(
+            context.free_conn,
+            evoxc.logical_not(
+                evoxc.equal(
+                    context.conn_row_index, enp.reshape(identity_row, (pop_size, 1))
+                )
             ),
         )
-        split_keys, split_attrs = delete_conn_by_pos(conn_keys, conn_attrs, rows)
-        split_node_keys, split_node_attrs = add_node(
-            node_keys,
-            node_attrs,
+        copy_row, has_copy = first_row(remaining)
+        ok = evoxc.logical_and(
+            evoxc.logical_and(gate, has_connection),
+            evoxc.logical_and(has_node, has_copy),
+        )
+        return AddNodePlan(
+            ok,
             node_row,
-            new_node_keys,
-            _broadcast_row(genome.node_gene.new_identity_attrs(state), pop_size),
-        )
-        identity_row = first_free_row(split_keys)
-        split_keys, split_attrs = add_conn(
-            split_keys,
-            split_attrs,
+            delete_row,
             identity_row,
-            _edge_keys(in_keys, new_node_keys, new_conn_keys, 0, genome),
-            _broadcast_row(genome.conn_gene.new_identity_attrs(state), pop_size),
-        )
-        # The second row comes from the post-first-write key array, so the two new
-        # connection rows can never be the same one.
-        copy_row = first_free_row(split_keys)
-        split_keys, split_attrs = add_conn(
-            split_keys,
-            split_attrs,
             copy_row,
-            _edge_keys(new_node_keys, out_keys, new_conn_keys, 1, genome),
-            original_attrs,
-        )
-        return GenomeTensors(
-            _gated(splittable, split_node_keys, node_keys),
-            _gated(splittable, split_node_attrs, node_attrs),
-            _gated(splittable, split_keys, conn_keys),
-            _gated(splittable, split_attrs, conn_attrs),
+            evoxc.reshape(evoxc.slice(key_row, (0, 0), (pop_size, 1)), (pop_size,)),
+            evoxc.reshape(evoxc.slice(key_row, (0, 1), (pop_size, 1)), (pop_size,)),
+            copy_attrs,
         )
 
-    def _mutate_delete_node(
+    def plan_delete_node(
         self,
         state: State,
         genome: "BaseGenome",
         key: evoxc.SymbolicTensor,
+        context: object,
         node_keys: evoxc.SymbolicTensor,
-        node_attrs: evoxc.SymbolicTensor,
         conn_keys: evoxc.SymbolicTensor,
-        conn_attrs: evoxc.SymbolicTensor,
         gate: evoxc.SymbolicTensor,
-    ) -> GenomeTensors:
-        """Delete one hidden node per individual together with all its connections.
+    ) -> DeleteNodePlan:
+        """Resolve one hidden-node deletion per individual.
 
         Input rows (``0..num_inputs-1``) and output rows (``N-num_outputs..N-1``) are never
-        candidates, so :meth:`choose_node_key` is called with both ``allow_*_keys=False``;
-        the node row is cleared with ``delete_node_by_pos`` and every connection touching the
-        deleted key is cleared with ``delete_conns_by_key``.
+        candidates.  Every connection touching the deleted key is detached in the same
+        elementwise pass, so the operation costs one mask and never a per-connection delete.
 
-        No-op when ``gate`` is false or when no hidden node exists
-        (:meth:`choose_node_key` returns ``I_INF``).
+        No candidate when ``gate`` is false or when the genome has no hidden node.
 
         Args:
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome providing the input/output row ranges.
-            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this helper.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this operation's draw.
+            context (EditContext): Shared masks and flat index blocks of the stage.
             node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
-            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
-            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
-            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
-            gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected the
-                delete-node operation" mask from the shared gate draw.
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
+            gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected
+                delete-node".
 
         Returns:
-            GenomeTensors: the four payload arrays, with the deleted node's row and every touching
-            connection row sent back to their padding sentinels.
+            DeleteNodePlan: the row to clear and the (already gated) detach mask.
         """
-        deleted_keys, rows = self.choose_node_key(
-            key,
-            node_keys,
-            genome.num_inputs,
-            genome.num_outputs,
-            allow_input_keys=False,
-            allow_output_keys=False,
+        pop_size = node_keys.shape[0]
+        node_row, has_node = random_row(key, context.deletable_node)
+        deleted_key = take_rows(context.node_flat, context.node_offsets, node_row)
+        target = enp.reshape(deleted_key, (pop_size, 1))
+        touches = evoxc.logical_and(
+            evoxc.logical_or(
+                evoxc.equal(conn_keys[:, :, 0], target),
+                evoxc.equal(conn_keys[:, :, 1], target),
+            ),
+            context.present_conn,
         )
-        deletable = evoxc.logical_and(gate, evoxc.not_equal(rows, _int32(I_INF)))
-        deleted_node_keys, deleted_node_attrs = delete_node_by_pos(
-            node_keys, node_attrs, rows
-        )
-        deleted_conn_keys, deleted_conn_attrs = delete_conns_by_key(
-            conn_keys, conn_attrs, deleted_keys
-        )
-        return GenomeTensors(
-            _gated(deletable, deleted_node_keys, node_keys),
-            _gated(deletable, deleted_node_attrs, node_attrs),
-            _gated(deletable, deleted_conn_keys, conn_keys),
-            _gated(deletable, deleted_conn_attrs, conn_attrs),
+        ok = evoxc.logical_and(gate, has_node)
+        return DeleteNodePlan(
+            ok, node_row, evoxc.logical_and(touches, enp.reshape(ok, (pop_size, 1)))
         )
 
-    def _mutate_add_conn(
+    def plan_add_conn(
         self,
         state: State,
         genome: "BaseGenome",
         key: evoxc.SymbolicTensor,
+        context: object,
         node_keys: evoxc.SymbolicTensor,
-        node_attrs: evoxc.SymbolicTensor,
         conn_keys: evoxc.SymbolicTensor,
-        conn_attrs: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
         gate: evoxc.SymbolicTensor,
-    ) -> GenomeTensors:
-        """Add one connection per individual with the connection gene's zero attributes.
+    ) -> AddConnPlan:
+        """Resolve one added connection per individual.
 
-        Two independent :meth:`choose_node_key` draws pick the endpoints: the source may be
-        any existing node (``allow_input_keys=True, allow_output_keys=True``), the
-        destination any existing node that is not an input (``allow_input_keys=False``).
-
-        No-op for an individual when ``gate`` is false, when an endpoint is ``I_INF``, when
-        ``first_free_row`` finds no free connection row, when the ``(in_key, out_key)`` pair
-        already exists, when the edge would close a cycle and ``genome.network_type ==
-        "feedforward"`` (the genome's ``check_cycles`` predicate, equivalent to the legacy
-        ``common.graph.check_cycles`` reachability test), or when it would push the
-        destination's in-degree past ``genome.max_in_degree``.
+        The source may be any existing node, the destination any existing node that is not an
+        input.  The pair is refused when an endpoint is absent, when the ``(in_key, out_key)``
+        pair already exists, when the destination would exceed ``genome.max_in_degree``, and —
+        for a feedforward genome — when the edge would close a cycle
+        (:func:`~.cycle.closes_cycle`, the bounded reachability predicate).
 
         Args:
             state (State): Immutable host configuration container.
-            genome ("BaseGenome"): Genome providing ``max_in_degree``, ``network_type`` and
-                ``conn_gene.new_zero_attrs``.
-            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this helper.
+            genome ("BaseGenome"): Genome providing ``max_in_degree`` and ``network_type``.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this operation's draws.
+            context (EditContext): Shared masks and flat index blocks of the stage.
             node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
-            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
-            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
-            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
-            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated conn keys;
-                ``[:, 2]`` becomes the ``historical_marker`` of the new edge when declared.
-            gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected the
-                add-connection operation" mask from the shared gate draw.
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
+            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated connection keys.
+            gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected add-conn".
 
         Returns:
-            GenomeTensors: the four payload arrays; a refused add leaves the individual unchanged.
+            AddConnPlan: the candidate row and endpoints; ``ok`` is false for a refused add.
         """
-        pop_size = node_keys.shape[0]
-        source_key, destination_key = evoxc.random.split_n(key, 2)
-        in_keys, _ = self.choose_node_key(
-            source_key,
-            node_keys,
-            genome.num_inputs,
-            genome.num_outputs,
-            allow_input_keys=True,
-            allow_output_keys=True,
+        pop_size, node_count = node_keys.shape
+        candidates = enp.concatenate(
+            [
+                enp.reshape(context.present_node, (pop_size, 1, node_count)),
+                enp.reshape(context.targetable_node, (pop_size, 1, node_count)),
+            ],
+            axis=1,
         )
-        out_keys, _ = self.choose_node_key(
-            destination_key,
-            node_keys,
-            genome.num_inputs,
-            genome.num_outputs,
-            allow_input_keys=False,
-            allow_output_keys=True,
-        )
-        conn_row = first_free_row(conn_keys)
-        present = evoxc.not_equal(conn_keys[:, :, 0], _int32(I_INF))
+        rows, hits = _fetch_two(key, candidates)
+        endpoints = take_rows(context.node_flat, context.node_offsets, rows)
+        in_keys = evoxc.reshape(evoxc.slice(endpoints, (0, 0), (pop_size, 1)), (pop_size,))
+        out_keys = evoxc.reshape(evoxc.slice(endpoints, (0, 1), (pop_size, 1)), (pop_size,))
+        conn_row, has_room = first_row(context.free_conn)
         in_column = enp.reshape(in_keys, (pop_size, 1))
         out_column = enp.reshape(out_keys, (pop_size, 1))
         duplicate = evoxc.reduce_max(
             evoxc.logical_and(
-                present,
+                context.present_conn,
                 evoxc.logical_and(
                     evoxc.equal(conn_keys[:, :, 0], in_column),
                     evoxc.equal(conn_keys[:, :, 1], out_column),
@@ -401,7 +323,7 @@ class DefaultMutation(BaseMutation):
             evoxc.reduce_sum(
                 evoxc.cast(
                     evoxc.logical_and(
-                        present, evoxc.equal(conn_keys[:, :, 1], out_column)
+                        context.present_conn, evoxc.equal(conn_keys[:, :, 1], out_column)
                     ),
                     evoxc.int32,
                 ),
@@ -410,164 +332,48 @@ class DefaultMutation(BaseMutation):
             evoxc.int32,
         )
         allowed = evoxc.logical_and(
+            evoxc.logical_and(gate, has_room),
             evoxc.logical_and(
-                gate,
-                evoxc.logical_and(
-                    evoxc.not_equal(in_keys, _int32(I_INF)),
-                    evoxc.not_equal(out_keys, _int32(I_INF)),
-                ),
-            ),
-            evoxc.logical_and(
-                evoxc.not_equal(conn_row, _int32(I_INF)),
-                evoxc.logical_not(duplicate),
+                evoxc.reshape(evoxc.slice(hits, (0, 0), (pop_size, 1)), (pop_size,)),
+                evoxc.reshape(evoxc.slice(hits, (0, 1), (pop_size, 1)), (pop_size,)),
             ),
         )
         allowed = evoxc.logical_and(
-            allowed, evoxc.less(in_degree, _int32(genome.max_in_degree))
+            evoxc.logical_and(allowed, evoxc.logical_not(duplicate)),
+            evoxc.less(in_degree, context.in_degree_limit),
         )
         if genome.network_type == "feedforward":
             allowed = evoxc.logical_and(
                 allowed,
-                evoxc.logical_not(
-                    genome.check_cycles(node_keys, conn_keys, in_keys, out_keys)
-                ),
+                evoxc.logical_not(closes_cycle(node_keys, conn_keys, in_keys, out_keys)),
             )
-        added_keys, added_attrs = add_conn(
-            conn_keys,
-            conn_attrs,
-            conn_row,
-            _edge_keys(in_keys, out_keys, new_conn_keys, 2, genome),
-            _broadcast_row(genome.conn_gene.new_zero_attrs(state), pop_size),
-        )
-        return GenomeTensors(
-            node_keys,
-            node_attrs,
-            _gated(allowed, added_keys, conn_keys),
-            _gated(allowed, added_attrs, conn_attrs),
-        )
+        return AddConnPlan(allowed, conn_row, in_keys, out_keys)
 
-    def _mutate_delete_conn(
+    def plan_delete_conn(
         self,
         state: State,
         genome: "BaseGenome",
         key: evoxc.SymbolicTensor,
-        node_keys: evoxc.SymbolicTensor,
-        node_attrs: evoxc.SymbolicTensor,
+        context: object,
         conn_keys: evoxc.SymbolicTensor,
-        conn_attrs: evoxc.SymbolicTensor,
         gate: evoxc.SymbolicTensor,
-    ) -> GenomeTensors:
-        """Delete one connection per individual.
-
-        The candidate row comes from :meth:`choose_connection_key` and is cleared with
-        ``delete_conn_by_pos``, which restores both padding sentinels (``I_INF`` keys, NaN
-        attributes) while leaving every other row bit-identical.
-
-        No-op when ``gate`` is false or when there is no connection to delete (``I_INF``
-        row).
+    ) -> DeleteConnPlan:
+        """Resolve one connection deletion per individual.
 
         Args:
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome owning the connection gene.
-            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this helper.
-            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
-            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
-            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
-            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
-            gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected the
-                delete-connection operation" mask from the shared gate draw.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this operation's draw.
+            context (EditContext): Shared masks and flat index blocks of the stage.
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
+            gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected
+                delete-conn".
 
         Returns:
-            GenomeTensors: the four payload arrays, with the chosen connection row cleared.
+            DeleteConnPlan: the row to clear; ``ok`` is false when there is none.
         """
-        _, _, rows = self.choose_connection_key(key, conn_keys)
-        deletable = evoxc.logical_and(gate, evoxc.not_equal(rows, _int32(I_INF)))
-        deleted_keys, deleted_attrs = delete_conn_by_pos(conn_keys, conn_attrs, rows)
-        return GenomeTensors(
-            node_keys,
-            node_attrs,
-            _gated(deletable, deleted_keys, conn_keys),
-            _gated(deletable, deleted_attrs, conn_attrs),
-        )
-
-    def choose_node_key(
-        self,
-        key: evoxc.SymbolicTensor,
-        node_keys: evoxc.SymbolicTensor,
-        num_inputs: int,
-        num_outputs: int,
-        allow_input_keys: bool = False,
-        allow_output_keys: bool = False,
-    ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
-        """Pick one candidate node per individual, out of the eligible rows.
-
-        Eligibility is an elementwise mask over ``node_keys``: absent rows (``I_INF``) are
-        dropped, and input rows (``0..num_inputs-1``) / output rows
-        (``N-num_outputs..N-1``) are dropped unless the matching flag is ``True``.  The draw
-        is a single batched ``fetch_random_index`` over the ``(P, N)`` mask — never a Python
-        loop over individuals.
-
-        The key and the row come from that one draw, so they always agree: the returned key
-        is the key *at* the returned row, never a second, independent sample.
-
-        Args:
-            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this draw.
-            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
-            num_inputs (int): ``I``, the number of input rows ``0..I-1`` (static).
-            num_outputs (int): ``O``, the number of output rows ``N-O..N-1`` (static).
-            allow_input_keys (bool): Whether input rows may be chosen.
-            allow_output_keys (bool): Whether output rows may be chosen.
-
-        Returns:
-            tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]: ``(keys, rows)``, both
-            ``(P,) int32``, with ``I_INF`` in both entries where no candidate exists.
-        """
-        _, node_count = node_keys.shape
-        present = evoxc.not_equal(node_keys, _int32(I_INF))
-        rows = enp.reshape(enp.arange(0, node_count, dtype=evoxc.int32), (1, node_count))
-        if not allow_input_keys:
-            present = evoxc.logical_and(present, evoxc.greater_equal(rows, _int32(num_inputs)))
-        if not allow_output_keys:
-            present = evoxc.logical_and(
-                present, evoxc.less(rows, _int32(node_count - num_outputs))
-            )
-        chosen = fetch_random_index(key, present)
-        keys = masked_flat_gather(
-            node_keys,
-            chosen,
-            mask=evoxc.not_equal(chosen, _int32(I_INF)),
-            fill=I_INF,
-        )
-        return keys, chosen
-
-    def choose_connection_key(
-        self,
-        key: evoxc.SymbolicTensor,
-        conn_keys: evoxc.SymbolicTensor,
-    ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
-        """Pick one candidate connection per individual, out of the existing rows.
-
-        One ``fetch_random_index`` draw over the ``(P, E)`` presence mask resolves the row,
-        and the ``(in_key, out_key)`` pair is gathered from that same row — so the caller
-        gets a consistent ``(in_key, out_key, row)`` triple for the price of one draw, and
-        absent rows (``I_INF``) are never candidates.
-
-        Args:
-            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this draw.
-            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
-
-        Returns:
-            tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
-            ``(in_keys, out_keys, rows)``, all ``(P,) int32``, with ``I_INF`` in all three
-            entries for individuals that have no connection.
-        """
-        rows = fetch_random_index(key, evoxc.not_equal(conn_keys[:, :, 0], _int32(I_INF)))
-        present = evoxc.not_equal(rows, _int32(I_INF))
-        return (
-            masked_flat_gather(conn_keys[:, :, 0], rows, mask=present, fill=I_INF),
-            masked_flat_gather(conn_keys[:, :, 1], rows, mask=present, fill=I_INF),
-            rows,
-        )
+        conn_row, has_connection = random_row(key, context.present_conn)
+        return DeleteConnPlan(evoxc.logical_and(gate, has_connection), conn_row)
 
 
 __all__ = ["DefaultMutation"]
