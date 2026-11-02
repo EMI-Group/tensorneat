@@ -145,6 +145,14 @@ class RecurrentMutation(DefaultMutation):
         fired — the edge closes a cycle.  The *first* accepted attempt wins, selected with a
         reduce over the attempt axis rather than a ``cond`` region.
 
+        The cycle predicate is the only loop region here, and it is consulted by exactly two
+        branches: the ``network_type == "feedforward"`` veto (always required) and the
+        ``p_recur`` requirement, which exists only for a recurrent genome with
+        ``p_recur > 0``.  Both are trace-time conditions (a Python string and a Python
+        float), so a **recurrent** genome with ``p_recur == 0`` — the degenerate
+        :class:`~.default.DefaultMutation` add-connection — skips the whole
+        :func:`~.cycle.closes_cycle` region instead of tracing a dead result.
+
         Padding never enters the two connection-table slabs: a padded row is ``I_INF`` in
         *every* key column, while an accepted candidate endpoint is finite by construction
         (``exists``), so key equality alone excludes padded rows and the ``present_conn``
@@ -243,7 +251,16 @@ class RecurrentMutation(DefaultMutation):
         # One cycle query for the *chosen* edge instead of one per attempt: the reachability
         # relaxation is the most expensive predicate here (a loop region), and a rejected
         # attempt costs a later one nothing but a re-draw.
-        closes = closes_cycle(node_keys, conn_keys, in_key, out_key)
+        #
+        # A static gate decides whether the query is needed at all: only the feedforward veto
+        # below and the `p_recur` requirement consume `closes`, and `required` exists exactly
+        # when `network_type == "recurrent"` and `p_recur > 0`.  For a recurrent genome with
+        # `p_recur == 0` the add-connection degenerates to the plain draw, so the whole
+        # region (and its ~106 traced ops) is skipped rather than traced and discarded.
+        if genome.network_type == "feedforward" or self.p_recur > 0.0:
+            closes = closes_cycle(node_keys, conn_keys, in_key, out_key)
+        else:
+            closes = None
         if genome.network_type == "feedforward":
             # A feedforward genome must stay acyclic, which also makes the `p_recur`
             # requirement unsatisfiable — no cycle-closing edge is ever accepted.
