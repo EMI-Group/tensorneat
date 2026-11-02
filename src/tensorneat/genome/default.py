@@ -1,9 +1,15 @@
-"""``DefaultGenome``: depth-unrolled, level-synchronous feedforward evaluation.
+"""``DefaultGenome``: depth-adaptive, level-synchronous feedforward evaluation.
 
-The forward pass seeds the input rows once, then walks the *static* depth levels in a plain
-Python ``for`` loop, so the traced graph contains only ``gather``/``select``/``reduce_*`` and
-elementwise ops — no ``scan``/``while_loop``/``cond`` — which is what lets ``evoxc.grad``
-differentiate it.
+The forward pass seeds the input rows once, then walks the depth levels in one
+``evoxc.while_loop`` whose trip count is derived from the schedule's ``node_level`` — an evolved
+network is usually 2-4 levels deep, so the ``max_depth`` ceiling would otherwise spend most of
+its unrolled passes on rows that cannot update. The loop body is the shared window reduce of
+:class:`.base.BaseGenome` (:meth:`._node_step`), so the graph holds one copy of the level step
+inside a region op instead of one copy per level.
+
+That region op is safe *here* because this forward is never differentiated: ``evoxc.grad``
+cannot differentiate ``while_loop``, and ``BaseGenome.grad`` deliberately builds its own dense
+graph in ``grad.py`` instead of differentiating this one.
 Everything is batch-first (population on axis 0); the shared window reduce lives in
 :class:`.base.BaseGenome` and must not be re-implemented here.
 """
@@ -31,14 +37,15 @@ from .operations import (
     DefaultMutation,
 )
 from .utils import GenomeTensors
+from .window import _iinf
 
 
 class DefaultGenome(BaseGenome):
     """Feedforward NEAT genome, behaviourally equivalent to NEAT-python.
 
     ``network_type = "feedforward"``: the schedule carries ``node_level`` (longest-path depth,
-    inputs at level 0) and the forward pass evaluates one level per Python-unrolled step, so a
-    node is computed only after all of its real sources already have a value.
+    inputs at level 0) and the forward pass evaluates one level per loop iteration, so a node is
+    computed only after all of its real sources already have a value.
     """
 
     network_type = "feedforward"
@@ -131,10 +138,10 @@ class DefaultGenome(BaseGenome):
         conn_attrs: evoxc.SymbolicTensor,
         inputs: evoxc.SymbolicTensor,
     ) -> evoxc.SymbolicTensor:
-        """Evaluate the population level by level, in one unrolled graph.
+        """Evaluate the population level by level, in one loop graph.
 
-        The exact algebra, with ``P`` the population, ``N`` ``max_nodes`` and ``D``
-        ``max_depth``:
+        The exact algebra, with ``P`` the population, ``N`` ``max_nodes``, ``K`` the window
+        width and ``D`` ``max_depth``:
 
         1. ``values = full((P, N), NaN)`` with ``input_transform(inputs)`` written into the
            input rows (``0..num_inputs-1``) — only those rows hold a number. The seed is
@@ -145,22 +152,27 @@ class DefaultGenome(BaseGenome):
            of the loop. The attribute rows of absent nodes are rewritten to ``0`` in the same
            one-off step (``self._padding_safe_attrs``): the node gene casts its option-index
            columns to ``int32``, and those rows are never read back into ``values``.
-        3. ``for level in range(1, self.max_depth + 1)`` (a Python loop, hence unrolled at trace
-           time): ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs,
-           values, update_mask=(transformed.node_level == level) & transformed.node_exists &
-           (valid_count > 0))``, with ``valid_count = reduce_sum(transformed.in_valid,
-           axis=-1)`` the static "this row has at least one incoming connection" gate (a
-           per-row live-slot count, not ``.utils.valid_count``, which counts existing rows).
-           The dynamic "at least one *live* slot" term is ANDed in inside ``_node_step``, so a
-           node whose sources are all NaN keeps NaN and its descendants lose their only live
-           source: the legacy NaN poisoning, reproduced exactly.
+        3. ``limit = self._depth_limit(transformed)`` — the deepest reachable level of this
+           batch, clamped to ``[1, max_depth]`` — then
+           ``evoxc.while_loop(cond, body, (1, values))`` walks ``level = 1 .. limit`` with
+           ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs, values,
+           update_mask=(transformed.node_level == level))``. The two further terms the
+           pre-rewrite formulation ANDed in are both implied: ``node_exists`` because the
+           schedule stores ``I_INF`` in ``node_level`` on every absent (and every unreachable)
+           row, and the static ``reduce_sum(in_valid, axis=-1) > 0`` because a row with no
+           incoming slot has no *live* slot either. The dynamic "at least one *live* slot" term
+           is ANDed in inside ``_node_step``, so a node whose sources are all NaN keeps NaN and
+           its descendants lose their only live source: the legacy NaN poisoning, reproduced
+           exactly.
         4. ``return self._output_values(values, self.output_transform)`` — rows
            ``max_nodes-num_outputs..max_nodes-1``, then ``output_transform``.
 
-        Cost is ``O(D x N x K)`` elementwise work: proportional to depth and real in-degree,
-        never ``max_nodes**2`` per node. A node whose level exceeds ``max_depth`` is never
-        visited and keeps the ``NaN`` seed (the documented static-unroll limit; a rebuild with
-        a larger ``max_depth`` is the fix, and ``Transformed.overflow`` flags it).
+        Cost is ``O(depth x N x K)`` elementwise work: proportional to the *real* depth and the
+        real in-degree, never ``max_nodes**2`` per node and never ``max_depth`` levels of typed
+        graph. The bound is the population maximum because the loop counter is one scalar, so a
+        batch containing one deep individual still pays for it. A node whose level exceeds
+        ``max_depth`` is never visited and keeps the ``NaN`` seed (the documented depth limit; a
+        rebuild with a larger ``max_depth`` is the fix, and ``Transformed.overflow`` flags it).
 
         Args:
             state: Host configuration container.
@@ -193,22 +205,72 @@ class DefaultGenome(BaseGenome):
         # warning (and a garbage id) even though those rows never reach ``values``.
         node_attrs = self._padding_safe_attrs(node_attrs, node_keys)
         hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs)
-        for level in range(1, self.max_depth + 1):
-            # One level per unrolled step: the "has a live incoming slot" term is ANDed in by
-            # ``_node_step`` itself, so the mask here stays a cheap int comparison.
-            level_mask = evoxc.equal(
-                transformed.node_level, enp.full((), level, dtype=evoxc.int32)
-            )
-            update_mask = evoxc.logical_and(level_mask, transformed.node_exists)
-            values = self._node_step(
+        # The node gene builds its operand bundle lazily on the first step; force it here so
+        # the bundle is traced in this block instead of inside the loop body, where the
+        # region would re-evaluate it on every iteration for a loop-invariant result.
+        hit_conn_attrs.node_operands(self, node_attrs)
+        # One level per loop iteration, bounded by the *real* depth of this batch instead of
+        # the static ``max_depth`` ceiling: an evolved network is typically 2-4 levels deep,
+        # so a third of the unrolled passes used to be no-ops that still cost real time on
+        # the interpreter backend. ``limit`` is derived from the schedule alone (one
+        # ``reduce_max`` over the masked ``node_level``), so it is a loop bound, not data.
+        one = enp.full((), 1, dtype=evoxc.int32)
+        limit = self._depth_limit(transformed)
+
+        def cond(carry) -> evoxc.SymbolicTensor:
+            """Keep iterating while the next unvisited level is still within the depth."""
+            level, _values = carry
+            return evoxc.less_equal(level, limit)
+
+        def body(carry) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+            """Advance one level: the plain window step of :meth:`._node_step`.
+
+            The ``node_exists`` term is not ANDed into the mask: the schedule sets
+            ``node_level`` to ``I_INF`` on every absent (or unreachable) row, so
+            ``node_level == level`` is already False there.
+            """
+            level, values = carry
+            updated = self._node_step(
                 state,
                 transformed,
                 node_attrs,
                 hit_conn_attrs,
                 values,
-                update_mask,
+                evoxc.equal(transformed.node_level, level),
             )
+            return evoxc.add(level, one), updated
+
+        _level, values = evoxc.while_loop(cond, body, (one, values))
         return self._output_values(values, self.output_transform)
+
+    def _depth_limit(self, transformed: Transformed) -> evoxc.SymbolicTensor:
+        """Deepest level this batch can reach, as a rank-0 loop bound in ``[1, max_depth]``.
+
+        ``node_level`` is ``I_INF`` on every row that is absent, unreachable from an input, or
+        on a cycle, so those rows are masked to ``0`` before the reduction: they are never
+        visited, exactly as in the fully unrolled pass (their value stays ``NaN``). The
+        population maximum is used because the loop counter is one scalar shared by the whole
+        batch; clamping to at least ``1`` keeps the ordinary one-level network unchanged and
+        clamping to ``max_depth`` preserves the documented static-unroll limit.
+
+        Args:
+            transformed: Execution schedule of the current population.
+
+        Returns:
+            Rank-0 ``int32`` tensor: ``min(max_depth, max(1, max(node_level)))``.
+        """
+        reachable = evoxc.logical_and(
+            transformed.node_exists,
+            evoxc.not_equal(transformed.node_level, _iinf(evoxc.int32)),
+        )
+        levels = evoxc.select(
+            reachable, transformed.node_level, enp.zeros((), dtype=evoxc.int32)
+        )
+        deepest = evoxc.reduce_max(levels)  # rank-0: max over the population and the rows
+        return evoxc.minimum(
+            evoxc.maximum(deepest, enp.full((), 1, dtype=evoxc.int32)),
+            enp.full((), self.max_depth, dtype=evoxc.int32),
+        )
 
     def network_dict(
         self, state: State, genome: GenomeTensors, whether_re_cound_idx: bool = True

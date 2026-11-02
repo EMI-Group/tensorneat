@@ -16,13 +16,10 @@ import evoxc.numpy as enp
 
 from ....common import ACT, AGG, State
 from ....common.errors import ConfigError
-from ....common.functions import (
-    FunctionManager,
-    apply_activation,
-    apply_aggregation,
-)
+from ....common.functions import FunctionManager
 from ....common.functions.act import ACT_IDENTITY
-from ..base import BaseGene, column
+from ..base import BaseGene, column, option_masks, select_cascade
+from ...window import any_slot
 
 
 class NodeOperands(NamedTuple):
@@ -30,10 +27,11 @@ class NodeOperands(NamedTuple):
 
     ``_node_step`` calls the gene once per unrolled level/tick with the *same* attribute
     tensor, so every per-column read (a ``slice`` plus the ``reshape`` that makes it
-    differentiable, i.e. two traced ops each) and the option-index casts would otherwise
-    be re-emitted on every level. This bundle is built once per forward pass and then
-    read by :meth:`BaseNode.forward` / :meth:`BaseNode.aggregate` /
-    ``combine`` of the families, which turn ``~11`` per-level ops into zero.
+    differentiable, i.e. two traced ops each), the option-index casts and the option
+    dispatch masks would otherwise be re-emitted on every level. This bundle is built
+    once per forward pass and then read by :meth:`BaseNode.forward` /
+    :meth:`BaseNode.aggregate` / ``combine`` of the families, which turn ``~10``
+    per-level ops into zero.
 
     Attributes:
         columns: One ``(P, N) float32`` tensor per ``attr_specs`` column, in table order
@@ -44,11 +42,22 @@ class NodeOperands(NamedTuple):
             rows, which is what lets :meth:`BaseNode.forward` skip its
             ``select(is_output_node, z, activated)``: an id of ``-1`` matches no option,
             so the dispatch cascade returns ``z`` itself there.
+        aggregation_masks: The ``ids == index`` masks of ``aggregation_ids``, one per
+            configured aggregation option (see
+            :func:`~tensorneat.genome.gene.base.option_masks`), so no level re-derives
+            them.
+        activation_masks: The same masks for ``activation_ids``.
+        zero: Rank-0 ``float32`` zero, shared by the dispatch of every level (the
+            cascade's "no option matched" value) instead of materialising one constant
+            per level.
     """
 
     columns: tuple
     aggregation_ids: Any
     activation_ids: Any
+    aggregation_masks: tuple
+    activation_masks: tuple
+    zero: Any
 
 
 class BaseNode(BaseGene):
@@ -88,13 +97,21 @@ class BaseNode(BaseGene):
     #: ``BiasNode`` / ``OriginNode`` resolve them in their constructor).
     aggregation_options: tuple = ()
     activation_options: tuple = ()
+    #: Aggregations whose reduce of an all-dead window is already exactly ``0.0``: the
+    #: masked window of :func:`~tensorneat.common.functions.agg.sum` sums to ``0.0``, and
+    #: :func:`~tensorneat.common.functions.agg.mean` divides that same sum by
+    #: ``maximum(count, 1)``, so the ``has_valid`` guard of ``apply_aggregation`` would
+    #: return the value it already has and :meth:`aggregate` skips it.
+    #: The comparison is by identity, so a wrapper callable is not recognised and simply
+    #: keeps the guard -- the conservative direction.
+    self_neutral_aggregations: tuple = (AGG.sum, AGG.mean)
 
     def setup(self, state: State | None = None) -> State:
         """Validate the attr table and the option lists on the host.
 
         Chains :meth:`..base.BaseGene.setup` (which checks the attr table) and then
         checks that the two option lists a node gene dispatches on are non-empty:
-        an empty list would make ``apply_aggregation`` / ``apply_activation`` return
+        an empty list would make the aggregation / activation cascade return
         the cascade's neutral value for every node, silently disabling the gene.
 
         Args:
@@ -116,6 +133,26 @@ class BaseNode(BaseGene):
                 )
         return state
 
+    @property
+    def needs_has_valid(self) -> bool:
+        """Whether :meth:`aggregate` must emit the ``has_valid`` guard (host-only).
+
+        The guard of ``apply_aggregation`` rewrites a node with no real incoming edge to
+        ``0.0``; it is only observable for an option whose all-dead-window reduction is
+        not already ``0`` (``max``/``min`` reduce to ``+/-inf``, ``product`` to ``1``),
+        and it is emitted for the whole cascade as soon as one configured option needs it.
+
+        Returns:
+            ``False`` iff every configured option is in
+            :attr:`self_neutral_aggregations`, i.e. an empty window already reduces to
+            ``0.0`` for every option the gene can select; ``True`` otherwise (including
+            every custom, unrecognised kernel).
+        """
+        return any(
+            option not in self.self_neutral_aggregations
+            for option in self.aggregation_options
+        )
+
     def forward(
         self,
         state: State,
@@ -126,16 +163,19 @@ class BaseNode(BaseGene):
     ) -> evoxc.SymbolicTensor:
         """Compute the value of every node row of the population in one pass.
 
-        The caller feeds one depth level at a time: ``messages`` is the already
-        gathered and NaN-sanitized incoming window of the nodes of that level.
+        The caller feeds one depth level at a time: ``messages`` is the gathered incoming
+        window of the nodes of that level, already masked by the caller (a dead slot may
+        carry ``NaN``; ``valid_mask`` is what marks it dead, and every aggregation option
+        replaces the slots of that mask with its neutral value before reducing).
 
         ``attrs`` may be the raw ``(P, N, NA)`` attribute tensor or the
         :class:`NodeOperands` bundle of :meth:`prepare`. The bundle is what the forward
-        pass uses: it carries the per-column reads and the option ids of the whole
-        unrolled pass, so this kernel emits no attribute read per level. Output rows are
-        left unactivated by writing :data:`~tensorneat.common.functions.act.ACT_IDENTITY`
-        into their activation id inside the bundle (an id of ``-1`` matches no option, so
-        the dispatcher returns ``z`` unchanged), which is why no
+        pass uses: it carries the per-column reads, the option ids and the option
+        dispatch masks of the whole unrolled pass, so this kernel emits no attribute read
+        and no ``equal`` mask per level. Output rows are left unactivated by writing
+        :data:`~tensorneat.common.functions.act.ACT_IDENTITY` into their activation id
+        inside the bundle (an id of ``-1`` matches no option, so the dispatcher returns
+        ``z`` unchanged), which is why no
         ``select(is_output_node, z, activated)`` is emitted here.
 
         Args:
@@ -143,7 +183,8 @@ class BaseNode(BaseGene):
             attrs: Node attributes, ``(P, N, NA)`` float32, one row per node slot, or the
                 :class:`NodeOperands` of :meth:`prepare` for those attributes.
             messages: One scalar message per incoming edge slot, ``(P, N, K)``
-                float32, already NaN-sanitized (NaN source -> 0).
+                float32; a dead slot may carry ``NaN`` — ``valid_mask`` marks it dead and
+                the aggregation neutralises it before the reduce.
             is_output_node: ``(P, N)`` bool, True for the rows read out as network
                 outputs, which must stay unactivated here.
             valid_mask: ``(P, N, K)`` bool, True where the slot holds a real, live
@@ -161,19 +202,24 @@ class BaseNode(BaseGene):
             attrs = self.prepare(attrs, is_output_node)
         aggregated = self.aggregate(state, attrs, messages, valid_mask)
         z = self.combine(state, attrs, aggregated)
-        return apply_activation(z, attrs.activation_ids, self.activation_options)
+        return select_cascade(
+            attrs.activation_masks,
+            [fn(z) for fn in self.activation_options],
+            z,
+        )
 
     def prepare(
         self,
         attrs: evoxc.SymbolicTensor,
         is_output_node: evoxc.SymbolicTensor,
     ) -> NodeOperands:
-        """Read every attribute column and resolve the option ids once per forward pass.
+        """Read every attribute column and resolve the option dispatch once per forward pass.
 
         Loop-invariant work hoisted out of the unrolled level/tick loop: the columns of
         ``node_attrs`` do not change while a forward pass runs, so the per-column
-        ``slice`` + ``reshape`` reads and the option-id casts belong here, not in
-        :meth:`forward`.
+        ``slice`` + ``reshape`` reads, the option-id casts and the per-option
+        ``ids == index`` dispatch masks belong here, not in :meth:`forward` /
+        :meth:`aggregate`.
 
         ``state`` is deliberately not an argument: the reads are pure column arithmetic
         (like :meth:`..base.BaseGene.attr_column`), and the one production caller lives in
@@ -207,7 +253,14 @@ class BaseNode(BaseGene):
             enp.full((), ACT_IDENTITY, dtype=evoxc.int32),
             evoxc.cast(columns[self.attr_index("activation")], evoxc.int32),
         )
-        return NodeOperands(columns, aggregation_ids, activation_ids)
+        return NodeOperands(
+            columns,
+            aggregation_ids,
+            activation_ids,
+            option_masks(aggregation_ids, len(self.aggregation_options)),
+            option_masks(activation_ids, len(self.activation_options)),
+            enp.zeros((), dtype=evoxc.float32),
+        )
 
     def column_of(
         self, attrs: Any, name: str
@@ -236,14 +289,20 @@ class BaseNode(BaseGene):
         """Reduce the incoming-message window of every node with its own option.
 
         The reduction itself is option-independent and therefore implemented here
-        once: :func:`~tensorneat.common.functions.apply_aggregation` evaluates every
-        configured aggregation on the whole ``(P, N, K)`` window, replacing the dead
-        slots of ``valid_mask`` with that option's neutral element (``0``, ``1``,
-        ``+/-inf``) before reducing, and then picks the row's option with a ``select``
-        cascade. A node whose window has no live slot gets exactly ``0.0`` from the
-        dispatcher, never ``NaN`` and never a neutral that leaks into the value.
-        Families inherit this method unchanged (a family that needs a different
-        operator over the window would override it *without* copying the cascade).
+        once: every configured aggregation is evaluated on the whole ``(P, N, K)``
+        window -- the kernels replace the dead slots of ``valid_mask`` with that
+        option's neutral element (``0``, ``1``, ``+/-inf``) before reducing -- and then
+        the row's option is picked with a ``select`` cascade
+        (:func:`~tensorneat.genome.gene.base.select_cascade`). A node whose window has no
+        live slot gets exactly ``0.0`` from the ``has_valid`` guard, never ``NaN`` and
+        never a neutral that leaks into the value. Families inherit this method
+        unchanged (a family that needs a different operator over the window would
+        override it *without* copying the cascade).
+
+        This is :func:`~tensorneat.common.functions.apply_aggregation` with the
+        loop-invariant half hoisted: the ``ids`` cast and the per-option ``ids == index``
+        masks are built once per forward pass by :meth:`prepare`, not once per level, and
+        the branch kernels are the configured option callables themselves.
 
         Args:
             state: Host configuration container.
@@ -260,17 +319,31 @@ class BaseNode(BaseGene):
             tensorneat.common.errors.ConfigError: If the attr table declares no
                 ``aggregation`` column (families always declare one).
         """
-        aggregation_ids = (
-            attrs.aggregation_ids
-            if isinstance(attrs, NodeOperands)
-            else evoxc.cast(self.attr_column(attrs, "aggregation"), evoxc.int32)
+        if isinstance(attrs, NodeOperands):
+            masks, zero = attrs.aggregation_masks, attrs.zero
+        else:
+            masks = option_masks(
+                evoxc.cast(self.attr_column(attrs, "aggregation"), evoxc.int32),
+                len(self.aggregation_options),
+            )
+            zero = enp.zeros((), dtype=evoxc.float32)
+        aggregated = select_cascade(
+            masks,
+            [fn(messages, valid_mask) for fn in self.aggregation_options],
+            zero,
         )
-        return apply_aggregation(
-            messages,
-            valid_mask,
-            aggregation_ids,
-            self.aggregation_options,
-        )
+        if not self.needs_has_valid:
+            # Every configured option already reduces an all-dead window to exactly
+            # ``0.0``, so the guard below would select the value it is replacing.
+            return aggregated
+        # ``has_valid``, as in ``apply_aggregation``: a node with no real incoming edge gets
+        # ``0.0``, so the ``-inf`` / ``+inf`` neutral padding of ``max`` / ``min`` cannot
+        # leak into a node value (and a padded product cannot become ``1``). ``valid_mask``
+        # is ``bool``, so its boolean "any" is the same predicate as the dispatcher's
+        # ``count > 0`` at two ops instead of four, and it is folded slice-wise
+        # (:func:`~tensorneat.genome.window.any_slot`) because a reduction over the
+        # innermost window axis is the expensive shape on the numpy backend.
+        return evoxc.select(any_slot(valid_mask), aggregated, zero)
 
     def combine(
         self,

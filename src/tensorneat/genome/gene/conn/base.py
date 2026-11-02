@@ -32,9 +32,12 @@ class ConnOperands(NamedTuple):
         columns: One tensor per ``attr_specs`` column, in table order, with the NaN of the
             padding rows cleaned to ``0`` (the default "absent row" policy of
             :meth:`BaseConn.prepare`).
+        zero: Rank-0 ``float32`` zero, created once per pass so a family can sanitise its
+            ``NaN`` operand without materialising a fresh constant on every level.
     """
 
     columns: tuple
+    zero: Any
 
 
 class BaseConn(BaseGene):
@@ -49,8 +52,10 @@ class BaseConn(BaseGene):
         message = forward(attrs, source_values)     # (P, N, K), elementwise
 
     so one scalar message is produced per edge slot and the destination node
-    aggregates them. A gene must not rely on ``NaN * 0`` arithmetic: the NaN
-    sanitisation of the source value happens inside the family's ``forward``.
+    aggregates them. The window step hands ``forward`` already-masked source values: a dead
+    slot (or a slot whose source row has no value yet) is ``NaN`` there, and the node gene's
+    aggregation replaces every dead slot with its neutral value *before* reducing, so a
+    family may multiply straight through and need no sanitisation of its own.
 
     :attr:`labels` renames the key columns for the inherited host-only
     :meth:`~tensorneat.genome.gene.base.BaseGene.repr` /
@@ -157,7 +162,10 @@ class BaseConn(BaseGene):
 
         Loop-invariant work hoisted out of the unrolled level/tick loop: the gathered
         edge attributes do not change while a forward pass runs, so the per-column reads
-        and the NaN cleaning belong here, not in the family's ``forward``.
+        and the NaN cleaning belong here, not in the family's ``forward``. Each column is
+        read **once** (a second ``column`` call would emit its ``slice`` + ``reshape``
+        pair again) and the ``0`` the cleaning writes is a single rank-0 constant shared
+        by every column.
 
         The default policy is "a NaN attribute means an absent (padding) row, so it reads
         as ``0``", which is what the pre-rewrite library did in every family; a family
@@ -183,12 +191,12 @@ class BaseConn(BaseGene):
                 f"{type(self).__name__} reads {self.attr_width} attribute column(s) but "
                 f"the payload carries {width}"
             )
-        return ConnOperands(
-            tuple(
-                evoxc.select(evoxc.isnan(column(attrs, index)), 0.0, column(attrs, index))
-                for index in range(width)
-            )
-        )
+        zero = enp.zeros((), dtype=evoxc.float32)
+        columns = []
+        for index in range(width):
+            values = column(attrs, index)
+            columns.append(evoxc.select(evoxc.isnan(values), zero, values))
+        return ConnOperands(tuple(columns), zero)
 
     def column_of(self, attrs: Any, name: str) -> evoxc.SymbolicTensor:
         """Read one named attribute column of a raw batch or of a prepared bundle.
@@ -221,19 +229,22 @@ class BaseConn(BaseGene):
                 for those rows is accepted too and is what the forward pass passes, so a
                 family reads its columns with :meth:`column_of` and skips the re-cleaning.
             source_values: Values of the source node of each slot, ``(P, N, K)``
-                float32; NaN where the source has not been computed (unreachable or
-                absent node).
+                float32; ``NaN`` where the slot is statically dead or its source has not
+                been computed (unreachable or absent node), so the family may use it as a
+                masked operand without re-testing it.
 
         Returns:
             ``(P, N, K)`` float32 messages, elementwise in ``(attrs, source_values)``;
-            dead slots carry 0 so the aggregation can neutralise them by mask.
+            a dead slot may keep its ``NaN``, because the node gene's aggregation replaces
+            every slot its ``valid_mask`` calls dead with that option's neutral value
+            before reducing.
 
         Raises:
             NotImplementedError: Abstract hook; connection families implement it.
         """
         raise NotImplementedError(
-            "elementwise message per edge slot: sanitized source value combined with "
-            "the sanitized float attributes -> (P, N, K)"
+            "elementwise message per edge slot: the masked source value combined with "
+            "the prepared float attributes -> (P, N, K)"
         )
 
     def get_historical_marker(

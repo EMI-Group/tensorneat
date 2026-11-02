@@ -5,7 +5,8 @@ The evolutionary layer: it owns the population, the ask → transform → forwar
 Everything here runs **inside an evoxc trace** — `pipeline.py` builds one graph per shape signature covering a whole generation — except the explicitly host-side helpers (`__init__` validation, `setup` on the host, `show_details`, substrate construction).
 This layer owns no network mathematics: genomes own `transform/forward/grad`, problems own `evaluate`, and the algorithm only shuffles whole populations with static shapes.
 Cost profile: O(species_size × pop_size) gene-row distance work in `speciate` + O(pop_size) selection/crossover/mutation per generation; no `max_nodes × max_nodes` tensor ever appears here.
-Measured with the real `DefaultGenome`/`XOR` (see `## Measured Cost`): ~300 / ~950 / ~2060 ms per generation at pop 100 / 500 / 1000 (`species_size=20`), against a legacy JAX baseline of 51 / 109 / 157 ms; `speciate`'s `2 × species_size` unconditional distance passes are the dominant algorithm-side cost (see `## Known Issues`).
+Measured with the real `DefaultGenome`/`XOR` (see `## Measured Cost`): ~97 / ~835 / ~1516 ms per generation at pop 100 / 500 / 1000 (`species_size=20`), against a legacy JAX baseline of 51 / 109 / 157 ms.
+`speciate` is 60 % / 88 % / 88 % of `tell`, and its cost is the `2 · species_size · pop_size` compatibility pair count times a genome-owned per-pair kernel — not a tensor this subtree can shrink (see `## Known Issues`).
 
 ## Kernel Contract (binding for this subtree)
 Batch-first: population is axis 0, always; a kernel is written once over the whole batch.
@@ -53,7 +54,8 @@ Dead species slots are addressed solely by the `isnan(species_keys)` mask; the c
 - both phases are guarded: an iteration with no unassigned genome, or with a dead slot in phase 1, performs no writes (mask first, `scatter` once), so a fixed-length scan is equivalent to the legacy early-terminating `while_loop`.
 - post-pass: still-unassigned genomes join the last species key, newly created slots get `best_fitness = -inf` / `last_improved = generation`, and `member_count` is a masked compare-sum `(species_size, pop_size)` reduce.
 Rationale for scans instead of the legacy data-dependent `while_loop`: evoxc de-sugars `scan` to `while` + gather/scatter, so trip counts must stay static to codegen on compiler backends, and iree aborts on wide `while` carries (`select` plus ≥3–4 carried values).
-Each scan iteration calls `distance_fn` unconditionally, even for a dead or already-satisfied slot — the source of the `2 × species_size` passes counted under `## Measured Cost`.
+Each scan iteration needs exactly one `(P,)` distance row, and the two phases need `2 · species_size` genuinely different centres, so the pair count is fixed.
+Below `GATED_ROWS = 6000` (`species_size * pop_size`) the row is computed lazily behind one `evoxc.cond` whose predicate is the very mask that permits the iteration to write, so a dead slot pays neither the broadcast nor the compatibility kernel; above the gate the row is computed unconditionally, because an always-taken `if` region costs ~26 % of a generation while skipping nothing (see `./neat/CONTEXT.md` `## Lazy Distance Rows`).
 
 ## Randomness Budget
 Per generation the algorithm performs exactly two `evoxc.random.split`s, yielding three subkeys consumed in this order: parent selection, crossover, mutation — the advanced parent key is stored back into `state.randkey`.
@@ -86,23 +88,25 @@ Gene payload encoding is genome-owned and opaque here — in particular evoxc ha
 `problem`: `evaluate(state, keys, act_fn, transformed)` where `act_fn` is `algorithm.forward` partially applied — the problem owns the dataset tiling into the population axis.
 
 ## Measured Cost (numpy reference backend, real `DefaultGenome` + `XOR`)
-`DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, one compiled graph per generation, 5 generations timed after the first.
+`DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, `XOR()`, seed 42, `backend="numpy"`; one compiled graph per shape signature, one configuration per fresh process, median of 5 timed steps after a warmup step and 5 setup steps.
 Legacy JAX baseline on the same machine: 51 / 109 / 157 ms per generation at pop 100 / 500 / 1000.
 
-| pop | ms/gen (steady state) | legacy | ratio |
-| --- | --- | --- | --- |
-| 100 | ~300 | 51 | ~5.9× |
-| 500 | ~950 | 109 | ~8.7× |
-| 1000 | ~2060 | 157 | ~13× |
+| pop | ms/gen | legacy | ratio | live species slots |
+| --- | --- | --- | --- | --- |
+| 100 | ~97 | 51 | ~1.9× | 3 |
+| 500 | ~835 | 109 | ~7.4× | 20 |
+| 1000 | ~1516 | 157 | ~9.4× | 20 |
 
-The first generation costs 4.2 / 5.4 / 7.1 s because it includes the one-off `evoxc.build` of the whole cycle; `NEAT.setup` is ~40 ms.
-Phase split at pop 100 / 500, measured as separate executables (so the sum exceeds the single-graph figure): evaluation 48 / 232 ms, `tell` 289 / 1002 ms, of which `speciate` 223 / 614 ms, crossover+mutation+elite 33 / 89 ms and `update_species` ~1.5 ms.
-One `execute_distance` pass (one centre against the whole population) costs 5.7 / 17.1 ms, and `speciate` runs `2 × species_size` of them unconditionally, which accounts for its entire cost.
-Evaluation alone (48 ms at pop 100) already exceeds the legacy per-generation budget, so the genome/problem side is over budget as well as this subtree.
+The first step costs 4.0 / 5.3 / 7.0 s because it includes the one-off `evoxc.build` of the whole cycle; `NEAT.setup` is ~40 ms.
+Phase split, measured as separate executables at pop 100 / 500 / 1000 (so the sum over-counts one generation): `evaluate` (`transform` + `forward` + `evaluate`) 30 / 135 / 280 ms, crossover+mutation+elite 29 / 76 / 142 ms, `update_species` 1.1 / 1.5 / 1.9 ms, `speciate` 46 / 576 / 1032 ms.
+`tell` is therefore 77 / 653 / 1176 ms: `speciate` 60 % / 88 % / 88 %, breeding 37 % / 12 % / 12 % (at pop 100 the breeding kernel is now the second hot spot).
+One `genome.execute_distance` row (one centre against the whole population) costs ~2.5 ms of dispatch plus ~48 µs per pair, so ~5.7 ms at pop 100 and ~33 ms at pop 1000; `speciate`'s cost is that row cost times `2 · species_size`.
+Evaluation alone (30 / 135 / 280 ms) still exceeds the legacy per-generation budget at every size, so the genome/problem side is over budget as well as this subtree.
 
 ## Known Issues
-The repo-level performance contract is missed by ~5.9× / ~8.7× / ~13× at pop 100 / 500 / 1000 (see `## Measured Cost`).
-The dominant algorithm-side cost is `speciate` calling `execute_distance` `2 × species_size` times unconditionally; hoisting it to one batched pass — `D = execute_distance(centres tiled to (S·P), pop tiled to (S·P)) -> (S, P)` and indexing `D[slot]` inside the two scans — would replace `2·S` passes with 2 with identical masks and results, but it restructures what `## Speciation Without vmap-over-Control-Flow` documents and is therefore not implemented yet.
+The repo-level performance contract is missed by ~1.9× / ~7.4× / ~9.4× at pop 100 / 500 / 1000 (see `## Measured Cost`).
+From pop ≈ 300 upward `speciate` is ~88 % of `tell`, and it is per-pair bound: `DefaultDistance`'s `find_homologous` sorts `2·M` key rows for every pair, so the same population genome is re-sorted `species_size` times per phase — a genome-side "prepare the population once, measure many centres" API is the next real lever and lies outside this subtree.
+The pair count `2 · species_size · pop_size` itself is irreducible: each phase needs its own set of genuinely different centres, and a created species takes the first unassigned genome as its centre, so its row depends on every earlier assignment.
 `genome/base.py::_iinf` materialises a full-size `I_INF` constant, so tracing warns `Embedding a tensor of … bytes as a graph constant` from pop 500 (1.6 MB) upward (genome-owned; a rank-0 sentinel plus broadcasting would avoid it).
 `_sanitize_fitness`'s `f - f` finite test emits one numpy `RuntimeWarning: invalid value encountered in subtract` when a fitness is ±inf; the result is exact because the difference is only a `select` predicate.
 `test/unit/algorithm/**` is a spec written ahead of the implementation — its bodies are hard-coded `pytest.skip` (71 skipped), so it verifies nothing even against a working tree, and there is no `test/unit/algorithm/hyperneat/` directory at all; `test/parity/` needs the `bench` extra (JAX).
@@ -122,7 +126,7 @@ No `jax` / `torch` / `numpy.random` import anywhere in this subtree; `import ten
 No Python branching, `bool()`, `len()` or host reads on traced values; static Python `if`/`for` over constructor configuration is fine and unrolls at trace time.
 Constructor validation raises `tensorneat.common.errors.TensorNEATError`; trace/shape/backend errors propagate unchanged and are never re-wrapped or silently fallen back.
 Nothing here reads `state` fields it did not register, except the documented genome/problem keys above.
-Files stay under ~1000 lines (the largest are `species.py` at 929 and `hyperneat.py` at 823, the gene kernels having moved to `hyperneat/genes.py` at 297); shared algebra helpers live in `./neat/_kernels.py`, host validators in `./neat/_validation.py`.
+Files stay under ~1000 lines (the largest are `species.py` at 949 and `hyperneat.py` at 823, the gene kernels having moved to `hyperneat/genes.py` at 297); shared algebra helpers live in `./neat/_kernels.py` (863), host validators in `./neat/_validation.py`.
 
 ## Test Strategy
 Tests live in the sibling `./../../test` tree (read-only from here), mirroring this subtree: `test/unit/algorithm/` for the spawn/selection/stagnation algebra on fixed keys, `test/parity/algorithm/` for comparison against `benchmarks/legacy_jax` (documented divergences above are the only allowed mismatches), `test/integration/` for a full XOR run reaching its fitness target with a reproducible seed.

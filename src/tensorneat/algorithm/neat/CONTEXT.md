@@ -4,12 +4,12 @@
 Everything in a NEAT generation that is neither network mathematics (genome) nor task evaluation (problem): the population payload, the generation counter, speciation, stagnation, spawn allocation, parent pairing, and the crossover/mutation dispatch.
 `NEAT` (`neat.py`) is the algorithm the pipeline drives; `SpeciesController` + `SpeciesState` (`species.py`) own the species algebra.
 Every kernel here is batch-first over `P = pop_size` and compiled by `pipeline.py` into the single per-generation evoxc graph, so no function may branch on a traced value or read the host.
-Measured on the numpy reference backend with the real `DefaultGenome(max_nodes=50, max_conns=100)` and `XOR`, `species_size=20`: the whole `tell` runs in ~289 ms/generation at `P=100` and ~1002 ms at `P=500`, of which `speciate` is ~77 % and breeding ~11 % (see `## Measured Cost`); the interpreter, not the data, dominates.
-The layer's own work is `O(species_size × pop_size)` distance work in `speciate` plus `O(pop_size)` selection/crossover/mutation, and it never materialises a `max_nodes × max_nodes` tensor; the measured cost is the genome's per-pair distance kernel invoked `2 × species_size` times per generation, not a tensor size.
+Measured on the numpy reference backend with the real `DefaultGenome(max_nodes=50, max_conns=100)` and `XOR`, `species_size=20`: the whole `tell` runs in ~77 ms/generation at `P=100`, ~653 ms at `P=500` and ~1176 ms at `P=1000`, of which `speciate` is 60 % / 88 % / 88 % and breeding 37 % / 12 % / 12 % (see `## Measured Cost`); the interpreter, not the data, dominates.
+The layer's own work is `O(species_size × pop_size)` distance work in `speciate` plus `O(pop_size)` selection/crossover/mutation, and it never materialises a `max_nodes × max_nodes` tensor; the measured cost is the genome's per-pair distance kernel — one `(pop_size,)` row per species slot per phase, not a tensor size.
 
 ## Layout (four files, each under 1000 lines)
 `species.py` — `SpeciesState` plus `SpeciesController`: the documented, traced-facing methods and the species algebra, each delegating its tensor body to `_kernels.py`.
-`_kernels.py` — plain graph helpers (no `@evoxc.defn`, no state): spawn allocation, block layout, parent pairing, membership, sort/prefix-sum primitives, and the two speciation scans.
+`_kernels.py` — plain graph helpers (no `@evoxc.defn`, no state): spawn allocation, block layout, parent pairing, membership, sort/prefix-sum primitives, `gated` (the static lazy-row gate) and the two speciation scans.
 `_validation.py` — host-side configuration validators shared with `neat.py` (`positive_int`, `non_negative_int`, `unit_interval`, `positive_float`), each raising `TensorNEATError` with the parameter name.
 `neat.py` — `_sanitize_fitness` and `NEAT`: setup, ask/transform/forward, the `tell` algebra, `_batched` chunking, host-side `show_details`.
 
@@ -59,9 +59,19 @@ Spawn (fitness mode): `f' = f_live - min_live(f_live) + 1`, `rate = f' / sum_liv
 Spawn (both modes): `damped = member_count + (target - member_count) * spawn_number_change_rate`, floored at `min_species_size`, dead/NaN slots forced to `0.0`, cast to int32, then the residual added to the **first live slot** by one `scatter` so `sum(spawn) == pop_size` exactly.
 Parent pairing: members ranked by fitness descending, `survive_size = clamp(floor(survival_threshold * member_count), 1, min(member_count, pop_size))`, one `randint(key, (S, 2, P), 0, survive[:, None, None])` draw for father and mother, `flat_gather` of the ranking, winner decided in species space (ties to the father, `>=`), elite slots (`idx_in_block < genome_elitism`) then pinned to their species' best member.
 Block flattening: with exclusive prefix `E` of `spawn`, `loc(p)` is the **last** `i` with `spawn[i] > 0 and E[i] <= p` (reversed `argmax` of the mask) and `idx_in_block(p) = p - E[loc(p)]`; parents are one `gather` at `flat = loc * P + idx_in_block` into the row-major `(S, P)` pair arrays.
-Speciation, scan 1 (centre reservation): per live slot `i`, `d_i = distance_fn(state, centre_i broadcast, pop)`, `closest = argmin(select(unassigned, d_i, +inf))`, then assign `idx2species[closest] = species_keys[i]`, re-elect `pop[closest]` as the centre and set its distance to `0`; a dead slot or an empty unassigned set writes nothing.
+Speciation, scan 1 (centre reservation): per live slot `i`, `d_i` is the `(P,)` row `distance(centre_i, pop)` (computed lazily behind a `cond` below the gate, see `## Lazy Distance Rows`), `closest = argmin(select(unassigned, d_i, +inf))`, then assign `idx2species[closest] = species_keys[i]`, re-elect `pop[closest]` as the centre and set its distance to `0`; a dead slot or an empty unassigned set writes nothing.
 Speciation, scan 2 (member assignment): a live slot assigns every genome with `d < compatibility_threshold` and `(unassigned | d < current distance)`; a dead slot with anything still unassigned creates a species keyed `next_species_key` seeded by the first unassigned genome, then assigns the same way; an iteration with nothing to do writes nothing.
 Speciation post-pass: leftovers adopt the last species key, slots created this generation get `best_fitness = -inf` / `last_improved = generation`, and `member_count` is one masked compare-sum over `(S, P)`.
+
+## Lazy Distance Rows (`GATED_ROWS`, one `cond` per scan iteration)
+Both phases need one `(P,)` compatibility row per species slot, and the row of a slot is known before the iteration reads it: phase 1's row is `distance(pre-scan centre slot, pop)` (scan 1 reads only the row it inherited and writes only its own), and phase 2's row is `distance(post-phase-1 centre slot, pop)` except for a slot that *creates*, whose centre is `pop[seed]` with `seed` the first unassigned genome.
+`_kernels.speciate` computes each row lazily, one slot at a time, behind exactly one `evoxc.cond` per scan iteration — `gated_row(active, compute_row, operands)`, where `compute_row` builds the payload and calls `distance_fn` and the false branch is `enp.zeros((pop_size,), float32)`.
+The predicate is exactly the mask that lets the iteration write — scan 1 `live & any_pending`, scan 2 `live | create` — so a skipped iteration's zero row is discarded by its own `claim` / `take` mask and the substitution is bit-identical.
+Scan 2 selects its centre *before* the `cond` (`select(create, pop[seed], carry row)` per gene array), so a created species needs no branch of its own and only two compatibility-kernel copies exist in the whole graph.
+The gate is static: `gated(species_size, pop_size)` is `species_size * pop_size <= GATED_ROWS` (6000), a plain Python predicate on static ints evaluated at trace time, never a traced branch.
+Below the gate the lazy `cond` wins because the species table is sparse — 1–3 live slots of 20 at `P=8/100`, 15 at `P=300` — so 14–19 of the 20 rows per phase never run.
+Above the gate both scans call `distance_fn(state, centre_payload(...), population)` unconditionally: the pre-gate behaviour, with no `cond` and no zero row, because a skipped slot would still leave its `if` region and carries in the graph and at `P=500` that region overhead costs more than the rows it skips would save (measured 26 % of the whole generation), while from `P=500` up every slot is live and nothing is skippable anyway.
+`GATED_ROWS` is a module constant so the public `NEAT` constructor is unchanged.
 
 ## Scan Patterns (why fixed-length scans are exact)
 `evoxc` de-sugars `scan` into `while` + `gather`/`scatter`, so a trip count must be static and the carry must keep identical dtypes and shapes: both speciation phases are `scan(f, carry, enp.arange(species_size))` with per-slot masks, never a data-dependent `while_loop`.
@@ -94,25 +104,33 @@ Per generation there are exactly two splits: `selection_key, rest = split(state.
 Keys are rank-0 scalars, so a batched kernel takes one key and draws its own population-shaped randomness; chunked and unchunked runs therefore draw different streams and `pop_batch_size` is part of the reproducibility config.
 
 ## Dependencies (cross-node contracts this subtree relies on)
-`genome` (batch-first, one rank-0 key each): `setup(state)`, `initialize(state, key, pop_size) -> GenomeTensors`, `transform(state, node_keys, conn_keys)`, `forward(state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, inputs)`, `execute_crossover(state, key, winners, losers)`, `execute_mutation(state, key, genome, new_node_keys, new_conn_markers)`, `execute_distance(state, centre_batch, pop_batch) -> (P,)`.
+`genome` (batch-first, one rank-0 key each): `setup(state)`, `initialize(state, key, pop_size) -> GenomeTensors`, `transform(state, node_keys, conn_keys)`, `forward(state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, inputs)`, `execute_crossover(state, key, winners, losers)`, `execute_mutation(state, key, genome, new_node_keys, new_conn_markers)`, `execute_distance(state, centre_batch, pop_batch) -> (P,)` — the distance kernel is strictly row-independent and accepts **any** common batch width, never asserting `batch == pop_size` (speciation passes one `(pop_size,)` row per call through a lazy `cond`).
 `genome` statics: `num_inputs`, `num_outputs`, `max_nodes`, `max_conns`, `node_gene.length`, `conn_gene.length`, `conn_gene.uses_historical_marker`; helpers `node_exists`, `conn_exists`, `max_node_key`, `max_conn_marker`.
 `genome.utils.GenomeTensors` is the payload namedtuple — the four fields in declaration order.
 `common`: `State` (immutable, `register`/`update`/`registered_keys`), `StatefulBaseClass`, `errors.TensorNEATError`, `tools.{rank_elements, fetch_first, argmin_with_mask, flat_gather, to_numpy}`.
 `pipeline`: creates `randkey` with `evoxc.random.key(seed)`, calls `setup` on the host, drives `ask → transform → forward/evaluate → tell`, and calls `show_details` on host-readable values.
 
 ## Measured Cost (numpy backend, real `DefaultGenome(max_nodes=50, max_conns=100)`, XOR, `species_size=20`, this repo)
-Whole `Pipeline.step` (one graph, build cached by the pipeline): 313 ms/generation at `P=100`, 1024 ms at `P=500`, 2157 ms at `P=1000`; the first step additionally pays a 4.3 / 5.5 / 7.3 s graph build.
-Phase split at `P=100` / `P=500`: evaluation (`transform` + `forward` + `evaluate`) 48 / 232 ms, `tell` 289 / 1002 ms — `tell` is 71 % / 81 % of the generation.
-Inside `tell` at `P=100` / `P=500`: `speciate` 223 / 614 ms, crossover + mutation + elite select 33 / 89 ms, `update_species` (species fitness, stagnation, sort, spawn, pairing) 1.2 / 1.6 ms.
-`execute_distance` for one broadcast centre against the whole population: 5.7 / 17.1 ms, so `speciate`'s ~`2 × species_size` passes account for its whole cost — the distance kernel is genome-owned, and the pass count is this node's.
+Whole `Pipeline.step` (one graph, build cached by the pipeline), one configuration per fresh process, median of 5 steps after 5 setup steps and a warmup, alternating the pre-change tree and this one on the same box:
+`P=100` 240 / 240 -> 107 / 107 ms (2.25x), `P=300` 559 / 554 -> 456 / 452 ms (1.22x), `P=500` 830 / 834 and 806 / 806 -> 791 / 806 ms (parity), `P=1000` 1475 / 1811 -> 1471 / 1778 ms (parity; the spread inside each pair is run-to-run drift of this box, not a tree effect).
+A generation-by-generation trace at `P=500` shows the two trees step-for-step identical (800–830 ms per step, identical live-node, live-connection, live-species and max-fitness trajectories).
+Graph build (`pipeline.build_seconds`): 3.45 -> 3.96 s at `P=100`, 4.03 -> 4.23 s at `P=300`, 4.28 -> 4.15 s at `P=500`, 4.60 -> 4.65 s at `P=1000` — the gated path adds one kernel copy plus its region plumbing, ~15 % at the smallest population.
+Phase split at the same configuration (separate executables, so the sum over-counts one generation): `evaluate` (`transform` + `forward` + `evaluate`) 30 / 135 / 280 ms, `update_species` (species fitness, stagnation, sort, spawn, pairing) 1.1 / 1.5 / 1.9 ms, crossover + mutation + elite select 29 / 76 / 142 ms, `speciate` 46 / 576 / 1032 ms at `P=100` / `500` / `1000`.
+`tell` is 77 / 653 / 1176 ms and `speciate` is 60 % / 88 % / 88 % of it; at `P=100` the breeding kernel (37 % of `tell`, 29 ms) is now the second hot spot, from `P=500` up it is the 2 x 20 compatibility rows.
+Live species slots in the measured states: 3 / 15 / 20 / 20 at `P=100 / 300 / 500 / 1000` — a small population's species table is mostly dead slots, which is why the lazy rows pay off there and nowhere else.
+Per-row cost of `genome.execute_distance` (real payload shapes, standalone executable): ~2.5 ms of interpreter dispatch per call plus ~48 us per pair, flat from 100 to 20 000 rows, so in situ a row costs ~5.7 ms at `P=100` and ~33 ms at `P=1000`.
+The distance kernel is genome-owned: the per-pair cost is the batch-wide key alignment (`find_homologous` sorts `2·M` key rows for every pair), which this node cannot change.
 `NEAT.setup` (init kernel build + run): 40 / 38 / 47 ms at `P=100` / `500` / `1000`.
-The legacy JAX baseline is 51 / 109 / 157 ms per generation, so the cycle is 6–14× over budget at the configuration above in this node.
+Against the declared legacy JAX baseline (51 / 109 / 157 ms per generation, measured in an earlier session) the cycle is ~2.1x / ~7.4x / ~9.4x over budget at `P=100` / `500` / `1000`.
 
 ## Known Issues
 `next_species_key` must stay strictly greater than every live key; `setup` seeds it at `1.0` (slot 0 uses `0.0`) and each created species increments it, so the invariant holds as long as the counter is never rebound by hand — a colliding counter silently merges two species' `member_count`.
 `test/unit/algorithm/test_spawn.py` encodes the brief's `loc(p) = #{i : spawn[i] > 0 and E[i] <= p} - 1`; that count is wrong for a live zero-spawn species in the middle of the table, so the oracle needs the "last qualifying block" form to agree with `block_layout` (cross-node item, `test/` is not writable from here).
 `test/unit/algorithm/**` bodies are hard-coded `pytest.skip`, so the suite verifies nothing even against a working tree; this node is currently verified by driving `Pipeline` end-to-end on the numpy backend with the real `DefaultGenome`/`XOR` (pop 8/100/500/1000, `rank` and `fitness` spawn modes, `max_stagnation` kills, `OriginConn`'s `historical_marker` branch, `pop_batch_size` chunking, `RecurrentGenome`, XOR3d) plus bit-identical repeat runs.
-`speciate` calls `distance_fn` once per species slot in each of its two scans (`2 × species_size` whole-population passes per generation) and pays that even for dead slots and for iterations whose masks turn every write into a no-op; at `species_size=20` this is ~77 % of `tell`.
+`speciate`'s pair count is `2 · species_size · pop_size` and cannot be reduced without changing the algebra: each phase needs its own `(species_size, pop_size)` set of genuinely different centres, and a created species takes the first unassigned genome as its centre, so its row depends on every earlier assignment.
+The remaining cost is therefore per-pair, not per-call: `DefaultDistance` re-sorts `2·M` key rows for every pair (`find_homologous`), i.e. the same genome is re-sorted `species_size` times per phase — a genome-side sorted-row reuse is the next lever and lies outside this node.
+Liveness gating only pays while the species table is sparse, so it is confined below `GATED_ROWS`; a large population cannot exploit a sparse table even early in a run, when its species slots are still filling.
+Above `GATED_ROWS` the graph must stay free of the `if` regions: an unconditional `cond` around the rows costs 26 % of the generation at `P=500` while skipping nothing, and chunked tables were measured slower still (one 20 000-row call at `P=1000` loses to 20 rows of `P`).
 `_new_gene_keys` is per-individual by contract (see `## Gene Keys & Padding`), so the genome must not assume keys are globally unique across the population.
 
 ## Constraints
@@ -135,12 +153,13 @@ Tests live in the sibling `test/` tree (read-only from here): `test/unit/algorit
 `test/parity/algorithm/neat/` compares against `benchmarks/legacy_jax` on fixed gene payloads — identical selection/speciation outcomes for the deterministic steps, and only the divergences listed above allowed elsewhere.
 `test/integration/` evolves XOR to its fitness target with a fixed seed and asserts run-to-run determinism for a `(seed, config, shape)` triple.
 Every kernel here must be a pure function of `(state, key)`: no dict-order dependence, no host RNG, no float→int conversion without an explicit mask.
+The lazy distance rows are verified by bit-identity of a whole run: `fitness_history` element-for-element plus sha256 of `node_keys`, `node_attrs`, `conn_keys`, `conn_attrs`, `species_keys`, `best_fitness`, `last_improved`, `member_count`, `idx2species`, the four centre arrays, `next_species_key` and `randkey`, compared against the pre-change tree at pop 100 and pop 8 (gated path) and pop 500 (ungated path) — `common.tools.to_numpy` first, because hashing an `evoxc.Tensor` directly hashes the object pointer rather than the data.
 
 ## Routing Table
 | Path | Responsibility |
 | --- | --- |
 | `./neat.py` | `NEAT`: population cycle (`setup`/`ask`/`transform`/`forward`/`tell`), fitness sanitising, next-generation creation, `pop_batch_size` scan chunking, host-side `show_details`. |
 | `./species.py` | `SpeciesState` (frozen dataclass) and `SpeciesController`: species fitness, stagnation, descending sort, spawn allocation, parent pairing, block layout, fixed-length speciation scans. |
-| `./_kernels.py` | Plain graph helpers behind `species.py`: constants, payload helpers, sort/prefix-sum primitives, membership, spawn allocation, block layout, parent pairing, the two speciation scans, payload reading. |
+| `./_kernels.py` | Plain graph helpers behind `species.py`: constants, payload helpers, sort/prefix-sum primitives, membership, spawn allocation, block layout, parent pairing, `GATED_ROWS`/`gated` (the static lazy-row gate) and the two speciation scans, payload reading. |
 | `./_validation.py` | Host-side constructor validators shared by `species.py` and `neat.py`. |
 | `./__init__.py` | Re-exports `NEAT`, `SpeciesController`, `SpeciesState`. |

@@ -487,6 +487,25 @@ class SpeciesController(StatefulBaseClass):
             "``best_fitness`` was NaN before this call and the key is live now";
             it is reused instead of re-deriving the same mask with ``isnan`` on
             two fields.
+
+        Note:
+            **Below ``_kernels.GATED_ROWS`` both scans compute their distance row
+            lazily, behind one ``evoxc.cond`` per iteration.**  The predicate is
+            the mask that lets the iteration write -- ``live and any-pending`` for
+            scan 1, ``live or create`` for scan 2 -- so a slot that cannot claim a
+            genome (scan 1) or take a member (scan 2) never runs the
+            compatibility kernel.  The skipped branch yields zeros, which the
+            iteration's own write mask discards, so no reader ever consumes a
+            row that was not computed: the substitution is bit-identical.
+        Note:
+            **Above ``_kernels.GATED_ROWS`` both scans call ``distance_fn``
+            unconditionally, exactly as before the gate existed.**  The lazy
+            ``cond`` only wins while the species table is sparse (1-3 live slots
+            at pop 8/100, 20 of 20 at pop >= 500); once every slot is live its
+            ``if`` regions cost more than the passes they skip (26 % of a whole
+            generation at pop 500).  ``_kernels.gated`` is a pure predicate on
+            static ints, so one path is traced and the other never reaches the
+            graph.
         """
         population = self._population(state, pop)
         values = _kernels.speciate(
@@ -497,6 +516,7 @@ class SpeciesController(StatefulBaseClass):
             self.pop_size,
             self.species_size,
             self.compatibility_threshold,
+            _kernels.gated(self.species_size, self.pop_size),
         )
         return state.update(species=SpeciesState(*values))
 
