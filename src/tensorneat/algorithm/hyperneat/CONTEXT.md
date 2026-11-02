@@ -100,7 +100,7 @@ The recurrent executor (`RecurrentGenome`) ignores `max_depth` — it ticks a fi
 `../../common`: `State`, `functions.{ACT, AGG}` (aggregation callables are `(z, mask)`), `errors.{TensorNEATError, ConfigError}`, `tools.to_numpy` (host-only gene `repr`/`to_dict`), and `host_graph.node_depth` (imported from the module, not from `common.__init__`).
 `../base.py`: `BaseAlgorithm`, including `show_details` as the only host-side member.
 `problem`: `evaluate` reads only `static_batch_size(transformed)`, so the `SubstrateSchedule` container is legal as long as every leaf keeps axis 0 = population.
-`problem`'s `FuncFit.show` does **not** honour that and breaks on the nested `SubstrateSchedule` (see Known Issues).
+`problem`'s `FuncFit.show` rebuilds the nested schedule with `evoxc.tree_unflatten`, so a `SubstrateSchedule` survives the round trip and `Pipeline.show` reports a decoded substrate.
 `pipeline.py`: creates `randkey`; this node seeds nothing and draws no randomness.
 
 ## Constraints
