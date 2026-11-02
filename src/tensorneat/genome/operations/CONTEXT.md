@@ -49,7 +49,7 @@ Non-homologous slots are zeroed **before** the attribute `reduce_sum` (a `NaN * 
 ## Deviations from the pre-rewrite library (intentional)
 - The four structural operations are mutually exclusive through one shared draw; the legacy build gated each of them with an independent uniform and could apply several per individual.
 - `choose_node_key` takes the static row counts `num_inputs`/`num_outputs` (the legacy signature passed `input_idx`/`output_idx` lists); the four private mutation helpers take the trailing gate.
-- Alignment is the tagged-`argsort` merge over the concatenated key hashes (`_COLLISION_WINDOW`/`searchsorted` no longer exist); the collision window is closed by comparing the full key rows of the surviving pairs.
+- Alignment is the packed-identity rank merge over `row_identity` (`_COLLISION_WINDOW`/`searchsorted`/hash-and-confirm no longer exist in any form): the parent tag lives in the low 2 bits of the `uint64` sort key, so parent 1 sorts first inside a group of equal identities and the single `argsort` may run unstable; only key columns past the packed prefix are confirmed by `_confirm_rows`.
 - Non-finite distance weights are rejected as well as negative ones, and `compatibility_disjoint`/`compatibility_weight` are validated at construction.
 
 ## Test Strategy
