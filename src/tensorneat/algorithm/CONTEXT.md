@@ -126,7 +126,7 @@ No `jax` / `torch` / `numpy.random` import anywhere in this subtree; `import ten
 No Python branching, `bool()`, `len()` or host reads on traced values; static Python `if`/`for` over constructor configuration is fine and unrolls at trace time.
 Constructor validation raises `tensorneat.common.errors.TensorNEATError`; trace/shape/backend errors propagate unchanged and are never re-wrapped or silently fallen back.
 Nothing here reads `state` fields it did not register, except the documented genome/problem keys above.
-Files stay under ~1000 lines (the largest are `species.py` at 929 and `hyperneat.py` at 823, the gene kernels having moved to `hyperneat/genes.py` at 297); shared algebra helpers live in `./neat/_kernels.py`, host validators in `./neat/_validation.py`.
+Files stay under ~1000 lines (the largest are `species.py` at 949 and `hyperneat.py` at 823, the gene kernels having moved to `hyperneat/genes.py` at 297); shared algebra helpers live in `./neat/_kernels.py` (863), host validators in `./neat/_validation.py`.
 
 ## Test Strategy
 Tests live in the sibling `./../../test` tree (read-only from here), mirroring this subtree: `test/unit/algorithm/` for the spawn/selection/stagnation algebra on fixed keys, `test/parity/algorithm/` for comparison against `benchmarks/legacy_jax` (documented divergences above are the only allowed mismatches), `test/integration/` for a full XOR run reaching its fitness target with a reproducible seed.
