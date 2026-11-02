@@ -19,7 +19,10 @@ Conventions that hold everywhere in this module:
   genome-owned padding encoding: this module never inspects padding, it asks the
   genome (``node_exists``, ``conn_exists``, ``max_node_key``,
   ``max_conn_marker``) instead;
-* host-side Python is limited to ``__init__`` validation and ``show_details``.
+* host-side Python is limited to ``__init__`` validation and ``show_details``;
+  ``numpy`` is the one other host import, used only for the *static* dtype bound
+  of :func:`_finite_bound` (``numpy.finfo``), never for tensor arithmetic --
+  ``numpy.random`` is not used anywhere and no host array enters a kernel.
 
 Sizes: ``P = pop_size``, ``S = species_size``, ``N = max_nodes``,
 ``E = max_conns``, ``NA``/``CK``/``CA`` the node attribute, connection key and
@@ -29,6 +32,8 @@ connection attribute widths declared by the genome's genes.
 from __future__ import annotations
 
 from typing import Any, Callable, Optional
+
+import numpy as np
 
 import evoxc
 import evoxc.numpy as enp
@@ -40,18 +45,56 @@ from tensorneat.common.tools import to_numpy
 from ...genome.utils import GenomeTensors
 from ..base import BaseAlgorithm
 from .species import SpeciesController, SpeciesState
+from ._distance import DistanceRows
 from ._validation import positive_int
+
+
+def _finite_bound(dtype: Any) -> Any:
+    """Rank-0 constant holding the largest finite magnitude representable by ``dtype``.
+
+    Args:
+        dtype (Any): Floating point dtype of the fitness array (``evoxc``/
+            ``numpy`` dtype object).
+
+    Returns:
+        Any: Rank-0 ``dtype`` constant equal to ``finfo(dtype).max``.
+
+    Raises:
+        TensorNEATError: If ``dtype`` is not a floating point dtype (an integer
+            "fitness" has no non-finite values, so this is a caller bug rather
+            than something to guess around).
+
+    Note:
+        The bound is the *exact* largest finite value of the dtype, so
+        ``abs(f) <= bound`` is true for every finite ``f`` and false for ``inf``
+        and ``NaN`` -- the same predicate the previous ``f - f`` composition
+        computed, without performing ``inf - inf`` (which numpy reports as a
+        ``RuntimeWarning: invalid value encountered in subtract``).
+    """
+    np_dtype = np.dtype(dtype)
+    if not np.issubdtype(np_dtype, np.floating):
+        raise TensorNEATError(
+            "_sanitize_fitness: fitness must be a floating point array, got "
+            f"dtype {np_dtype!r}"
+        )
+    return enp.full((), np.finfo(np_dtype).max, dtype=dtype)
 
 
 def _sanitize_fitness(fitness: Any, pop_size: int) -> Any:
     """Map NaN and infinite fitness to ``-inf``.
 
     Fitness is maximised and a broken topology evaluates to NaN, so the raw
-    ``(P,)`` value cannot enter selection.  ``evoxc`` has ``isnan`` but no
-    ``isfinite``/``isinf``; the exact composition used here is "``f - f`` is NaN
-    for NaN and for both infinities, and ``0`` for every finite value", i.e.
+    ``(P,)`` value cannot enter selection.  ``evoxc`` has no
+    ``isfinite``/``isinf``; the exact composition used here is "a value is
+    finite iff its magnitude does not exceed the dtype's largest finite value",
+    i.e.
 
-    ``finite = ~isnan(f - f)`` and ``clean = select(finite, f, -inf)``.
+    ``finite = abs(f) <= finfo(dtype).max`` and ``clean = select(finite, f, -inf)``.
+
+    ``NaN`` makes the comparison false and ``±inf`` exceeds the bound, so both
+    become ``-inf``, while every finite value (``-0.0`` and subnormals included)
+    passes through bit-identically.  No invalid arithmetic is performed, so the
+    kernel emits no numpy ``RuntimeWarning``.
 
     Args:
         fitness (Any): ``(P,)`` float32 raw fitness as produced by the problem.
@@ -64,7 +107,8 @@ def _sanitize_fitness(fitness: Any, pop_size: int) -> Any:
         only used as a ``select`` predicate, never as arithmetic).
 
     Raises:
-        TensorNEATError: If ``fitness`` is not 1-D over the population axis.
+        TensorNEATError: If ``fitness`` is not 1-D over the population axis, or
+            not floating point.
     """
     shape = tuple(getattr(fitness, "shape", ()))
     if len(shape) != 1 or shape[0] != pop_size:
@@ -73,7 +117,7 @@ def _sanitize_fitness(fitness: Any, pop_size: int) -> Any:
             f"({pop_size},) -- one value per individual -- but got "
             f"shape {shape} for {type(fitness).__name__}"
         )
-    finite = evoxc.logical_not(evoxc.isnan(evoxc.subtract(fitness, fitness)))
+    finite = evoxc.less_equal(evoxc.abs(fitness), _finite_bound(fitness.dtype))
     return evoxc.select(
         finite, fitness, enp.full((), float("-inf"), dtype=fitness.dtype)
     )
@@ -435,7 +479,11 @@ class NEAT(BaseAlgorithm):
            split (crossover/mutation/next ``randkey``).
         5. **Re-speciate**: ``SpeciesController.speciate`` rebuilds membership
            against the new population, re-electing centres and possibly creating
-           species.
+           species.  The population is digested exactly once here
+           (``genome.prepare_distance``) and that digest backs every distance
+           row of the generation through :meth:`_distance_rows`, so a centre no
+           longer re-sorts the population and one phase can be measured in a
+           single wide call.
         6. **Commit**: the new ``pop``, the advanced ``randkey``, the incremented
            ``generation`` and the new ``species`` come back on the returned
            state.
@@ -472,7 +520,11 @@ class NEAT(BaseAlgorithm):
         state = state.update(generation=generation)
         state, winner, loser, elite_mask = self.species.update_species(state, fitness)
         state = self._create_next_generation(state, winner, loser, elite_mask)
-        return self.species.speciate(state, self.genome.execute_distance)
+        population = state.pop
+        digest = self.genome.prepare_distance(state, population)
+        return self.species.speciate(
+            state, self._distance_rows(digest, population), population
+        )
 
     # ------------------------------------------------------------- next pop
 
@@ -529,12 +581,19 @@ class NEAT(BaseAlgorithm):
             )
         )
 
+        # Elitism: keep the (unmutated) crossover child on elite slots.  The
+        # broadcast mask depends only on a field's rank, so it is built once per
+        # distinct rank instead of once per field.
+        masks: dict[int, Any] = {}
         next_fields = []
         for crossed_field, mutated_field in zip(crossed, mutated):
             rank = len(crossed_field.shape)
-            mask = evoxc.reshape(
-                elite_mask, (self._pop_size,) + (1,) * (rank - 1)
-            )
+            mask = masks.get(rank)
+            if mask is None:
+                mask = evoxc.reshape(
+                    elite_mask, (self._pop_size,) + (1,) * (rank - 1)
+                )
+                masks[rank] = mask
             next_fields.append(evoxc.select(mask, crossed_field, mutated_field))
 
         return state.update(pop=GenomeTensors(*next_fields), randkey=next_randkey)
@@ -544,14 +603,15 @@ class NEAT(BaseAlgorithm):
 
         A batch-first mutation creates nodes and connections for the whole
         population in one kernel, so every individual needs key ranges that do
-        not overlap:
+        not collide with *its own* existing rows:
 
-        * ``new_node_keys = max_node_key(state, node_keys) + 1 + enp.arange(P)``
+        * ``new_node_keys = max_node_key(state, node_keys) + (1 + enp.arange(P))``
           -- with ``arange(P)`` inserted in the ``"add_node"`` path, each genome
           adds at most one node per mutation call;
         * ``new_conn_markers`` is ``(P, 3)`` int32:
-          ``max_conn_marker(state, conn_keys) + 1 + arange(P * 3).reshape(P, 3)``
-          when the connection gene carries a ``historical_marker``, otherwise
+          ``reshape(max_conn_marker(state, conn_keys), (P, 1))
+          + (1 + arange(P * 3)).reshape(P, 3)`` when the connection gene carries
+          a ``historical_marker``, otherwise
           ``enp.zeros((P, 3), dtype=evoxc.int32)``.
 
         Args:
@@ -561,37 +621,51 @@ class NEAT(BaseAlgorithm):
             tuple: ``(new_node_keys (P,) int32, new_conn_markers (P, 3) int32)``.
 
         Note:
+            **Rank contract.** ``max_node_key``/``max_conn_marker`` return one
+            maximum per individual, ``(P,) int32``, so the base is per-individual
+            and uniqueness is only guaranteed *within* an individual's own gene
+            keys: keys are effectively namespaced per individual, and a key
+            allocated for one genome may collide with a key held by another
+            genome (legal -- the mutation kernel is batch-first and only ever
+            inspects an individual's own rows).  ``base + 1 + arange(P)`` is
+            strictly greater than *that* individual's own maximum.  The marker
+            path therefore reshapes the ``(P,)`` base to ``(P, 1)`` before adding
+            the ``(P, 3)`` offsets, so each individual's three markers are
+            strictly above its own maximum marker and distinct from each other.
+            Node keys and markers live in different key columns, so a numerical
+            coincidence between an allocated node key and an allocated marker
+            within one individual is meaningless.
             The width ``3`` is a genome-level convention: one mutation call may
             add at most three connections per genome.  Both maxima come from the
             genome helpers ``max_node_key``/``max_conn_marker``, which apply the
             padding encoding themselves; this module never infers validity from
-            NaN.  The ``+1`` is spelled as an int32 constant tensor because an
-            ``evoxc`` addition against a Python int promotes to int64, and the
-            gene key columns are int32.
+            NaN.  The ``+1`` offsets are baked into the ``int32`` arange
+            constants (``arange(1, P + 1)``, ``arange(1, 3P + 1)``) rather than
+            added as a separate rank-0 constant, so each allocation is a single
+            ``add`` and no ``int64`` promotion can creep in.
         """
-        one = enp.full((), 1, dtype=evoxc.int32)
         node_keys = state.pop.node_keys
-        node_base = evoxc.reshape(
-            evoxc.cast(self.genome.max_node_key(state, node_keys), evoxc.int32), ()
-        )
+        node_base = self.genome.max_node_key(state, node_keys)
+        if node_base.dtype != evoxc.int32:
+            # The genome documents ``(P,) int32``; cast only when it does not
+            # already hold that dtype, so the default path pays no ``cast`` op.
+            node_base = evoxc.cast(node_base, evoxc.int32)
+        # ``1 + arange(P)`` is one constant: the whole offset is baked in, so the
+        # allocation costs a single ``add`` against the base.
         new_node_keys = evoxc.add(
-            evoxc.add(node_base, one),
-            enp.arange(self._pop_size, dtype=evoxc.int32),
+            node_base, enp.arange(1, self._pop_size + 1, dtype=evoxc.int32)
         )
 
         if self.genome.conn_gene.uses_historical_marker:
-            conn_base = evoxc.reshape(
-                evoxc.cast(
-                    self.genome.max_conn_marker(state, state.pop.conn_keys),
-                    evoxc.int32,
-                ),
-                (),
-            )
+            conn_base = self.genome.max_conn_marker(state, state.pop.conn_keys)
+            if conn_base.dtype != evoxc.int32:
+                conn_base = evoxc.cast(conn_base, evoxc.int32)
+            conn_base = evoxc.reshape(conn_base, (self._pop_size, 1))
             markers = evoxc.reshape(
-                enp.arange(self._pop_size * 3, dtype=evoxc.int32),
+                enp.arange(1, self._pop_size * 3 + 1, dtype=evoxc.int32),
                 (self._pop_size, 3),
             )
-            new_conn_markers = evoxc.add(evoxc.add(conn_base, one), markers)
+            new_conn_markers = evoxc.add(conn_base, markers)
         else:
             new_conn_markers = enp.zeros(
                 (self._pop_size, 3), dtype=evoxc.int32
@@ -746,11 +820,9 @@ class NEAT(BaseAlgorithm):
         if self._details_cache is not None and self._details_cache[0] == shape_key:
             return self._details_cache[1]
 
-        cfg = self._static_state(state)
-
         def _count_kernel(node_key_rows, conn_key_rows):
-            node_mask = self.genome.node_exists(cfg, node_key_rows)
-            conn_mask = self.genome.conn_exists(cfg, conn_key_rows)
+            node_mask = self.genome.node_exists(node_key_rows)
+            conn_mask = self.genome.conn_exists(conn_key_rows)
             return [
                 evoxc.sum(evoxc.cast(node_mask, evoxc.int32), axes=1),
                 evoxc.sum(evoxc.cast(conn_mask, evoxc.int32), axes=1),
@@ -797,3 +869,37 @@ class NEAT(BaseAlgorithm):
             class declares it read-only and the pipeline reads it).
         """
         return self._pop_size
+
+    # ------------------------------------------------------- distance rows
+    def _distance_rows(self, digest: Any, population: Any) -> Callable:
+        """Wrap one generation's distance digest as ``speciate``'s ``distance_fn``.
+
+        The digest is built once by :meth:`tell` from the generation's new
+        population; every speciation distance of that generation is then measured
+        against it, so no centre re-sorts the population.  The returned callable
+        keeps the ``(state, centre, pop)`` signature the speciation scans expect:
+        a batch-1 centre yields one ``(pop_size,)`` row, a batch-``species_size``
+        centre yields the whole ``(species_size, pop_size)`` matrix from one wide
+        call, and a batch-``pop_size`` centre is measured row-wise.
+
+        Args:
+            digest (Any): ``DistanceDigest`` from
+                ``self.genome.prepare_distance(state, population)``.
+            population (Any): The payload the digest was prepared from; the
+                callable rejects any other payload instead of mixing generations.
+
+        Returns:
+            Callable: ``distance_fn(state, centre, pop=None)`` producing the
+            rows described above.
+
+        Raises:
+            TensorNEATError: If the digest's population axis or the payload's
+                batch is not ``pop_size`` (raised when the callable is built).
+        """
+        return DistanceRows(
+            self.genome,
+            digest,
+            population,
+            pop_size=self._pop_size,
+            species_size=self.species.species_size,
+        )

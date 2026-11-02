@@ -22,7 +22,9 @@ Why this module contains no ``vmap``
     in the pre-rewrite library.
 
 Notation used throughout (all sizes are static ints known at construction)
-    ``P`` = ``neat.pop_size``; ``Q`` = ``substrate.conns_cnt``; ``N`` = ``substrate.nodes_cnt``;
+    ``P`` = the decoded payload's leading dimension (``neat.pop_size`` in an evolution step, ``1``
+    for a single-individual ``Pipeline.show`` decode); ``Q`` = ``substrate.conns_cnt``;
+    ``N`` = ``substrate.nodes_cnt``;
     ``I`` = ``substrate.num_inputs`` (substrate input neurons *including* the trailing bias);
     ``O`` = ``substrate.num_outputs``;
     ``C`` = ``neat.num_inputs`` = ``substrate.query_coors.shape[1]`` = ``2 * CD`` (CPPN input width,
@@ -39,7 +41,8 @@ evoxc facts this module is designed against
       :meth:`HyperNEAT._assemble_substrate`) and there is no gene-level payload builder to go
       through.
     * ``getitem`` is *static* indexing only and rejects ``Ellipsis``, so a last-axis column is taken
-      with an explicit ``(slice(None),) * (rank - 1) + (index,)`` key (see :func:`_attr_column`).
+      with an explicit ``(slice(None),) * (rank - 1) + (index,)`` key (see
+      ``tensorneat.genome.gene.base.column``, wrapped by the genes' ``column_of``).
 """
 
 import numbers
@@ -52,43 +55,14 @@ import evoxc.numpy as enp
 
 from tensorneat.common import ACT, AGG, State
 from tensorneat.common.errors import TensorNEATError
-from tensorneat.common.tools import to_numpy
-from tensorneat.genome import BaseConn, BaseNode, RecurrentGenome
-from tensorneat.genome.gene.base import GeneAttr
+from tensorneat.common.host_graph import node_depth
+from tensorneat.genome import RecurrentGenome
 from tensorneat.genome.utils import GenomeTensors
 
 from ..base import BaseAlgorithm
 from ..neat import NEAT
+from .genes import HyperNEATConn, HyperNEATNode
 from .substrate import BaseSubstrate
-
-
-def _attr_column(attrs: Any, index: int) -> Any:
-    """Take one attribute column from the last axis of a gene-attribute tensor.
-
-    Args:
-        attrs: ``(..., attr_width)`` float32 attribute tensor of any rank; the connection kernel
-            receives ``(..., max_sources, attr_width)``.
-        index: Static column index, e.g. the position of the ``weight`` spec.
-
-    Returns:
-        ``(...,)`` float32 tensor with the last axis dropped.
-
-    Note:
-        ``attrs[..., index]`` is not available: evoxc's ``getitem`` is static indexing over
-        ``int``/``slice`` keys only and rejects ``Ellipsis``.
-    """
-    key = (slice(None),) * (len(attrs.shape) - 1) + (index,)
-    return attrs[key]
-
-
-def _key_int(key_row: Any, column: int) -> int:
-    """Read one ``int32`` key column of a single gene row on the host (never inside a trace)."""
-    return int(np.asarray(to_numpy(key_row)).reshape(-1)[column])
-
-
-def _attr_float(attr_row: Any, column: int) -> float:
-    """Read one ``float32`` attribute column of a single gene row on the host (never in a trace)."""
-    return float(np.asarray(to_numpy(attr_row)).reshape(-1)[column])
 
 
 def _require_real(name: str, value: Any) -> None:
@@ -482,6 +456,51 @@ class HyperNEAT(BaseAlgorithm):
                 f"{required!r}, got {substrate.connection_type!r}"
             )
 
+    def _static_bounds(self) -> dict:
+        """Derive the executor genome's static in-degree window and depth unroll from the substrate.
+
+        The substrate is a *dense* topology (``max_nodes == nodes_cnt``, ``max_conns == conns_cnt``),
+        so its schedule fits only if the genome's static window ``K`` is at least the largest
+        per-destination in-degree the substrate actually has, and -- for the feedforward executor --
+        if the depth unroll ``D`` is at least its longest input-to-node path.  Neither bound is
+        covered by ``Transformed.overflow``: a too-small ``K`` drops connections (the pipeline raises
+        on the overflow), while a too-small ``D`` would silently leave the tail of a deep substrate
+        at ``NaN``.
+
+        Returns:
+            ``{"max_in_degree": K}`` plus ``{"max_depth": D}`` for the feedforward executor only.
+
+        Note:
+            ``K`` is the exact maximum in-degree, ``bincount(conn_index[:, 1]).max()``, floored at
+            ``1`` and at ``substrate.num_inputs``: the genome constructor validates ``max_in_degree``
+            against its (never used) dense initial ``num_inputs -> num_outputs`` network and would
+            otherwise reject the bound.  The bound is *per destination node*, so for a full or MLP
+            feedforward substrate it is the number of lower-layer neurons wired into one neuron -- a
+            ``FullSubstrate`` with 4 inputs and 3 fully interconnected hidden neurons therefore needs
+            ``K = 7`` (4 inputs + 3 hidden, its own self-loop included), not 4.  ``D`` is the longest
+            path length from the substrate inputs
+            (:func:`~tensorneat.common.host_graph.node_depth`, floored at ``1``); it is only derived
+            when ``_required_connection_type == "feedforward"`` because ``RecurrentGenome`` ignores
+            ``max_depth`` (it ticks a fixed ``activate_time`` instead).
+            A cyclic or input-unreachable substrate makes ``node_depth`` raise
+            :class:`~tensorneat.common.errors.GraphError` (a ``TensorNEATError``), which propagates
+            unchanged -- a broken geometry must not be papered over.
+        """
+        conn_index = np.asarray(self.substrate.conn_index)
+        nodes_cnt = int(self.substrate.nodes_cnt)
+        in_degree = np.bincount(conn_index[:, 1], minlength=nodes_cnt)
+        bounds = {
+            "max_in_degree": max(int(in_degree.max()), int(self.substrate.num_inputs), 1)
+        }
+        if self._required_connection_type == "feedforward":
+            depth = node_depth(
+                list(int(key) for key in self.substrate.nodes),
+                [(int(src), int(dst)) for src, dst in conn_index],
+                range(int(self.substrate.num_inputs)),
+            )
+            bounds["max_depth"] = max(max(int(value) for value in depth.values()), 1)
+        return bounds
+
     def _make_hyper_genome(self) -> Any:
         """Build the fixed-topology substrate executor genome.
 
@@ -489,9 +508,12 @@ class HyperNEAT(BaseAlgorithm):
             ``self._genome_cls(num_inputs=substrate.num_inputs, num_outputs=substrate.num_outputs,
             max_nodes=substrate.nodes_cnt, max_conns=substrate.conns_cnt,
             node_gene=HyperNEATNode(aggregation, activation), conn_gene=HyperNEATConn(),
-            output_transform=output_transform, **self._genome_extra_kwargs())``, whose
-            ``max_nodes`` / ``max_conns`` equal the substrate's counts (dense arrays, pruning through
-            zero weights rather than absent genes).
+            output_transform=output_transform, **_static_bounds(),
+            **self._genome_extra_kwargs())``, whose ``max_nodes`` / ``max_conns`` equal the
+            substrate's counts (dense arrays, pruning through zero weights rather than absent genes)
+            and whose static bounds come from :meth:`_static_bounds`: ``max_in_degree`` is the
+            substrate's exact maximum in-degree (floored at ``num_inputs``), and ``max_depth`` --
+            passed for the feedforward executor only -- is its longest path from the inputs.
         """
         return self._genome_cls(
             num_inputs=self.substrate.num_inputs,
@@ -501,6 +523,7 @@ class HyperNEAT(BaseAlgorithm):
             node_gene=HyperNEATNode(self.aggregation, self.activation),
             conn_gene=HyperNEATConn(),
             output_transform=self.output_transform,
+            **self._static_bounds(),
             **self._genome_extra_kwargs(),
         )
 
@@ -533,8 +556,13 @@ class HyperNEAT(BaseAlgorithm):
         """
         return evoxc.constant(evoxc.from_numpy(np.ascontiguousarray(array)))
 
-    def _query_coors(self) -> Any:
+    def _query_coors(self, pop_size: int) -> Any:
         """Materialise the substrate query coordinates as a batch-first query grid.
+
+        Args:
+            pop_size: Static batch size ``P`` of the *payload being decoded* -- normally
+                ``self.pop_size``, but any static batch (``Pipeline.show`` decodes a single
+                individual) is legal because it is read off the payload, not off the config.
 
         Returns:
             ``(P, Q, C)`` float32 graph tensor: row ``q`` of ``substrate.query_coors`` -- the
@@ -549,7 +577,6 @@ class HyperNEAT(BaseAlgorithm):
             to ``(1, Q, C)``; the coordinate row order is substrate-owned and must match
             ``substrate.conn_index`` 1:1.
         """
-        pop_size = self.pop_size
         conns_cnt = int(self.substrate.conns_cnt)
         width = int(np.asarray(self.substrate.query_coors).shape[1])
         table = self._graph_constant(self.substrate.query_coors)
@@ -557,12 +584,14 @@ class HyperNEAT(BaseAlgorithm):
             enp.reshape(table, (1, conns_cnt, width)), (pop_size, conns_cnt, width)
         )
 
-    def _expand_schedule(self, transformed: Any, n_query: int) -> Any:
+    def _expand_schedule(self, transformed: Any, n_query: int, pop_size: int) -> Any:
         """Repeat a per-individual schedule along a new query axis and fuse it into axis 0.
 
         Args:
             transformed: Batch-first schedule from ``self.neat.transform`` (individual on axis 0).
             n_query: Static query count ``Q``.
+            pop_size: Static batch size ``P`` of that schedule -- the payload's own leading
+                dimension, so a batch smaller than ``self.pop_size`` decodes correctly.
 
         Returns:
             The same pytree structure whose leaves carrying the population axis become
@@ -575,15 +604,17 @@ class HyperNEAT(BaseAlgorithm):
             ordering or key table) are left alone and broadcast inside the genome kernels; the walk is
             a static Python recursion over the pytree, legal at trace time because it is static.
         """
-        return evoxc.tree_map(lambda leaf: self._expand_leaf(leaf, n_query), transformed)
+        return evoxc.tree_map(lambda leaf: self._expand_leaf(leaf, n_query, pop_size), transformed)
 
-    def _expand_leaf(self, leaf: Any, n_query: int) -> Any:
+    def _expand_leaf(self, leaf: Any, n_query: int, pop_size: int) -> Any:
         """Repeat one batch-first leaf along a query axis and fuse both axes into axis 0.
 
         Args:
             leaf: One leaf of a batch-first pytree; either a tensor whose axis 0 is the population
                 or a tensor without that axis (a shared ordering or key table).
             n_query: Static query count ``Q``.
+            pop_size: Static batch size ``P`` of the batch being decoded -- the population axis
+                length to rewrite, taken from the payload rather than from ``self.pop_size``.
 
         Returns:
             ``(P * n_query, *leaf.shape[1:])`` when ``leaf`` carries the population axis, and
@@ -595,9 +626,8 @@ class HyperNEAT(BaseAlgorithm):
             line up.  ``enp.broadcast_to`` cannot expand a non-unit axis, so the leaf is reshaped to
             ``(P, 1, ...)`` first; the repetition stays a broadcast until a consumer materialises it.
         """
-        if not leaf.shape or int(leaf.shape[0]) != self.pop_size:
+        if not leaf.shape or int(leaf.shape[0]) != pop_size:
             return leaf
-        pop_size = self.pop_size
         trailing = tuple(int(size) for size in leaf.shape[1:])
         widened = enp.reshape(leaf, (pop_size, 1) + trailing)
         repeated = enp.broadcast_to(widened, (pop_size, n_query) + trailing)
@@ -608,7 +638,9 @@ class HyperNEAT(BaseAlgorithm):
 
         Args:
             state: Current algorithm state.
-            pop: CPPN population payload, individual on axis 0.
+            pop: CPPN population payload, individual on axis 0.  Its leading dimension is the batch
+                ``P`` -- normally ``self.pop_size``, but any static batch is accepted (``Pipeline.show``
+                decodes one individual), which is why ``P`` is read from the payload.
 
         Returns:
             ``(P, Q)`` float32 graph tensor of raw CPPN outputs.
@@ -628,13 +660,13 @@ class HyperNEAT(BaseAlgorithm):
             (``node_keys, node_attrs, conn_keys, conn_attrs``) is exactly ``genome.forward``'s
             parameter order after ``transformed``.
         """
-        pop_size = self.pop_size
+        pop_size = int(pop.node_keys.shape[0])
         n_query = int(self.substrate.conns_cnt)
         width = int(np.asarray(self.substrate.query_coors).shape[1])
         transformed_cppn = self.neat.transform(state, pop)
-        expanded = self._expand_schedule(transformed_cppn, n_query)
-        expanded_pop = evoxc.tree_map(lambda leaf: self._expand_leaf(leaf, n_query), pop)
-        queries = enp.reshape(self._query_coors(), (pop_size * n_query, width))
+        expanded = self._expand_schedule(transformed_cppn, n_query, pop_size)
+        expanded_pop = evoxc.tree_map(lambda leaf: self._expand_leaf(leaf, n_query, pop_size), pop)
+        queries = enp.reshape(self._query_coors(pop_size), (pop_size * n_query, width))
         out = self.neat.genome.forward(state, expanded, *expanded_pop, queries)
         return enp.reshape(out, (pop_size, n_query))
 
@@ -677,6 +709,8 @@ class HyperNEAT(BaseAlgorithm):
 
         Args:
             weights: ``(P, Q)`` float32 connection weights from :meth:`_weights_from_query`.
+                Its leading dimension is the batch ``P`` this payload is built for, so a decode of
+                fewer than ``self.pop_size`` individuals produces a matching ``(P, ...)`` payload.
 
         Returns:
             :class:`~tensorneat.genome.utils.GenomeTensors` with ``node_keys (P, N) int32``,
@@ -693,7 +727,9 @@ class HyperNEAT(BaseAlgorithm):
             * ``node_attrs`` gets one zero column per ``node_gene.attr_specs`` entry, because no node
               attribute is decoded from the CPPN (an ``"int"`` spec stores its option index as
               float32, and index ``0`` is the first configured option -- correct for a non-evolved
-              substrate); with ``attr_width == 0`` the array is an empty ``(P, N, 0)`` and
+              substrate, whose :class:`HyperNEATNode` declares exactly two single-option columns,
+              ``aggregation`` and ``activation``, so index ``0`` selects the constructor callables);
+              with ``attr_width == 0`` the array is an empty ``(P, N, 0)`` and
               ``enp.stack`` is never called on an empty column list;
             * ``conn_keys`` carries the static ``(Q, 2)`` ``conn_index`` endpoint table in its first
               two columns and a deterministic unique per-row id ``arange(Q) + 1`` in every further
@@ -706,7 +742,7 @@ class HyperNEAT(BaseAlgorithm):
             substrate topology is dense (``max_nodes == nodes_cnt``, ``max_conns == conns_cnt``), so
             no row is padding and no NaN sentinel is produced here.
         """
-        pop_size = self.pop_size
+        pop_size = int(weights.shape[0])
         nodes_cnt = int(self.substrate.nodes_cnt)
         conns_cnt = int(self.substrate.conns_cnt)
         node_gene = self.hyper_genome.node_gene
@@ -798,195 +834,3 @@ class HyperNEAT(BaseAlgorithm):
         extra = enp.broadcast_to(row_ids, (pop_size, conns_cnt, extra_width))
         return enp.concatenate([keys, extra], axis=-1)
 
-
-class HyperNEATNode(BaseNode):
-    """Substrate node gene with fixed (non-evolved) aggregation and activation.
-
-    The substrate topology is fixed at construction and only its weights are decoded from the CPPN,
-    so a substrate node carries no evolvable attributes: ``attr_specs`` is empty, ``attr_width == 0``
-    and ``key_width == 1`` (the node identity key alone).  ``attrs`` is therefore accepted for
-    protocol compatibility and never read.
-
-    Attributes:
-        aggregation (Callable): ``(z (..., max_sources), valid_mask (..., max_sources)) -> (...,)``.
-        activation (Callable): Unary elementwise activation applied to non-output nodes.
-    """
-
-    #: Identity column of a node row; the substrate node carries nothing else.
-    fixed_attrs = ("index",)
-
-    #: No evolvable node attributes for a HyperNEAT substrate node.
-    attr_specs: tuple[GeneAttr, ...] = ()
-
-    def __init__(self, aggregation: Callable = AGG.sum, activation: Callable = ACT.sigmoid):
-        """Store the fixed aggregation and activation.
-
-        Args:
-            aggregation: Masked aggregation over the incoming-source axis, taking ``(z, valid_mask)``.
-            activation: Activation applied to every node that is not an output node.
-
-        Note:
-            Both callables are configuration shared by every individual: they never enter ``State``
-            and are never mutated, because the hyper genome is not evolved.
-        """
-        self.aggregation = aggregation
-        self.activation = activation
-
-    def forward(
-        self,
-        state: State,
-        attrs: Any,
-        messages: Any,
-        is_output_node: Any,
-        valid_mask: Any,
-    ) -> Any:
-        """Aggregate a node's weighted incoming values and activate non-output nodes.
-
-        Batch-first over *arbitrary* leading axes, so the same kernel serves the ``(P, N, S)``
-        population batch and any slice of it:
-
-        Args:
-            state: Current algorithm state (unused; kept for the gene protocol).
-            attrs: ``(..., attr_width)`` float32 node attribute rows; unused because the node has no
-                evolvable attributes.
-            messages: ``(..., max_sources)`` already weighted incoming values, one slot per incoming
-                edge.  Slots above the real in-degree hold garbage, not a sentinel.
-            is_output_node: Bool array broadcastable to the leading batch axes, ``True`` where the
-                node is an output node.
-            valid_mask: ``(..., max_sources)`` bool, ``True`` for real incoming edges.
-
-        Returns:
-            ``(...)`` float32 node value: the masked aggregation, activated only for non-output
-            nodes.
-
-        Note:
-            This fixes the two legacy defects: it takes the gene protocol's argument order
-            ``(state, attrs, messages, is_output_node, valid_mask)`` -- the order the genome calls it
-            in, positionally -- and it aggregates through the two-argument contract, i.e.
-            ``evoxc.select(valid_mask, messages, 0.0)`` before ``self.aggregation(z, valid_mask)``,
-            never the legacy one-argument ``aggregation(inputs)`` call, which raised ``TypeError``
-            because every ``AGG`` member is ``(z, mask)``.  Output nodes are handled by one
-            ``evoxc.select`` on the result (aggregation only, no activation), not by a per-node
-            ``evoxc.cond``: the batch is heterogeneous and ``cond`` requires a scalar predicate.
-        """
-        masked = evoxc.select(valid_mask, messages, 0.0)
-        aggregated = self.aggregation(masked, valid_mask)
-        activated = self.activation(aggregated)
-        return evoxc.select(is_output_node, aggregated, activated)
-
-    def repr(
-        self,
-        state: State,
-        key_row: Any,
-        attr_row: Any,
-        precision: int = 2,
-    ) -> str:
-        """Render one substrate node gene as one line (host-only, ``HyperNEATNode(idx=3)``).
-
-        Args:
-            state: Host configuration container.
-            key_row: ``(key_width,)`` int32 key columns of a single node gene.
-            attr_row: ``(0,)`` float32 columns -- the gene has none and never reads it.
-            precision: Unused; accepted for the gene protocol.
-        """
-        return f"{type(self).__name__}(idx={_key_int(key_row, 0)})"
-
-    def to_dict(
-        self,
-        state: State,
-        key_row: Any,
-        attr_row: Any,
-    ) -> dict[str, Any]:
-        """Convert one substrate node gene to ``{"idx": int}`` (host-only, never traced)."""
-        return {"idx": _key_int(key_row, 0)}
-
-
-class HyperNEATConn(BaseConn):
-    """Substrate connection gene whose only evolvable attribute is the decoded CPPN weight.
-
-    The two endpoint columns are ``int32`` keys fixed by the substrate topology; ``attr_specs``
-    declares the single float32 ``weight`` column that :meth:`HyperNEAT.transform` repaints from the
-    CPPN, so ``key_width == 2`` and ``attr_width == 1``.
-    """
-
-    #: Endpoint key columns, fixed by the substrate topology.
-    fixed_attrs = ("input_index", "output_index")
-
-    #: The single decoded attribute: the connection weight, with ``DefaultConn``'s weight semantics.
-    attr_specs: tuple[GeneAttr, ...] = (
-        GeneAttr(
-            name="weight",
-            kind="float",
-            init_mean=0.0,
-            init_std=1.0,
-            mutate_power=0.15,
-            mutate_rate=0.8,
-            replace_rate=0.1,
-        ),
-    )
-
-    def __init__(self):
-        """Resolve ``self.weight_index`` from the ``attr_specs`` names (never from an offset)."""
-        self.weight_index = [spec.name for spec in self.attr_specs].index("weight")
-
-    def forward(self, state: State, attrs: Any, source_values: Any) -> Any:
-        """Scale a source value by the connection weight.
-
-        Batch-first over arbitrary leading axes; the incoming-source axis is the last one:
-
-        Args:
-            state: Current algorithm state (unused; kept for the gene protocol).
-            attrs: ``(..., max_sources, attr_width)`` gathered connection attribute rows for one
-                destination node.
-            source_values: ``(..., max_sources)`` source values already masked to ``0`` where the
-                edge does not exist.
-
-        Returns:
-            ``(..., max_sources)`` weighted contributions, ``source_values * weight``.
-
-        Note:
-            The weight column is read through ``self.weight_index`` (the position of the ``weight``
-            spec in ``attr_specs``, resolved in ``__init__``), never as a literal index, so inserting
-            an attribute column cannot silently shift it.  Unlike the legacy
-            ``HyperNEATConn.forward`` this kernel does **not** NaN-guard its operands: absent edges
-            are excluded upstream by ``valid_mask`` and their slots are already ``0``, so masking
-            happens once, at the node gene, and this kernel stays a single multiply.
-        """
-        return source_values * _attr_column(attrs, self.weight_index)
-
-    def repr(
-        self,
-        state: State,
-        key_row: Any,
-        attr_row: Any,
-        precision: int = 2,
-    ) -> str:
-        """Render one substrate connection gene as ``in / out / weight`` (host-only).
-
-        Args:
-            state: Host configuration container.
-            key_row: ``(key_width,)`` int32 key columns of a single connection gene.
-            attr_row: ``(attr_width,)`` float32 attribute columns of the same gene.
-            precision: Decimal places for the weight.
-
-        Returns:
-            A single-line description, e.g. ``HyperNEATConn(in: 1, out: 4, weight: 0.50)``.
-        """
-        weight = _attr_float(attr_row, self.weight_index)
-        return (
-            f"{type(self).__name__}(in: {_key_int(key_row, 0)}, "
-            f"out: {_key_int(key_row, 1)}, weight: {weight:.{precision}f})"
-        )
-
-    def to_dict(
-        self,
-        state: State,
-        key_row: Any,
-        attr_row: Any,
-    ) -> dict[str, Any]:
-        """Convert one substrate connection gene to ``{"in", "out", "weight"}`` (host-only)."""
-        return {
-            "in": _key_int(key_row, 0),
-            "out": _key_int(key_row, 1),
-            "weight": _attr_float(attr_row, self.weight_index),
-        }

@@ -1,17 +1,360 @@
+"""``Pipeline`` -- the host-side compile site, generation loop and checkpoint writer.
+
+One *generation* of NEAT is a single ``evoxc`` graph:
+``split randkey -> ask -> transform -> problem.evaluate -> tell``.
+:meth:`Pipeline.step` is the only place that graph is built, and it is built
+**once per shape signature**, never per generation:
+
+* the graph boundary carries only tensors -- the four gene payload arrays, the
+  ``generation`` counter, the ``randkey`` and the ``species`` pytree -- while the
+  whole tensor-free configuration ``State`` is baked into the graph through the
+  closure (:meth:`Pipeline._static_config` drops every tensor and every runtime
+  entry), so no concrete ``evoxc.Tensor`` is ever captured by a trace;
+* the compiled ``evoxc.Executable`` is cached in :attr:`Pipeline._executables`
+  under ``(pop_size, max_nodes, max_conns, max_in_degree, max_depth, key_span)``
+  and reused verbatim while that signature does not change, so :meth:`auto_run`
+  pays the compile cost once and then only runs;
+* a *different* signature builds a second executable; a population whose shape
+  does not match the cached signature is rejected by ``evoxc``'s own shape check,
+  which is why nothing here ever reshapes a batch to make it fit.
+
+Randomness discipline: ``evoxc.random`` keys only.  ``step`` performs exactly one
+split (``eval_key, tell_key``), hands ``eval_key`` to the problem and
+``tell_key`` to ``algorithm.tell`` (which advances it internally), and stores the
+resulting key on the returned state -- so exactly one key advance per generation
+reaches the caller and ``(seed, config, shape)`` reproduces a run.
+
+Overflow policy: an execution schedule is lossy when a node has more incoming
+edges than the static window ``max_in_degree`` can hold (``edge_overflow > 0``).
+The graph returns ``evoxc.max(edge_overflow)``; after the run a positive host
+value raises :class:`~tensorneat.common.errors.TensorNEATError` naming the
+overflow count, the population size and ``max_in_degree``.  ``max_in_degree`` is
+a *genome* static, so the pipeline cannot widen it silently -- the caller
+rebuilds the genome -- and a lossy schedule is never used.
+
+Tiled batches: a problem tiles its dataset (``P * S`` rows) or its episodes
+(``P * R`` rows) over the population axis, while the genome kernels are
+batch-first over ``P``.  The ``act_fn`` this module hands the problem therefore
+repeats the schedule and the payload ``S`` times with
+:func:`_repeat_batch`, in the individual-major order the problem's tiling uses.
+
+No ``jax``, no ``torch``, no ``numpy.random``: ``numpy`` appears only in the
+host-side bookkeeping of :meth:`Pipeline.auto_run` (logging, checkpointing) and
+in :func:`~tensorneat.common.tools.to_numpy`, the one host array accessor.
+
+## Measured cost
+
+``backend="numpy"``, one configuration per fresh process, build excluded (one
+warmup step, then 6 timed :meth:`step` calls), ``seed=42``,
+``DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100,
+output_transform=ACT.sigmoid)``, ``NEAT(pop_size=P, species_size=20,
+survival_threshold=0.01)``, ``XOR()``:
+
+| pop | build (one-off) | ms/generation (median / min) | legacy JAX | ratio |
+| --- | --- | --- | --- | --- |
+| 100 | 2.2 s | 54.7 / 51.3 | 51 | 1.07x |
+| 500 | 3.9 s | 352.5 / 343.7 | 109 | 3.2x |
+| 1000 | 4.5 s | 642.4 / 603.5 | 157 | 4.1x |
+
+This box drifts +-30 % between sessions: re-running the recipe moves the medians
+by that much while the ordering never changes, so the **ratio** against the
+frozen legacy baseline -- not the absolute millisecond count -- is the
+load-bearing number.  The committed old-vs-new harness record is
+``benchmarks/RESULTS.md``.
+
+Phases, same protocol but each phase traced as its **own** executable on one
+snapshot state (so the phase sum slightly over-counts a real generation):
+
+| pop | ``transform`` + ``forward`` on the tiled ``4P`` batch | ``tell`` | ``step`` |
+| --- | --- | --- | --- |
+| 100 | 11.6 ms | 48.4 ms | 59.4 ms |
+| 500 | 25.1 ms | 292.1 ms | 336.5 ms |
+| 1000 | 55.3 ms | 578.5 ms | 681.3 ms |
+
+* Inside ``tell``, **``speciate`` dominates**: two phases x 20 species slots x P
+  genome-distance measurements = 4 000 / 20 000 / 40 000 pairs per generation at
+  ~7.5 us/pair (pop 100) rising to ~13 us/pair (pop 1000) after the
+  population-digest API.  The pair count is irreducible under NEAT's assignment
+  semantics -- each phase needs genuinely different centres and a newly created
+  species takes the first unassigned genome as its centre, so its row depends on
+  every earlier assignment.
+* ``breed`` (crossover + mutation + elitism) is second: ~30 / ~76 / ~148 ms in
+  the same phase-sum protocol, roughly three quarters of its graph being
+  ``genome.execute_mutation`` (1360 traced ops) and the rest
+  ``genome.execute_crossover`` (433 traced ops; the two kernels alone are
+  65.7 ms + 30.5 ms at pop 1000).
+* ``evaluate`` -- ``transform`` plus ``forward`` on the tiled ``4P`` batch -- is
+  last.
+
+The numpy reference interpreter pays per traced op *and* per element, whereas the
+legacy baseline was the same work fused by XLA, so parity at ``pop >= 500`` is
+**not reachable on ``backend="numpy"``**.  The compiled route is currently blocked
+inside ``evoxc`` rather than here: ``evoxc.scan`` desugars to ``while`` plus
+gather/scatter and a matrix-valued scan carry needs a rank-3 scatter the v1
+StableHLO exporter rejects; ``iree``'s llvm-cpu compiler SIGSEGVs
+non-deterministically on a ``while`` with >= 3 carried values plus a ``select``;
+a compile costs ~3-7 s per few-thousand-op graph; and there is no committed
+llvm-cpu measurement above ~8 k ops.  The shipped backend is therefore the
+reference interpreter -- no compiled win is claimed, and a compiled backend must
+be re-evaluated when ``evoxc`` lifts those limits.
+
+Current per-generation op counts: ``forward`` 112 traced ops (749 before the
+level loop was reformulated), ``execute_mutation`` 1360 (3114), and
+``measure_distance`` 7.5 us/pair where the 40 000 pop-1000 pairs cost 25-48 us
+each before the digest API.
+
+The build is one-off and *per shape*: a wider genome
+(``max_nodes``/``max_conns``) or a bigger population is a separate compile, which
+is why :meth:`Pipeline._executable_for` caches by signature instead of holding one
+global executable.
+"""
+
+from __future__ import annotations
+
+import datetime
+import inspect
 import json
 import os
-import warnings
+import time
+from typing import Any, Callable, Optional
 
-import jax, jax.numpy as jnp
-import datetime, time
+import evoxc
+import evoxc.numpy as enp
 import numpy as np
 
-from tensorneat.algorithm import BaseAlgorithm
-from tensorneat.problem import BaseProblem
-from tensorneat.common import State, StatefulBaseClass
+from .algorithm import BaseAlgorithm
+from .common import State, StatefulBaseClass, TensorNEATError, to_numpy
+from .genome.utils import GenomeTensors
+from .problem import BaseProblem
+
+__all__ = ["Pipeline"]
+
+#: ``State`` entries holding the *runtime* tensors of one generation; they are
+#: rebuilt from the graph's tensor arguments and never baked in as statics.
+_RUNTIME_KEYS: tuple[str, ...] = ("pop", "generation", "species", "randkey")
+
+
+# --------------------------------------------------------------------------- #
+# module helpers (host-side rendering + the tiled-batch act_fn body)
+# --------------------------------------------------------------------------- #
+
+
+def _jsonable(value: Any) -> Any:
+    """Render one configuration value so ``json.dumps`` can always accept it.
+
+    Primitives pass through (NumPy scalars unwrapped with ``.item()``),
+    containers are rendered element-wise and anything else becomes
+    ``repr(value)``, so a compiled executable or a gene object shows up in
+    ``config.txt`` instead of aborting the checkpoint.
+    """
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable(item) for item in value]
+    return repr(value)
+
+
+def _config_value(owner: Any, name: str) -> Any:
+    """The ``_jsonable`` value of ``owner.name``, or ``None`` when it does not exist.
+
+    Only the two "this value is not available here" errors (``AttributeError``,
+    ``NotImplementedError`` from an abstract shape) are absorbed; any other
+    exception is a bug in the configuration object and propagates.
+    """
+    try:
+        value = getattr(owner, name)
+    except (AttributeError, NotImplementedError):
+        return None
+    return _jsonable(value)
+
+
+def _declared_shape(owner: Any, name: str) -> Optional[tuple[int, ...]]:
+    """The per-sample ``input_shape``/``output_shape`` of ``owner``, or ``None``.
+
+    Raises:
+        TensorNEATError: If the declared value is not a sequence of ints -- a
+            broken declaration must not read as "no shape".
+    """
+    try:
+        value = getattr(owner, name)
+    except (AttributeError, NotImplementedError):
+        return None
+    try:
+        return tuple(int(size) for size in value)
+    except TypeError as error:
+        raise TensorNEATError(
+            f"{type(owner).__name__}.{name} must be a sequence of ints, got {value!r}"
+        ) from error
+
+
+def _schedule_overflow(schedule: Any) -> Any:
+    """The ``(P,)`` overflow counter of a schedule, or ``None`` if it has none.
+
+    A genome ``Transformed`` exposes ``edge_overflow`` directly; a wrapper such
+    as ``HyperNEAT``'s ``SubstrateSchedule`` nests the genome schedule in its
+    ``schedule`` field; a fixed topology overflows by construction, never.
+    The branch is over *types* at trace time, never over a traced value.
+    """
+    overflow = getattr(schedule, "edge_overflow", None)
+    if overflow is None:
+        overflow = getattr(getattr(schedule, "schedule", None), "edge_overflow", None)
+    return overflow
+
+
+def _repeat_batch(tree: Any, factor: int, pop_size: int) -> Any:
+    """Repeat every batch-first leaf of a pytree ``factor`` times along axis 0.
+
+    A problem tiles its batch over the population axis, so the schedule and the
+    payload must be repeated to ``P * factor`` rows in the flat order
+    ``p * factor + s`` (individual slowest) that the tiling uses.  Leaves
+    without the population axis (a shared key or order table) pass through.
+    """
+    if factor == 1:
+        return tree
+
+    def expand(leaf: Any) -> Any:
+        """Repeat one leaf along a new sample axis, if it carries the population."""
+        shape = getattr(leaf, "shape", None)
+        if not shape or int(shape[0]) != pop_size:
+            return leaf
+        trailing = tuple(int(size) for size in shape[1:])
+        widened = enp.reshape(leaf, (pop_size, 1) + trailing)
+        repeated = enp.broadcast_to(widened, (pop_size, factor) + trailing)
+        return enp.reshape(repeated, (pop_size * factor,) + trailing)
+
+    return evoxc.tree_map(expand, tree)
+
+
+def _run_network(
+    state: State,
+    forward: Callable[[Any, Any, Any, Any], Any],
+    transformed: Any,
+    payload: GenomeTensors,
+    inputs: Any,
+) -> Any:
+    """Evaluate a population on a tiled batch (the body of every ``act_fn``).
+
+    ``transformed``/``payload`` arrive batch-first over ``P``; ``inputs`` is
+    ``(P * S, *input_shape)``, so both are repeated ``S`` times before the
+    ``forward`` adapter (:meth:`Pipeline._forward_adapter`) runs them.
+
+    Raises:
+        TensorNEATError: If the batch is not a positive multiple of ``P``.
+    """
+    row_count = int(payload.node_keys.shape[0])
+    batch = int(inputs.shape[0])
+    factor, remainder = divmod(batch, row_count)
+    if remainder or factor < 1:
+        raise TensorNEATError(
+            f"the problem asked the network for a batch of {batch} row(s), which is "
+            f"not a positive multiple of the population {row_count}; a tiled "
+            "dataset must be individual-major over the population axis"
+        )
+    return forward(
+        state,
+        _repeat_batch(transformed, factor, row_count),
+        inputs,
+        _repeat_batch(payload, factor, row_count),
+    )
+
+
+def _one_individual(payload: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Normalise a payload to its four arrays with **one** individual on axis 0.
+
+    Args:
+        payload (Any): A ``GenomeTensors`` (or any four-element sequence) whose
+            arrays either carry a population axis of length 1 or are the bare
+            per-individual rows :attr:`Pipeline.best_genome` stores.
+
+    Returns:
+        tuple: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` as numpy arrays
+        shaped ``(1, N)``, ``(1, N, NA)``, ``(1, E, CK)``, ``(1, E, CA)``.
+
+    Raises:
+        TensorNEATError: If the payload is not four non-scalar arrays.
+    """
+    fields = list(payload)
+    if len(fields) != 4:
+        raise TensorNEATError(
+            "a genome payload is the four arrays (node_keys, node_attrs, conn_keys, "
+            f"conn_attrs), got {len(fields)} array(s) of {type(payload).__name__}"
+        )
+    arrays = []
+    for index, field in enumerate(fields):
+        array = np.asarray(to_numpy(field))
+        if array.ndim == 0:
+            raise TensorNEATError(
+                f"payload field {index} is rank-0; expected a per-individual row "
+                "(node_keys (N,), node_attrs (N, NA), conn_keys (E, CK), "
+                "conn_attrs (E, CA)) or the same with a leading population axis"
+            )
+        arrays.append(array)
+    node_keys, node_attrs, conn_keys, conn_attrs = arrays
+    if node_keys.ndim == 1:
+        node_keys = node_keys[np.newaxis, :]
+        node_attrs = node_attrs[np.newaxis, ...]
+        conn_keys = conn_keys[np.newaxis, ...]
+        conn_attrs = conn_attrs[np.newaxis, ...]
+    return node_keys, node_attrs, conn_keys, conn_attrs
+
+
+# --------------------------------------------------------------------------- #
+# the pipeline
+# --------------------------------------------------------------------------- #
 
 
 class Pipeline(StatefulBaseClass):
+    """Drive one evolutionary algorithm over one problem and log the trajectory.
+
+    Args:
+        algorithm (BaseAlgorithm): The algorithm to run (``NEAT`` or
+            ``HyperNEAT``); it owns the population tensors and the species
+            bookkeeping, and every kernel is routed through it.
+        problem (BaseProblem): The task that turns a schedule into fitness.
+        seed (int, optional): Seed of the ``evoxc.random.key`` created in
+            :meth:`setup` -- the only source of randomness of a run. Defaults to ``42``.
+        fitness_target (float, optional): Fitness (maximised) at which
+            :meth:`auto_run` stops. Defaults to ``1``.
+        generation_limit (int, optional): Maximum number of generations
+            :meth:`auto_run` executes. Defaults to ``1000``.
+        backend (str, optional): Forwarded verbatim to ``evoxc.build``;
+            ``"numpy"`` is the reference interpreter, ``"iree"``/``"tvm"``/
+            ``"xla"`` are opt-in extras. Nothing falls back. Defaults to ``"numpy"``.
+        device (Any, optional): Forwarded to ``evoxc.build`` only when not
+            ``None``. Defaults to ``None``.
+        compile_options (dict | None, optional): Expanded into ``evoxc.build``'s
+            ``**options`` (each stage uses the keys it understands). Defaults to ``None``.
+        is_save (bool, optional): Write ``config.txt``, ``log.txt`` and one
+            ``genomes/<generation>.npz`` per generation. Defaults to ``False``.
+        save_dir (str | os.PathLike | None, optional): Checkpoint directory;
+            ``None`` with ``is_save`` creates ``"./Pipeline YYYYmmddHHMMSS"``.
+            Defaults to ``None``.
+        is_detailed (bool, optional): Print the per-generation report and call
+            ``algorithm.show_details``. Defaults to ``True``.
+        show_problem_details (bool, optional): Also call the problem's host-side
+            ``show_details`` hook each generation. Defaults to ``False``.
+        pop_batch_size (int | None, optional): Must agree with the algorithm's own
+            ``pop_batch_size``: chunking is fixed when ``NEAT`` is constructed (it
+            changes the random stream), so the pipeline cannot inject it.
+            ``None`` means "whatever the algorithm was built with". Defaults to ``None``.
+
+    Raises:
+        TensorNEATError: If the problem and the algorithm disagree about the
+            network arity, or if ``pop_batch_size`` disagrees with the
+            algorithm's own setting.
+
+    Note:
+        Construction is host-only: it validates configuration, stores it and
+        prints nothing. No graph is built until the first :meth:`step` (or the
+        explicit warm-up inside :meth:`auto_run`).
+    """
+
     def __init__(
         self,
         algorithm: BaseAlgorithm,
@@ -19,278 +362,771 @@ class Pipeline(StatefulBaseClass):
         seed: int = 42,
         fitness_target: float = 1,
         generation_limit: int = 1000,
+        backend: str = "numpy",
+        device: Any = None,
+        compile_options: Optional[dict] = None,
         is_save: bool = False,
-        save_dir=None,
+        save_dir: Optional[Any] = None,
+        is_detailed: bool = True,
         show_problem_details: bool = False,
-        using_multidevice: bool = False,
-        pop_batch_size: int = None,
-    ):
-        """
-        Args:
-            pop_batch_size: Overrides ``algorithm.pop_batch_size`` if provided.
-                See :class:`NEAT` for semantics.
-        """
-        assert problem.jitable, "Currently, problem must be jitable"
-
+        pop_batch_size: Optional[int] = None,
+    ) -> None:
         self.algorithm = algorithm
         self.problem = problem
         self.seed = seed
         self.fitness_target = fitness_target
         self.generation_limit = generation_limit
-        self.pop_size = self.algorithm.pop_size
-
-        if pop_batch_size is not None:
-            self.algorithm.pop_batch_size = pop_batch_size
-
-        self.pop_batch_size = getattr(self.algorithm, 'pop_batch_size', None)
-        if self.pop_batch_size is not None:
-            assert self.pop_size % self.pop_batch_size == 0, (
-                f"pop_size ({self.pop_size}) must be divisible by pop_batch_size ({self.pop_batch_size})"
-            )
-
-        np.random.seed(self.seed)
-
-        assert (
-            algorithm.num_inputs == self.problem.input_shape[-1]
-        ), f"algorithm input shape is {algorithm.num_inputs} but problem input shape is {self.problem.input_shape}"
-
-        self.best_genome = None
-        self.best_fitness = float("-inf")
-        self.generation_timestamp = None
+        self.backend = backend
+        self.device = device
+        self.compile_options = compile_options
         self.is_save = is_save
+        self.is_detailed = is_detailed
+        self.show_problem_details = show_problem_details
+
+        self.pop_size = int(algorithm.pop_size)
+        self.pop_batch_size = self._resolve_pop_batch_size(pop_batch_size)
+        self._validate_arity()
+
+        # In-memory trajectory / best-so-far; reset again by ``setup``.
+        self.fitness_history: list[tuple[int, float]] = []
+        self.best_fitness: float = float("-inf")
+        self.best_genome: Optional[GenomeTensors] = None
+
+        # Per-shape executable cache: signature -> evoxc.Executable.
+        self._executables: dict[tuple[int, ...], Any] = {}
+        self.shape_signature: Optional[tuple[int, ...]] = None
+        self.build_seconds: float = 0.0
+        self.builds: int = 0
 
         if is_save:
             if save_dir is None:
                 now = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-                self.save_dir = f"./{self.__class__.__name__} {now}"
-            else:
-                self.save_dir = save_dir
-            print(f"save to {self.save_dir}")
-            if not os.path.exists(self.save_dir):
-                os.makedirs(self.save_dir)
+                save_dir = f"./{self.__class__.__name__} {now}"
+            self.save_dir = str(save_dir)
             self.genome_dir = os.path.join(self.save_dir, "genomes")
-            if not os.path.exists(self.genome_dir):
-                os.makedirs(self.genome_dir)
+            os.makedirs(self.genome_dir, exist_ok=True)
+        else:
+            self.save_dir = None if save_dir is None else str(save_dir)
+            self.genome_dir = (
+                None if self.save_dir is None else os.path.join(self.save_dir, "genomes")
+            )
 
-        self.show_problem_details = show_problem_details
+    # ---------------------------------------------------------- construction
 
-        self.using_multidevice = using_multidevice
-        if self.using_multidevice:
-            assert jax.device_count() > 1, f"using_multidevice requires more than 1 device, but {jax.device_count()=} devices are available"
-            print(f"Using {jax.device_count()} devices!")
+    def _resolve_pop_batch_size(self, pop_batch_size: Optional[int]) -> Optional[int]:
+        """Check the pipeline's chunking request against the algorithm's own.
 
-    def setup(self, state=State()):
-        print("initializing")
-        state = state.register(randkey=jax.random.PRNGKey(self.seed))
+        Args:
+            pop_batch_size (int | None): The pipeline's request, or ``None``.
 
+        Returns:
+            int | None: The effective chunk size.
+
+        Raises:
+            TensorNEATError: If the pipeline asks for a chunk size the algorithm
+                was not constructed with (it changes the random stream, so it is
+                part of the reproducible configuration).
+        """
+        declared = getattr(self.algorithm, "pop_batch_size", None)
+        if declared is None:
+            declared = getattr(self.algorithm, "_pop_batch_size", None)
+        if pop_batch_size is None:
+            return declared
+        if declared is None or int(declared) != int(pop_batch_size):
+            raise TensorNEATError(
+                f"Pipeline(pop_batch_size={pop_batch_size}) disagrees with the "
+                f"algorithm's pop_batch_size={declared!r}. Chunking is fixed when "
+                "the algorithm is constructed (it changes the random stream), so "
+                "pass it to NEAT(..., pop_batch_size=...) instead of to the pipeline"
+            )
+        return int(pop_batch_size)
+
+    def _validate_arity(self) -> None:
+        """Check that the problem and the algorithm agree on the network arity.
+
+        Raises:
+            TensorNEATError: If the problem declares no ``input_shape``, or if
+                ``input_shape[-1]``/``output_shape[-1]`` disagree with the
+                algorithm's ``num_inputs``/``num_outputs``.
+        """
+        input_shape = _declared_shape(self.problem, "input_shape")
+        if input_shape is None:
+            raise TensorNEATError(
+                f"problem {type(self.problem).__name__} declares no input_shape; "
+                "every problem must expose the per-sample input shape so the "
+                "pipeline can check it against algorithm.num_inputs"
+            )
+        if input_shape[-1] != int(self.algorithm.num_inputs):
+            raise TensorNEATError(
+                f"algorithm.num_inputs={self.algorithm.num_inputs} does not match "
+                f"problem.input_shape={input_shape} (per-sample); the genome and the "
+                "problem must agree on the network's input width"
+            )
+        output_shape = _declared_shape(self.problem, "output_shape")
+        if output_shape is not None and output_shape[-1] != int(
+            self.algorithm.num_outputs
+        ):
+            raise TensorNEATError(
+                f"algorithm.num_outputs={self.algorithm.num_outputs} does not match "
+                f"problem.output_shape={output_shape} (per-sample); the genome and "
+                "the problem must agree on the network's output width"
+            )
+
+    # --------------------------------------------------------------- config
+
+    def show_config(self) -> dict:
+        """Describe the full run configuration as a JSON-serialisable mapping.
+
+        Returns:
+            dict: ``{"pipeline": ..., "algorithm": ..., "problem": ...}`` with
+            plain Python values (anything exotic is rendered as its ``repr``), so
+            ``json.dumps(pipeline.show_config(), indent=4)`` always succeeds and
+            the checkpoint header is readable.
+
+        Notes:
+            Host-only, and read defensively: a genome that does not expose a
+            static simply omits it instead of failing the checkpoint.
+        """
+        genome = self._genome()
+        algorithm: dict[str, Any] = {"class": type(self.algorithm).__name__}
+        species = getattr(self.algorithm, "species", None)
+        for name in (
+            "pop_size", "pop_batch_size", "species_size", "max_stagnation",
+            "species_elitism", "spawn_number_change_rate", "genome_elitism",
+            "survival_threshold", "min_species_size", "compatibility_threshold",
+            "species_number_calculate_by",
+        ):
+            value = _config_value(self.algorithm, name)
+            if value is None and name not in ("pop_size", "pop_batch_size"):
+                value = _config_value(species, name)
+            if value is not None:
+                algorithm[name] = value
+        if genome is not None:
+            algorithm["genome"] = {
+                "class": type(genome).__name__,
+                **{
+                    name: _config_value(genome, name)
+                    for name in (
+                        "num_inputs", "num_outputs", "max_nodes", "max_conns",
+                        "max_in_degree", "max_depth", "key_span", "node_gene",
+                        "conn_gene", "mutation", "crossover", "distance",
+                    )
+                },
+            }
+        problem_info = {
+            "class": type(self.problem).__name__,
+            "input_shape": _jsonable(_declared_shape(self.problem, "input_shape")),
+            "output_shape": _jsonable(_declared_shape(self.problem, "output_shape")),
+        }
+        for name in ("error_method", "max_step", "repeat_times"):
+            value = _config_value(self.problem, name)
+            if value is not None:
+                problem_info[name] = value
+        return {
+            "pipeline": {
+                "class": type(self).__name__,
+                "seed": self.seed,
+                "fitness_target": _jsonable(self.fitness_target),
+                "generation_limit": self.generation_limit,
+                "pop_size": self.pop_size,
+                "pop_batch_size": self.pop_batch_size,
+                "backend": self.backend,
+                "device": _jsonable(self.device),
+                "compile_options": _jsonable(self.compile_options),
+                "is_save": self.is_save,
+                "save_dir": _jsonable(self.save_dir),
+                "is_detailed": self.is_detailed,
+                "show_problem_details": self.show_problem_details,
+            },
+            "algorithm": algorithm,
+            "problem": problem_info,
+        }
+
+    # ---------------------------------------------------------------- setup
+
+    def setup(self, state: Optional[State] = None) -> State:
+        """Create the initial state: RNG key, build options, population, task.
+
+        Order matters and follows the kernel contract: ``randkey`` first (the
+        single source of randomness), then ``backend``/``device``/
+        ``compile_options`` (every ``evoxc.build`` below reads them off the
+        state), then ``algorithm.setup`` (population, generation counter, species
+        table; it advances ``randkey`` once), then ``problem.setup``.
+
+        Args:
+            state (State, optional): Base state to extend; ``None`` -- spelled
+                this way because a ``State()`` default argument would be
+                evaluated at import time -- starts from an empty state.
+
+        Returns:
+            State: The initial state, ready for :meth:`step` / :meth:`auto_run`.
+
+        Raises:
+            TensorNEATError: Propagated from ``algorithm.setup`` /
+                ``problem.setup``; ``common.errors.ConfigError`` if the incoming
+                state already carries one of the registered keys.
+        """
+        state = State() if state is None else state
+        state = state.register(randkey=evoxc.random.key(self.seed))
+        state = state.register(
+            backend=self.backend,
+            device=self.device,
+            compile_options=self.compile_options,
+        )
         state = self.algorithm.setup(state)
         state = self.problem.setup(state)
 
-        if self.is_save:
-            # self.save(state=state, path=os.path.join(self.save_dir, "pipeline.pkl"))
-            with open(os.path.join(self.save_dir, "config.txt"), "w") as f:
-                f.write(json.dumps(self.show_config(), indent=4))
-            # create log file
-            with open(os.path.join(self.save_dir, "log.txt"), "w") as f:
-                f.write("Generation,Max,Min,Mean,Std,Cost Time\n")
+        self.fitness_history = []
+        self.best_fitness = float("-inf")
+        self.best_genome = None
+        self._executables = {}
+        self.shape_signature = None
+        self.build_seconds = 0.0
+        self.builds = 0
 
-        print("initializing finished")
+        if self.is_save:
+            os.makedirs(self.genome_dir, exist_ok=True)
+            with open(os.path.join(self.save_dir, "config.txt"), "w") as handle:
+                handle.write(json.dumps(self.show_config(), indent=4))
+            with open(os.path.join(self.save_dir, "log.txt"), "w") as handle:
+                handle.write("Generation,Max,Min,Mean,Std,Cost Time\n")
         return state
 
-    def step(self, state):
+    # ----------------------------------------------------------- compile site
+
+    def _genome(self) -> Any:
+        """The genome whose statics define the compiled shape, or ``None``.
+
+        ``NEAT`` exposes it directly; ``HyperNEAT`` holds the CPPN genome on its
+        inner ``NEAT`` (the payload -- and therefore the compiled signature --
+        belongs to the CPPN, never to the fixed substrate).
         """
-        returns: 
-            state, previous_pop, fitnesses
-        state: updated state
-        previous_pop: previous population
-        fitnesses: fitnesses of previous population
+        genome = getattr(self.algorithm, "genome", None)
+        if genome is None:
+            genome = getattr(getattr(self.algorithm, "neat", None), "genome", None)
+        return genome
+
+    def _shape_signature(self, state: State) -> tuple[int, ...]:
+        """The static signature that keys the executable cache.
+
+        Args:
+            state (State): State after ``setup``; its payload supplies fallbacks
+                for a genome that does not expose the full static set.
+
+        Returns:
+            tuple[int, ...]: ``(pop_size, max_nodes, max_conns, max_in_degree,
+            max_depth, key_span)`` -- a change in any of them forces a rebuild.
+
+        Raises:
+            TensorNEATError: If ``state`` carries no four-array payload (it did
+                not come from :meth:`setup`).
         """
+        pop = getattr(state, "pop", None)
+        if pop is None or len(tuple(pop)) != 4:
+            raise TensorNEATError(
+                "Pipeline.step needs the algorithm's population payload on the "
+                "state (four arrays); call setup() first, or pass an algorithm "
+                "that registers 'pop'"
+            )
+        genome = self._genome()
 
-        randkey_, randkey = jax.random.split(state.randkey)
+        def static(name: str, fallback: int) -> int:
+            """Read one genome static, falling back to a shape-derived value."""
+            value = getattr(genome, name, None) if genome is not None else None
+            return int(value) if value is not None else int(fallback)
 
-        pop = self.algorithm.ask(state)
+        node_keys, _, conn_keys, _ = tuple(pop)
+        return (
+            int(self.algorithm.pop_size),
+            static("max_nodes", node_keys.shape[1]),
+            static("max_conns", conn_keys.shape[1]),
+            static("max_in_degree", 0),
+            static("max_depth", 0),
+            static("key_span", 0),
+        )
 
-        if not self.using_multidevice:
-            keys = jax.random.split(randkey_, self.pop_size)
-            if self.pop_batch_size is None or self.pop_batch_size >= self.pop_size:
-                pop_transformed = jax.vmap(self.algorithm.transform, in_axes=(None, 0))(
-                    state, pop
+    def _build_options(self) -> dict:
+        """The ``evoxc.build`` keyword arguments this pipeline forwards.
+
+        ``backend`` always, ``device`` only when it is not ``None``, and every
+        ``compile_options`` entry expanded into ``**options``. Nothing is
+        defaulted or rewritten: a backend that cannot compile a kernel raises its
+        own error instead of falling back.
+        """
+        options: dict[str, Any] = {"backend": self.backend}
+        if self.device is not None:
+            options["device"] = self.device
+        if self.compile_options:
+            options.update(dict(self.compile_options))
+        return options
+
+    def _static_config(self, state: State) -> State:
+        """The tensor-free configuration ``State`` baked into the graph.
+
+        Every registered entry survives except the runtime tensors -- the
+        :data:`_RUNTIME_KEYS` names and any remaining ``evoxc.Tensor`` -- which
+        the kernel rebuilds from its tensor arguments. Baking a concrete tensor
+        into a trace would freeze the current generation's data.
+        """
+        entries = {}
+        for name in state.registered_keys():
+            if name in _RUNTIME_KEYS:
+                continue
+            value = getattr(state, name)
+            if isinstance(value, evoxc.Tensor):
+                continue
+            entries[name] = value
+        entries["pop_size"] = int(self.algorithm.pop_size)
+        return State(**entries)
+
+    def _forward_adapter(self) -> Callable[[Any, Any, Any, Any], Any]:
+        """Adapt ``algorithm.forward`` to ``(state, transformed, inputs, payload)``.
+
+        ``NEAT.forward`` accepts the payload explicitly (which is what lets the
+        *expanded* payload of a tiled batch reach the genome instead of the
+        unexpanded one on the state); ``HyperNEAT.forward`` hides its substrate
+        payload inside its schedule and takes three arguments.
+        ``inspect.signature`` runs once per build, never inside a trace.
+        """
+        if "pop" in inspect.signature(self.algorithm.forward).parameters:
+            return lambda state, transformed, inputs, payload: self.algorithm.forward(
+                state, transformed, inputs, payload
+            )
+        return lambda state, transformed, inputs, payload: self.algorithm.forward(
+            state, transformed, inputs
+        )
+
+    def _generation_kernel(self, config: State, species_tree: Any) -> Callable:
+        """Build the traced function of one whole generation.
+
+        Args:
+            config (State): Tensor-free configuration
+                (:meth:`_static_config`), captured by the closure so the graph
+                inputs stay pure tensors.
+            species_tree (Any): ``evoxc.TreeSpec`` of the ``SpeciesState``
+                pytree, used to rebuild it inside the trace from its leaves.
+
+        Returns:
+            Callable: ``kernel(randkey, node_keys, node_attrs, conn_keys,
+            conn_attrs, generation, *species_leaves)`` returning the flat list
+            ``[randkey, generation, *pop, *species, fitness, max_overflow]``.
+        """
+        algorithm = self.algorithm
+        problem = self.problem
+        forward = self._forward_adapter()
+        species_leaves = int(species_tree.num_leaves)
+
+        def kernel(
+            randkey: Any,
+            node_keys: Any,
+            node_attrs: Any,
+            conn_keys: Any,
+            conn_attrs: Any,
+            generation: Any,
+            *species_values: Any,
+        ) -> list:
+            """One generation: ``split`` -> ``ask`` -> ``transform`` -> ``evaluate`` -> ``tell``.
+
+            The arguments are the four split-payload arrays (``(P, N) int32``
+            keys with ``I_INF`` padding, ``(P, N, NA) float32`` attrs with NaN
+            padding, ``(P, E, CK) int32`` and ``(P, E, CA) float32``), the 0-d
+            float32 generation counter and the ``SpeciesState`` leaves.
+
+            Returns:
+                list: ``[randkey, generation, *next_pop, *next_species, fitness,
+                max_overflow]``.
+
+            Raises:
+                TensorNEATError: If ``tell`` changes the species leaf count,
+                    which would break the host-side rebuild.
+            """
+            pop = GenomeTensors(node_keys, node_attrs, conn_keys, conn_attrs)
+            species = evoxc.tree_unflatten(list(species_values), species_tree)
+            eval_key, tell_key = evoxc.random.split(randkey)
+            current = config.register(
+                pop=pop, generation=generation, species=species, randkey=tell_key
+            )
+            transformed = algorithm.transform(current, pop)
+
+            def act_fn(inputs: Any) -> Any:
+                """Run the whole population on one tiled batch of samples."""
+                return _run_network(current, forward, transformed, pop, inputs)
+
+            fitness = problem.evaluate(current, eval_key, act_fn, transformed)
+            next_state = algorithm.tell(current, fitness)
+            overflow = _schedule_overflow(transformed)
+            max_overflow = (
+                enp.full((), 0, dtype=evoxc.int32)
+                if overflow is None
+                else evoxc.max(overflow)
+            )
+            next_species = evoxc.tree_leaves(next_state.species)
+            if len(next_species) != species_leaves:
+                raise TensorNEATError(
+                    "algorithm.tell changed the species pytree: "
+                    f"{species_leaves} leaves in, {len(next_species)} out; the "
+                    "pipeline rebuilds the state from a fixed leaf layout"
                 )
-                fitnesses = jax.vmap(self.problem.evaluate, in_axes=(None, 0, None, 0))(
-                    state, keys, self.algorithm.forward, pop_transformed
-                )
-            else:
-                fitnesses = self._batched_evaluate(state, keys, pop)
-        else: # using_multidevice
-            num_devices = jax.device_count()
-            assert self.pop_size % num_devices == 0, "if you want to use multiple gpus, pop_size must be divisible by jax.device_count()"
-            pop_size_per_device = self.pop_size // num_devices
+            return [
+                next_state.randkey,
+                next_state.generation,
+                *next_state.pop,
+                *next_species,
+                fitness,
+                max_overflow,
+            ]
 
-            pop_transformed = jax.vmap(self.algorithm.transform, in_axes=(None, 0))(
-                state, pop
-            )
+        return kernel
 
-            keys = jax.random.split(randkey_, (num_devices, pop_size_per_device))
-            split_pop_transformed = jax.tree_util.tree_map(
-                lambda x: x.reshape(num_devices, pop_size_per_device, *x.shape[1:]),
-                pop_transformed
-            )
+    def _build_executable(self, state: State) -> Any:
+        """Trace, lower, compile and load the generation graph for ``state``.
 
-            fitnesses = jax.pmap(
-                lambda key_slice, pop_slice: jax.vmap(self.problem.evaluate, in_axes=(None, 0, None, 0))(
-                    state, key_slice, self.algorithm.forward, pop_slice
-                ),
-                axis_name='devices',
-                in_axes=(0, 0)
-            )(keys, split_pop_transformed)
+        Args:
+            state (State): State after ``setup``; its tensors define both the
+                input specs and the static configuration.
 
-            fitnesses = fitnesses.reshape(self.pop_size)
+        Returns:
+            Any: The loaded ``evoxc.Executable``.
 
-        # replace nan with -inf
-        fitnesses = jnp.where(jnp.isnan(fitnesses), -jnp.inf, fitnesses)
-
-        previous_pop = self.algorithm.ask(state)
-        state = self.algorithm.tell(state, fitnesses)
-
-        return state.update(randkey=randkey), previous_pop, fitnesses
-
-    def _batched_evaluate(self, state, keys, pop):
-        """Batched transform + evaluate using lax.scan instead of Python for-loop.
-        See: https://github.com/EMI-Group/tensorneat/issues/39
+        Raises:
+            evoxc.EVOXCError subclasses: Propagated unchanged from
+                ``evoxc.build`` -- nothing here retries elsewhere.
         """
-        bs = self.pop_batch_size
-        n_batches = self.pop_size // bs
-
-        batched_keys = keys.reshape(n_batches, bs, *keys.shape[1:])
-        batched_pop = jax.tree_util.tree_map(
-            lambda x: x.reshape(n_batches, bs, *x.shape[1:]),
-            pop,
+        kernel = self._generation_kernel(
+            self._static_config(state), evoxc.tree_structure(state.species)
         )
+        specs = [
+            evoxc.TensorSpec(tuple(state.randkey.shape), state.randkey.dtype),
+            *(evoxc.TensorSpec(tuple(field.shape), field.dtype) for field in state.pop),
+            evoxc.TensorSpec(tuple(state.generation.shape), state.generation.dtype),
+            *(
+                evoxc.TensorSpec(tuple(leaf.shape), leaf.dtype)
+                for leaf in evoxc.tree_leaves(state.species)
+            ),
+        ]
+        return evoxc.build(kernel, *specs, **self._build_options())
 
-        def scan_body(carry, inputs):
-            b_keys, b_pop = inputs
-            b_transformed = jax.vmap(self.algorithm.transform, in_axes=(None, 0))(
-                state, b_pop
-            )
-            b_fit = jax.vmap(
-                self.problem.evaluate, in_axes=(None, 0, None, 0)
-            )(state, b_keys, self.algorithm.forward, b_transformed)
-            return carry, b_fit
+    def _executable_for(self, state: State) -> Any:
+        """The cached executable for ``state``'s shape signature.
 
-        _, all_fitnesses = jax.lax.scan(
-            scan_body, None, (batched_keys, batched_pop)
+        Built on first use and then reused; the build is timed into
+        :attr:`build_seconds` and counted in :attr:`builds`. A *different*
+        signature (population or genome geometry) is a second entry, so a shape
+        change can never silently reuse the previous graph.
+        """
+        signature = self._shape_signature(state)
+        self.shape_signature = signature
+        cached = self._executables.get(signature)
+        if cached is not None:
+            return cached
+        start = time.perf_counter()
+        executable = self._build_executable(state)
+        self.build_seconds = time.perf_counter() - start
+        self.builds += 1
+        self._executables[signature] = executable
+        return executable
+
+    # ------------------------------------------------------------- one step
+
+    def step(self, state: State) -> tuple[State, GenomeTensors, np.ndarray]:
+        """Advance the search by exactly one generation (one compiled graph run).
+
+        Args:
+            state (State): Current state from :meth:`setup` or the previous
+                :meth:`step`.
+
+        Returns:
+            tuple: ``(new_state, previous_pop, fitnesses)`` -- the state of the
+            *next* generation (advanced ``randkey``, incremented ``generation``,
+            new population, updated species), the gene payload that was
+            evaluated (host numpy arrays, population on axis 0) and the ``(P,)``
+            host float fitness, **fitness last**.
+
+        Raises:
+            TensorNEATError: If the schedule overflowed (``edge_overflow > 0``):
+                some connections did not fit the static ``max_in_degree`` window,
+                so the evaluated phenotype would silently differ from the genome.
+            evoxc.ShapeError / evoxc.DTypeError: Propagated when the state does
+                not match the cached signature -- shapes are static, and a
+                mismatch is never reshaped away.
+
+        Notes:
+            Prints nothing (:meth:`auto_run` owns all output). ``algorithm.ask``
+            costs zero ops, so the state's ``pop`` *is* the population that
+            produced ``fitnesses``; it is returned as the evaluated payload.
+        """
+        executable = self._executable_for(state)
+        species_leaves = evoxc.tree_leaves(state.species)
+        outputs = evoxc.run(
+            executable, state.randkey, *state.pop, state.generation, *species_leaves
         )
-
-        return all_fitnesses.reshape(-1)
-
-    def auto_run(self, state):
-        print("start compile")
-        tic = time.time()
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore",
-                message=r"The jitted function .* includes a pmap. Using jit-of-pmap can lead to inefficient data movement"
+        split = 6 + len(species_leaves)
+        max_overflow = int(to_numpy(outputs[split + 1]))
+        if max_overflow > 0:
+            raise TensorNEATError(
+                f"the execution schedule dropped {max_overflow} connection(s): a "
+                "node had more incoming edges than the static window "
+                f"max_in_degree={getattr(self._genome(), 'max_in_degree', None)} can "
+                f"hold (population {self.pop_size}). max_in_degree is a genome "
+                "static, so rebuild the genome with a larger max_in_degree -- the "
+                "pipeline will not widen it silently, and a lossy schedule is never "
+                "used"
             )
-            compiled_step = jax.jit(self.step).lower(state).compile()
-
-        if self.show_problem_details:
-            self.compiled_pop_transform_func = (
-                jax.jit(jax.vmap(self.algorithm.transform, in_axes=(None, 0)))
-                .lower(state, self.algorithm.ask(state))
-                .compile()
-            )
-
-        print(
-            f"compile finished, cost time: {time.time() - tic:.6f}s",
+        new_state = state.update(
+            pop=GenomeTensors(*outputs[2:6]),
+            generation=outputs[1],
+            species=evoxc.tree_unflatten(
+                list(outputs[6:split]), evoxc.tree_structure(state.species)
+            ),
+            randkey=outputs[0],
         )
+        previous_pop = GenomeTensors(*(to_numpy(field) for field in state.pop))
+        return new_state, previous_pop, to_numpy(outputs[split])
+
+    # ------------------------------------------------------------- run loop
+
+    def auto_run(self, state: State) -> tuple[State, Optional[GenomeTensors]]:
+        """Run generations until the fitness target or the generation limit.
+
+        Args:
+            state (State): Initial state from :meth:`setup`.
+
+        Returns:
+            tuple: ``(state, best_genome)`` -- the final state and the best
+            payload seen (``GenomeTensors`` of host numpy arrays, one individual
+            without a population axis), or ``None`` if no generation produced a
+            finite fitness.
+
+        Raises:
+            TensorNEATError: Propagated from :meth:`step` (e.g. schedule
+                overflow).
+            evoxc.EVOXCError subclasses: Propagated from the build/run.
+
+        Notes:
+            The executable is built once here (timed into
+            :attr:`build_seconds`) and reused for every generation; the host loop
+            is what makes logging, checkpointing and early stopping possible
+            without putting Python control flow into the graph.
+        """
+        self._executable_for(state)
+        if self.is_detailed:
+            print(f"compile finished, cost time: {self.build_seconds:.6f}s")
 
         for _ in range(self.generation_limit):
-
-            self.generation_timestamp = time.time()
-
-            state, previous_pop, fitnesses = compiled_step(state)
-
-            fitnesses = jax.device_get(fitnesses)
-
-            self.analysis(state, previous_pop, fitnesses)
-
-            if max(fitnesses) >= self.fitness_target:
-                print("Fitness limit reached!")
+            start = time.perf_counter()
+            state, previous_pop, fitnesses = self.step(state)
+            self._analyse(state, previous_pop, fitnesses, time.perf_counter() - start)
+            if float(np.max(fitnesses)) >= self.fitness_target:
+                if self.is_detailed:
+                    print("Fitness limit reached!")
                 break
-
-        if int(state.generation) >= self.generation_limit:
-            print("Generation limit reached!")
+        else:
+            if self.is_detailed and int(to_numpy(state.generation)) >= int(
+                self.generation_limit
+            ):
+                print("Generation limit reached!")
 
         if self.is_save:
-            best_genome = jax.device_get(self.best_genome)
-            with open(os.path.join(self.genome_dir, f"best_genome.npz"), "wb") as f:
-                np.savez(
-                    f,
-                    nodes=best_genome[0],
-                    conns=best_genome[1],
-                    fitness=self.best_fitness,
-                )
-
+            self._save_best()
         return state, self.best_genome
 
-    def analysis(self, state, pop, fitnesses):
+    def _analyse(
+        self,
+        state: State,
+        previous_pop: GenomeTensors,
+        fitnesses: np.ndarray,
+        cost_time: float,
+    ) -> None:
+        """Record one generation on the host: history, best, log and report.
 
-        generation = int(state.generation)
-
-        valid_fitnesses = fitnesses[~np.isinf(fitnesses)]
-        # avoid there is no valid fitness in the whole population
-        if len(valid_fitnesses) == 0:
-            max_f, min_f, mean_f, std_f = ["NaN"] * 4
+        ``state`` is the state *after* the step (its incremented generation
+        counter is what the log numbers, as in the legacy library),
+        ``previous_pop``/``fitnesses`` are the population that produced this
+        generation's fitness and ``cost_time`` its wall time in seconds.
+        Both diagnostics hooks are *reporting* only, so neither can abort an
+        evolution run: a failing hook is printed (never swallowed silently) and
+        the loop continues.
+        """
+        generation = int(to_numpy(state.generation))
+        valid = fitnesses[~np.isinf(fitnesses)]
+        if valid.size == 0:
+            max_f = min_f = mean_f = std_f = float("nan")
         else:
-            max_f, min_f, mean_f, std_f = (
-                max(valid_fitnesses),
-                min(valid_fitnesses),
-                np.mean(valid_fitnesses),
-                np.std(valid_fitnesses),
+            max_f = float(np.max(valid))
+            min_f = float(np.min(valid))
+            mean_f = float(np.mean(valid))
+            std_f = float(np.std(valid))
+        self.fitness_history.append((generation, float(max_f)))
+
+        max_index = int(np.argmax(fitnesses))
+        if float(fitnesses[max_index]) > self.best_fitness:
+            self.best_fitness = float(fitnesses[max_index])
+            self.best_genome = GenomeTensors(
+                *(np.array(field[max_index]) for field in previous_pop)
             )
-
-        new_timestamp = time.time()
-
-        cost_time = new_timestamp - self.generation_timestamp
-
-        max_idx = np.argmax(fitnesses)
-        if fitnesses[max_idx] > self.best_fitness:
-            self.best_fitness = fitnesses[max_idx]
-            self.best_genome = pop[0][max_idx], pop[1][max_idx]
 
         if self.is_save:
-            # save best
-            best_genome = jax.device_get((pop[0][max_idx], pop[1][max_idx]))
-            file_name = os.path.join(self.genome_dir, f"{generation}.npz")
-            with open(file_name, "wb") as f:
-                np.savez(
-                    f,
-                    nodes=best_genome[0],
-                    conns=best_genome[1],
-                    fitness=self.best_fitness,
+            self._save_generation(generation, previous_pop, fitnesses, max_index)
+            with open(os.path.join(self.save_dir, "log.txt"), "a") as handle:
+                handle.write(
+                    f"{generation},{max_f},{min_f},{mean_f},{std_f},{cost_time}\n"
                 )
 
-            # append log
-            with open(os.path.join(self.save_dir, "log.txt"), "a") as f:
-                f.write(f"{generation},{max_f},{min_f},{mean_f},{std_f},{cost_time}\n")
-
-        print(
-            f"Generation: {generation}, Cost time: {cost_time * 1000:.2f}ms\n",
-            f"\tfitness: valid cnt: {len(valid_fitnesses)}, max: {max_f:.4f}, min: {min_f:.4f}, mean: {mean_f:.4f}, std: {std_f:.4f}\n",
-        )
-
-        self.algorithm.show_details(state, fitnesses)
+        if self.is_detailed:
+            print(
+                f"Generation: {generation}, Cost time: {cost_time * 1000:.2f}ms\n",
+                f"\tfitness: valid cnt: {valid.size}, max: {max_f:.4f}, "
+                f"min: {min_f:.4f}, mean: {mean_f:.4f}, std: {std_f:.4f}\n",
+            )
+            self._details(
+                "algorithm.show_details",
+                lambda: self.algorithm.show_details(state, fitnesses),
+            )
 
         if self.show_problem_details:
-            pop_transformed = self.compiled_pop_transform_func(
-                state, pop #using previous pop instead of requesting the new one from state here
+            self._details(
+                "problem.show_details",
+                lambda: self.problem.show_details(
+                    state,
+                    state.randkey,
+                    self._constant_act_fn(state, previous_pop),
+                    self._schedule_of(state, previous_pop),
+                ),
             )
-            self.problem.show_details(
-                state, state.randkey, self.algorithm.forward, pop_transformed
-            )
-        # show details for problem
 
-    def show(self, state, best, *args, **kwargs):
-        transformed = self.algorithm.transform(state, best)
+    @staticmethod
+    def _details(label: str, callback: Callable[[], Any]) -> None:
+        """Run one diagnostics hook, reporting a failure instead of aborting.
+
+        The failure is printed with its own message, so it stays visible in the
+        run log -- which is what keeps this different from swallowing the error --
+        while the evolution loop is unaffected.
+        """
+        try:
+            callback()
+        except Exception as error:  # noqa: BLE001 - diagnostics must not abort a run
+            print(
+                f"{label} failed ({type(error).__name__}: {error}); continuing the run"
+            )
+
+    # ------------------------------------------------------- host-side show
+
+    def _schedule_of(self, state: State, payload: GenomeTensors) -> Any:
+        """Derive a host payload's execution schedule, outside any trace.
+
+        The schedule derivation is graph code (``argsort``/``gather``), so it
+        runs in a one-off executable whose inputs are ``payload``'s four arrays;
+        its result is that algorithm's schedule (``Transformed`` or a wrapper)
+        with concrete ``evoxc.Tensor`` leaves.
+        """
+        config = self._static_config(state)
+        algorithm = self.algorithm
+        fields = tuple(payload)
+
+        def kernel(*arrays: Any) -> Any:
+            """Rebuild the payload from graph data and derive its schedule."""
+            return algorithm.transform(config, GenomeTensors(*arrays))
+
+        executable = evoxc.build(
+            kernel,
+            *(evoxc.TensorSpec(tuple(f.shape), f.dtype) for f in fields),
+            **self._build_options(),
+        )
+        return evoxc.run(
+            executable, *(evoxc.from_numpy(np.ascontiguousarray(f)) for f in fields)
+        )
+
+    def _constant_act_fn(self, state: State, payload: GenomeTensors) -> Callable:
+        """An ``act_fn(batch) -> outputs`` that carries its payload as graph constants.
+
+        It is valid inside *any* trace -- including the one a problem builds for
+        its ``show`` report -- because it rebuilds ``payload`` with
+        ``evoxc.constant`` and re-derives the schedule there; a concrete tensor
+        captured in a closure would raise ``evoxc.TraceError`` instead.
+        """
+        config = self._static_config(state)
+        algorithm = self.algorithm
+        forward = self._forward_adapter()
+        arrays = tuple(
+            np.ascontiguousarray(to_numpy(field)) for field in _one_individual(payload)
+        )
+
+        def act_fn(inputs: Any) -> Any:
+            """Run the baked genome over one batch of inputs."""
+            one = GenomeTensors(
+                *(evoxc.constant(evoxc.from_numpy(array)) for array in arrays)
+            )
+            network = config.register(pop=one)
+            return _run_network(
+                network, forward, algorithm.transform(network, one), one, inputs
+            )
+
+        return act_fn
+
+    def show(self, state: State, best: Any) -> None:
+        """Print the behaviour of one genome.
+
+        Args:
+            state (State): State carrying the configuration (a ``setup`` output).
+            best (Any): The genome to report: a ``GenomeTensors`` (four arrays,
+                with or without a leading population axis), a four-element
+                sequence, or the ``best_genome`` :meth:`auto_run` returns.
+
+        Returns:
+            None; the report comes from the problem's ``show`` (stdout).
+
+        Raises:
+            TensorNEATError: If ``best`` is not a four-array genome payload.
+
+        Notes:
+            Host-side only. The schedule is derived once for the report (so a
+            problem that leans on it gets a real one) and the ``act_fn`` handed to
+            the problem rebuilds the same genome from ``evoxc.constant`` values.
+        """
+        payload = GenomeTensors(*_one_individual(best))
         return self.problem.show(
-            state, state.randkey, self.algorithm.forward, transformed, *args, **kwargs
+            state,
+            state.randkey,
+            self._constant_act_fn(state, payload),
+            self._schedule_of(state, payload),
+        )
+
+    # --------------------------------------------------------- checkpointing
+
+    def _save_generation(
+        self,
+        generation: int,
+        previous_pop: GenomeTensors,
+        fitnesses: np.ndarray,
+        max_index: int,
+    ) -> None:
+        """Write ``genomes/<generation>.npz`` -- this generation's best genome.
+
+        Plain ``numpy.savez`` of the best individual's four payload rows plus its
+        own fitness, so ``np.load`` round-trips to a payload :meth:`show` accepts.
+        """
+        np.savez(
+            os.path.join(self.genome_dir, f"{generation}.npz"),
+            node_keys=np.asarray(previous_pop.node_keys[max_index]),
+            node_attrs=np.asarray(previous_pop.node_attrs[max_index]),
+            conn_keys=np.asarray(previous_pop.conn_keys[max_index]),
+            conn_attrs=np.asarray(previous_pop.conn_attrs[max_index]),
+            fitness=float(fitnesses[max_index]),
+        )
+
+    def _save_best(self) -> None:
+        """Write ``genomes/best_genome.npz`` for the best genome of the run.
+
+        A no-op when no generation produced a finite fitness: there is nothing to
+        checkpoint, and an empty file would look like a valid genome.
+        """
+        if self.best_genome is None:
+            return
+        np.savez(
+            os.path.join(self.genome_dir, "best_genome.npz"),
+            node_keys=np.asarray(self.best_genome.node_keys),
+            node_attrs=np.asarray(self.best_genome.node_attrs),
+            conn_keys=np.asarray(self.best_genome.conn_keys),
+            conn_attrs=np.asarray(self.best_genome.conn_attrs),
+            fitness=float(self.best_fitness),
         )
