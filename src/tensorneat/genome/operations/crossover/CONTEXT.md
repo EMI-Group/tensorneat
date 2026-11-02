@@ -13,7 +13,8 @@ The operator is order-sensitive by contract: `(genome1, genome2)` = (winner, los
 `DefaultCrossover.crossover_gene_attrs(state, gene, key, attrs1, homologous_rows, attrs2) -> (P, M, A) float32` redirects absent homologues to row `0` (`select`), makes ONE `../alignment.gather_attr_rows` call for the whole `(P, M, A)` block, makes ONE batched `gene.crossover` call over that block, and selects `attrs1` where the homologue is `I_INF` (one rank-3 mask, so no per-column select).
 Key tables are accepted as `(P, N)` (rank 2, the payload's node-key layout) or `(P, N, 1)`; `..alignment.key_rows` normalises them to `(P, N, K)` and any other rank raises `ConfigError`.
 
-## Alignment (`align.py`, a rank merge inside this node)
+## Alignment (`../alignment.py`, the rank merge shared with distance)
+This node no longer owns an aligner: `../alignment.py` holds the one implementation both crossover and compatibility distance consume, so the two operators cannot drift apart on what a "key row" is or on how a homologue is found.
 `find_homologous` = one `argsort` per gene family: pack each key row into one `uint64` identity, concat both parents' identities, `argsort` once, take each gene's rank as the inverse permutation, and read the successor (`rank + 1`) through two row gathers — the successor's identity must equal the gene's own identity with the parent-2 tag set.
 The parent tag lives in the low `_TAG_BITS` of the sort key (parent 1 = `0`), so inside a group of equal identities parent 1 sorts first and the ordering never depends on the sort being stable — which is why the sort runs unstable (4× faster on the reference interpreter).
 The successor index is clamped to the last position; the clamped gene is its own successor and its tag differs, so the clamp cannot invent a homologue.
