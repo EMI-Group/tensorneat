@@ -44,19 +44,69 @@ in :func:`~tensorneat.common.tools.to_numpy`, the one host array accessor.
 
 ## Measured cost
 
-numpy reference interpreter, this repository, single CPU thread (measured, not
-asserted; ``generation_limit`` generations after one build):
+``backend="numpy"``, one configuration per fresh process, build excluded (one
+warmup step, then 6 timed :meth:`step` calls), ``seed=42``,
+``DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100,
+output_transform=ACT.sigmoid)``, ``NEAT(pop_size=P, species_size=20,
+survival_threshold=0.01)``, ``XOR()``:
 
-| case | shape | build | per generation |
+| pop | build (one-off) | ms/generation (median / min) | legacy JAX | ratio |
+| --- | --- | --- | --- | --- |
+| 100 | 2.2 s | 54.7 / 51.3 | 51 | 1.07x |
+| 500 | 3.9 s | 352.5 / 343.7 | 109 | 3.2x |
+| 1000 | 4.5 s | 642.4 / 603.5 | 157 | 4.1x |
+
+This box drifts +-30 % between sessions: re-running the recipe moves the medians
+by that much while the ordering never changes, so the **ratio** against the
+frozen legacy baseline -- not the absolute millisecond count -- is the
+load-bearing number.  The committed old-vs-new harness record is
+``benchmarks/RESULTS.md``.
+
+Phases, same protocol but each phase traced as its **own** executable on one
+snapshot state (so the phase sum slightly over-counts a real generation):
+
+| pop | ``transform`` + ``forward`` on the tiled ``4P`` batch | ``tell`` | ``step`` |
 | --- | --- | --- | --- |
-| XOR | pop 8, max_nodes 8, max_conns 16 | 2.9 s | 33 ms |
-| XOR | pop 100, max_nodes 50, max_conns 100 | 4.0 s | 314 ms |
+| 100 | 11.6 ms | 48.4 ms | 59.4 ms |
+| 500 | 25.1 ms | 292.1 ms | 336.5 ms |
+| 1000 | 55.3 ms | 578.5 ms | 681.3 ms |
 
-The build dominates short runs; the per-generation figure is what the
-``benchmarks/`` harness compares against the frozen JAX baseline.
-The cost is *per shape*: a wider genome (``max_nodes``/``max_conns``) or a bigger
-population is a separate compile, which is why :meth:`Pipeline._executable_for`
-caches by signature instead of holding one global executable.
+* Inside ``tell``, **``speciate`` dominates**: two phases x 20 species slots x P
+  genome-distance measurements = 4 000 / 20 000 / 40 000 pairs per generation at
+  ~7.5 us/pair (pop 100) rising to ~13 us/pair (pop 1000) after the
+  population-digest API.  The pair count is irreducible under NEAT's assignment
+  semantics -- each phase needs genuinely different centres and a newly created
+  species takes the first unassigned genome as its centre, so its row depends on
+  every earlier assignment.
+* ``breed`` (crossover + mutation + elitism) is second: ~30 / ~76 / ~148 ms in
+  the same phase-sum protocol, roughly three quarters of its graph being
+  ``genome.execute_mutation`` (1360 traced ops) and the rest
+  ``genome.execute_crossover`` (433 traced ops; the two kernels alone are
+  65.7 ms + 30.5 ms at pop 1000).
+* ``evaluate`` -- ``transform`` plus ``forward`` on the tiled ``4P`` batch -- is
+  last.
+
+The numpy reference interpreter pays per traced op *and* per element, whereas the
+legacy baseline was the same work fused by XLA, so parity at ``pop >= 500`` is
+**not reachable on ``backend="numpy"``**.  The compiled route is currently blocked
+inside ``evoxc`` rather than here: ``evoxc.scan`` desugars to ``while`` plus
+gather/scatter and a matrix-valued scan carry needs a rank-3 scatter the v1
+StableHLO exporter rejects; ``iree``'s llvm-cpu compiler SIGSEGVs
+non-deterministically on a ``while`` with >= 3 carried values plus a ``select``;
+a compile costs ~3-7 s per few-thousand-op graph; and there is no committed
+llvm-cpu measurement above ~8 k ops.  The shipped backend is therefore the
+reference interpreter -- no compiled win is claimed, and a compiled backend must
+be re-evaluated when ``evoxc`` lifts those limits.
+
+Current per-generation op counts: ``forward`` 112 traced ops (749 before the
+level loop was reformulated), ``execute_mutation`` 1360 (3114), and
+``measure_distance`` 7.5 us/pair where the 40 000 pop-1000 pairs cost 25-48 us
+each before the digest API.
+
+The build is one-off and *per shape*: a wider genome
+(``max_nodes``/``max_conns``) or a bigger population is a separate compile, which
+is why :meth:`Pipeline._executable_for` caches by signature instead of holding one
+global executable.
 """
 
 from __future__ import annotations
