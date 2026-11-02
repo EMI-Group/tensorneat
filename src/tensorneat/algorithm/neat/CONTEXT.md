@@ -10,7 +10,7 @@ The layer's own work is one population digest plus `2 · ceil(species_size / 4)`
 ## Layout (five files, each under 1000 lines)
 `species.py` — `SpeciesState` plus `SpeciesController`: the documented, traced-facing methods and the species algebra, each delegating its tensor body to `_kernels.py`.
 `_kernels.py` — plain graph helpers (no `@evoxc.defn`, no state): spawn allocation, block layout, parent pairing, membership, sort/prefix-sum primitives, `gated` (the static lazy-row gate) and the two speciation scans.
-`_distance.py` — `DistanceRows` (the digest-backed `distance_fn` `speciate` consumes), `CENTRES_PER_CALL`, and the two tiling primitives `tile_leading` / `repeat_leading`.
+`_distance.py` — `DistanceRows` (the digest-backed, population-shaped `distance_fn` `speciate` consumes) and the `repeat_leading` tiling primitive.
 `_validation.py` — host-side configuration validators shared with `neat.py` (`positive_int`, `non_negative_int`, `unit_interval`, `positive_float`), each raising `TensorNEATError` with the parameter name.
 `neat.py` — `_sanitize_fitness` and `NEAT`: setup, ask/transform/forward, the `tell` algebra, `_batched` chunking, host-side `show_details`.
 
