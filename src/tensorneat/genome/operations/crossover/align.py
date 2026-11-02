@@ -18,9 +18,19 @@ That is ``O(M log M)`` per individual in one batch-wide kernel over the populati
 no Python loop over individuals, no ``vmap``, no ``scan``/``while_loop``/``cond``.
 
 A gene with more than two key columns (``OriginConn``'s ``historical_marker``) cannot be
-packed into one 64-bit identity, so :func:`row_identity` folds the spare columns and
-:func:`find_homologous` **confirms** every candidate against the full key rows, which keeps
-homology equal to whole-tuple key-row equality at any key width.
+packed into one 64-bit identity, so :func:`row_identity` packs the **first two** columns —
+the pair that identifies a gene, see the precondition below — and
+:func:`find_homologous` **confirms** every candidate against the remaining columns, which
+keeps homology equal to whole-tuple key-row equality.
+
+The one precondition of the rank merge is the payload's own uniqueness invariant: *the first
+two key columns are unique within one parent*.  It holds for both gene families the NEAT
+payload ships — a node gene has a single key column (the node key, unique per genome) and a
+connection gene's first two columns are its ``(in_key, out_key)`` pair, which
+``execute_mutation`` refuses to duplicate and ``initialize`` builds once — and it is what
+makes "the successor in sorted order" the *one* candidate partner of a gene.  A payload
+that repeats an ``(in_key, out_key)`` pair would leave the pair's rows indistinguishable,
+and homology there is undefined rather than merely expensive.
 
 Two contract details drive the implementation, both about cost rather than maths:
 
@@ -55,17 +65,21 @@ from ..alignment import key_rows
 if TYPE_CHECKING:  # pragma: no cover - typing only
     pass
 
-#: Bits one key column occupies in the packed row identity.
-_COLUMN_BITS = 32
+#: Bits one key column occupies in the packed row identity.  A key is a non-negative
+#: ``int32`` — the payload contract says keys live in ``[0, key_span)`` and ``I_INF =
+#: 2**31 - 1`` is the pad sentinel — so 31 bits hold every value a column can carry.
+_COLUMN_BITS = 31
 
-#: Widest key table whose identity is provably injective (``2 * 32`` bits fit the domain).
-_EXACT_KEY_WIDTH = 2
+#: Low bits of the packed identity reserved for the parent tag.
+_TAG_BITS = 2
 
-#: Mask that keeps one ``int32`` column's bit pattern inside the packed identity.
-_COLUMN_MASK = (1 << _COLUMN_BITS) - 1
+#: Tag bit of a parent-2 row.  Parent 1's tag is ``0``, so its rows need no extra op.
+_TAG_PARENT_2 = 1
 
-#: Modulus of the folded identity, i.e. the wrap width of an unsigned 64-bit fold.
-_FOLD_MODULUS = 1 << 64
+#: Number of key columns packed into the identity.  ``2 * 31`` bits plus the tag bits fill
+#: an ``uint64`` exactly, so the identity is injective over the whole legal key domain; the
+#: columns of a wider gene are confirmed by :func:`_confirm_rows` instead.
+_PACKED_KEY_WIDTH = 2
 
 
 def _column(x: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
@@ -110,36 +124,39 @@ def row_identity(keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
             family, ``I_INF`` padded.
 
     Returns:
-        evoxc.SymbolicTensor: ``(P, M)`` row identities — the key itself for a one-column
-        table (``int32``), the two packed columns for a two-column table (``uint64``), and
-        a folded 64-bit mix beyond that (``uint64``, confirmed afterwards).
+        evoxc.SymbolicTensor: ``(P, M)`` ``uint64`` row identities, low :data:`_TAG_BITS`
+        bits clear (they hold the parent tag, see :func:`find_homologous`).
 
     Notes:
-        Packing is ``column 0 << 32 | column 1`` with every column masked to its own 32
-        bits first: an ``int32`` is 32 bits wide, so the pack is **injective over the whole
-        ``int32`` range** — negative keys and the ``I_INF`` pad sentinel included — and two
-        distinct key rows can never share an identity.  The fold is done in ``uint64``
-        because the top column's bits reach the sign bit of a signed ``int64``; unsigned
-        shifts wrap cleanly there, so the identity is deterministic on every backend.
+        Packing is ``column 0 << 31 | column 1``, shifted up by :data:`_TAG_BITS`: a key is
+        a non-negative ``int32`` and ``I_INF = 2**31 - 1`` is the largest value one column
+        can carry, so the pack is **injective over the whole legal key domain** — pad
+        sentinel included — and two distinct key prefixes can never share an identity.  The
+        fold is done in ``uint64`` because the top column's bits reach the sign bit of a
+        signed ``int64``; unsigned shifts wrap cleanly there, so the identity is
+        deterministic on every backend.
 
-        A third column cannot fit one 64-bit integer.  Folding it shifts the accumulated
-        bits out of the register, so the result is only a *candidate* identity and
-        :func:`find_homologous` confirms it against the full key rows.
+        Columns past :data:`_PACKED_KEY_WIDTH` do not fit one 64-bit integer, so they are
+        left out of the sort key: they make the identity a *prefix* of the key tuple, and
+        :func:`find_homologous` confirms every candidate against them with
+        :func:`_confirm_rows`.  That is exact as long as the packed prefix is unique per
+        parent, which the payload guarantees (a node gene has one key column; a connection
+        gene's first two columns are its unique ``(in_key, out_key)`` pair).
     """
     pop_size, count = keys.shape[0], keys.shape[1]
     width = keys.shape[2]
-    if width == 1:  # the key itself is the identity; no cast, no mask, nothing to fold
-        return evoxc.reshape(keys, (pop_size, count))
     fold = evoxc.uint64
-    mask = _scalar(_COLUMN_MASK, fold)
-    identity = evoxc.bitwise_and(evoxc.cast(_column(keys, 0), fold), mask)
-    shift = _scalar(_COLUMN_BITS, fold)
-    for index in range(1, width):
-        identity = evoxc.bitwise_or(
-            evoxc.bitwise_left_shift(identity, shift),
-            evoxc.bitwise_and(evoxc.cast(_column(keys, index), fold), mask),
-        )
-    return identity
+    if width == 1:
+        identity = evoxc.cast(evoxc.reshape(keys, (pop_size, count)), fold)
+    else:
+        identity = evoxc.cast(_column(keys, 0), fold)
+        shift = _scalar(_COLUMN_BITS, fold)
+        for index in range(1, min(width, _PACKED_KEY_WIDTH)):
+            identity = evoxc.bitwise_or(
+                evoxc.bitwise_left_shift(identity, shift),
+                evoxc.cast(_column(keys, index), fold),
+            )
+    return evoxc.bitwise_left_shift(identity, _scalar(_TAG_BITS, fold))
 
 
 def _pad_identity(width: int) -> int:
@@ -149,20 +166,21 @@ def _pad_identity(width: int) -> int:
         width (int): Static number of key columns of the gene family.
 
     Returns:
-        int: The identity :func:`row_identity` produces for an absent row, folded on the
+        int: The identity :func:`row_identity` produces for an absent row, computed on the
         host with the same arithmetic — so one ``not_equal`` separates parent 1's padding
         from a real gene instead of a per-column comparison.
 
     Notes:
-        Values are folded modulo ``2**64`` exactly like the traced ``uint64`` shift, and a
-        result at or above ``2**63`` is returned as the wrapped signed value so it can be
-        written into an ``int64`` constant by :func:`find_homologous` when the family has a
-        single key column.
+        This is the host mirror of :func:`row_identity` on a plain-Python key tuple.  It has
+        to stay in step with the traced pack (same stride, same reserved tag bits), or
+        padding rows would stop being recognised; both read
+        :data:`_COLUMN_BITS`/:data:`_TAG_BITS`, so only a change of *formula* can make them
+        diverge.
     """
     identity = I_INF
-    for index in range(1, width):
-        identity = ((identity << _COLUMN_BITS) | (I_INF & _COLUMN_MASK)) % _FOLD_MODULUS
-    return identity
+    for _ in range(1, min(width, _PACKED_KEY_WIDTH)):
+        identity = (identity << _COLUMN_BITS) | I_INF
+    return identity << _TAG_BITS
 
 
 def _gather_rows(
@@ -205,16 +223,21 @@ def _flat_row_index(
     Returns:
         evoxc.SymbolicTensor: ``(P, M, width)`` ``int32`` flat indices
         ``row * width + column + p * (M * width)``.
+
+    Notes:
+        The per-individual stride is folded into the row term *before* the column term is
+        broadcast, so exactly one of the three index ops works on the full ``(P, M, width)``
+        block; the other two run on the ``(P, M, 1)`` row block.  Element volume, not op
+        count, is what a wide index block costs on the reference interpreter.
     """
-    offsets = enp.reshape(batch_offsets(pop_size, count * width), (pop_size, 1, 1))
-    return evoxc.add(
-        evoxc.add(
-            evoxc.multiply(
-                enp.reshape(rows, (pop_size, count, 1)), _scalar(width, evoxc.int32)
-            ),
-            enp.arange(0, width, dtype=evoxc.int32),
-        ),
+    offsets = batch_offsets(pop_size, count * width)
+    base = evoxc.add(
+        evoxc.multiply(enp.reshape(rows, (pop_size, count)), _scalar(width, evoxc.int32)),
         offsets,
+    )
+    return evoxc.add(
+        enp.reshape(base, (pop_size, count, 1)),
+        enp.arange(0, width, dtype=evoxc.int32),
     )
 
 
@@ -264,17 +287,26 @@ def _confirm_rows(
         parent 1's key tuple.
 
     Notes:
-        Only needed when :func:`row_identity` folded a third column away; with at most two
-        key columns the identity is injective and this pass would always agree.
+        Only needed when the gene has more key columns than :data:`_PACKED_KEY_WIDTH` packed
+        into :func:`row_identity`; with at most two key columns the identity is injective
+        and this pass would always agree.  The packed columns are skipped — they match by
+        construction — so a three-column gene pays one gather plus one ``equal`` per spare
+        column, folded with ``logical_and`` rather than an innermost-axis reduce (a reduce
+        over the column axis costs 10-20 ordinary ops on the reference interpreter).
     """
     pop_size, count, width = keys2.shape
     safe = evoxc.select(candidates, rows, _scalar(0, evoxc.int32))
     flat = evoxc.reshape(keys2, (pop_size * count * width,))
     echoed = evoxc.gather(flat, _flat_row_index(safe, width, pop_size, count), axis=0)
-    identical = evoxc.reduce_min(
-        evoxc.cast(evoxc.equal(echoed, keys1), evoxc.int32), axes=-1
-    )
-    return evoxc.greater(identical, _scalar(0, evoxc.int32))
+    identical = None
+    for index in range(_PACKED_KEY_WIDTH, width):
+        column_equal = evoxc.equal(_column(echoed, index), _column(keys1, index))
+        identical = (
+            column_equal
+            if identical is None
+            else evoxc.logical_and(identical, column_equal)
+        )
+    return identical
 
 
 def find_homologous(
@@ -303,49 +335,58 @@ def find_homologous(
         evoxc.ShapeError: Propagated unchanged if the two parents' shapes differ.
 
     Notes:
-        Two sorts and two row gathers carry the whole merge.  The stable sort is what makes
-        "immediately after me" the right successor to look at: inside a group of equal
-        identities parent 1's row comes first, so its successor is parent 2's row when a
-        homologue exists and something with a *different* identity otherwise.
+        One ``argsort`` and two row gathers carry the whole merge — the sorted identity
+        sequence is *gathered* through the permutation instead of being sorted a second
+        time, and the rank of each gene is the ``argsort`` of the permutation.  "Immediately
+        after me" is the right successor to look at because the **parent tag lives in the
+        low bits of the sort key** (:func:`row_identity` leaves them clear and parent 2's
+        rows set them), so inside a group of equal identities parent 1's row is strictly
+        smaller than parent 2's and the ordering does not depend on the sort being stable —
+        which is what lets the sort run unstable, 4x faster on the reference interpreter.
 
-        The successor index is clamped to the last position.  Only the gene with the
-        largest identity can ever be clamped, and its clamped successor identity differs
-        from its own, so the clamp cannot invent a homologue; parent 1's padded rows are
-        excluded explicitly by comparing the identity against the padding identity, which
-        is why two padded rows never align with each other.
+        The successor's identity is therefore tested against *own identity with parent 2's
+        tag set*: an equal answer means the successor is a parent-2 row holding exactly this
+        key tuple, and it needs no separate "is it a parent-2 row" comparison.  Two padded
+        rows also get different tags, so the tag alone keeps them apart; the explicit
+        padding-identity test is what keeps a padded parent-1 row from reporting a row at
+        all.
 
-        A gene family with more than two key columns gets one extra pass
-        (:func:`_confirm_rows`) because its identity is only a candidate match there.
+        The successor index is clamped to the last position.  Only the gene with the largest
+        identity can ever be clamped, and then the successor is the gene itself, whose tag
+        differs from the tag being tested for — so the clamp cannot invent a homologue.
+
+        A gene family with more key columns than :data:`_PACKED_KEY_WIDTH` gets one extra
+        pass (:func:`_confirm_rows`) because its identity covers only the packed prefix.
     """
     pop_size, count = keys1.shape[0], keys1.shape[1]
     width = keys1.shape[2]
+    tag = _scalar(_TAG_PARENT_2, evoxc.uint64)
     identity1 = row_identity(keys1)
-    identity2 = row_identity(keys2)
+    identity2 = evoxc.bitwise_or(row_identity(keys2), tag)
     merged = evoxc.concatenate((identity1, identity2), axis=1)
 
-    order = evoxc.cast(evoxc.argsort(merged, axis=-1, stable=True), evoxc.int32)
-    ranks = evoxc.cast(evoxc.argsort(order, axis=-1, stable=True), evoxc.int32)
-    rank = evoxc.slice(ranks, (0, 0), (pop_size, count))
+    order = evoxc.cast(evoxc.argsort(merged, axis=-1), evoxc.int32)
+    ranks = evoxc.cast(evoxc.argsort(order, axis=-1), evoxc.int32)
     successors = evoxc.minimum(
-        evoxc.add(rank, _scalar(1, evoxc.int32)),
+        evoxc.add(evoxc.slice(ranks, (0, 0), (pop_size, count)), _scalar(1, evoxc.int32)),
         _scalar(2 * count - 1, evoxc.int32),
     )
     offsets = batch_offsets(pop_size, 2 * count)
-    # ``order`` is a permutation, so ``sorted`` is the identity sequence in sorted order:
-    # position ``rank[i] + 1`` of it is the *successor's identity*, while position
-    # ``rank[i] + 1`` of ``order`` is the successor's row in the merged batch.
-    sorted_identity = _gather_rows(merged, order, offsets)
-    successor_row = _gather_rows(order, successors, offsets)
-    matched = evoxc.logical_and(
-        evoxc.equal(_gather_rows(sorted_identity, successors, offsets), identity1),
-        evoxc.greater_equal(successor_row, _scalar(count, evoxc.int32)),
+    # Position ``rank[i]`` of ``order`` is the merged row holding gene ``i``, so position
+    # ``rank[i] + 1`` of ``order`` is the successor's row and the same position of
+    # ``gather(merged, order)`` is the successor's identity.
+    matched = evoxc.equal(
+        _gather_rows(_gather_rows(merged, order, offsets), successors, offsets),
+        evoxc.bitwise_or(identity1, tag),
     )
-    rows = evoxc.subtract(successor_row, _scalar(count, evoxc.int32))
-    if width > _EXACT_KEY_WIDTH:
+    rows = evoxc.subtract(
+        _gather_rows(order, successors, offsets), _scalar(count, evoxc.int32)
+    )
+    if width > _PACKED_KEY_WIDTH:
         matched = evoxc.logical_and(matched, _confirm_rows(keys1, keys2, rows, matched))
     present = evoxc.logical_and(
         matched,
-        evoxc.not_equal(identity1, _scalar(_pad_identity(width), identity1.dtype)),
+        evoxc.not_equal(identity1, _scalar(_pad_identity(width), evoxc.uint64)),
     )
     return evoxc.select(present, rows, _scalar(I_INF, evoxc.int32))
 
