@@ -878,7 +878,7 @@ def _banner(doc: dict) -> str:
         lines.insert(
             2,
             f"> Re-rendered from that same JSON at {rendered} with `--render-from-json` "
-            "(no worker was re-run; the git fingerprint is re-probed).",
+            "(no worker was re-run; the dirty state is re-probed on this tree).",
         )
     return "\n".join(lines)
 
