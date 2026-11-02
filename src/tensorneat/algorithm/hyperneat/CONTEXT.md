@@ -109,7 +109,7 @@ No (un)vectorization of any kind: no `vmap`, no `fori_loop`, no `switch`; this n
 No `.at[...]` updates, no `tile` on batched data (evoxc's `tile` has no batching rule), no `repeat`, no `max/sum(where=…)`, no `any`/`all`: mask with `evoxc.select`, reduce afterwards.
 `evoxc` `getitem` is static-only and rejects `Ellipsis`, so column selection goes through the genes' `column_of` (which wraps `genome.gene.base.column`'s explicit `(slice(None),) * (ndim - 1) + (index,)` key) rather than a literal last-axis index.
 Python `if`/`for` over constructor configuration is legal and unrolls at trace time; branching on traced values is a `TraceError`.
-All shapes must be static: `P`, `Q`, `N`, `I`, `O`, `NA`, `CK`, `CA` come from configuration, never from a runtime tensor shape.
+All shapes must be static: `Q`, `N`, `I`, `O`, `NA`, `CK`, `CA` come from configuration, and `P` from the payload argument's static axis-0 length — never from a value only known at run time.
 Nothing here mutates `State`, the substrate, the genome objects, or any array in place; the substrate geometry is read-only.
 User-facing validation raises `TensorNEATError`/`ConfigError`, never `assert`; backend/shape errors propagate unchanged.
 Files stay under ~1000 lines (`hyperneat.py` ≈ 820, `genes.py` ≈ 300).
