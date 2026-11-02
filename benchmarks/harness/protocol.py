@@ -77,6 +77,36 @@ read the thread variables at import time; keep the two lists in step.
 GIT_TIMEOUT = 5
 """Seconds allowed for one ``git`` probe before the fingerprint degrades to ``n/a``."""
 
+GIT_DIRTY_PATHS: tuple[str, ...] = (
+    "src",
+    "benchmarks/harness",
+    "benchmarks/legacy_jax",
+    "benchmarks/cases.py",
+    "benchmarks/run_benchmark.py",
+    "test",
+    "pyproject.toml",
+)
+"""The *code under test*: only a change here makes the fingerprint ``git_dirty``.
+
+``benchmarks/harness`` covers ``benchmarks/harness/worker.py`` and the rest of the harness.
+Everything else (report text, generated JSON, spikes) is measurement output, not an input of
+the measurement, so a harness that renders ``benchmarks/RESULTS.md`` while it samples its own
+fingerprint must not report itself as dirty — that was the false alarm this scope removes.
+"""
+
+GIT_EVIDENCE_PATHS: tuple[str, ...] = (
+    "benchmarks/RESULTS.md",
+    "benchmarks/THREADS.md",
+    "benchmarks/iree.md",
+    "benchmarks/results",
+    "benchmarks/BACKENDS.md",
+    "benchmarks/spikes",
+)
+"""Generated evidence, explicitly outside :data:`GIT_DIRTY_PATHS` even if a scope ever widens."""
+
+GIT_DIRTY_PATH_LIMIT = 5
+"""How many offending paths the report names before it says ``+N more``."""
+
 __all__ = [
     "SCHEMA",
     "STATUS_OK",
@@ -96,6 +126,10 @@ __all__ = [
     "NO_ERROR_TEXT",
     "REPO_ROOT",
     "THREAD_ENV_VARS",
+    "GIT_DIRTY_PATHS",
+    "GIT_EVIDENCE_PATHS",
+    "GIT_DIRTY_PATH_LIMIT",
+    "git_report",
     "short_error",
     "rss_mb",
     "env_report",
@@ -287,17 +321,58 @@ def _git(*arguments: str, root: Path = REPO_ROOT) -> str | None:
     return completed.stdout.strip()
 
 
+def _porcelain_path(entry: str) -> str:
+    """The path named by one ``git status --porcelain`` line (rename -> its new name)."""
+    payload = entry[3:] if len(entry) > 3 else entry.strip()
+    if " -> " in payload:  # "R  old -> new"
+        payload = payload.split(" -> ", 1)[1]
+    return payload.strip().strip('"')
+
+
+def _in_code_scope(path: str) -> bool:
+    """True when ``path`` is code under test (inside a dirty scope, never an evidence artifact)."""
+
+    def inside(candidate: str, prefix: str) -> bool:
+        return candidate == prefix or candidate.startswith(prefix + "/")
+
+    return any(inside(path, prefix) for prefix in GIT_DIRTY_PATHS) and not any(
+        inside(path, prefix) for prefix in GIT_EVIDENCE_PATHS
+    )
+
+
 def git_report(root: Path = REPO_ROOT) -> dict:
-    """Commit SHA and dirty flag of the checkout the two implementations come from.
+    """Commit SHA and dirty state of the checkout the two implementations come from.
+
+    The dirty flag is computed over the **code under test only** (:data:`GIT_DIRTY_PATHS`,
+    with :data:`GIT_EVIDENCE_PATHS` excluded), because the harness writes its own report and
+    JSON while it samples this fingerprint: a full-tree ``git status`` would always call a
+    perfectly clean measurement "dirty" and make the SHA untrustworthy.
 
     A missing git binary, a non-checkout directory or a timeout yields ``None`` values,
     which the report renders as ``n/a``; measuring must never fail because of provenance.
+
+    Returns:
+        ``{"git_commit", "git_dirty", "git_dirty_paths"}``: the full SHA, ``True`` only when
+        one code path is modified/untracked, and the offending repo-relative paths (empty
+        when clean). The list is not truncated here — the report names
+        :data:`GIT_DIRTY_PATH_LIMIT` of them and counts the rest.
     """
     commit = _git("rev-parse", "HEAD", root=root)
     if commit is None:
-        return {"git_commit": None, "git_dirty": None}
-    status = _git("status", "--porcelain", root=root)
-    return {"git_commit": commit, "git_dirty": None if status is None else bool(status)}
+        return {"git_commit": None, "git_dirty": None, "git_dirty_paths": []}
+    status = _git("status", "--porcelain", "--", *GIT_DIRTY_PATHS, root=root)
+    if status is None:
+        return {"git_commit": commit, "git_dirty": None, "git_dirty_paths": []}
+    paths = [
+        path
+        for path in (_porcelain_path(entry) for entry in status.splitlines() if entry.strip())
+        if path and _in_code_scope(path)
+    ]
+    return {
+        "git_commit": commit,
+        "git_dirty": bool(paths),
+        "git_dirty_paths": list(dict.fromkeys(paths)),
+    }
 
 
 def _thread_env() -> dict:

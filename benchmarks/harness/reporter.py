@@ -14,6 +14,7 @@ import shlex
 from pathlib import Path
 
 from harness.protocol import (
+    GIT_DIRTY_PATH_LIMIT,
     QUALITY_ABS_TOL,
     QUALITY_TOLERANCE_REL,
     STATUS_OK,
@@ -61,6 +62,10 @@ from harness.report_sections import headline_section, winlose_section
 __all__ = ["render_report", "write_report", "IMPL_LABELS"]
 
 TITLE = "# TensorNEAT benchmark — evoxc rewrite vs frozen JAX baseline"
+"""Default H1; ``--report-title`` (stored as ``meta.report_title``) overrides it."""
+
+DEFAULT_REPORT_NOTE = ""
+"""Default note under the banner: none, so an unflagged render is byte-for-byte the old one."""
 
 PARITY_TEST_COUNT = 53
 """Collected parity tests on this box, measured 2026-11-02 with
@@ -77,18 +82,34 @@ def _memory_text(env: dict) -> str:
     return f"{value:.0f} MiB" if value is not None else "n/a"
 
 
+def _git_state(env: dict) -> str:
+    """The dirty state of the *code under test*, naming the offending paths when there are some.
+
+    A clean tree says so explicitly: the harness rewrites its own report and JSON while it
+    samples this fingerprint, so "clean" must not be mistaken for "unchecked" — generated
+    evidence is outside ``protocol.GIT_DIRTY_PATHS`` and never counts.
+    """
+    dirty = env.get("git_dirty")
+    if not isinstance(dirty, bool):
+        return "dirty state n/a"
+    if not dirty:
+        return "clean — generated report artifacts are not counted"
+    paths = [text(path) for path in (env.get("git_dirty_paths") or []) if text(path)]
+    if not paths:
+        return "dirty working tree"  # JSON written before the paths were recorded
+    shown = ", ".join(paths[:GIT_DIRTY_PATH_LIMIT])
+    more = len(paths) - GIT_DIRTY_PATH_LIMIT
+    return f"dirty: {shown}" + (f" +{more} more" if more > 0 else "")
+
+
 def _git_text(env: dict) -> str:
     """Commit SHA and dirty state, with the reminder that both sides come from this tree."""
     commit = text(env.get("git_commit"), "")
     if not commit:
         return "n/a (git unavailable)"
-    dirty = env.get("git_dirty")
-    state = {True: "dirty working tree", False: "clean"}.get(
-        dirty if isinstance(dirty, bool) else None, "dirty state n/a"
-    )
     return (
-        f"`{commit[:12]}` ({state}) — `benchmarks/legacy_jax` and `src/` both come from "
-        "this checkout"
+        f"`{commit[:12]}` ({_git_state(env)}) — `benchmarks/legacy_jax` and `src/` both come "
+        "from this checkout"
     )
 
 
@@ -857,9 +878,32 @@ def _banner(doc: dict) -> str:
         lines.insert(
             2,
             f"> Re-rendered from that same JSON at {rendered} with `--render-from-json` "
-            "(no worker was re-run).",
+            "(no worker was re-run; the dirty state is re-probed on this tree).",
         )
     return "\n".join(lines)
+
+
+def _title(doc: dict) -> str:
+    """The H1: ``meta.report_title`` when the run declared one, else :data:`TITLE`.
+
+    A bare title ('Thread sensitivity') gets the ``#`` marker; one that already carries its
+    own hashes is kept verbatim, so both spellings render a single H1.
+    """
+    custom = text(meta(doc).get("report_title"), "").strip()
+    if not custom:
+        return TITLE
+    return custom if custom.startswith("#") else f"# {custom}"
+
+
+def _report_note(doc: dict) -> str:
+    """``meta.report_note`` as one italic line under the banner (``""`` when none was given).
+
+    Companion documents (``THREADS.md``) must not be confused with the authoritative report,
+    so the note is rendered from the document rather than hard-coded here; a multi-line
+    value is collapsed to the one line the report promises.
+    """
+    note = " ".join(text(meta(doc).get("report_note"), "").split())
+    return f"*{note}*" if note else DEFAULT_REPORT_NOTE
 
 
 def _footer(doc: dict) -> str:
@@ -881,13 +925,15 @@ def render_report(doc: dict, report_path=None) -> str:
             really is there (a ``$TMPDIR`` render does not claim a checkout's files).
 
     Returns:
-        Markdown text with a trailing newline.
+        Markdown text with a trailing newline. Without ``meta.report_title`` /
+        ``meta.report_note`` the output is exactly the default ``RESULTS.md``.
     """
     document = doc or {}
     companions = companion_files(document, report_path)
     blocks = [
-        TITLE,
+        _title(document),
         _banner(document),
+        _report_note(document),
         headline_section(document),
         _environment_section(document),
         _protocol_section(document, companions),
@@ -902,7 +948,12 @@ def render_report(doc: dict, report_path=None) -> str:
         _reproduce_section(document, companions),
         _footer(document),
     ]
-    return spaced_headings("\n\n".join(block.rstrip() for block in blocks)) + "\n"
+    return (
+        spaced_headings(
+            "\n\n".join(block.rstrip() for block in blocks if block.rstrip())
+        )
+        + "\n"
+    )
 
 
 def write_report(doc: dict, path) -> None:

@@ -161,6 +161,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=protocol.DEFAULT_TIMEOUT,
         help="per-run wall clock limit in seconds",
     )
+    parser.add_argument(
+        "--report-title",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "override the report H1 (stored as meta.report_title, so a re-render keeps it); "
+            "default: the standard benchmark title"
+        ),
+    )
+    parser.add_argument(
+        "--report-note",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "one-line italic note under the report banner (stored as meta.report_note) — what "
+            "this document is, e.g. a sensitivity run next to the authoritative RESULTS.md"
+        ),
+    )
     return parser
 
 
@@ -474,6 +492,8 @@ def _build_document(
             "case_matrix": [case.as_dict() for case in selected],
             "json_path": str(json_path),
             "out_path": str(Path(args.out)),
+            "report_title": args.report_title,
+            "report_note": args.report_note,
         },
         "runs": run_records,
         "aggregated": aggregated,
@@ -523,6 +543,15 @@ def _render_meta(doc: dict, args: argparse.Namespace, records: list[dict]) -> di
     paths (this JSON, this ``--out``) and ``rendered_at`` are this invocation's. A stored
     document that has no ``meta`` at all degrades to an environment probe of *this* host,
     which the report then presents as an unmeasured fingerprint — never as measurement data.
+
+    Two deliberate exceptions:
+
+    * ``--report-title``/``--report-note`` win over the stored ones (otherwise the document's
+      own values are reused, so ``THREADS.md`` never renders with the authoritative H1).
+    * the git *dirty* state is re-probed: it describes the code under test *now*, and the
+      harness's own report/JSON writes are outside the code scope
+      (``protocol.GIT_DIRTY_PATHS``), so a re-render cannot repeat a stale false alarm. The
+      ``git_commit`` stays the measurement's — it is the commit those numbers came from.
     """
     protocol = _protocol()
     stored = dict(doc.get("meta") or {})
@@ -539,8 +568,10 @@ def _render_meta(doc: dict, args: argparse.Namespace, records: list[dict]) -> di
             if record.get("impl") == "new" and record.get("backend")
         }
     )
+    env = dict(stored.get("env") or protocol.env_report(threads=None))
+    env.update(_fresh_dirty_state(protocol, env))
     return {
-        "env": stored.get("env") or protocol.env_report(threads=None),
+        "env": env,
         "cases": list(cases),
         "impls": list(impls),
         "backends": list(backends),
@@ -549,8 +580,24 @@ def _render_meta(doc: dict, args: argparse.Namespace, records: list[dict]) -> di
         "case_matrix": stored.get("case_matrix") or [],
         "json_path": str(args.render_from_json),
         "out_path": str(args.out),
+        "report_title": _override(args.report_title, stored.get("report_title")),
+        "report_note": _override(args.report_note, stored.get("report_note")),
         "rendered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
+
+
+def _fresh_dirty_state(protocol, env: dict) -> dict:
+    """Re-probe the code-scope dirty state, keeping the recorded commit as the provenance."""
+    probe = protocol.git_report()
+    fresh = {key: probe.get(key) for key in ("git_dirty", "git_dirty_paths")}
+    if not env.get("git_commit"):
+        fresh["git_commit"] = probe.get("git_commit")
+    return fresh
+
+
+def _override(flag_value, stored_value):
+    """The CLI value when it was given, else the document's, else ``None``."""
+    return flag_value if flag_value is not None else stored_value
 
 
 def _render_from_json(args: argparse.Namespace) -> int:
