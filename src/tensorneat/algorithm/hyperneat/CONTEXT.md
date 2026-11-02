@@ -131,7 +131,8 @@ Tests live in the sibling `./../../../test` tree (read-only from here) and mirro
 Integration: `examples/func_fit/xor_hyperneat.py` and `xor_hyperneat_feedforward.py` must reach their fitness target with a fixed seed, deterministically, on the numpy backend.
 
 ## Notes for Agents
-Every shape above is static: derive it from `self.neat`/`self.substrate`/`self.hyper_genome`, never from a traced tensor shape.
+Every shape above is static: `Q`/`N`/`I`/`O`/`NA`/`CK`/`CA` come from `self.substrate`/`self.hyper_genome`, and the decode batch `P` from the payload's static axis-0 length, never from a value only known at run time.
+`transform` must accept any static batch, not just `neat.pop_size`: `Pipeline.show` derives a one-individual schedule, and the decode is value-identical to the same individual's rows of a full-population forward (verified for batches 1…8).
 `_validate` runs before `_make_hyper_genome` (which calls `_static_bounds`), so a bad configuration raises before any genome is constructed; keep that order.
 `_validate` checks `weight_threshold`/`max_weight`/`activate_time` with `_require_real` (rejecting `bool`, which is an `int` subclass) before the range checks, so a non-numeric value raises `TensorNEATError`, never `TypeError`; NumPy scalars pass.
 `HyperNEATNode.__init__` checks its two options with `_require_callable`, so a non-callable aggregation/activation raises `ConfigError` at construction instead of inside a later trace.
