@@ -8,6 +8,8 @@ operators (initialisation / mutation / crossover / distance) and the split-paylo
 assembly helpers: it must never import ``jax``/``torch``, never run eager NumPy on
 the compute path, and never implement node/connection semantics (those live in
 ``node/`` and ``conn/``).
+The operators themselves are one-line delegations to :mod:`.blocks`, which fuses the
+per-column draw/``select`` chains of a whole attribute block into one cascade.
 """
 
 from dataclasses import dataclass
@@ -18,7 +20,8 @@ import evoxc.numpy as enp
 
 from ...common import State, StatefulBaseClass
 from ...common.errors import ConfigError
-from ...common.tools import mutate_float, mutate_int, to_numpy
+from ...common.tools import to_numpy
+from .blocks import crossover_attrs, init_attrs, mutate_attrs, static_row
 
 #: Fold constants of the key-row hash; identical to
 #: :func:`tensorneat.common.tools.hash_rows` so an in-graph hash and the host-side
@@ -487,9 +490,11 @@ class BaseGene(StatefulBaseClass):
     ) -> evoxc.SymbolicTensor:
         """Draw initial attribute rows for a batch of newly created genes.
 
-        One batched draw per spec (float: clipped Gaussian, int: uniform option
-        index); the rank-0 ``key`` is never split per row, so each individual gets an
-        independent stream from the single batched draw.
+        One batched draw per spec (float: clipped Gaussian -- an exact constant when
+        ``init_std`` is ``0``; int: uniform option index), joined and clipped once as
+        a whole block by :func:`.blocks.init_attrs`; the rank-0 ``key`` is never
+        split per row, so each individual gets an independent stream from the single
+        batched draw.
 
         Args:
             state: Host configuration container.
@@ -499,29 +504,7 @@ class BaseGene(StatefulBaseClass):
         Returns:
             ``(*shape, attr_width)`` float32 attribute rows.
         """
-        shape = tuple(int(size) for size in shape)
-        if not self.attr_specs:
-            return enp.zeros((*shape, 0), dtype=evoxc.float32)
-        # A rank-0 random draw is rejected by the numpy reference backend (it builds
-        # its output tensor from a NumPy scalar), so a single-gene batch is drawn as
-        # shape ``(1,)`` and reshaped back to ``()``.
-        draw_shape = shape or (1,)
-        draw_keys = evoxc.random.split_n(key, len(self.attr_specs))
-        columns = []
-        for spec, draw_key in zip(self.attr_specs, draw_keys):
-            if spec.kind == "float":
-                values = evoxc.random.normal(
-                    draw_key, draw_shape, spec.init_mean, spec.init_std, dtype=evoxc.float32
-                )
-                values = self._clip(spec, values)
-            else:
-                count = len(spec.options)
-                values = evoxc.cast(
-                    evoxc.random.randint(draw_key, draw_shape, 0, count, dtype=evoxc.int32),
-                    evoxc.float32,
-                )
-            columns.append(evoxc.reshape(values, shape) if not shape else values)
-        return evoxc.stack(columns, axis=-1)
+        return init_attrs(key, shape, self.attr_specs)
 
     def new_identity_attrs(self, state: State) -> evoxc.SymbolicTensor:
         """Attribute row whose gene is an identity transform (host ``add_node`` split).
@@ -586,25 +569,7 @@ class BaseGene(StatefulBaseClass):
             ``(attr_width,)`` float32 row; an empty row when the family has no
             evolvable attributes.
         """
-        if not values:
-            return enp.zeros((0,), dtype=evoxc.float32)
-        scalars = [enp.full((), value, dtype=evoxc.float32) for value in values]
-        return evoxc.stack(scalars, axis=-1)
-
-    def _clip(self, spec: GeneAttr, values: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
-        """Clip a traced float column into the inclusive bounds of ``spec``.
-
-        Args:
-            spec: The float spec supplying the bounds.
-            values: Traced values of that column.
-
-        Returns:
-            ``values`` clipped into ``[lower_bound, upper_bound]``; unchanged when the
-            spec is unbounded.
-        """
-        if spec.lower_bound is None and spec.upper_bound is None:
-            return values
-        return enp.clip(values, spec.lower_bound, spec.upper_bound)
+        return static_row(values)
 
     @staticmethod
     def _clip_scalar(spec: GeneAttr, value: float) -> float:
@@ -638,6 +603,11 @@ class BaseGene(StatefulBaseClass):
         floats are clipped into their bounds. Selection is a ``select`` chain over the
         batched attrs -- no branching on traced values. A ``NaN`` column (absent gene
         row) stays ``NaN``: mutation never revives padding.
+        :func:`.blocks.mutate_attrs` draws one column per participating spec and then
+        applies one gate/``select``/``clip`` cascade over the whole ``(*shape,
+        attr_width)`` block, so the traced cost of a pass does not grow with the
+        number of attribute columns; a spec that cannot change (zero rates, a single
+        option, ``init_std == 0``) contributes no draw at all.
 
         Args:
             state: Host configuration container.
@@ -647,34 +617,7 @@ class BaseGene(StatefulBaseClass):
         Returns:
             ``(*shape, attr_width)`` float32 mutated rows.
         """
-        if not self.attr_specs:
-            return attrs
-        draw_keys = evoxc.random.split_n(key, len(self.attr_specs))
-        columns = []
-        for index, (spec, draw_key) in enumerate(zip(self.attr_specs, draw_keys)):
-            current = column(attrs, index)
-            # A rank-0 row is drawn as shape ``(1,)``: the numpy reference backend
-            # rejects a 0-d random output (see ``new_random_attrs``).
-            batch_shape = tuple(current.shape)
-            batched = evoxc.reshape(current, (1,)) if not batch_shape else current
-            if spec.kind == "float":
-                mutated = mutate_float(
-                    draw_key,
-                    batched,
-                    spec.init_mean,
-                    spec.init_std,
-                    spec.mutate_power,
-                    spec.mutate_rate,
-                    spec.replace_rate,
-                )
-                mutated = self._clip(spec, mutated)
-            else:
-                options = enp.arange(len(spec.options), dtype=evoxc.int32)
-                mutated = mutate_int(draw_key, batched, options, spec.replace_rate)
-            if not batch_shape:
-                mutated = evoxc.reshape(mutated, ())
-            columns.append(evoxc.select(evoxc.isnan(current), current, mutated))
-        return evoxc.stack(columns, axis=-1)
+        return mutate_attrs(key, attrs, self.attr_specs)
 
     def crossover(
         self,
@@ -685,9 +628,12 @@ class BaseGene(StatefulBaseClass):
     ) -> evoxc.SymbolicTensor:
         """Crossover the attributes of two homologous genes.
 
-        Default behaviour is a per-attribute 50/50 pick (one normal draw per column
-        entry, ``> 0`` selects the first parent); the origin families override it with
+        Default behaviour is a per-attribute 50/50 pick (one ``U[0, 1)`` block draw,
+        ``< 0.5`` selects the first parent); the origin families override it with
         a whole-gene pick (one draw selects the whole attribute vector).
+        :func:`.blocks.crossover_attrs` owns the uniform-draw formulation, which is
+        the same Bernoulli(0.5) per-entry law at half the random work of a Gaussian
+        comparison.
 
         Args:
             state: Host configuration container.
@@ -700,13 +646,7 @@ class BaseGene(StatefulBaseClass):
         """
         if not self.attr_specs:
             return attrs1
-        shape = tuple(attrs1.shape)
-        draw = evoxc.random.normal(
-            key, shape or (1,), 0.0, 1.0, dtype=evoxc.float32
-        )
-        if not shape:  # the numpy backend rejects a 0-d random output
-            draw = evoxc.reshape(draw, ())
-        return evoxc.select(evoxc.greater(draw, 0.0), attrs1, attrs2)
+        return crossover_attrs(key, attrs1, attrs2)
 
     def distance(
         self, state: State, attrs1: evoxc.SymbolicTensor, attrs2: evoxc.SymbolicTensor
