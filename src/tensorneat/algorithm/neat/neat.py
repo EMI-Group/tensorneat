@@ -40,6 +40,7 @@ from tensorneat.common.tools import to_numpy
 from ...genome.utils import GenomeTensors
 from ..base import BaseAlgorithm
 from .species import SpeciesController, SpeciesState
+from ._distance import DistanceRows
 from ._validation import positive_int
 
 
@@ -435,7 +436,11 @@ class NEAT(BaseAlgorithm):
            split (crossover/mutation/next ``randkey``).
         5. **Re-speciate**: ``SpeciesController.speciate`` rebuilds membership
            against the new population, re-electing centres and possibly creating
-           species.
+           species.  The population is digested exactly once here
+           (``genome.prepare_distance``) and that digest backs every distance
+           row of the generation through :meth:`_distance_rows`, so a centre no
+           longer re-sorts the population and one phase can be measured in a
+           single wide call.
         6. **Commit**: the new ``pop``, the advanced ``randkey``, the incremented
            ``generation`` and the new ``species`` come back on the returned
            state.
@@ -472,7 +477,11 @@ class NEAT(BaseAlgorithm):
         state = state.update(generation=generation)
         state, winner, loser, elite_mask = self.species.update_species(state, fitness)
         state = self._create_next_generation(state, winner, loser, elite_mask)
-        return self.species.speciate(state, self.genome.execute_distance)
+        population = state.pop
+        digest = self.genome.prepare_distance(state, population)
+        return self.species.speciate(
+            state, self._distance_rows(digest, population), population
+        )
 
     # ------------------------------------------------------------- next pop
 
@@ -809,3 +818,37 @@ class NEAT(BaseAlgorithm):
             class declares it read-only and the pipeline reads it).
         """
         return self._pop_size
+
+    # ------------------------------------------------------- distance rows
+    def _distance_rows(self, digest: Any, population: Any) -> Callable:
+        """Wrap one generation's distance digest as ``speciate``'s ``distance_fn``.
+
+        The digest is built once by :meth:`tell` from the generation's new
+        population; every speciation distance of that generation is then measured
+        against it, so no centre re-sorts the population.  The returned callable
+        keeps the ``(state, centre, pop)`` signature the speciation scans expect:
+        a batch-1 centre yields one ``(pop_size,)`` row, a batch-``species_size``
+        centre yields the whole ``(species_size, pop_size)`` matrix from one wide
+        call, and a batch-``pop_size`` centre is measured row-wise.
+
+        Args:
+            digest (Any): ``DistanceDigest`` from
+                ``self.genome.prepare_distance(state, population)``.
+            population (Any): The payload the digest was prepared from; the
+                callable rejects any other payload instead of mixing generations.
+
+        Returns:
+            Callable: ``distance_fn(state, centre, pop=None)`` producing the
+            rows described above.
+
+        Raises:
+            TensorNEATError: If the digest's population axis or the payload's
+                batch is not ``pop_size`` (raised when the callable is built).
+        """
+        return DistanceRows(
+            self.genome,
+            digest,
+            population,
+            pop_size=self._pop_size,
+            species_size=self.species.species_size,
+        )
