@@ -112,7 +112,7 @@ The box drifts ±30 % between sessions, so only the before/after pairs above (me
 - The non-empty guard rides on the denominator: `maximum(float32(max(cnt1, cnt2)), 1.0)`, so an empty pair yields `0.0 / 1.0` with no second `select`.
 - Key tables are accepted as `(P, M)` or `(P, M, K)` via `alignment.key_rows`; rank-0 integer constants come from the pool (`enp.full((), v, dtype=...)` underneath) because a Python literal would widen an `int32` tensor to `int64`.
 - Errors: a parent shape mismatch, a wrong key width, a digest built for another gene axis, or a centre batch that is neither `1` nor `P` raises `ConfigError` (`TensorNEATError`); `evoxc` errors propagate unchanged.
-- Files ≤ ~1000 lines (`digest.py` 672, `base.py` 588, `default.py` 385, `consts.py` 101).
+- Files ≤ ~1000 lines (`digest.py` 690, `base.py` 588, `default.py` 394, `consts.py` 101).
 
 ## Bit-identity argument
 `__call__`/`gene_distance` and `prepare`+`measure` differ only in how the homologue table is produced (`alignment.find_homologous` vs `digest.measure_alignment`), and both feed the *same* tail.
