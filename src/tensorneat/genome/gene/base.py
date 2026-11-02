@@ -41,6 +41,18 @@ def column(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
     index has no usable cotangent shape -- a sliced-then-reshaped read is
     differentiable, which is what ``Genome.grad`` needs for every gene attribute.
 
+    Two ops is the floor this ``evoxc`` offers, and it is a cheap floor -- measured on
+    the reference interpreter, not assumed. ``x[..., i]`` (an ``int`` index) lowers to
+    a single ``gather`` with a rank-0 index constant, i.e. still two ops (``constant``
+    + ``gather``), and its VJP (``scatter`` of the cotangent through a rank-0 index)
+    raises ``evoxc.ShapeError`` in the numpy backend, so it is not differentiable at
+    all; a rank-1 index of length one needs the same trailing ``reshape``. What the
+    read costs at run time is the interpreter's per-op overhead: ``slice`` and
+    ``reshape`` are both *views*, ~0.09 ms marginal per read against a ``(2000, 50, 4)``
+    block (whole ``distance`` kernel with eight reads: 0.87 ms), so the read is never
+    what makes a gene kernel slow -- reading a whole attribute block instead multiplies
+    the elementwise traffic and measured 1.9-3.3x slower per call.
+
     Args:
         tensor: Any traced tensor whose last axis is the gene column axis.
         index: Static (non-negative) column index.
@@ -655,6 +667,17 @@ class BaseGene(StatefulBaseClass):
 
         Sums over the attribute axis: ``|delta|`` for float specs and ``!=`` for int
         specs, so a changed option index contributes exactly 1.
+
+        The column-by-column form is deliberate: it costs ``2 * attr_width`` :func:`column`
+        reads plus one arithmetic op per column, which reads as the gene-side block with
+        the most traced ops in a generation, but every one of those reads is a ``slice``
+        plus a ``reshape`` *view* and the arithmetic runs on ``(*shape,)`` columns. Fusing
+        the columns into one attribute-block pass (subtract/``not_equal`` over the whole
+        ``(*shape, attr_width)`` block, one ``select`` and one last-axis ``reduce_sum``)
+        removes ~240 of the ~250 reads per generation at ``pop_size=500`` and was 3.3x
+        *slower* (2.83 vs 0.87 ms per call at ``(2000, 50, 4)``) -- elementwise work moves
+        from 0.4 MB columns to 1.6 MB blocks and an innermost-axis reduction is the most
+        expensive op class here. Traced-op count is not the cost driver for this kernel.
 
         Args:
             state: Host configuration container.
