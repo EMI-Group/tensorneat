@@ -3,15 +3,20 @@
 The machinery behind `../run_benchmark.py`: one schema for every measurement, one adapter per implementation, one worker process per run, one renderer for `../RESULTS.md`.
 This package is import-safe for both sides: nothing here imports `jax`, `tensorneat` or `evoxc` at module scope — the implementation-specific imports live inside `adapters/old.py` and `adapters/new.py`, which the worker loads *after* it has put the right tree on `sys.path`.
 ## Module Map
-- `protocol.py` — schema constants, `RunResult`, timing/quality summarisers, repeat aggregation, verdict rules, environment reporting, RSS sampling. Stdlib + `numpy` only.
+- `protocol.py` — schema constants, `RunResult`, timing/quality summarisers, repeat aggregation, verdict rules, environment reporting (host/CPU/RAM probes, git SHA + dirty flag, thread env), RSS sampling. Stdlib + `numpy` only.
 - `worker.py` — script entry point (not a module entry): parses run arguments, sets `sys.path` + thread env, imports the adapter, times one run, writes one `RunResult` JSON.
 - `adapters/__init__.py` — `get_adapter(impl)`; the adapter contract (below).
 - `adapters/old.py` — `tensorneat_legacy` + JAX; one-off cost is `jax.jit(pipeline.step).lower(state).compile()`.
 - `adapters/new.py` — `src/tensorneat` + evoxc; one-off cost is the first `Pipeline.step` call (the build), and it asserts no `jax`/`torch` module was pulled in.
-- `reporter.py` — aggregated records + run metadata -> `RESULTS.md` markdown (tables, verdict, fairness, reproduce block).
+- `reporter.py` — assembles `RESULTS.md` from aggregated records + run metadata (environment, protocol, case matrix, per-case tables, verdict, quality curves, reference baseline, fairness, reproduce block).
+- `report_format.py` — shared null-safe cell/table formatters and document accessors (`_cell`, `_table`, `_num`, `_gens_to_target`, repo-relative paths, case order); presentation only.
+- `report_sections.py` — the data-derived `## Headline: old vs new` table and the `## Why the new side wins and loses` narrative, both written from the measured speed-ups rather than assuming a winner.
 ## Report Document
 The CLI writes one JSON document to `--json` and hands the same dict to the reporter: `{schema, generated_at, meta, runs, aggregated, verdict}`.
 `meta` carries `env`, `cases`, `impls`, `backends`, `protocol` (generations/warmup/repeats/seed/threads/timeout), `command`, `case_matrix` (each case's `as_dict()`) and the paths.
+`meta.env` / each run's `env` is the environment fingerprint: Python/platform/machine, `cpu_model` (`/proc/cpuinfo`), `cpu_count`, `memory_mb`, metadata-only `numpy`/`jax`/`evoxc`/`tensorneat` versions, `git_commit` + `git_dirty` of this checkout, and the `--threads` value with the observed `thread_env` values (`None` = unset) for `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS` + `XLA_FLAGS`.
+The fingerprint never imports an implementation: versions are package metadata and the host probes degrade to `None` (rendered `n/a`) when `/proc` or git is unavailable.
+The report opens with the headline old-vs-new table (one row per case/backend: ms/gen both sides, speed-up, compile seconds, peak RSS, final best, gens-to-target, timing/quality verdict), then environment, protocol, case matrix, per-case tables, old-vs-new, verdict, the data-derived win/lose narrative, quality curves, declared baseline, non-comparisons and the reproduce block.
 `reporter.render_report(doc) -> str` and `reporter.write_report(doc, path)` are the only consumers; the reporter is presentation only and reuses `protocol.comparisons` / `doc["verdict"]` instead of recomputing verdicts.
 `protocol.short_error(text)` is the single error summariser: it keeps the exception line of a traceback (not `Traceback (most recent call last):`) and is used by `aggregate`, `verdict`, the CLI progress line and the reporter.
 Paths in the report are repo-relative (`_display_path`): `meta.json_path`/`meta.out_path` and the interpreter recorded in `meta.command` drop the worktree prefix when they sit inside the checkout and fall back to the basename otherwise, so a committed `RESULTS.md` never names the machine that produced it.
@@ -38,8 +43,11 @@ The worker reads fitness from the **last** element of the step result: `(state, 
 ```
 {schema, case, impl, backend, repeat, seed, status: ok|skipped|error, error|null,
  case_config: {family, algorithm, genome, problem, pop_size, generation_limit, fitness_target, notes},
- env: {python, platform, machine, cpu_count, numpy, jax, evoxc, tensorneat},
- protocol: {warmup_generations, timed_generations, threads},
+ env: {python, platform, machine, cpu_model, cpu_count, memory_mb,
+        numpy, jax, evoxc, tensorneat, git_commit, git_dirty,
+        threads, thread_env: {OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS, XLA_FLAGS}},
+ protocol: {warmup_generations, timed_generations, threads, thread_env,
+            untimed_warmup_generations},
  compile_time_s, generations_consumed_before_timing,
  generation_ms: [...], ms_per_generation, ms_per_generation_mean, ms_per_generation_min,
  ms_per_generation_max, gens_per_second,
@@ -54,7 +62,7 @@ It writes JSON to `--out` even on failure (`status="error"`, traceback in `error
 ## Constraints
 - Never import the implementation under test at module scope here; the worker controls `sys.path` before the adapter import.
 - `protocol.py` holds the only copy of the schema, the verdict rules and the tolerance constants — the CLI and reporter must not re-implement them.
-- Files <= ~1000 lines; `reporter.py` is presentation only (no measurement logic) and is the one long file here by design (~900 lines of null-safe table rendering): if it grows, split it per report section instead of moving measurement code into it.
+- Files <= ~1000 lines; `reporter.py` assembles the document, `report_format.py` owns the null-safe table primitives and `report_sections.py` the data-derived headline/win-lose sections: split per report section when one grows instead of moving measurement code into presentation.
 ## Routing Table
 | Path | Purpose |
 |---|---|

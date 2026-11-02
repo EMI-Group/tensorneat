@@ -14,9 +14,11 @@ import math
 import os
 import platform
 import resource
+import subprocess
 from collections import Counter
 from dataclasses import asdict, dataclass, field, fields
 from importlib import metadata
+from pathlib import Path
 
 try:
     import numpy as np
@@ -45,6 +47,25 @@ OLD_BACKEND_LABEL = "jax"
 NO_ERROR_TEXT = "(no error recorded)"
 """Placeholder for a run that recorded no error text at all (``short_error`` returns ``""``)."""
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+"""The checkout under test: ``benchmarks/harness/protocol.py`` -> repository root."""
+
+THREAD_ENV_VARS: tuple[str, ...] = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "XLA_FLAGS",
+)
+"""Every thread variable recorded in the environment fingerprint.
+
+``worker.py`` keeps its own copy because it must not import this module before numpy/jax
+read the thread variables at import time; keep the two lists in step.
+"""
+
+GIT_TIMEOUT = 5
+"""Seconds allowed for one ``git`` probe before the fingerprint degrades to ``n/a``."""
+
 __all__ = [
     "SCHEMA",
     "STATUS_OK",
@@ -61,6 +82,8 @@ __all__ = [
     "OLD_BACKEND_LABEL",
     "RunResult",
     "NO_ERROR_TEXT",
+    "REPO_ROOT",
+    "THREAD_ENV_VARS",
     "short_error",
     "rss_mb",
     "env_report",
@@ -180,18 +203,107 @@ def _version(package: str) -> str | None:
         return None
 
 
-def env_report() -> dict:
-    """Environment fingerprint recorded once per run; versions come from metadata only."""
-    return {
+def _cpu_model() -> str | None:
+    """CPU model string from ``/proc/cpuinfo`` (``platform.processor()`` as fallback).
+
+    The first ``model name`` (x86), ``Model`` (ARM) or ``Hardware`` line wins; an
+    unreadable file or an empty value degrades to ``None`` instead of raising.
+    """
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                key, separator, value = line.partition(":")
+                if separator and key.strip() in ("model name", "Model", "Hardware"):
+                    text = value.strip()
+                    if text:
+                        return text
+    except OSError:
+        pass
+    return platform.processor() or None
+
+
+def _memory_mb() -> float | None:
+    """Total physical memory in MiB from ``/proc/meminfo``, else ``sysconf``, else ``None``."""
+    try:
+        with open("/proc/meminfo", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("MemTotal:"):
+                    return round(float(line.split()[1]) / 1024.0)
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        return round(pages * page_size / (1024.0 * 1024.0))
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _git(*arguments: str, root: Path = REPO_ROOT) -> str | None:
+    """Run one ``git`` command in the checkout; ``None`` when git or the repo is unavailable."""
+    try:
+        completed = subprocess.run(
+            ["git", *arguments],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
+def git_report(root: Path = REPO_ROOT) -> dict:
+    """Commit SHA and dirty flag of the checkout the two implementations come from.
+
+    A missing git binary, a non-checkout directory or a timeout yields ``None`` values,
+    which the report renders as ``n/a``; measuring must never fail because of provenance.
+    """
+    commit = _git("rev-parse", "HEAD", root=root)
+    if commit is None:
+        return {"git_commit": None, "git_dirty": None}
+    status = _git("status", "--porcelain", root=root)
+    return {"git_commit": commit, "git_dirty": None if status is None else bool(status)}
+
+
+def _thread_env() -> dict:
+    """The thread variables as they are *actually set in this process* (``None`` = unset)."""
+    return {name: os.environ.get(name) for name in THREAD_ENV_VARS}
+
+
+def env_report(threads: int | None = None, root: Path = REPO_ROOT) -> dict:
+    """Environment fingerprint recorded once per run; versions come from metadata only.
+
+    Args:
+        threads: The ``--threads`` value in force. ``0`` means runtime defaults and exports
+            nothing, so ``thread_env`` is exactly what every worker inherited; a positive
+            value is what the workers export over the inherited environment (the caller's
+            own environment is still reported verbatim, which is why the value is recorded).
+        root: Checkout whose git commit/dirty flag fingerprint the tree under test.
+
+    Returns:
+        A JSON-safe mapping with no implementation imports: only stdlib probes plus
+        package metadata.
+    """
+    report = {
         "python": platform.python_version(),
         "platform": platform.platform(),
         "machine": platform.machine(),
+        "cpu_model": _cpu_model(),
         "cpu_count": os.cpu_count(),
+        "memory_mb": _memory_mb(),
         "numpy": _version("numpy"),
         "jax": _version("jax"),
         "evoxc": _version("evoxc"),
         "tensorneat": _version("tensorneat"),
+        "threads": threads,
+        "thread_env": _thread_env(),
     }
+    report.update(git_report(root))
+    return report
 
 
 # --- Per-run record ---------------------------------------------------------------------

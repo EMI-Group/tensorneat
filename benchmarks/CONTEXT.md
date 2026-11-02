@@ -6,11 +6,11 @@ Nothing here ships: the harness never imports both implementations in one proces
 ## Layout
 - `run_benchmark.py` — CLI: plans the case matrix, spawns the worker subprocesses, aggregates, regenerates `RESULTS.md`.
 - `cases.py` — the case matrix: the logical workload (problem, genome, NEAT config, pop/gen budget, target) declared as data and shared by both implementations.
-- `harness/` — protocol (schema, aggregation, verdict rules), per-implementation adapters, worker entry point, report writer.
+- `harness/` — protocol (schema, aggregation, verdict rules), per-implementation adapters, worker entry point, report writer plus its presentation helpers (`report_format.py`) and data-derived sections (`report_sections.py`).
 - `spikes/` — measured formulation evidence behind the depth-parallel design (`FORMULATION.md` + runnable micro-benchmark).
 - `legacy_jax/` — frozen pre-rewrite JAX implementation; the timing baseline and numerical oracle (read-only, see its `CONTEXT.md`).
 - `results/` — machine-readable run records; `latest.json` is what the committed `RESULTS.md` was rendered from (git-ignored).
-- `RESULTS.md` — the generated report (tables, verdict, how-to-reproduce).
+- `RESULTS.md` — the generated report: environment fingerprint, protocol, headline old-vs-new table, per-case tables, verdict, win/lose narrative, quality curves, declared baseline, non-comparisons, how to reproduce.
 ## Metric Protocol
 Every number comes from one worker run of one `(case, impl, backend, repeat)` tuple.
 - `compile_time_s` — one-off build/compile of the generation step: on the old side `jax.jit(pipeline.step).lower(state).compile()`; on the new side the first `Pipeline.step` call, which performs the evoxc build (it also advances the state by one generation, reported as `generations_consumed_before_timing`).
@@ -52,20 +52,24 @@ The worker prepends `benchmarks/legacy_jax` (old side) or `src` (new side) to `s
 - `--list` and `--dry-run` must work on an interpreter without numpy: `cases.py` is stdlib-only at module scope and `harness/protocol.py` guards its numpy import (`np = None`), so keep new module-scope imports on the numpy-free paths clean.
 - A failing run is always an `error`/`skipped` row, never a missing row: `harness/worker.py` writes its record even on a traceback, and the CLI synthesises a row when a worker dies without writing one.
 - `benchmarks/.gitignore` keeps `results/*.json` untracked; `RESULTS.md` is committed evidence and is only ever rewritten by `run_benchmark.py`.
-- The committed `RESULTS.md` currently carries the old-side baseline only (7 cases, 150 timed generations, 2 repeats, verdict `INCOMPLETE`); the old-vs-new comparison appears as soon as the rewrite can be driven through `Pipeline.setup/step`.
+- The committed `RESULTS.md` currently carries the old-side baseline only (7 cases, 150 timed generations, 2 repeats, verdict `INCOMPLETE`) in the pre-headline template; the next measurement run rewrites it with both sides, the environment fingerprint (CPU model, cores, RAM, versions, git SHA + dirty flag, thread settings), the headline table and the data-derived win/lose narrative. It stays generated evidence.
+- A backend whose runtime is absent (for example `iree` without `iree-base-compiler`/`iree-base-runtime`) becomes an `error` row with the backend's message; the rest of the matrix still runs and the verdict stays `INCOMPLETE`, never a crash.
+- The `## Why the new side wins and loses` section reads the measured speed-ups: it states which side won each case and each population, and rewrites its mechanism paragraph accordingly. Never hard-code the new side as the winner.
 - A case's `fitness_target` must be unreachable by the initial population, or `generations_to_target` reads 1 for every run and the column carries no information: XOR3d's `-0.05` sits below the trivial linear-baseline fitness of `-0.25`, and Pagie's `-0.01` sits below the ~`-0.049` the legacy first generation already reaches (its measured final best is ~`-0.005`).
 - Bench environment: `jax` only on the old side, `evoxc` on the new side; the verdict compares the old row measured on the same box, never the declared 51/109/157 ms contract numbers.
 ## Constraints
 - Python >= 3.11; harness dependencies are stdlib + `numpy` (plus `jax` on the old side only, via the `bench` extra).
 - Never edit `legacy_jax/` — a moving baseline makes every number meaningless.
-- Nothing outside `benchmarks/` is read except the two implementation trees under test, and nothing outside `benchmarks/` is written.
-- Files stay under ~1000 lines with one responsibility each: protocol / adapters / worker / reporter / CLI / cases.
+- Nothing outside `benchmarks/` is read except the two implementation trees under test and the host fingerprint (`/proc/cpuinfo`, `/proc/meminfo`, `git rev-parse`/`git status` on this checkout); nothing outside `benchmarks/` is written.
+- Files stay under ~1000 lines with one responsibility each: protocol / adapters / worker / reporter / report format / report sections / CLI / cases.
 - A run that cannot work must fail loudly (`status="error"` with the traceback in JSON and a non-zero exit from the worker) — never a silently missing row.
 ## Test Strategy
 There is no pytest suite in this node (`test/` is a sibling, read-only); its verification is running the harness, and every check below is cheap.
 - `python benchmarks/run_benchmark.py --list` prints the 8-case matrix on an interpreter without `numpy` (exit 0); `--dry-run --impl both --cases xor_p100,cartpole_p100` prints both worker commands and skips `cartpole_p100/old` with a reason.
 - Old-side smoke: `--impl old --cases xor_p100 --generations 5 --warmup 2 --repeats 1` gives one `ok` row (~30 ms/gen at pop 100) and the verdict `INCOMPLETE` because no new-side row exists.
 - New-side failure path: `--impl new --cases xor_p100 --generations 2 --repeats 1` must render `status="error"` rows with the exception line and exit 1 — the CLI never crashes on a broken implementation.
+- Unavailable-backend smoke (no IREE runtime): `--impl new --backend iree,numpy --cases xor_p100 --generations 2 --warmup 1 --repeats 1 --out $TMPDIR/x.md --json $TMPDIR/x.json` records the `iree` row as `error` and still measures and reports the `numpy` row; the matrix never aborts.
+- Report smoke: `--impl both --backend numpy --cases xor_p100 --generations 2 --warmup 1 --repeats 1 --out $TMPDIR/report.md --json $TMPDIR/report.json` renders the headline, environment fingerprint and win/lose sections from those records, and both files are valid; write them into `$TMPDIR` so a smoke run never clobbers the committed `RESULTS.md`.
 - `python benchmarks/spikes/forward_micro.py --mode unrolled` runs numpy-only, asserts the two prototype forms agree to `1e-5` and reproduces `FORMULATION.md` within ~±5%.
 - Regression rule: a harness change must leave the old-side rows within ~10% of the committed `RESULTS.md`; a larger shift means the protocol moved and `RESULTS.md` is regenerated in the same commit.
 ## Routing Table
@@ -73,9 +77,9 @@ There is no pytest suite in this node (`test/` is a sibling, read-only); its ver
 |---|---|
 | `./run_benchmark.py` | CLI: matrix planning, subprocess orchestration, JSON and `RESULTS.md` regeneration. |
 | `./cases.py` | Case matrix (problem + genome + NEAT config as data) and the per-implementation builders. |
-| `./harness` | Schema/aggregation/verdict, adapter contract, worker entry point, report writer (`./harness/CONTEXT.md`). |
+| `./harness` | Schema/aggregation/verdict, adapter contract, worker entry point, report writer and its presentation helpers (`./harness/CONTEXT.md`). |
 | `./spikes` | Measured formulation evidence for the depth-parallel design. |
 | `./legacy_jax` | Frozen pre-rewrite JAX implementation: timing baseline and numerical oracle (read-only). |
 | `./results` | Generated JSON run records (`latest.json`); git-ignored, safe to delete. |
-| `./RESULTS.md` | Generated report: environment, protocol, tables, verdict, how to reproduce. |
+| `./RESULTS.md` | Generated report: environment fingerprint, protocol, headline old-vs-new, per-case tables, verdict, win/lose narrative, quality curves, non-comparisons, how to reproduce. |
 | `../test/parity` | Numerical-fidelity suite using `./legacy_jax` as the oracle (sibling — read-only, escalate writes to parent). |

@@ -326,7 +326,7 @@ def _error_record(run: dict, args: argparse.Namespace, case_by_name: dict, messa
         "status": protocol.STATUS_ERROR,
         "error": protocol.short_error(message) or protocol.NO_ERROR_TEXT,
         "case_config": case.as_dict() if case is not None else {},
-        "env": protocol.env_report(),
+        "env": protocol.env_report(threads=args.threads),
         "protocol": {
             "warmup_generations": args.warmup,
             "timed_generations": args.generations,
@@ -449,7 +449,7 @@ def _build_document(
         "schema": protocol.SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "meta": {
-            "env": protocol.env_report(),
+            "env": protocol.env_report(threads=args.threads),
             "cases": [case.name for case in selected],
             "impls": impls,
             "backends": list(backends),
