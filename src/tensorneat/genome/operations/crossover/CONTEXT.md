@@ -9,7 +9,7 @@ The operator is order-sensitive by contract: `(genome1, genome2)` = (winner, los
 ## API Surface
 `BaseCrossover.__call__(state, genome, key, node_keys1, node_attrs1, conn_keys1, conn_attrs1, node_keys2, node_attrs2, conn_keys2, conn_attrs2) -> GenomeTensors` — the generic driver: validates that all four arrays of both parents have identical shapes (`ConfigError`), `split_n(key, 2)` into one key per gene family, then per family `self.find_homologous(...)` + `self.crossover_gene_attrs(...)`, returning `GenomeTensors(node_keys1, recombined_node_attrs, conn_keys1, recombined_conn_attrs)`.
 `DefaultCrossover.__call__(...)` keeps the same signature and delegates to the base driver.
-`DefaultCrossover.find_homologous(keys1, keys2) -> (P, M) int32` delegates to `..align.find_homologous` (row into parent 2 per gene of parent 1, `I_INF` where absent or padded); it is the method the acceptance test traces, hence it takes no `state`.
+`DefaultCrossover.find_homologous(keys1, keys2) -> (P, M) int32` delegates to `../alignment.find_homologous` (row into parent 2 per gene of parent 1, `I_INF` where absent or padded); it is the method the acceptance test traces, hence it takes no `state`.
 `DefaultCrossover.crossover_gene_attrs(state, gene, key, attrs1, homologous_rows, attrs2) -> (P, M, A) float32` redirects absent homologues to row `0` (`select`), makes ONE `align.gather_attr_rows` call for the whole `(P, M, A)` block, makes ONE batched `gene.crossover` call over that block, and selects `attrs1` where the homologue is `I_INF` (one rank-3 mask, so no per-column select).
 Key tables are accepted as `(P, N)` (rank 2, the payload's node-key layout) or `(P, N, 1)`; `..alignment.key_rows` normalises them to `(P, N, K)` and any other rank raises `ConfigError`.
 
