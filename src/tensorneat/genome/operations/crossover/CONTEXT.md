@@ -44,8 +44,7 @@ Verified evidence until those bodies land: a scratch oracle (`{key tuple: row}` 
 
 ## Known Issues
 - `gene.crossover` (`../gene/base.py`) is now the crossover kernel's dominant cost: 7 traced ops but **7.3 ms (node) + 9.0 ms (conn) at pop 1000** — ~46 % of the kernel's runtime, element-bound on `(P, M, A)` float blocks (its per-column uniform draw, comparison and select). It is out of this node's write scope; the alignment is no longer the bottleneck.
-- `../alignment.py::find_homologous` (167/185 traced ops) is still the older hash+tagged-argsort+`masked_flat_scatter` merge and is what `distance/default.py` uses; porting `align.py`'s rank merge there needs a write scope above this node.
-- A gene family with more than two key columns (`OriginConn`'s `historical_marker`) pays one gather plus one `equal` per spare column in `_confirm_rows`; not exercised by the benchmark config (`DefaultConn` has two key columns).
+- A gene family with more than two key columns (`OriginConn`'s `historical_marker`) pays one gather plus one `equal` per spare column in `../alignment._confirm_rows`; not exercised by the benchmark config (`DefaultConn` has two key columns).
 
 ## Routing Table
 | File | Responsibility |
