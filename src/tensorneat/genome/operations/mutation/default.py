@@ -164,6 +164,15 @@ class DefaultMutation(BaseMutation):
         No candidate when ``gate`` is false, when there is no connection to consume, when the
         node table is full, or when fewer than two connection rows are free.
 
+        Structural node keys are **caller-allocated** (``algorithm/`` draws them from a
+        population-side maximum), so this plan also verifies the allocation it is handed:
+        a split is refused when ``new_node_keys`` already appears in ``node_keys`` (a
+        duplicate key would fold two node rows onto one schedule slot) or when the consumed
+        edge's destination is already at ``genome.max_in_degree`` incoming edges
+        (``max_in_degree`` counts the destination's pre-write rows, which the split leaves
+        unchanged).  Refusing is a bit-exact no-op — nothing in the payload is rewritten —
+        so an over-eager allocation costs one skipped mutation, never an invalid genome.
+
         Args:
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome providing the identity attribute factory.
@@ -205,9 +214,40 @@ class DefaultMutation(BaseMutation):
             ),
         )
         copy_row, has_copy = first_row(remaining)
+        in_key = evoxc.reshape(
+            evoxc.slice(key_row, (0, 0, 0), (pop_size, 1, 1)), (pop_size,)
+        )
+        out_key = evoxc.reshape(
+            evoxc.slice(key_row, (0, 0, 1), (pop_size, 1, 1)), (pop_size,)
+        )
+        # The caller allocates structural keys and may hand out one the payload already
+        # uses (e.g. a crossover child can inherit a larger key from a parent other than
+        # the one the allocation was based on).  Writing it would put two node rows on one
+        # schedule slot, and the extra identity edge can then push a destination past
+        # ``max_in_degree``; a colliding allocation therefore refuses the split instead of
+        # duplicating a key.  The comparison is one ``(P, N)`` equality after broadcasting
+        # the ``(P,)`` keys to a column, folded by a reduce over the node axis.
+        aliased = evoxc.reduce_max(
+            evoxc.equal(node_keys, enp.reshape(new_node_keys, (pop_size, 1))), axes=1
+        )
+        # The consumed row (``in_key -> out_key``) is replaced by the copy edge
+        # (``new -> out_key``), so the destination's post-write in-degree equals its
+        # pre-write count; refusing a destination already over the limit is therefore a
+        # no-op on every legal payload and closes the case the alias guard cannot.
+        out_degree = evoxc.reduce_sum(
+            evoxc.cast(
+                evoxc.equal(context.conn_dst, enp.reshape(out_key, (pop_size, 1))),
+                evoxc.int32,
+            ),
+            axes=1,
+        )
         ok = evoxc.logical_and(
             evoxc.logical_and(gate, has_connection),
             evoxc.logical_and(has_node, has_copy),
+        )
+        ok = evoxc.logical_and(ok, evoxc.logical_not(aliased))
+        ok = evoxc.logical_and(
+            ok, evoxc.less_equal(out_degree, context.in_degree_limit)
         )
         return AddNodePlan(
             ok,
@@ -215,12 +255,8 @@ class DefaultMutation(BaseMutation):
             delete_row,
             identity_row,
             copy_row,
-            evoxc.reshape(
-                evoxc.slice(key_row, (0, 0, 0), (pop_size, 1, 1)), (pop_size,)
-            ),
-            evoxc.reshape(
-                evoxc.slice(key_row, (0, 0, 1), (pop_size, 1, 1)), (pop_size,)
-            ),
+            in_key,
+            out_key,
             copy_attrs,
         )
 
