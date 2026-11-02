@@ -34,6 +34,8 @@ from tensorneat.common.tools import (
     flat_gather,
 )
 
+from ._distance import repeat_leading
+
 #: Entry name under which the current population payload is stored.
 POP_KEY = "pop"
 
@@ -96,11 +98,12 @@ def payload_like(
 ) -> Any:
     """Rebuild ``template``'s payload type from the four split arrays.
 
-    ``distance_fn`` receives a *population-shaped* payload on both sides, so the
-    per-slot centre rows are broadcast with ``enp.broadcast_to`` and wrapped in
-    the caller's own payload class (``genome.utils.GenomeTensors``) instead of a
-    second, locally defined copy -- importing ``tensorneat.genome`` from here
-    would make ``algorithm`` depend on a sibling node at package import time.
+    ``distance_fn`` receives a *population-shaped* payload on both sides -- one
+    row per (centre, individual) pair (see :mod:`._distance`) -- so a per-slot
+    centre row is tiled to ``pop_size`` rows before it is wrapped in the caller's
+    own payload class (``genome.utils.GenomeTensors``) instead of a second,
+    locally defined copy; importing ``tensorneat.genome`` from here would make
+    ``algorithm`` depend on a sibling node at package import time.
     """
     return type(template)(node_keys, node_attrs, conn_keys, conn_attrs)
 
@@ -480,46 +483,36 @@ def speciate(
 
     **Distance rows.**  ``distance_fn`` is the digest-backed callable built by
     ``NEAT.tell`` from ``genome.prepare_distance`` (see
-    :class:`._distance.DistanceRows`): a batch-1 centre returns one ``(pop_size,)``
-    row, a batch-``species_size`` centre returns the whole ``(species_size,
-    pop_size)`` matrix from a single wide ``measure_distance`` call.  Which form a
-    phase uses is a static choice on ``gate``:
+    :class:`._distance.DistanceRows`).  Every call it receives carries a
+    *population-shaped* centre payload -- ``pop_size`` rows, row ``p`` measured
+    against population member ``p`` -- and returns one ``(pop_size,)`` row; a
+    whole ``(species_size, pop_size)`` table is ``species_size`` such calls
+    stacked, never one ``species_size * pop_size`` batch.  Which form a phase
+    uses is a static choice on ``gate``:
 
     * **Sparse table** (``gate`` true, ``species_size * pop_size <=
       GATED_ROWS``): rows are computed lazily, one slot at a time, behind a
       single ``evoxc.cond`` per scan iteration, the predicate being exactly the
       mask that lets that iteration write -- scan 1 ``live and any_pending``, scan
       2 ``live or create``.  A table with 3 live slots out of 20 would waste 17 of
-      the 20 rows of a wide call, so the lazy path is kept below the gate.  A
+      the 20 rows of the table, so the lazy path is kept below the gate.  A
       skipped iteration reads a zero row, which its own write mask (``claim`` in
       scan 1, ``take`` in scan 2) discards, so the substitution is bit-identical:
       no reader ever consumes the row of a slot that is not allowed to write.
-    * **Dense table** (``gate`` false): every row of a phase is measured before
-      that phase runs, in one wide call, and each iteration reads its own row with
-      a single ``evoxc.gather``.
-      Scan 1's centres are the centre rows the table was handed: every
-      ``scatter`` writes index ``slot`` and each slot is visited once, so no
-      earlier iteration can rewrite slot ``i``'s centre row and the whole matrix
-      is known before the scan.
-      Scan 2's live-slot centres are the *post-scan-1* carry rows -- known as soon
-      as scan 1 returns, and likewise never rewritten by a later scan-2 iteration
-      -- so that matrix is measured between the two scans.
-      Only a *creating* slot needs a per-iteration call: its centre is
-      ``pop[seed]``, with ``seed`` the first still-unassigned genome, which
-      genuinely depends on earlier iterations; that one row therefore stays behind
-      an ``evoxc.cond`` whose predicate is ``create``, and the branch body is the
-      same one the sparse path uses.
-      Above ``GATED_ROWS`` the species table is full, so a skipped slot's ``if``
-      region would cost more than the rows it skips (see ``GATED_ROWS``).
+    * **Dense table** (``gate`` false): every iteration calls ``distance_fn``
+      unconditionally with its own centre row.  Above ``GATED_ROWS`` the species
+      table is full, so a skipped slot's ``if`` region would cost more than the
+      row it skips (see ``GATED_ROWS``); nothing else changes -- the row of slot
+      ``i`` is measured from exactly the centre the gated path would read.
+      Scan 1 measures the carry centre at ``slot`` (no earlier iteration can
+      rewrite that row: every ``scatter`` writes index ``slot`` and each slot is
+      visited once) and scan 2 measures its selected centre, ``pop[seed]`` for a
+      creating slot and the post-scan-1 carry row otherwise.
 
     ``gate`` is a static Python ``bool``, so exactly one of the two paths is
     traced.  Bit-identity holds across the two paths by construction -- both
-    compute the same ``(pop_size,)`` rows from the same kernel -- and across
-    *batch width*: the compatibility kernel is row-independent (elementwise
-    per-pair ops plus per-row reductions over the gene axis, and one sorted
-    alignment per row), so one ``(k * P)`` batch returns exactly the floats ``k``
-    batches of ``P`` do.  The wide path verifies that empirically through the
-    bit-identical whole-run tests.
+    compute the same ``(pop_size,)`` rows from the same kernel with the same
+    population-shaped centre.
     """
     keys_ext = enp.concatenate(
         [species_state.species_keys, enp.reshape(species_state.next_species_key, (1,))],
@@ -540,31 +533,22 @@ def speciate(
     population_fields = tuple(population)
 
     def single_payload(rows):
-        """Wrap four 1-D centre rows as a batch-1 payload.
+        """Wrap four 1-D centre rows as a population-shaped payload.
 
-        The genome's two-phase distance kernel broadcasts a batch-1 centre to the
-        whole population internally, so a lazily computed row costs neither the
-        ``(pop_size, ...)`` gather-and-broadcast nor the memory of a staged
-        population tile.  The ``(1, ...)`` view is what the kernel validates:
-        a bare row would be read as a rank-1 payload.
+        The genome's distance kernel takes a population-shaped centre -- one row
+        per (centre, individual) pair -- so the slot's single centre row is
+        repeated ``pop_size`` times with :func:`._distance.repeat_leading`: every
+        row of the payload is the same centre, which is what makes the returned
+        ``(pop_size,)`` vector the centre's distance row.  A bare row would be
+        read as a rank-1 payload.
         """
         return payload_like(
             population,
-            *(evoxc.reshape(row, (1,) + tuple(row.shape)) for row in rows),
+            *(
+                repeat_leading(evoxc.reshape(row, (1,) + tuple(row.shape)), pop_size)
+                for row in rows
+            ),
         )
-
-    def wide_matrix(centres):
-        """``(species_size, pop_size)`` distance matrix of a whole centre table.
-
-        One ``distance_fn`` call over the ``(species_size, ...)`` centre arrays,
-        reshaped so the caller can ``gather`` a single slot's row regardless of
-        whether ``species_size`` is ``1`` (where the kernel takes its narrow,
-        internally broadcast path and returns a bare row).
-        """
-        matrix = distance_fn(
-            state, payload_like(population, *centres), population
-        )
-        return evoxc.reshape(matrix, (species_size, pop_size))
 
     def centre_rows(fields, slot):
         """Gather the centre row held in ``slot`` of each of the four ``fields``.
@@ -603,10 +587,6 @@ def speciate(
 
         return evoxc.cond(active, compute_row, zero_row, *operands)
 
-    # The dense path measures scan 1's whole centre table before the scan runs;
-    # the sparse path never calls this and pays no tiling.
-    rows1 = None if gate else wide_matrix(centre_fields)
-
     def reserve(carry, slot):
         """Scan 1: claim the nearest unassigned genome for one live slot."""
         assign, dist, keys_ext, node_keys, node_attrs, conn_keys, conn_attrs = carry
@@ -615,60 +595,50 @@ def speciate(
         pending = evoxc.isnan(assign)
         any_pending = evoxc.reduce_max(pending, axes=0)
         claim = evoxc.logical_and(live, any_pending)
-        if gate:
 
-            def compute_row(
-                centre_node_keys,
-                centre_node_attrs,
-                centre_conn_keys,
-                centre_conn_attrs,
-                pop_node_keys,
-                pop_node_attrs,
-                pop_conn_keys,
-                pop_conn_attrs,
-                centre_slot,
-            ):
-                """Distance row of the carry centre ``centre_slot``, ``(P,)`` floats.
+        def compute_row(
+            centre_node_keys,
+            centre_node_attrs,
+            centre_conn_keys,
+            centre_conn_attrs,
+            pop_node_keys,
+            pop_node_attrs,
+            pop_conn_keys,
+            pop_conn_attrs,
+            centre_slot,
+        ):
+            """Distance row of the carry centre ``centre_slot``, ``(P,)`` floats.
 
-                The payload is built *in here* from the four carry arrays, so a
-                skipped slot pays neither the gather nor the compatibility
-                kernel.
-                """
-                return distance_fn(
-                    state,
-                    single_payload(
-                        centre_rows(
-                            (
-                                centre_node_keys,
-                                centre_node_attrs,
-                                centre_conn_keys,
-                                centre_conn_attrs,
-                            ),
-                            centre_slot,
-                        )
-                    ),
-                    payload_like(
-                        population,
-                        pop_node_keys,
-                        pop_node_attrs,
-                        pop_conn_keys,
-                        pop_conn_attrs,
-                    ),
-                )
-
-            distances = gated_row(
-                claim,
-                compute_row,
-                (node_keys, node_attrs, conn_keys, conn_attrs)
-                + population_fields
-                + (slot,),
+            The payload is built *in here* from the four carry arrays, so a
+            skipped slot pays neither the gather nor the compatibility kernel.
+            """
+            return distance_fn(
+                state,
+                single_payload(
+                    centre_rows(
+                        (
+                            centre_node_keys,
+                            centre_node_attrs,
+                            centre_conn_keys,
+                            centre_conn_attrs,
+                        ),
+                        centre_slot,
+                    )
+                ),
+                payload_like(
+                    population,
+                    pop_node_keys,
+                    pop_node_attrs,
+                    pop_conn_keys,
+                    pop_conn_attrs,
+                ),
             )
+
+        operands = (node_keys, node_attrs, conn_keys, conn_attrs) + population_fields
+        if gate:
+            distances = gated_row(claim, compute_row, operands + (slot,))
         else:
-            # Every row of this phase was measured before the scan: slot ``i``'s
-            # centre row cannot be rewritten by an earlier iteration (all writes
-            # target index ``slot``, visited once), so this is the same row the
-            # lazy path would compute.
-            distances = evoxc.gather(rows1, slot, axis=0)
+            distances = compute_row(*(operands + (slot,)))
         # ``argmin_with_mask`` folds "nothing left to claim" into the ``I_INF``
         # sentinel index, which is clamped to row ``0`` before it is used.
         closest = evoxc.reshape(
@@ -795,57 +765,11 @@ def speciate(
             )
 
         active = evoxc.logical_or(live, create)
+        operands = centre + population_fields
         if gate:
-            distances = gated_row(active, compute_row, centre + population_fields)
+            distances = gated_row(active, compute_row, operands)
         else:
-            # The live-slot rows were measured between the two scans; only a
-            # creating slot's centre (``pop[seed]``) depends on the carry, so
-            # that is the one row that still needs its own call.  ``create_row``
-            # adapts the shared body to the extra operand the two ``if`` branches
-            # must agree on (the pre-measured row the create branch ignores).
-            def keep_row(
-                centre_node_keys,
-                centre_node_attrs,
-                centre_conn_keys,
-                centre_conn_attrs,
-                pop_node_keys,
-                pop_node_attrs,
-                pop_conn_keys,
-                pop_conn_attrs,
-                static_row,
-            ):
-                """Row of a live slot: the pre-measured matrix row."""
-                return static_row
-
-            def create_row(
-                centre_node_keys,
-                centre_node_attrs,
-                centre_conn_keys,
-                centre_conn_attrs,
-                pop_node_keys,
-                pop_node_attrs,
-                pop_conn_keys,
-                pop_conn_attrs,
-                static_row,
-            ):
-                """Row of a creating slot: measured from ``pop[seed]``."""
-                return compute_row(
-                    centre_node_keys,
-                    centre_node_attrs,
-                    centre_conn_keys,
-                    centre_conn_attrs,
-                    pop_node_keys,
-                    pop_node_attrs,
-                    pop_conn_keys,
-                    pop_conn_attrs,
-                )
-
-            distances = evoxc.cond(
-                create,
-                create_row,
-                keep_row,
-                *(centre + population_fields + (evoxc.gather(rows2, slot, axis=0),)),
-            )
+            distances = compute_row(*operands)
         closer = evoxc.logical_or(unassigned, evoxc.less(distances, dist))
         within = evoxc.less(distances, float(compatibility_threshold))
         take = evoxc.logical_and(evoxc.logical_and(active, within), closer)
@@ -862,11 +786,6 @@ def speciate(
         ), create
 
     carry, _ = evoxc.scan(reserve, carry, iota_i32(species_size))
-    # Scan 2's live-slot rows are the *post-scan-1* carry centres, all known by
-    # now -- scan 2 writes index ``slot`` only, visited once -- so they are
-    # measured in one wide call before the scan starts.  A creating slot is the
-    # one case whose centre (``pop[seed]``) depends on the running carry.
-    rows2 = None if gate else wide_matrix(carry[3:7])
     carry, created = evoxc.scan(assign_members, carry, iota_i32(species_size))
     assign, dist, keys_ext, node_keys, node_attrs, conn_keys, conn_attrs = carry
     del dist

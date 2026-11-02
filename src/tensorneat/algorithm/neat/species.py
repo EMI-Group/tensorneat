@@ -419,14 +419,14 @@ class SpeciesController(StatefulBaseClass):
             distance_fn (Callable): Population-digest compatibility distance with
                 the signature ``distance_fn(state, centre: GenomeTensors,
                 pop: GenomeTensors) -> distances``, where ``pop`` must be the
-                payload the digest was prepared from.  A **batch-1** centre
-                returns one ``(pop_size,)`` row (the genome kernel broadcasts it
-                internally), a **batch-``species_size``** centre -- the whole
-                species table of a phase -- returns the ``(species_size,
-                pop_size)`` matrix measured in a single wide call, and a
-                **batch-``pop_size``** centre is measured row-wise.  Slicing the
-                centre out of the ``(S, ...)`` fields is this method's job, not
-                the genome's; ``NEAT.tell`` builds the callable from
+                payload the digest was prepared from.  Every centre it receives is
+                **population-shaped** -- ``pop_size`` rows, row ``p`` measured
+                against population member ``p`` -- and returns one ``(pop_size,)``
+                distance row.  A **batch-``species_size``** centre (the whole
+                species table of a phase) returns the ``(species_size, pop_size)``
+                matrix instead, built as ``species_size`` population-shaped calls.
+                Slicing the centre out of the ``(S, ...)`` fields is this method's
+                job, not the genome's; ``NEAT.tell`` builds the callable from
                 ``genome.prepare_distance`` (see :class:`._distance.DistanceRows`),
                 and ``genome.execute_distance`` no longer plugs in directly
                 because it re-sorts the population for every centre.
@@ -504,25 +504,20 @@ class SpeciesController(StatefulBaseClass):
             compatibility kernel.  The skipped branch yields zeros, which the
             iteration's own write mask discards, so no reader ever consumes a
             row that was not computed: the substitution is bit-identical.  A
-            sparse table (1-3 live slots of 20 at pop 8/100) would waste most of
-            the rows of a wide call, so the lazy path is kept there.
+            sparse table (1-3 live slots of 20 at pop 8/100) would pay for the
+            rows of slots that cannot write, so the lazy path is kept there.
         Note:
-            **Above ``_kernels.GATED_ROWS`` every row of a phase is measured
-            before that phase runs, in one wide call, and each scan iteration
-            reads its own row with a single ``gather``.**  Scan 1's centres are
-            the rows the table was handed (no earlier iteration can rewrite slot
-            ``i``'s centre, because every ``scatter`` writes index ``slot`` and
-            each slot is visited once), and scan 2's live-slot centres are the
-            post-scan-1 carry rows, known before scan 2 starts.  Only a
-            *creating* scan-2 slot keeps a per-iteration call, behind an
-            ``evoxc.cond`` whose predicate is ``create``: its centre is
-            ``pop[seed]`` with ``seed`` the first still-unassigned genome, which
-            genuinely depends on earlier iterations.  Once the species table is
-            full every slot is live and nothing is skippable, so bulk measurement
-            is strictly cheaper than the ``if`` regions a lazy row would carry
-            (see ``_kernels.GATED_ROWS``).  The gate is a pure static predicate,
-            so exactly one of the two paths reaches the graph, and both compute
-            the same ``(pop_size,)`` rows from the same kernel.
+            **Above ``_kernels.GATED_ROWS`` every scan iteration measures its own
+            centre row unconditionally, one population-shaped call per slot.**
+            Scan 1's centre is the carry row of that slot (no earlier iteration
+            can rewrite it, because every ``scatter`` writes index ``slot`` and
+            each slot is visited once); scan 2's is ``pop[seed]`` for a creating
+            slot and the post-scan-1 carry row otherwise.  Once the species table
+            is full every slot is live and nothing is skippable, so a lazy row's
+            ``if`` region costs more than it saves (see ``_kernels.GATED_ROWS``).
+            The gate is a pure static predicate, so exactly one of the two paths
+            reaches the graph, and both compute the same ``(pop_size,)`` rows from
+            the same kernel with the same population-shaped centre.
         """
         population = self._population(state, pop)
         values = _kernels.speciate(

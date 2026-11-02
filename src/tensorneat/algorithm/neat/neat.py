@@ -482,8 +482,8 @@ class NEAT(BaseAlgorithm):
            species.  The population is digested exactly once here
            (``genome.prepare_distance``) and that digest backs every distance
            row of the generation through :meth:`_distance_rows`, so a centre no
-           longer re-sorts the population and one phase can be measured in a
-           single wide call.
+           longer re-sorts the population and every row is one population-shaped
+           call.
         6. **Commit**: the new ``pop``, the advanced ``randkey``, the incremented
            ``generation`` and the new ``species`` come back on the returned
            state.
@@ -878,9 +878,10 @@ class NEAT(BaseAlgorithm):
         population; every speciation distance of that generation is then measured
         against it, so no centre re-sorts the population.  The returned callable
         keeps the ``(state, centre, pop)`` signature the speciation scans expect:
-        a batch-1 centre yields one ``(pop_size,)`` row, a batch-``species_size``
-        centre yields the whole ``(species_size, pop_size)`` matrix from one wide
-        call, and a batch-``pop_size`` centre is measured row-wise.
+        every call carries a population-shaped centre (``pop_size`` rows) and
+        yields one ``(pop_size,)`` row, a batch-``species_size`` centre yields the
+        whole ``(species_size, pop_size)`` matrix as one stacked row per slot, and
+        a batch-``pop_size`` centre is measured as it stands.
 
         Args:
             digest (Any): ``DistanceDigest`` from
