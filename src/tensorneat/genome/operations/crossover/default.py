@@ -1,11 +1,12 @@
 """Key-aligned crossover: parent 1 keeps its structure, attributes may come from parent 2.
 
 Alignment is exact on the whole key column tuple of a gene (``(in_key, out_key)`` plus
-``historical_marker`` for connections), found through a hash plus an ``argsort`` merge plus
-an exact key-row confirmation of every candidate pair: ``O(M log M)`` per array, never an
-``O(M^2)`` scan, and still one batched kernel for the whole population.
-The merge itself lives in :mod:`..alignment`, shared with the compatibility distance, and
-this module only turns its homologue table into recombined attribute rows.
+``historical_marker`` for connections), found through one stable ``argsort`` rank merge
+plus two row gathers: ``O(M log M)`` per array, never an ``O(M^2)`` scan, and still one
+batched kernel for the whole population.
+The merge itself lives in :mod:`..crossover.align`; this module only turns its homologue
+table into recombined attribute rows, with one flat gather per attribute *row* rather than
+one per attribute column.
 """
 
 from typing import TYPE_CHECKING
@@ -13,9 +14,9 @@ from typing import TYPE_CHECKING
 import evoxc
 import evoxc.numpy as enp
 
-from ....common import I_INF, State, masked_flat_gather
+from ....common import I_INF, State
 from ...utils import GenomeTensors
-from ..alignment import find_homologous
+from .align import find_homologous, gather_attr_rows
 from .base import BaseCrossover
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -155,32 +156,25 @@ class DefaultCrossover(BaseCrossover):
             homologue is missing equal ``attrs1``, padding rows remain NaN.
 
         Notes:
-            The row of parent 2 is turned into a flat index into the ``(P, M * A)`` view of
-            ``attrs2`` (``row * A + arange(A)``), and ``I_INF`` rows are redirected to row
-            ``0`` **before** that multiplication: ``I_INF * A`` would overflow ``int32``,
-            whereas the gathered value of a redirected row is discarded by the final
-            ``select``.  The mask still marks those positions absent, so the gather can
-            never read outside the payload.  A family without attribute columns has nothing
-            to recombine and comes back unchanged.
+            One flat gather per attribute **row** (:func:`~.align.gather_attr_rows`), so the
+            cost is one op for the whole block instead of one per attribute column.
+            ``I_INF`` rows are redirected to row ``0`` **before** the index arithmetic —
+            ``I_INF * A`` would overflow ``int32`` — and the gathered value of a redirected
+            row is discarded by the final ``select``, so the unmasked read can never
+            escape.  The absent-row mask is computed once and used twice: to build that
+            safe row index and to pick ``attrs1`` back out afterwards.  A family without
+            attribute columns has nothing to recombine and comes back unchanged.
         """
         if gene.attr_width == 0:
             return attrs1
         pop_size, count, width = attrs1.shape
-        rows = enp.reshape(homologous_rows, (pop_size, count, 1))
-        present = evoxc.not_equal(rows, enp.full((), I_INF, dtype=evoxc.int32))
-        safe_rows = evoxc.select(present, rows, enp.full((), 0, dtype=evoxc.int32))
-        index = evoxc.add(
-            evoxc.multiply(safe_rows, enp.full((), width, dtype=evoxc.int32)),
-            enp.arange(0, width, dtype=evoxc.int32),
+        present = evoxc.not_equal(homologous_rows, enp.full((), I_INF, dtype=evoxc.int32))
+        safe_rows = evoxc.select(
+            present, homologous_rows, enp.full((), 0, dtype=evoxc.int32)
         )
-        gathered = masked_flat_gather(
-            enp.reshape(attrs2, (pop_size, count * width)),
-            index,
-            mask=enp.broadcast_to(present, (pop_size, count, width)),
-            fill=float("nan"),
-        )
+        gathered = gather_attr_rows(attrs2, safe_rows)
         crossed = gene.crossover(state, key, attrs1, gathered)
-        return evoxc.select(present, crossed, attrs1)
+        return evoxc.select(evoxc.reshape(present, (pop_size, count, 1)), crossed, attrs1)
 
 
 __all__ = ["DefaultCrossover"]
