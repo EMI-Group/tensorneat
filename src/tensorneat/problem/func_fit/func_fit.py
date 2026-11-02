@@ -3,6 +3,10 @@
 ``FuncFit`` owns the one non-trivial part of this family -- how a small fixed
 dataset becomes a single batched evaluation of the whole population -- and each
 concrete problem is just a dataset plus two shapes.
+Tiling is one ``evoxc.tile`` block repetition (individual-major, ``row p*S+s``),
+the ``(S, O)`` targets broadcast numpy-style against the ``(P, S, O)`` error
+tensor, and the dataset itself is a compile-time constant bounded by
+``FuncFit.MAX_DATASET_NBYTES``.
 """
 
 from typing import Any, Callable
@@ -43,12 +47,27 @@ class FuncFit(BaseProblem):
     The dataset is genuinely static, so it is baked into the compiled artifact
     as an evoxc constant at trace time instead of being threaded through
     ``State`` or uploaded per call.
+    That constant is paid on every build, so its footprint is checked against
+    ``MAX_DATASET_NBYTES`` on the host (at construction, in ``setup`` and again
+    at bake time) rather than discovered as an evoxc warning mid-trace.
 
     Attributes:
         ERROR_METHODS: The supported per-individual loss reductions.
+        MAX_DATASET_NBYTES: Compile budget for the two baked dataset constants.
+
+    Notes:
+        ``MAX_DATASET_NBYTES`` mirrors evoxc's large-constant threshold
+        (``EVOXC_LARGE_CONSTANT_BYTES``, 1 MiB by default).
+        A baked dataset is compiled into the artifact and the problem hands the
+        network a ``(P * S, I)`` batch, so the constant's size is paid on every
+        build; a subclass may raise the attribute deliberately.
     """
 
     ERROR_METHODS: tuple[str, ...] = ("mse", "rmse", "mae", "mape")
+    #: evoxc's large-constant threshold (``EVOXC_LARGE_CONSTANT_BYTES``, 1 MiB
+    #: by default); a baked dataset is compiled into the artifact, so its size
+    #: is paid on every build, and a subclass may raise this deliberately.
+    MAX_DATASET_NBYTES: int = 1 << 20
 
     def __init__(self, error_method: str = "mse") -> None:
         """Configure the loss reduction.
@@ -58,7 +77,9 @@ class FuncFit(BaseProblem):
                 i.e. a member of ``ERROR_METHODS``.
 
         Raises:
-            TensorNEATError: If ``error_method`` is not in ``ERROR_METHODS``.
+            TensorNEATError: If ``error_method`` is not in ``ERROR_METHODS``, or
+                if the dataset already exists and exceeds
+                ``MAX_DATASET_NBYTES``.
         """
         if error_method not in self.ERROR_METHODS:
             raise TensorNEATError(
@@ -66,6 +87,12 @@ class FuncFit(BaseProblem):
                 f"got {error_method!r}"
             )
         self.error_method = error_method
+        try:
+            self.validate_dataset()
+        except NotImplementedError:
+            # a subclass may build its dataset after calling super().__init__();
+            # the check then runs in setup() and again at bake time.
+            pass
 
     @property
     def inputs(self) -> np.ndarray:
@@ -131,6 +158,60 @@ class FuncFit(BaseProblem):
             "declare the per-sample output shape (O,)"
         )
 
+    @property
+    def dataset_nbytes(self) -> int:
+        """Combined footprint of the two baked dataset constants, in bytes.
+
+        Measured on the float32 host arrays that :meth:`_dataset_constants`
+        bakes, so it is exactly what the compiled artifact carries; the dataset
+        is never pre-tiled, so the population size does not enter it.
+
+        Returns:
+            ``inputs.nbytes + targets.nbytes`` for the float32 dataset.
+
+        Raises:
+            NotImplementedError: If the concrete problem has no dataset yet, via
+                the base :attr:`inputs`/:attr:`targets` properties.
+        """
+        return self._dataset_footprint(*self._host_dataset())
+
+    def validate_dataset(self) -> int:
+        """Check the dataset footprint against ``MAX_DATASET_NBYTES``.
+
+        The budget exists because evoxc already warns at this size
+        (``EVOXC_LARGE_CONSTANT_BYTES``, 1 MiB by default), yet in function
+        fitting the same ``S`` also multiplies every per-row allocation on the
+        activation path and is paid again on every build, so an oversized
+        dataset is a configuration mistake rather than a slow-but-valid run --
+        which is why it is an error and not a warning.
+
+        Returns:
+            The combined footprint in bytes.
+
+        Raises:
+            NotImplementedError: If the concrete problem has no dataset yet, via
+                the base :attr:`inputs`/:attr:`targets` properties.
+            TensorNEATError: If the footprint exceeds ``MAX_DATASET_NBYTES``.
+        """
+        return self._check_dataset_budget(*self._host_dataset())
+
+    def setup(self, state: Any = None) -> Any:
+        """Validate the dataset budget, then delegate to the base ``setup``.
+
+        Args:
+            state: The incoming shared state, or ``None`` to start from a fresh
+                empty ``State``.
+
+        Returns:
+            Whatever ``StatefulBaseClass.setup`` returns -- the same state,
+            unchanged, since func fit registers no keys.
+
+        Raises:
+            TensorNEATError: If the dataset exceeds ``MAX_DATASET_NBYTES``.
+        """
+        self.validate_dataset()
+        return super().setup(state)
+
     def evaluate(
         self,
         state: Any,
@@ -148,17 +229,18 @@ class FuncFit(BaseProblem):
         2. The dataset is baked at trace time as
            ``evoxc.constant(evoxc.from_numpy(...))``; it is genuinely static
            data, so nothing is uploaded per call.
-        3. ``tiled = enp.reshape(enp.broadcast_to(enp.expand_dims(inputs, 0),
-           (P, S, I)), (P * S, I))`` so that row ``p * S + s`` is sample ``s``
-           of individual ``p`` (individual-major, the layout ``act_fn`` must
-           see). The ``expand_dims`` is required because
-           ``enp.broadcast_to`` cannot introduce a new leading axis.
+        3. ``tiled = evoxc.tile(inputs, (P, 1))`` repeats the ``(S, I)`` block
+           ``P`` times with numpy ``tile`` semantics, so row ``p * S + s`` is
+           sample ``s`` of individual ``p`` (individual-major, the layout
+           ``act_fn`` must see). One ``tile`` op replaces the former
+           ``expand_dims`` + ``broadcast_to`` + ``reshape`` chain.
         4. **One** ``act_fn`` call over the whole tiled batch; there is no vmap
            in evoxc (``evoxc.vmap`` over control flow or random is unsupported),
            so tiling replaces vmap-over-samples.
-        5. ``pred = enp.reshape(pred, (P, S, O))`` and
-           ``err = pred - enp.expand_dims(targets, 0)`` broadcast over the
-           population axis.
+        5. ``pred = enp.reshape(act_fn(...), (P, S, O))`` and
+           ``err = enp.subtract(pred, targets)``: the ``(S, O)`` targets
+           broadcast numpy-style over the population axis, so no
+           ``expand_dims`` is needed.
         6. The per-individual loss is reduced over the sample **and** output
            axes (equivalent to the legacy ``jnp.mean`` over all elements), then
            negated for maximization: ``finalize_fitness(-loss)``.
@@ -264,33 +346,96 @@ class FuncFit(BaseProblem):
         """
         inputs, targets = self._dataset_constants()
         num_samples = int(inputs.shape[0])
-        num_inputs = int(inputs.shape[1])
-        num_outputs = int(targets.shape[1])
-        tiled = enp.reshape(
-            enp.broadcast_to(
-                enp.expand_dims(inputs, 0),
-                (pop_size, num_samples, num_inputs),
-            ),
-            (pop_size * num_samples, num_inputs),
+        tiled = evoxc.tile(inputs, (pop_size, 1))
+        pred = enp.reshape(
+            act_fn(tiled), (pop_size, num_samples, int(targets.shape[1]))
         )
-        pred = enp.reshape(act_fn(tiled), (pop_size, num_samples, num_outputs))
-        err = enp.subtract(pred, enp.expand_dims(targets, 0))
-        return pred, self._loss(err, targets)
+        return pred, self._loss(enp.subtract(pred, targets), targets)
+
+    def _host_dataset(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return the float32 host dataset exactly as it will be baked.
+
+        Host-side only; the single place the dtype coercion happens, so the
+        budget arithmetic and the baked constants can never disagree.
+
+        Returns:
+            The pair ``(inputs (S, I), targets (S, O))`` of float32 arrays.
+
+        Raises:
+            NotImplementedError: If the concrete problem has no dataset yet, via
+                the base :attr:`inputs`/:attr:`targets` properties.
+        """
+        return (
+            np.asarray(self.inputs, dtype=np.float32),
+            np.asarray(self.targets, dtype=np.float32),
+        )
+
+    @staticmethod
+    def _dataset_footprint(inputs: np.ndarray, targets: np.ndarray) -> int:
+        """Return the combined byte size of two already-materialised arrays.
+
+        Args:
+            inputs: Float32 inputs of shape ``(S, I)``.
+            targets: Float32 targets of shape ``(S, O)``.
+
+        Returns:
+            ``inputs.nbytes + targets.nbytes`` as an ``int``.
+        """
+        return int(inputs.nbytes + targets.nbytes)
+
+    def _check_dataset_budget(
+        self, inputs: np.ndarray, targets: np.ndarray
+    ) -> int:
+        """Enforce the dataset-constant budget on materialised arrays.
+
+        The single place the comparison lives: :meth:`validate_dataset` calls it
+        on the host, and :meth:`_dataset_constants` calls it again at bake time
+        so a direct ``evaluate`` is guarded too.
+
+        Args:
+            inputs: Float32 inputs of shape ``(S, I)``.
+            targets: Float32 targets of shape ``(S, O)``.
+
+        Returns:
+            The combined footprint in bytes.
+
+        Raises:
+            TensorNEATError: If the footprint exceeds ``MAX_DATASET_NBYTES``.
+        """
+        nbytes = self._dataset_footprint(inputs, targets)
+        if nbytes > self.MAX_DATASET_NBYTES:
+            raise TensorNEATError(
+                f"dataset constants cost {nbytes} bytes: inputs "
+                f"{inputs.shape} ({inputs.nbytes} bytes) + targets "
+                f"{targets.shape} ({targets.nbytes} bytes) exceed the "
+                f"{self.MAX_DATASET_NBYTES}-byte budget "
+                f"(FuncFit.MAX_DATASET_NBYTES); shrink the dataset (fewer "
+                f"samples or a coarser grid) or raise "
+                f"FuncFit.MAX_DATASET_NBYTES deliberately"
+            )
+        return nbytes
 
     def _dataset_constants(self) -> tuple[Any, Any]:
         """Bake the host dataset into graph constants.
 
         Must be called inside the trace, because ``evoxc.constant`` is a graph
-        constructor. The dataset travels inside the compiled artifact, so keep
-        ``S * I`` modest: evoxc warns above ~1 MiB of constant payload, i.e.
-        roughly ``S * I > 250k`` floats.
+        constructor.
+        The constants stay ``(S, I)`` and ``(S, O)`` -- never pre-tiled, never
+        scaled with the population -- because the tiling happens in the graph.
+        The budget is enforced here as well as on the host, so an ``evaluate``
+        called directly (as the parity harness does) is guarded too; the
+        ``TensorNEATError`` propagates unchanged through ``evoxc.build``.
 
         Returns:
             The pair ``(inputs, targets)`` as ``(S, I)`` and ``(S, O)`` graph
             constants.
+
+        Raises:
+            TensorNEATError: If the two constants exceed
+                :attr:`MAX_DATASET_NBYTES`.
         """
-        inputs = np.asarray(self.inputs, dtype=np.float32)
-        targets = np.asarray(self.targets, dtype=np.float32)
+        inputs, targets = self._host_dataset()
+        self._check_dataset_budget(inputs, targets)
         return (
             evoxc.constant(evoxc.from_numpy(np.ascontiguousarray(inputs))),
             evoxc.constant(evoxc.from_numpy(np.ascontiguousarray(targets))),
@@ -321,6 +466,7 @@ class FuncFit(BaseProblem):
         if self.error_method == "mae":
             return enp.mean(enp.abs(err), axis=(1, 2))
         # ``mape`` -- the only reduction left, since ``__init__`` validated the
-        # name against ``ERROR_METHODS``.
-        ratio = enp.divide(err, enp.expand_dims(targets, 0))
+        # name against ``ERROR_METHODS``. The ``(S, O)`` targets broadcast over
+        # the population axis, so no ``expand_dims`` is needed.
+        ratio = enp.divide(err, targets)
         return enp.mean(enp.abs(ratio), axis=(1, 2))

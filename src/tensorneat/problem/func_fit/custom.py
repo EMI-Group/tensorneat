@@ -14,8 +14,9 @@ class CustomFuncFit(FuncFit):
     """Fit a genome to an arbitrary Python function over a box.
 
     The dataset is generated host-side at construction time and then baked into
-    the graph, so it is a compile-time constant: keep ``S * I`` under roughly
-    250k floats, since evoxc warns above ~1 MiB of constant payload.
+    the graph, so it is a compile-time constant: its footprint is checked
+    against ``FuncFit.MAX_DATASET_NBYTES`` (1 MiB) at construction, and a fine
+    ``method="grid"`` step can exceed that and raises ``TensorNEATError``.
     """
 
     def __init__(
