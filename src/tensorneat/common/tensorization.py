@@ -1,35 +1,30 @@
 """Tensorization: turn a ragged evolved topology into a static execution schedule.
 
-Dependency DAG position: ``tensorneat.common`` bottom layer. Imports
-:mod:`~tensorneat.common.tools` (flat-index helpers),
-:mod:`~tensorneat.common.errors` and ``evoxc``; nothing from ``genome``,
-``algorithm``, ``problem`` or ``pipeline``, and no ``jax``/``torch``. It replaces
-the pre-rewrite ``common/graph.py``, whose topological sort ran over a dense
-``(N, N)`` adjacency matrix at ``max_nodes ** 2`` cost.
+Bottom layer of ``tensorneat.common``: imports
+:mod:`~tensorneat.common.tools` and :mod:`~tensorneat.common.errors`, nothing
+from ``genome``/``algorithm``/``problem``/``pipeline`` and no ``jax``/``torch``.
+It replaces the pre-rewrite ``common/graph.py``, whose topological sort ran over
+a dense ``(N, N)`` adjacency matrix at ``max_nodes ** 2`` cost.
 
-What a schedule is
-------------------
 A schedule resolves every ragged connection row to ``(src, dst)`` **node slots**
 (indices into that genome's own arrays, never innovation numbers), packs each
 node's incoming edges into a ``(P, N, K)`` table and gives every node a
 ``node_level`` (longest-path depth) that orders a forward pass by level — work
 proportional to real connections and depth, never to ``max_nodes ** 2``.
+:class:`Transformed` holds **arrays only**, so it is a plain pytree that crosses
+a graph boundary and is cached per shape signature.
 
-Output contract: :class:`Transformed` holds **arrays only** (no statics, no
-callables), so it is a plain pytree that crosses a graph boundary and is cached
-per shape signature; any static a consumer needs is implied by a shape or dtype.
-
-Cost: ``O(P * (S + C log C + N * K * D))`` with ``S = key_span``,
-``C = max_conns``, ``K = max_in_degree`` and ``D`` = network depth (``2N`` only
-for a population with a live cycle), paid once per generation.
+Cost: ``O(P * (S + C log C + N * K * D))`` with ``S = key_span``, ``C =
+max_conns``, ``K = max_in_degree`` and ``D`` = network depth, paid once per
+generation; only the cycle-detecting fallback of :func:`node_levels` can reach
+``2N`` relaxation steps, and only for a population that holds a cycle.
 
 ``evoxc`` constraints that shape this module: no ``cumsum`` (a StableHLO export
 deferral, hence the ``cc`` counting trick), no scatter-with-reduce, no batched
 ``take_along_axis`` (hence flat indexing), no ``where`` (``evoxc.select``), and
 out-of-range indices raise instead of clamping — every table index is sanitized
 *and* masked. Everything here is in-graph: no host round-trip, no ``.numpy()``
-and no Python ``if`` on a traced value (only on statics such as dtypes, shapes
-and the declared static integers).
+and no Python ``if`` on a traced value (only on statics).
 """
 
 from typing import Any, NamedTuple
@@ -54,32 +49,22 @@ from .tools import (
 
 
 class Transformed(NamedTuple):
-    """Static execution schedule of one population (all fields batch-first).
+    """Static execution schedule of one population; every field is batch-first.
 
-    Every field carries the population on axis 0; ``N = max_nodes``,
-    ``C = max_conns``, ``K = max_in_degree``, ``I = len(input_keys)`` and
-    ``O = len(output_keys)`` are static at build time. Sentinel: ``I_INF``
-    (``int32`` max) means "no index / unmatched / unavailable"; ``NaN`` lives in
-    the gene payload, never here. The twelve fields below are the contract and
-    ``level`` / ``overflow`` are read-only compatibility properties.
+    ``N = max_nodes``, ``C = max_conns``, ``K = max_in_degree``, ``I =
+    len(input_keys)`` and ``O = len(output_keys)`` are static at build time.
+    ``I_INF`` (``int32`` max) means "no index / unmatched / unavailable"; ``NaN``
+    lives in the gene payload, never here. The twelve fields below are the
+    contract, ``level`` / ``overflow`` are read-only compatibility properties.
 
-    Invariances consumers may rely on:
-
-    * ``in_conn``, ``in_src`` and ``in_valid`` mark the same positions
-      (``in_valid == (in_conn != I_INF)``); a node's columns ``0..d-1`` are
-      dense, ``d..K-1`` are padding, and ``in_conn[p, i, 0] == I_INF`` means
-      "no incoming edge" (input or isolated node).
-    * for every ``(p, c)`` with ``edge_valid[p, c]``, exactly one ``(p, i, k)``
-      satisfies ``in_conn[p, i, k] == c`` and ``in_src[p, i, k] == src[p, c]``
-      — except edges whose in-group rank reached ``K`` (``edge_overflow``, which
-      also means the schedule is lossy: the host must rebuild with a larger
-      ``max_in_degree``, never evaluate a truncated phenotype).
-    * ``node_level[p, i]`` is ``I_INF`` iff node ``i`` is absent, unreachable
-      from the inputs, or on / downstream of a live cycle;
-      ``reduce_max(node_level)`` bounds the execution loop.
-    * executing levels ``0, 1, ...`` in order is a valid topological order, and
-      nodes within one level are independent.
-        """
+    Invariants: ``in_valid == (in_conn != I_INF)`` marks the same positions in
+    ``in_src``, and a node's window columns ``0..d-1`` are dense; every valid row
+    appears exactly once as ``in_conn[p, i, k]``/``in_src[p, i, k]`` unless its
+    in-group rank reached ``K`` (``edge_overflow``: a lossy schedule the host must
+    rebuild); ``node_level`` is ``I_INF`` iff the node is absent, unreachable from
+    the inputs, or on / downstream of a live cycle, and it bounds the execution
+    loop; the levels ``0, 1, ...`` in order are a valid topological order.
+    """
 
     #: (P, C) int32 — source node slot of each connection row; I_INF = absent row or unmatched key.
     src: Any
@@ -150,10 +135,10 @@ def _node_slots(pop_size: int, count: int) -> Any:
 def _key_present(keys: Any) -> Any:
     """Mask of the entries holding a real key rather than the padding sentinel.
 
-    ``int32`` keys compare against ``I_INF``; ``float32`` keys are "not ``NaN``
-    and below ``KEY_MAX``" (evoxc has no ``isfinite``). A trace-time branch on the
-    static dtype: a negative or out-of-span key is dropped later by the ``[0, S)``
-    test in :func:`_key_indices`, so both spellings agree on every real key.
+    ``int32`` keys compare against ``I_INF``; ``float32`` keys are "not ``NaN`` and
+    below ``KEY_MAX``" (evoxc has no ``isfinite``). A trace-time branch on the static
+    dtype; a negative or out-of-span key is dropped later by :func:`_key_indices`,
+    so both spellings agree on every real key.
     """
     if keys.dtype.kind in ("i", "u"):
         return enp.not_equal(keys, _iinf_like(keys))
@@ -164,14 +149,11 @@ def _key_present(keys: Any) -> Any:
 
 
 def _narrow_int(limit):
-    """Narrowest ``evoxc`` integer dtype whose range covers ``[0, limit]``.
+    """Narrowest integer dtype that holds ``limit``, for a radix-sortable key.
 
-    ``int8`` for ``limit <= 127``, ``int16`` for ``limit <= 32767``, else
-    ``int32`` — a larger limit raises :class:`ConfigError` instead of silently
-    truncating a sort key. ``numpy``'s stable ``argsort`` takes its radix path for
-    narrow integers (on a ``(1000, 250)`` block: 0.6 / 1.0 / 7.4 ms for
-    int8 / int16 / int32 keys), so the dtype comes from the static shape, never
-    from the data.
+    evoxc has no unsigned dtypes, so the split is ``int8`` (``limit < 2**7``),
+    ``int16`` (``< 2**15``) and ``int32`` — numpy counting-sorts a narrow integer
+    key instead of comparison-sorting it.
     """
     if limit >= I_INF:
         raise ConfigError(
@@ -186,16 +168,11 @@ def _narrow_int(limit):
 
 
 def _key_indices(keys: Any, key_span: int) -> tuple:
-    """Sanitized table indices of a key array plus the "indexable" mask.
+    """Sanitized ``(P, L)`` ``int32`` table indices plus the "the key is real" mask.
 
-    Returns ``(idx, in_range)``: ``int32`` indices of ``keys``' shape with every
-    non-indexable entry replaced by ``0``, and the bool mask of the entries whose
-    key is a real node key inside ``[0, key_span)``. A present key that does not
-    fit ``key_span`` cannot be refused in-graph, so it reads as a miss — exactly
-    like an unknown key — and an ``I_INF`` never reaches the backend. For
-    ``int32`` keys the whole ``present & [0, S)`` test is one unsigned comparison
-    (``cast(key, uint32) < S``), which also maps negative keys and ``I_INF``
-    above ``S``; the ``float32`` spelling needs the explicit signed test.
+    ``NaN``/``I_INF`` keys and keys outside ``[0, key_span)`` map to ``0`` before the
+    gather (evoxc raises on out-of-range indices) and report ``False`` in the mask,
+    so the caller never reads a sanitized cell by accident.
     """
     zero = enp.zeros(tuple(keys.shape), dtype=keys.dtype)
     if keys.dtype.kind in ("i", "u"):
@@ -232,67 +209,40 @@ def derive_schedule(
     """Derive the execution schedule of one whole population (one evoxc graph).
 
     Args:
-        node_keys: ``(P, max_nodes)`` ``int32`` (``I_INF`` padding) or
-            ``float32`` (``NaN`` padding) node **key column**; the dispatch is on
-            the static dtype (see :func:`_key_present`).
-        conn_in: ``(P, max_conns)`` source key of each connection row, same dtype
-            and padding as ``node_keys``.
-        conn_out: ``(P, max_conns)`` destination key, likewise.
-        input_keys: ``(I,)`` keys of the input nodes, shared by the whole batch
-            (no batch axis), same dtype as ``node_keys``.
-        output_keys: ``(O,)`` keys of the output nodes, likewise shared.
+        node_keys: ``(P, max_nodes)`` node **key column**, ``int32`` with ``I_INF``
+            padding or ``float32`` with ``NaN`` padding (dispatch on the static
+            dtype, see :func:`_key_present`); conn_in/conn_out: ``(P, max_conns)``
+            source/destination keys, same dtype and padding; input_keys ``(I,)`` and
+            output_keys ``(O,)``: shared key vectors, no batch axis.
         pop_size (int): ``P``; max_nodes (int): ``N``; max_conns (int): ``C``;
-            max_in_degree (int): ``K``; key_span (int): ``S``, the key-magnitude
-            bound of the ``(P, S + 1)`` key→slot table. All trace-time statics.
-        acyclic (bool): ``False`` (default) keeps live-cycle detection, so a
-            genome on or downstream of a cycle gets ``I_INF`` levels — but it pays
-            for that only where a cycle exists: :func:`node_levels` runs the
-            level-only relaxation first and a violation test sends the population
-            through the cycle-detecting path inside ``evoxc.cond`` only when some
-            member holds a cycle. ``True`` asserts that the population is
-            cycle-free and drops both, so a cyclic genome then gets a saturated
-            level instead of ``I_INF``; a feed-forward genome may pass ``True``, a
-            recurrent one may not.
-
-    The statics are positional-or-keyword (not keyword-only), because
-    ``evoxc.build`` mirrors a positional call while
-    ``functools.partial(derive_schedule.fn, **statics)`` must keep working.
+            max_in_degree (int): ``K``; key_span (int): ``S``, the magnitude bound of
+            the ``(P, S + 1)`` key→slot table. All trace-time statics, positional-
+            or-keyword because ``evoxc.build`` mirrors a positional call.
+        acyclic (bool): ``False`` (default) detects live cycles — a genome on or
+            downstream of one gets ``I_INF`` levels — for the price of the level-only
+            relaxation plus an in-graph test, the cycle-detecting fallback running
+            in ``evoxc.cond`` only where a cycle exists. ``True`` asserts a cycle-free
+            population and drops both, so a cyclic genome then gets a saturated level
+            instead of ``I_INF`` (feed-forward may pass ``True``, recurrent may not).
 
     Returns:
-        Transformed: the schedule described by :class:`Transformed` — arrays
-        only, so the pytree can cross a graph boundary and be cached per shape.
+        Transformed: the schedule described by :class:`Transformed` — arrays only,
+        so the pytree can cross a graph boundary and be cached per shape.
 
     Raises:
-        tensorneat.common.errors.ConfigError: At trace time, for a non-positive
-            or shape-inconsistent static, or for key arrays of differing dtypes.
+        tensorneat.common.errors.ConfigError: At trace time, for a non-positive or
+            shape-inconsistent static, or for key arrays of differing dtypes.
 
     Notes:
-        Composition; every step is a separate, individually testable helper:
-
-        1. :func:`key_slot_table` — dense key→slot table, trailing dump column.
-        2. :func:`slot_lookup` — ``src``/``dst`` from that table; an unmatched
-           endpoint is ``I_INF`` and makes the row invalid (a present key no node
-           holds therefore needs no separate ``present`` test).
-        3. :func:`edge_order` — the global in-edge rank of every row and the
-           ``cumsum``-free per-node prefix count, from **one** stable sort (the
-           fused form of :func:`edge_group_rank` + :func:`cum_in_degree`, which
-           stay available for separate use).
-        4. :func:`incoming_table` — ``in_conn``/``in_src``/``edge_overflow`` from
-           ``col = rank - start[dst]``; ``in_valid`` is then free.
-        5. :func:`node_levels` — longest-path relaxation in a ``while_loop``,
-           inputs pinned to level 0, cycles reported as ``I_INF`` unless
-           ``acyclic`` asserts there are none; the cycle-detecting relaxation runs
-           only where :func:`_cycle_violation` finds an edge the levels
-           contradict.
-        6. ``node_exists``, ``topo_key``, ``input_slot`` and ``output_slot`` are
-           then free (``key != I_INF``/not ``NaN``, ``level * N + slot``, and two
-           lookups of the shared key vectors).
-
-        Value validation is impossible inside a trace: a key outside
-        ``[0, key_span)`` and an input/output key no node holds both surface as
-        ``I_INF`` slots (a miss) instead of raising. The host that owns the
-        payload refuses such a payload; this kernel reports, it never guesses.
-        """
+        One helper per step, each individually testable: :func:`key_slot_table`,
+        :func:`slot_lookup` (an unmatched endpoint is ``I_INF`` and invalidates the
+        row), :func:`edge_order` (in-edge rank and the ``cumsum``-free per-node
+        prefix count from **one** stable sort), :func:`incoming_table` (``col = rank
+        - start[dst]``, after which ``in_valid`` is free) and :func:`node_levels`.
+        A key outside ``[0, key_span)`` and an input/output key no node holds cannot
+        raise in-graph, so both surface as ``I_INF`` slots (a miss): the host that
+        owns the payload refuses such a payload, this kernel reports, never guesses.
+    """
     pop_size = _positive_static(pop_size, "pop_size")
     max_nodes = _positive_static(max_nodes, "max_nodes")
     max_conns = _positive_static(max_conns, "max_conns")
@@ -360,27 +310,17 @@ def key_slot_table(node_keys, key_span):
     """Build the dense per-genome key→node-slot table.
 
     Args:
-        node_keys: ``(P, N)`` ``int32`` (``I_INF`` padding) or ``float32``
-            (``NaN`` padding) node key column, keys integer-valued in
+        node_keys: ``(P, N)`` node key column, ``int32`` with ``I_INF`` padding or
+            ``float32`` with ``NaN`` padding; real keys are integer-valued in
             ``[0, key_span)``.
         key_span (int): ``S``, the static key-magnitude bound.
 
     Returns:
-        ``(P, S + 1)`` ``int32`` table: ``table[p, k]`` is the slot of genome
-        ``p``'s node with key ``k``, ``I_INF`` when no node holds it. Column ``S``
-        is the **dump slot**: absent rows are written there instead of index
-        ``0``, which is what makes one unmasked ``flat_scatter`` safe.
-
-    Raises:
-        tensorneat.common.errors.ConfigError: If ``key_span`` is not positive.
-
-    Notes:
-        One :func:`~tensorneat.common.tools.masked_flat_scatter` of the slot
-        indices, masked by "the key is real and inside ``[0, S)``"; a key outside
-        that range cannot be refused in-graph, so it lands in the dump slot and
-        reads as a miss. Under the float spelling a key at or above ``2**24``
-        (``tools.KEY_MAX``) is also absent, being no longer ``float32``-exact.
-        """
+        ``(P, S + 1)`` ``int32``: ``table[p, k]`` is the slot of genome ``p``'s node
+        with key ``k``, ``I_INF`` when no node holds it (a key outside ``[0, S)``, or
+        under the float spelling at or above ``2**24``/``tools.KEY_MAX``, is a miss).
+        Column ``S`` is the **dump slot** that makes one unmasked scatter safe.
+    """
     key_span = _positive_static(key_span, "key_span")
     pop_size, max_nodes = node_keys.shape
     indices, in_range = _key_indices(node_keys, key_span)
@@ -394,27 +334,20 @@ def slot_lookup(table, keys, key_span):
 
     Args:
         table: ``(P, S + 1)`` ``int32`` output of :func:`key_slot_table`.
-        keys: ``(P, L)`` key array to resolve (connection endpoints, or a
-            broadcast shared input/output key vector), same dtype as the table;
-            ``NaN``/``I_INF`` allowed and always a miss.
+        keys: ``(P, L)`` keys to resolve — connection endpoints, or a broadcast
+            shared key vector — same dtype as the table; ``NaN``, ``I_INF``, unknown
+            keys and keys outside ``[0, key_span)`` are all misses.
         key_span (int): ``S``, matching the table.
 
     Returns:
-        ``(P, L)`` ``int32`` slots in ``[0, N)``, ``I_INF`` where the key is the
-        padding sentinel, unknown, or outside ``[0, S)``.
-
-    Raises:
-        tensorneat.common.errors.ConfigError: If ``table``'s second dimension is
-            not ``key_span + 1``.
+        ``(P, L)`` ``int32`` slots in ``[0, N)``, ``I_INF`` on a miss.
 
     Notes:
         Indices are made safe *before* the gather (sentinel → ``0``, then a range
-        test) because evoxc raises on out-of-range gathers; the gather's own mask
-        then overwrites the miss cases with ``I_INF``, so the sanitized ``0``
-        never leaks into the result. Every selected index is a sanitized key
-        inside ``[0, key_span)`` and the table is ``key_span + 1`` wide, so the
-        index block is built ``trusted`` (no per-element range test).
-        """
+        test) because evoxc raises on out-of-range gathers; the gather's mask then
+        overwrites every miss with ``I_INF``, so the sanitized ``0`` never leaks and
+        a block of sanitized keys is ``trusted``.
+    """
     key_span = _positive_static(key_span, "key_span")
     width = int(table.shape[1])
     if width != key_span + 1:
@@ -427,8 +360,7 @@ def slot_lookup(table, keys, key_span):
 def _slot_of(table, keys, key_span):
     """Trusted slot lookup: sanitized indices, gather, ``I_INF`` on a miss.
 
-    Private body of :func:`slot_lookup` (no width check), also called by
-    :func:`derive_schedule` for a table built by :func:`key_slot_table`.
+    Private body of :func:`slot_lookup`, without its width check.
     """
     indices, in_range = _key_indices(keys, key_span)
     flat_index = prepare_flat_index(table, indices, in_range, 0, trusted=True)
@@ -441,40 +373,27 @@ def edge_order(dst, edge_valid, max_nodes, max_conns):
 
     Args:
         dst: ``(P, C)`` ``int32`` destination slots; ``I_INF`` where the row is
-            absent or unmatched.
-        edge_valid: ``(P, C)`` ``bool`` from the lookup.
+            absent or unmatched; edge_valid: ``(P, C)`` ``bool`` from the lookup.
         max_nodes (int): ``N``; max_conns (int): ``C``.
 
     Returns:
-        tuple: ``(rank, cc)``. ``rank`` is ``(P, C)`` ``int32``: the position of
-        row ``c`` among its genome's valid rows ordered by ``(dst, connection
-        index)`` — the number of valid rows before it — with ``I_INF`` on an
-        invalid row. ``cc`` is ``(P, N)`` ``int32``: the number of valid rows
-        whose destination slot is ``<= i``, so node ``i``'s in-edge group starts
-        at ``cc[i - 1]`` (``0`` for ``i == 0``) and an edge's in-group column is
+        tuple: ``(rank, cc)``. ``rank`` ``(P, C)`` ``int32`` is the number of valid
+        rows before row ``c`` in ``(dst, connection index)`` order (``I_INF`` on an
+        invalid row); ``cc`` ``(P, N)`` ``int32`` counts the valid rows whose
+        destination slot is ``<= i``, so node ``i``'s in-edge group starts at
+        ``cc[i - 1]`` (``0`` for ``i == 0``) and an edge's in-group column is
         ``rank - start[dst]``.
 
-    Raises:
-        tensorneat.common.errors.ConfigError: If a static is not positive or
-            disagrees with ``dst``'s width.
-
     Notes:
-        **One** stable ``argsort`` over the ``C + N`` combined entries — the ``C``
-        edge rows keyed ``2 * dst`` and the ``N`` node slots keyed ``2 * slot +
-        1`` — yields both answers from its inverse permutation ``inv``:
-        ``rank[c] = inv[c] - dst[c]`` (exactly ``dst[c]`` node entries sort below
-        an edge at slot ``dst[c]``, and same-destination edges keep connection
-        order through ``stable=True``) and ``cc[i] = inv[C + i] - i``. This is
-        the fused form of :func:`edge_group_rank` + :func:`cum_in_degree`, which
-        stay available separately but each pay for their own sort.
-
-        Keys never leave ``[0, 2 * N + 2]``: an edge key precedes its own node
-        key so an edge counts as ``"<= i"``, and an invalid row is keyed ``2 * N
-        + 2``, one past the last node key, so it sorts after everything without
-        spending ``I_INF`` (which no narrow integer can hold). That bound is what
-        lets :func:`_narrow_int` pick a radix-sortable carrier: ``int8`` for
-        ``N <= 62``, ``int16`` for ``N <= 16382``, ``int32`` above.
-        """
+        **One** stable ``argsort`` over the ``C + N`` combined entries — edge rows
+        keyed ``2 * dst``, node slots keyed ``2 * slot + 1`` — yields both answers
+        from its inverse ``inv``: ``rank[c] = inv[c] - dst[c]`` (exactly ``dst[c]``
+        node entries sort below an edge at slot ``dst[c]``, ``stable=True`` keeping
+        connection order inside a group) and ``cc[i] = inv[C + i] - i``. Keys stay in
+        ``[0, 2 * N + 2]`` (an edge key precedes its own node key, an invalid row is
+        keyed past the last one), so :func:`_narrow_int` picks a radix-sortable
+        carrier: ``int8`` for ``N <= 62``, ``int16`` for ``N <= 16382``, else ``int32``.
+    """
     max_nodes = _positive_static(max_nodes, "max_nodes")
     max_conns = _positive_static(max_conns, "max_conns")
     pop_size, width = dst.shape
@@ -523,38 +442,21 @@ def edge_group_rank(dst, edge_valid, max_conns):
     """Rank each connection row within the valid rows ordered by destination.
 
     Args:
-        dst: ``(P, C)`` ``int32`` destination slots; ``I_INF`` where the row is
-            absent or unmatched.
-        edge_valid: ``(P, C)`` ``bool`` from the lookup.
+        dst: ``(P, C)`` ``int32`` destination slots; ``I_INF`` on an invalid row;
+            edge_valid: ``(P, C)`` ``bool`` from the lookup.
         max_conns (int): ``C``.
 
     Returns:
-        ``(P, C)`` ``int32``: ``rank[p, c]`` = number of valid rows with a
-        smaller destination slot, plus the number of valid rows with the same
-        ``dst`` and a smaller connection index — i.e. the position of row ``c``
-        among the valid rows ordered by ``(dst, connection index)``.
-        ``I_INF`` for invalid rows.
-
-    Raises:
-        tensorneat.common.errors.ConfigError: If ``max_conns`` is not positive or
-            disagrees with ``dst``'s width.
+        ``(P, C)`` ``int32``: the position of row ``c`` among the valid rows ordered
+        by ``(dst, connection index)``; ``I_INF`` for invalid rows.
 
     Notes:
-        One ``argsort(..., stable=True)`` over the ``int32`` composite key
-        ``dst * C + conn_index``, then one ``flat_scatter`` of ``arange(C)`` to
-        invert the permutation. Invalid rows are sanitized to slot ``0`` *before*
-        the composite is built, so every real key is below ``N * C`` and an
-        invalid row can be keyed ``I_INF`` ("after every valid row") without
-        overflow, at half the ``int64`` sort traffic. ``stable=True`` keeps
-        connection-row order inside a ``dst`` group, which makes the retained
-        window deterministic.
-
-        :func:`derive_schedule` does not call this: :func:`edge_order` returns
-        the same ``rank`` from the sort it needs for ``cc`` anyway, with a key
-        narrow enough for the radix path. This standalone form cannot narrow its
-        key, because the composite is bounded by ``max_nodes * max_conns`` and
-        ``max_nodes`` is not an argument here.
-        """
+        One ``argsort(..., stable=True)`` over the ``int32`` composite ``dst * C +
+        conn_index`` (invalid rows sanitized to slot ``0`` first), then one
+        ``flat_scatter`` of ``arange(C)`` to invert the permutation.
+        :func:`derive_schedule` uses :func:`edge_order`, whose single sort yields
+        this ``rank`` *and* ``cc`` on a radix-friendly key.
+    """
     max_conns = _positive_static(max_conns, "max_conns")
     pop_size, width = dst.shape
     pop_size, width = int(pop_size), int(width)
@@ -582,27 +484,14 @@ def cum_in_degree(dst, edge_valid, max_nodes):
     """Count, per node, how many valid edges point at it or at a lower slot.
 
     Args:
-        dst: ``(P, C)`` ``int32`` destination slots (``I_INF`` for invalid rows).
-        edge_valid: ``(P, C)`` ``bool``.
-        max_nodes (int): ``N``.
+        dst: ``(P, C)`` ``int32`` destination slots (``I_INF`` for invalid rows);
+            edge_valid: ``(P, C)`` ``bool``; max_nodes (int): ``N``.
 
     Returns:
         ``(P, N)`` ``int32``: ``cc[p, i]`` = number of valid edges of genome ``p``
-        whose destination slot is ``<= i``. Node ``i``'s in-edge group starts at
-        ``cc[i - 1]`` (``0`` for ``i == 0``), so an edge's column is
-        ``rank - start[dst]``.
-
-    Raises:
-        tensorneat.common.errors.ConfigError: If ``max_nodes`` is not positive.
-
-    Notes:
-        Deliberately ``cumsum``-free (``cumsum`` is a StableHLO export deferral in
-        evoxc, numpy-interpreter only): the merged stable ``argsort`` of ``C``
-        edge entries keyed ``2 * dst`` and ``N`` node entries keyed ``2 * slot +
-        1`` yields ``cc[i] = inverse[C + i] - i``. This is the ``cc`` half of
-        :func:`edge_order`, which :func:`derive_schedule` calls once for both
-        outputs; here the rank half is simply discarded.
-        """
+        whose destination slot is ``<= i`` — the ``cumsum``-free ``cc`` of
+        :func:`edge_order`, kept separately so the step stays testable alone.
+    """
     max_nodes = _positive_static(max_nodes, "max_nodes")
     _rank, cc = edge_order(dst, edge_valid, max_nodes, int(dst.shape[1]))
     return cc
@@ -612,37 +501,25 @@ def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
     """Pack each node's incoming edges into the static ``(P, N, K)`` table.
 
     Args:
-        rank: ``(P, C)`` ``int32`` in-edge rank from :func:`edge_order`.
-        cc: ``(P, N)`` ``int32`` cumulative in-degree from :func:`edge_order`.
-        dst: ``(P, C)`` ``int32`` destination slots; src: source slots.
-        edge_valid: ``(P, C)`` ``bool``.
+        rank: ``(P, C)`` ``int32`` in-edge rank from :func:`edge_order``; cc:
+            ``(P, N)`` ``int32`` cumulative in-degree from the same call.
+        dst: ``(P, C)`` ``int32`` destination slots; src: the source slots;
+            edge_valid: ``(P, C)`` ``bool``.
         max_nodes (int): ``N``; max_in_degree (int): ``K``.
 
     Returns:
         tuple: ``(in_conn, in_src, edge_overflow)`` — ``(P, N, K)`` ``int32``
-        connection row indices, ``(P, N, K)`` ``int32`` source slots (``I_INF``
-        in the same positions) and ``(P,)`` ``int32`` counts of valid edges whose
+        connection row indices, ``(P, N, K)`` ``int32`` source slots (``I_INF`` in
+        the same positions) and ``(P,)`` ``int32`` counts of valid edges whose
         column reached ``K``.
 
-    Raises:
-        tensorneat.common.errors.ConfigError: If a static is not positive or
-            disagrees with a tensor shape.
-
     Notes:
-        ``start[i] = cc[i - 1]`` (``0`` for ``i == 0``) and
-        ``col = rank - start[dst]``; the flat scatter target is ``dst * K + col``
-        into a ``(P, N * K + 1)`` buffer whose trailing cell is the dump slot, so
-        edges with ``col >= K`` or an invalid row go to the dump instead of
-        throwing an out-of-range error. ``edge_overflow`` is a ``reduce_sum`` of
-        ``(col >= K) & edge_valid`` — data, never an exception (the host decides
-        to rebuild or to raise ``ShapeBoundError``).
-
-        The two scatter passes (the ``in_conn`` row index and the ``in_src``
-        source slot) share **one** index block (:func:`_window_block`) because
-        only their update payloads differ, and both index sources are provably
-        in range: ``safe_dst`` is a node slot, ``in_src``'s padded ``I_INF``
-        entries are dropped writes onto the dump cell.
-        """
+        ``start[i] = cc[i - 1]`` (``0`` for ``i == 0``) and ``col = rank -
+        start[dst]``; the flat scatter target ``dst * K + col`` lands in a ``(P, N *
+        K + 1)`` buffer whose trailing cell is the dump slot, so edges with ``col
+        >= K`` or an invalid row go there instead of raising. ``edge_overflow`` is
+        a ``reduce_sum`` of ``(col >= K) & edge_valid``: data, not an exception.
+    """
     max_nodes = _positive_static(max_nodes, "max_nodes")
     max_in_degree = _positive_static(max_in_degree, "max_in_degree")
     pop_size, max_conns = dst.shape
@@ -693,11 +570,10 @@ def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
 
 
 def _window_block(target, keep, pop_size, max_nodes, max_in_degree):
-    """Flat scatter block into the ``(P, N*K + 1)`` window buffer, built once.
+    """Flat scatter block for the ``(P, N*K + 1)`` window buffer, built once.
 
-    ``target`` is ``dst * K + col`` (``col < K``, ``dst < N``, so provably inside
-    ``[0, N*K)``) on every row with ``keep``; a dropped row is routed to the dump
-    cell ``N*K``. Both bounds are constructive, so the block is ``trusted``.
+    ``target = dst * K + col`` is provably inside ``[0, N*K)``; a row without
+    ``keep`` is routed to the dump cell ``N*K``, so the block is ``trusted``.
     """
     width = max_nodes * max_in_degree
     return prepare_flat_index((pop_size, width + 1), target, keep, width, trusted=True)
@@ -706,11 +582,9 @@ def _window_block(target, keep, pop_size, max_nodes, max_in_degree):
 def _window_table(block, updates, pop_size, max_nodes, max_in_degree):
     """Scatter one payload into a fresh ``(P, N, K)`` window table.
 
-    The shared body of :func:`incoming_table`'s two scatter passes: an
-    ``(P, N*K + 1)`` ``I_INF`` buffer written through ``block`` (dropped rows land
-    in the trailing dump cell), the dump column sliced off and reshaped to the
-    window. ``updates`` is the row index (``in_conn``) or the source slot
-    (``in_src``); its value on a row routed to the dump cell is ignored.
+    The shared body of :func:`incoming_table`'s two passes: an ``(P, N*K + 1)``
+    ``I_INF`` buffer written through ``block`` (dropped rows land in its trailing
+    cell), the dump column sliced off and the rest reshaped to the window.
     """
     width = max_nodes * max_in_degree
     buffer = flat_scatter_prepared(
@@ -727,56 +601,43 @@ def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=Non
 
     Args:
         in_conn: ``(P, N, K)`` ``int32`` incoming-edge table (``I_INF`` padding);
-            only its shape is read here.
-        in_src: ``(P, N, K)`` ``int32`` source slots of those edges, ``I_INF`` in
-            exactly the padded positions — those route to the dump column.
-        input_slot: ``(P, I)`` ``int32`` slots of the input nodes, pinned to 0.
-        max_nodes (int): ``N``; the slot count and the scale of the loop cap.
-        acyclic (bool): ``False`` (default) keeps the live-cycle semantics and pays
-            for them only where a cycle exists: the level-only relaxation runs
-            first, :func:`_cycle_violation` tests its output, and the
-            cycle-detecting fallback runs inside ``evoxc.cond`` only for a
-            population that fails that test. ``True`` asserts that the population
-            is cycle-free and drops test and fallback, so a cyclic genome then
-            receives a saturated (wrong) level instead of ``I_INF``.
+            only its shape is read here. in_src: the ``(P, N, K)`` ``int32`` source
+            slots of those edges, ``I_INF`` exactly where padded.
+        input_slot: ``(P, I)`` ``int32`` slots of the input nodes, pinned to 0;
+            max_nodes (int): ``N``, the slot count and the scale of the loop cap.
+        acyclic (bool): ``False`` (default) keeps the live-cycle semantics, paid
+            only where a cycle exists: the level-only relaxation runs first,
+            :func:`_cycle_violation` tests its output, and the cycle-detecting
+            fallback runs inside ``evoxc.cond`` only for a failing population.
+            ``True`` asserts a cycle-free population and drops test and fallback, so
+            a cyclic genome receives a saturated (wrong) level instead of ``I_INF``.
         edges: ``(src, dst, edge_valid)`` — the ``(P, C)`` endpoint slots and the
             "both endpoints matched" mask of the connection rows; required when
-            ``acyclic`` is ``False``, being the fallback's trigger.
+            ``acyclic`` is ``False`` as the fallback's trigger.
 
     Returns:
         ``(P, N)`` ``int32`` levels: ``0`` for input nodes, ``max(pred) + 1``
-        otherwise, ``I_INF`` for an absent node, a node unreachable from the
-        inputs, or (only with ``acyclic=False``) a node on / downstream of a cycle.
-
-    Raises:
-        tensorneat.common.errors.ConfigError: If a static is not positive or
-            disagrees with a tensor shape, or if ``acyclic`` is ``False`` without
-            the ``edges`` triple.
+        otherwise, ``I_INF`` for an absent node, a node unreachable from the inputs,
+        or (only with ``acyclic=False``) a node on / downstream of a cycle; raises
+        ``ConfigError`` for a bad static or a missing ``edges`` triple.
 
     Notes:
         A max-plus relaxation ``x[i] = max(x[i], max_k(x[in_src[i, k]] + 1))`` in an
         ``evoxc.while_loop``, with ``-1`` = "not settled" and ``-2`` the dump cell's
         value (so an unsettled predecessor is neutral and no mask is needed). The
         window's flat index block depends only on ``in_src`` and is built once
-        outside the loop (:func:`~tensorneat.common.tools.prepare_flat_index`); an
-        iteration concatenates its ``(P, N)`` state to a one-cell ``-2`` dump
-        column, gathers through that block and folds the ``K`` candidates pairwise
-        (0.30 ms against 1.26 ms for one ``reduce_max`` over the trailing axis at
-        ``P=1000, N=50, K=8``).
+        outside the loop; an iteration concatenates its ``(P, N)`` state to a
+        one-cell ``-2`` dump column, gathers through that block and folds the ``K``
+        candidates pairwise.
 
         ``level`` is seeded at ``0`` on the input slots, re-pinned every iteration,
-        and at ``-1`` elsewhere. The fallback relaxes a second state, ``reach``: the
-        longest *walk* ending at each node, seeded at ``0`` on every slot and never
-        re-pinned, so it grows without bound exactly on the nodes reachable from a
-        cycle (a walk may start on the cycle, which is why a pinned input does not
-        freeze it). Snapshotting it after iteration ``N`` of a loop that may run
-        ``2N`` separates those nodes (growth between the snapshots) from the
-        acyclic ones, which converged within ``N - 1``; a ``level`` still ``-1``
-        marks a node unreachable from the inputs.
-
-        Both campaigns are one ``settle(cap, detect_cycles)``; the level-only one
-        leaves after ``depth`` iterations (``changed`` turns false) at ``O(N * K)``
-        per iteration, and only the fallback can reach its cap.
+        and at ``-1`` elsewhere. The fallback also relaxes ``reach``, the longest
+        *walk* ending at each node, seeded at ``0`` everywhere and never re-pinned,
+        so it grows only where a cycle is reachable (a walk may start on the cycle,
+        which is why a pinned input does not freeze it); snapshotting it after
+        iteration ``N`` of a loop that may run ``2N`` separates those nodes from the
+        acyclic ones, and a ``level`` still ``-1`` marks a node unreachable from the
+        inputs. Both campaigns are one ``settle(cap, detect_cycles)``.
     """
     max_nodes = _positive_static(max_nodes, "max_nodes")
     pop_size, nodes, width = in_conn.shape
@@ -927,12 +788,10 @@ def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=Non
 def _carrier(cap):
     """``(dtype, no_snapshot)``: the narrowest integer carrier for a ``cap``-step loop.
 
-    A relaxation value lies in ``[-2, cap]`` (``-2`` the dump cell, ``0`` a pinned
-    input, ``cap`` the largest level or walk a capped loop can reach), so ``int8``
-    serves ``cap <= 127`` and ``int16`` serves ``cap < 32767``; the choice follows
-    the static shape, never the data. ``no_snapshot`` is the cycle-detecting
-    campaign's "no snapshot taken yet" sentinel and must sit above every reachable
-    walk length (``I_INF`` for ``int32``, where no larger value exists).
+    A value lies in ``[-2, cap]``, so ``int8`` serves ``cap <= 127`` and ``int16``
+    serves ``cap < 32767`` — a static choice, never a data-dependent one.
+    ``no_snapshot`` is the cycle-detecting campaign's "no snapshot yet" sentinel,
+    above every reachable walk length (``I_INF`` for ``int32``).
     """
     if cap <= 127:
         return evoxc.int8, 127
@@ -945,13 +804,11 @@ def _cycle_violation(level, src, dst, edge_valid, max_nodes):
     """0-d bool: some member has an edge whose settled levels are not increasing.
 
     Args:
-        level: ``(P, N)`` levels of the level-only relaxation, **before** the
-            ``I_INF`` mapping — i.e. ``-1`` for "never settled" and ``0 .. N``
-            elsewhere; any integer dtype.
-        src: ``(P, C)`` ``int32`` source slots, ``I_INF`` on an absent row or an
-            unmatched key; dst: the destination slots, likewise.
-        edge_valid: ``(P, C)`` ``bool`` — the row is a real connection and both of
-            its endpoint keys matched a node.
+        level: ``(P, N)`` levels of the level-only relaxation **before** the
+            ``I_INF`` mapping — ``-1`` for "never settled", ``0 .. N`` elsewhere.
+        src: ``(P, C)`` ``int32`` source slots (``I_INF`` on an absent or unmatched
+            row); dst: the destination slots, likewise; edge_valid: ``(P, C)``
+            ``bool`` = a real row whose endpoint keys both matched.
         max_nodes (int): ``N``.
 
     Returns:
@@ -959,20 +816,15 @@ def _cycle_violation(level, src, dst, edge_valid, max_nodes):
         with ``level[u] >= level[v]``.
 
     Notes:
-        The exactness test of the ``acyclic=False`` fast path. A member whose levels
-        settled satisfies ``level[v] = max(level[preds]) + 1 > level[u]`` on every
-        edge, and every cycle breaks it: a reachable one grows until the cap, one
-        through a pinned input leaves its non-pinned successors growing, and an
-        unreachable one leaves both endpoints at ``-1``. A member with an
-        *unreachable edge* (a connection whose source never settles) violates it
-        too, which costs a fallback and never a wrong answer.
-
-        Two ``(P, C)`` gathers over the ``(P, N + 1)`` level vector: a slot is
-        clamped to the trailing ``-2`` dump cell, so an ``I_INF`` endpoint cannot
-        index out of range, and ``edge_valid`` masks the half-matched rows the dump
-        value would otherwise read as a violation. One ``reduce_max`` per member,
-        then one over the population — data for ``evoxc.cond``, never Python control
-        flow.
+        The exactness test of the ``acyclic=False`` fast path: settled levels obey
+        ``level[v] = max(level[preds]) + 1 > level[u]`` on every edge, and every
+        cycle breaks it — a reachable one grows until the cap, one through a pinned
+        input leaves its non-pinned successors growing, an unreachable one leaves
+        both endpoints at ``-1``. An *unreachable edge* violates it too, which costs
+        a fallback and never a wrong answer. Two ``(P, C)`` gathers over the ``(P, N
+        + 1)`` vector, each slot clamped to the trailing ``-2`` dump cell (so no
+        index is out of range) and ``edge_valid`` masking the half-matched rows;
+        then two ``reduce_max`` steps — data for ``evoxc.cond``.
     """
     pop_size, nodes = int(level.shape[0]), int(level.shape[1])
     padded = evoxc.concatenate(
@@ -998,8 +850,8 @@ def _cycle_violation(level, src, dst, edge_valid, max_nodes):
 def _pinned_mask(input_slot, slots):
     """``(P, N)`` bool mask of the node slots named by ``input_slot``.
 
-    A broadcast equality over the ``I`` axis (``O(N * I)``) instead of a scatter:
-    ``I_INF`` never matches a real slot, so no index sanitizing or dump column.
+    A broadcast equality over the ``I`` axis (``O(N * I)``) instead of a scatter;
+    ``I_INF`` never matches a real slot, so no sanitizing or dump column.
     """
     pop_size, num_inputs = input_slot.shape
     pop_size, num_inputs = int(pop_size), int(num_inputs)
@@ -1019,23 +871,21 @@ def validate_schedule(transformed):
     """Check :class:`Transformed` invariants on the host (test/debug helper).
 
     Args:
-        transformed (Transformed): A schedule produced by
-            :func:`derive_schedule`, whose arrays have already been brought back
-            to host memory (numpy). ``evoxc.Tensor`` leaves are accepted and read
-            with ``.numpy()``.
+        transformed (Transformed): A schedule from :func:`derive_schedule` whose
+            arrays are already host memory (``evoxc.Tensor`` leaves are read through
+            :func:`~tensorneat.common.tools.to_numpy`).
 
     Returns:
         None: Returns ``None`` when every invariant of :class:`Transformed` holds.
 
     Raises:
         tensorneat.common.errors.ConfigError: Describing the *first* violated
-            invariant, in this order — a shape or dtype outside the documented
-            signature, ``in_conn``/``in_src`` disagreeing on a padded position,
-            ``in_valid`` disagreeing with ``in_conn != I_INF``,
-            ``topo_key``/``node_level`` disagreeing, a negative
-            ``edge_overflow``, or an ``input_slot``/``output_slot`` outside
-            ``[0, N)``.
-        """
+            invariant — a shape or dtype outside the documented signature,
+            ``in_conn``/``in_src`` disagreeing on a padded position, ``in_valid``
+            disagreeing with ``in_conn != I_INF``, ``topo_key``/``node_level``
+            disagreeing, a negative ``edge_overflow``, or an ``input_slot`` /
+            ``output_slot`` outside ``[0, N)``.
+    """
     src = _host_int(transformed.src, "src", 2)
     dst = _host_int(transformed.dst, "dst", 2)
     edge_valid = _host_bool(transformed.edge_valid, "edge_valid", 2)
@@ -1123,11 +973,10 @@ def validate_schedule(transformed):
 
 
 def _host_array(value, name):
-    """Bring one schedule field to host memory as a numpy array.
+    """Host-side numpy view of a ``transformed`` field (validation path only).
 
-    The conversion itself is :func:`~tensorneat.common.tools.to_numpy` (the one
-    host-side accessor of this package); this wrapper only adds the
-    validation-specific refusal of a non-array leaf.
+    Converts through :func:`~tensorneat.common.tools.to_numpy` and rejects a
+    non-array field.
     """
     array = np.asarray(to_numpy(value))
     if array.dtype == object:
