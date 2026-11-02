@@ -485,10 +485,10 @@ def speciate(
     ``NEAT.tell`` from ``genome.prepare_distance`` (see
     :class:`._distance.DistanceRows`).  Every call it receives carries a
     *population-shaped* centre payload -- ``pop_size`` rows, row ``p`` measured
-    against population member ``p`` -- and returns one ``(pop_size,)`` row; a
-    whole ``(species_size, pop_size)`` table is ``species_size`` such calls
-    stacked, never one ``species_size * pop_size`` batch.  Which form a phase
-    uses is a static choice on ``gate``:
+    against population member ``p`` -- and returns one ``(pop_size,)`` row, so a
+    phase's rows are one such call per slot, never one
+    ``species_size * pop_size`` batch.  Which form a phase uses is a static
+    choice on ``gate``:
 
     * **Sparse table** (``gate`` true, ``species_size * pop_size <=
       GATED_ROWS``): rows are computed lazily, one slot at a time, behind a

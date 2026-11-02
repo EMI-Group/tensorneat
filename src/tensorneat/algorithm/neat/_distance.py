@@ -17,13 +17,17 @@ broadcastable ``1``, so the population-shaped form is the one shape that works
 for both a single centre and a whole species table without a second digest
 tiling.
 
-:meth:`DistanceRows.row` tiles its one centre row to ``pop_size`` identical rows
-with :func:`repeat_leading` and measures it in a single call.
-:meth:`DistanceRows.matrix` concatenates one such call per species slot, so an
-``(S, P)`` table is ``species_size`` calls of ``pop_size`` rows rather than one
-``K * P`` batch: the rows are identical either way, because the compatibility
-kernel is row-independent, and a per-centre call keeps the transient footprint
-of the kernel at one population instead of ``K`` of them.
+:meth:`DistanceRows.__call__` is single-valued: it accepts a centre payload of
+batch ``pop_size`` (measured as it stands) or batch ``1`` (tiled to
+``pop_size`` rows and measured in one call) and rejects every other batch width.
+:meth:`DistanceRows.row` is the same measurement spelled explicitly for one
+centre, and :meth:`DistanceRows.matrix` is the explicit whole-table form: it
+concatenates one ``row`` call per centre row, so an ``(S, P)`` table is ``S``
+calls of ``pop_size`` rows rather than one ``S * P`` batch.  The rows are
+identical either way, because the compatibility kernel is row-independent, and a
+per-centre call keeps the transient footprint of the kernel at one population
+instead of ``S`` of them.  ``matrix`` is never selected by ``__call__``: a
+caller that wants a whole table asks for it by name.
 
 Nothing here re-implements distance arithmetic: every number comes from the
 genome's own kernel, so the rows are bit-identical to
@@ -117,9 +121,6 @@ class DistanceRows:
             measuring against a stale digest.
         pop_size (int): Static population size ``P`` (the digest's batch and the
             row count of every centre payload this class builds).
-        species_size (int): Static number of species slots ``S``; a centre
-            payload of exactly this batch width is measured row by row into the
-            ``(S, P)`` matrix form.
 
     Raises:
         TensorNEATError: If the digest's population axis is not ``pop_size``.
@@ -131,13 +132,11 @@ class DistanceRows:
         digest: Any,
         population: Any,
         pop_size: int,
-        species_size: int,
     ) -> None:
         self.genome = genome
         self.digest = digest
         self.population = population
         self.pop_size = int(pop_size)
-        self.species_size = int(species_size)
         digest_pop_size = int(digest.node_count.shape[0])
         if digest_pop_size != self.pop_size:
             raise TensorNEATError(
@@ -156,34 +155,33 @@ class DistanceRows:
 
         Args:
             state (Any): Shared state (forwarded to the genome kernel).
-            centre (Any): Centre payload, batch ``1`` (one centre), batch ``P``
-                (a population-shaped centre, measured row-wise) or batch ``S``
-                (the whole species table of a phase, measured one row at a
-                time).
+            centre (Any): Centre payload of batch ``pop_size`` (a
+                population-shaped centre, measured row-wise as it stands) or
+                batch ``1`` (one centre, tiled to ``pop_size`` rows).
             pop (Any, optional): The population payload ``speciate`` measures
                 against; its static shape must match the digested population's.
 
         Returns:
-            Any: ``(P,)`` float32 for a batch-1 or batch-``P`` centre, ``(S, P)``
-            float32 for a batch-``S`` one.
+            Any: ``(P,)`` float32 distances.
 
         Raises:
             TensorNEATError: If ``pop`` does not have the digested population's
-                static shape, or if the centre batch is neither ``1``, ``P`` nor
-                ``S``.
+                static shape, or if the centre batch is neither ``1`` nor ``P``.
 
         Note:
-            A batch of ``P`` is a *population-shaped* centre and wins over a
-            batch of ``S`` when the two coincide (``pop_size == species_size``),
-            because that is the shape every ``speciate`` call carries; a whole
-            centre table with more rows than one population is measured through
-            :meth:`matrix`.
+            A whole ``(S, P)`` species table is not a ``__call__`` shape: ask
+            for it by name with :meth:`matrix`, so a table can never be mistaken
+            for a population-shaped centre.
         """
         if pop is not None:
             self._check_population(pop)
         batch = int(centre[0].shape[0])
-        if batch != self.pop_size and batch != 1 and batch == self.species_size:
-            return self.matrix(state, centre)
+        if batch != self.pop_size and batch != 1:
+            raise TensorNEATError(
+                "DistanceRows: a distance row takes a centre payload of batch 1 "
+                f"or pop_size ({self.pop_size}), got batch {batch}; call "
+                "matrix() directly for a whole species table"
+            )
         return self.row(state, centre)
 
     def _check_population(self, pop: Any) -> None:
@@ -258,7 +256,7 @@ class DistanceRows:
         return type(centre)(*(repeat_leading(field, self.pop_size) for field in centre))
 
     def matrix(self, state: Any, centres: Any) -> Any:
-        """``(S, P)`` distance matrix of a whole species table.
+        """``(S, P)`` distance matrix of a whole species table (explicit form).
 
         Args:
             state (Any): Shared state.
@@ -270,6 +268,10 @@ class DistanceRows:
             population.
 
         Note:
+            This is the explicit whole-table form, never reached through
+            :meth:`__call__`: a caller holding an ``(S, ...)`` centre table asks
+            for it by name, so a table cannot be mistaken for a population-shaped
+            centre when ``S == P``.
             One ``row`` call per centre row, concatenated along axis ``0``: each
             call carries a population-shaped centre, so the kernel always sees
             the batch width the digest was prepared with.  Concatenating rows of

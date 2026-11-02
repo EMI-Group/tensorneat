@@ -422,11 +422,9 @@ class SpeciesController(StatefulBaseClass):
                 payload the digest was prepared from.  Every centre it receives is
                 **population-shaped** -- ``pop_size`` rows, row ``p`` measured
                 against population member ``p`` -- and returns one ``(pop_size,)``
-                distance row.  A **batch-``species_size``** centre (the whole
-                species table of a phase) returns the ``(species_size, pop_size)``
-                matrix instead, built as ``species_size`` population-shaped calls.
-                Slicing the centre out of the ``(S, ...)`` fields is this method's
-                job, not the genome's; ``NEAT.tell`` builds the callable from
+                distance row.  Slicing the centre out of the ``(S, ...)`` fields
+                and tiling it to ``pop_size`` rows is this method's job, not the
+                genome's; ``NEAT.tell`` builds the callable from
                 ``genome.prepare_distance`` (see :class:`._distance.DistanceRows`),
                 and ``genome.execute_distance`` no longer plugs in directly
                 because it re-sorts the population for every centre.

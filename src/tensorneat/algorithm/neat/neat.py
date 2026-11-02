@@ -933,10 +933,11 @@ class NEAT(BaseAlgorithm):
         population; every speciation distance of that generation is then measured
         against it, so no centre re-sorts the population.  The returned callable
         keeps the ``(state, centre, pop)`` signature the speciation scans expect:
-        every call carries a population-shaped centre (``pop_size`` rows) and
-        yields one ``(pop_size,)`` row, a batch-``species_size`` centre yields the
-        whole ``(species_size, pop_size)`` matrix as one stacked row per slot, and
-        a batch-``pop_size`` centre is measured as it stands.
+        every call carries a centre of batch ``pop_size`` (one row per
+        (centre, individual) pair) or batch ``1``, and yields one
+        ``(pop_size,)`` row; any other centre batch is rejected with
+        ``TensorNEATError``, and a whole species table is measured through
+        ``DistanceRows.matrix`` explicitly.
 
         Args:
             digest (Any): ``DistanceDigest`` from
@@ -946,7 +947,7 @@ class NEAT(BaseAlgorithm):
 
         Returns:
             Callable: ``distance_fn(state, centre, pop=None)`` producing the
-            rows described above.
+            row described above.
 
         Raises:
             TensorNEATError: If the digest's population axis or the payload's
@@ -957,5 +958,4 @@ class NEAT(BaseAlgorithm):
             digest,
             population,
             pop_size=self._pop_size,
-            species_size=self.species.species_size,
         )
