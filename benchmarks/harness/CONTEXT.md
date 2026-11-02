@@ -3,7 +3,7 @@
 The machinery behind `../run_benchmark.py`: one schema for every measurement, one adapter per implementation, one worker process per run, one renderer for `../RESULTS.md`.
 This package is import-safe for both sides: nothing here imports `jax`, `tensorneat` or `evoxc` at module scope — the implementation-specific imports live inside `adapters/old.py` and `adapters/new.py`, which the worker loads *after* it has put the right tree on `sys.path`.
 ## Module Map
-- `protocol.py` — schema constants, `RunResult`, timing/quality summarisers, repeat aggregation, verdict rules (including the quality tolerance `max(10 % × |old|, 1e-3)` and its absolute floor), environment reporting (host/CPU/RAM probes, git SHA + dirty flag, thread env, load average), RSS sampling. Stdlib + `numpy` only.
+- `protocol.py` — schema constants, `RunResult`, timing/quality summarisers, repeat aggregation, verdict rules (including the quality tolerance `max(10 % × |old|, 1e-3)` and its absolute floor), environment reporting (host/CPU/RAM probes, git SHA + code-scope dirty flag, thread env, load average), RSS sampling. Stdlib + `numpy` only.
 - `worker.py` — script entry point (not a module entry): parses run arguments, sets `sys.path` + thread env, imports the adapter, samples the load average at start and end, times one run, writes one `RunResult` JSON.
 - `adapters/__init__.py` — `get_adapter(impl)`; the adapter contract (below).
 - `adapters/old.py` — `tensorneat_legacy` + JAX; one-off cost is `jax.jit(pipeline.step).lower(state).compile()`.
