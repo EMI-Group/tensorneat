@@ -50,6 +50,8 @@ Build is one-off per shape: **0.06 s** on numpy, **0.87–1.24 s** on iree (flat
 Cost is linear in the horizon on both backends (200 → 500 steps is 2.5× the cost at either population) and sub-linear in `pop` (10× the population costs ≈1.15× on numpy and ≈3.6× on iree).
 No crossover was measured: iree wins every cell, by 2.7–8.5× on the rollout component; the box drifts ±30 % between processes, so the ratios are the load-bearing numbers and single-run medians can move by 2× under contention.
 
+The component table above ran on CPython 3.14 with the iree extras installed; the pipeline table below ran on CPython 3.12 (the shared test venv) with the same box, which shifts absolute milliseconds by ≈7 % and leaves the shares intact.
+
 Pipeline level (`/tmp/tnscratch/bench.py --case cartpole … --share`, numpy, `pop_batch_size` unset, one generation per `step`): `step` median, the same `step` with `problem.evaluate` monkeypatched to zeros, and the difference (the evaluate share).
 
 | pop | max_step | R | step ms | no-evaluate ms | evaluate share ms | rollout share of it | build s |
