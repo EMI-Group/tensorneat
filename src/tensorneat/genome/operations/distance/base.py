@@ -20,9 +20,9 @@ from typing import TYPE_CHECKING
 import evoxc
 import evoxc.numpy as enp
 
-from ....common import ConfigError, State, StatefulBaseClass
-from ...utils import valid_count
+from ....common import ConfigError, I_INF, State, StatefulBaseClass
 from . import digest as _digest
+from .consts import ConstantPool
 from .digest import DistanceDigest
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps genome -> operations acyclic
@@ -120,6 +120,8 @@ class BaseDistance(StatefulBaseClass):
         node_attrs: evoxc.SymbolicTensor,
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
+        *,
+        consts=None,
     ) -> DistanceDigest:
         """Sort one population payload into the reusable distance digest.
 
@@ -132,6 +134,9 @@ class BaseDistance(StatefulBaseClass):
             conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys, ``I_INF``
                 padded.
             conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs, NaN padded.
+            consts (ConstantPool | None): Pool for the rank-0 constants of this trace; pass
+                one pool to every kernel of a generation so each constant costs a single op.
+                ``None`` starts a private one.
 
         Returns:
             DistanceDigest: one sorted, tagged gene family per payload family — valid once per
@@ -148,8 +153,13 @@ class BaseDistance(StatefulBaseClass):
         """
         payload = (node_keys, node_attrs, conn_keys, conn_attrs)
         _validate_single(type(self).__name__, "prepare", payload)
-        node = _digest.prepare_family(state, genome.node_gene, node_keys, node_attrs)
-        conn = _digest.prepare_family(state, genome.conn_gene, conn_keys, conn_attrs)
+        pool = consts if consts is not None else ConstantPool()
+        node = _digest.prepare_family(
+            state, genome.node_gene, node_keys, node_attrs, consts=pool
+        )
+        conn = _digest.prepare_family(
+            state, genome.conn_gene, conn_keys, conn_attrs, consts=pool
+        )
         return DistanceDigest(
             node.keys,
             node.attrs,
@@ -170,6 +180,8 @@ class BaseDistance(StatefulBaseClass):
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
         digest: DistanceDigest,
+        *,
+        consts=None,
     ) -> evoxc.SymbolicTensor:
         """Distance of one centre genome against every genome of a prepared digest.
 
@@ -182,6 +194,9 @@ class BaseDistance(StatefulBaseClass):
             conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` centre conn keys.
             conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` centre conn attrs.
             digest (DistanceDigest): Population digest from :meth:`prepare`.
+            consts (ConstantPool | None): Pool for the rank-0 constants of this trace; pass
+                one pool to every kernel of a generation so each constant costs a single op.
+                ``None`` starts a private one.
 
         Returns:
             evoxc.SymbolicTensor: ``(P,) float32`` compatibility distances, ``0`` for an empty
@@ -201,7 +216,9 @@ class BaseDistance(StatefulBaseClass):
         if int(node_keys.shape[0]) != batch:
             payload = _broadcast_payload(payload, batch)
             node_keys, node_attrs, conn_keys, conn_attrs = payload
-        node_distance = self.gene_measure(
+        pool = consts if consts is not None else ConstantPool()
+        node_distance = self._measure_family(
+            pool,
             state,
             genome.node_gene,
             node_keys,
@@ -211,7 +228,8 @@ class BaseDistance(StatefulBaseClass):
             digest.node_count,
             digest.node_key_cols,
         )
-        conn_distance = self.gene_measure(
+        conn_distance = self._measure_family(
+            pool,
             state,
             genome.conn_gene,
             conn_keys,
@@ -254,14 +272,120 @@ class BaseDistance(StatefulBaseClass):
             excess count and normalization included.
 
         Notes:
-            The homologue table is the merge in :func:`~.digest.match_rows` (one sort per
-            call, no population re-sort); everything after it is ``distance_from_rows``, the
-            very tail ``gene_distance`` runs — which is what makes the two routes
-            bit-identical rather than merely close.
+            The homologue table is the merge in :func:`~.digest.measure_alignment` (one sort
+            per call, no population re-sort); everything after it is
+            :meth:`distance_from_alignment`, the very tail ``gene_distance`` runs — which is
+            what makes the two routes bit-identical rather than merely close.
+            A standalone call, so it starts its own constant pool; :meth:`measure` shares one
+            pool across both families and across every call of a generation.
         """
-        rows = _digest.match_rows(gene, keys, digest_keys, digest_key_cols)
+        return self._measure_family(
+            ConstantPool(),
+            state,
+            gene,
+            keys,
+            attrs,
+            digest_keys,
+            digest_attrs,
+            digest_count,
+            digest_key_cols,
+        )
+
+    def _measure_family(
+        self,
+        pool: ConstantPool,
+        state: State,
+        gene,
+        keys: evoxc.SymbolicTensor,
+        attrs: evoxc.SymbolicTensor,
+        digest_keys: evoxc.SymbolicTensor,
+        digest_attrs: evoxc.SymbolicTensor,
+        digest_count: evoxc.SymbolicTensor,
+        digest_key_cols: evoxc.SymbolicTensor,
+    ) -> evoxc.SymbolicTensor:
+        """One gene family of :meth:`measure`, with the pool and the alignment threaded in.
+
+        Args:
+            pool (ConstantPool): Pool for the rank-0 constants of this trace.
+            state (State): Immutable host configuration container.
+            gene: Node or connection gene supplying key width and ``distance``.
+            keys (evoxc.SymbolicTensor): ``(P, M)`` or ``(P, M, K) int32`` centre key array.
+            attrs (evoxc.SymbolicTensor): ``(P, M, A) float32`` centre attribute rows.
+            digest_keys (evoxc.SymbolicTensor): ``(P, M) int64`` composites of this family.
+            digest_attrs (evoxc.SymbolicTensor): ``(P, M, A) float32`` population attributes
+                permuted into the digest's gene order.
+            digest_count (evoxc.SymbolicTensor): ``(P,) int32`` real genes per individual.
+            digest_key_cols (evoxc.SymbolicTensor): ``(P, M, K) int32`` population key columns
+                in the digest's gene order.
+
+        Returns:
+            evoxc.SymbolicTensor: ``(P,) float32`` distances of this gene family.
+
+        Notes:
+            The merge hands back the homology mask and both counts, so nothing downstream
+            re-derives a mask from an ``I_INF`` row table or re-counts the centre's genes.
+        """
+        aligned = _digest.measure_alignment(
+            gene, keys, digest_keys, digest_key_cols, consts=pool
+        )
+        return self.distance_from_alignment(
+            state,
+            gene,
+            attrs,
+            digest_attrs,
+            aligned.rows,
+            aligned.homologous,
+            aligned.count,
+            aligned.matched,
+            digest_count,
+            consts=pool,
+        )
+
+    def distance_from_alignment(
+        self,
+        state: State,
+        gene,
+        attrs1: evoxc.SymbolicTensor,
+        attrs2: evoxc.SymbolicTensor,
+        rows: evoxc.SymbolicTensor,
+        homologous: evoxc.SymbolicTensor,
+        cnt1: evoxc.SymbolicTensor,
+        matched: evoxc.SymbolicTensor,
+        cnt2: evoxc.SymbolicTensor,
+        *,
+        consts=None,
+    ) -> evoxc.SymbolicTensor:
+        """Distance of one gene family from a finished alignment (subclass hook).
+
+        Args:
+            state (State): Immutable host configuration container.
+            gene: Node or connection gene supplying ``distance``.
+            attrs1 (evoxc.SymbolicTensor): ``(P, M, A) float32`` attributes of parent 1.
+            attrs2 (evoxc.SymbolicTensor): ``(P, M, A) float32`` attributes of parent 2, in
+                row-number order.
+            rows (evoxc.SymbolicTensor): ``(P, M) int32`` homologue row per parent-1 gene,
+                redirected to row ``0`` where there is none.
+            homologous (evoxc.SymbolicTensor): ``(P, M) bool`` True on the real homologues.
+            cnt1 (evoxc.SymbolicTensor): ``(P,)`` real genes of parent 1.
+            matched (evoxc.SymbolicTensor): ``(P,)`` number of homologous genes.
+            cnt2 (evoxc.SymbolicTensor): ``(P,)`` real genes of parent 2.
+            consts (ConstantPool | None): Pool for the rank-0 constants of this trace.
+
+        Returns:
+            evoxc.SymbolicTensor: ``(P,) float32`` distances of this gene family.
+
+        Notes:
+            Default adapter for a subclass that implements only
+            :meth:`distance_from_rows`: it re-spells the aligned rows as the documented
+            ``I_INF``-padded table and calls that hook, which costs one extra ``select`` and
+            one extra mask derivation.  :class:`~.default.DefaultDistance`, the only
+            implementation in this package, overrides it with the shared tail and pays
+            neither.
+        """
+        pool = consts if consts is not None else ConstantPool()
+        rows_inf = evoxc.select(homologous, rows, pool.i32(I_INF))
         return self.distance_from_rows(
-            state, gene, attrs, digest_attrs, rows, valid_count(keys), digest_count
+            state, gene, attrs1, attrs2, rows_inf, cnt1, cnt2
         )
 
 

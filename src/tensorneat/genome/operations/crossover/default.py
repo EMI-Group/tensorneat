@@ -1,12 +1,13 @@
 """Key-aligned crossover: parent 1 keeps its structure, attributes may come from parent 2.
 
 Alignment is exact on the whole key column tuple of a gene (``(in_key, out_key)`` plus
-``historical_marker`` for connections), found through one stable ``argsort`` rank merge
-plus two row gathers: ``O(M log M)`` per array, never an ``O(M^2)`` scan, and still one
-batched kernel for the whole population.
-The merge itself lives in :mod:`..crossover.align`; this module only turns its homologue
-table into recombined attribute rows, with one flat gather per attribute *row* rather than
-one per attribute column.
+``historical_marker`` for connections), found through one ``argsort`` rank merge plus two
+row gathers: ``O(M log M)`` per array, never an ``O(M^2)`` scan, and still one batched
+kernel for the whole population.
+The merge itself lives in :mod:`..alignment`, the single homologue implementation shared
+with the compatibility distance; this module only turns its homologue table into recombined
+attribute rows, with one flat gather per attribute *row* rather than one per attribute
+column.
 """
 
 from typing import TYPE_CHECKING
@@ -16,7 +17,7 @@ import evoxc.numpy as enp
 
 from ....common import I_INF, State
 from ...utils import GenomeTensors
-from .align import find_homologous, gather_attr_rows
+from ..alignment import find_homologous, gather_attr_rows
 from .base import BaseCrossover
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -100,12 +101,13 @@ class DefaultCrossover(BaseCrossover):
     ) -> evoxc.SymbolicTensor:
         """Locate, for every gene of parent 1, its homologous row in parent 2.
 
-        Exact match on the whole key-column tuple: one hash per gene (the gene's ``hash``
-        over its ``int32`` key columns), one ``argsort`` of the two parents' tagged hashes,
-        and a comparison of the full key rows of every ``(parent 1, parent 2)`` adjacency
-        that shares a hash — so a hash collision cannot produce a false homologue.  That is
-        ``O(M log M)`` in the gene count ``M`` — never an ``O(M^2)`` scan — and all of it is
-        one batched kernel over the population axis.
+        Exact match on the whole key-column tuple, found by one rank merge: one packed
+        ``uint64`` identity per gene row, one ``argsort`` of the two parents' concatenated
+        identities whose inverse permutation is the rank, and a successor test on the
+        element right after each gene in sorted order — a gene has a homologue exactly when
+        its successor is a parent-2 row with the same identity.  That is ``O(M log M)`` in
+        the gene count ``M`` — never an ``O(M^2)`` scan — and all of it is one batched
+        kernel over the population axis.
 
         Args:
             keys1 (evoxc.SymbolicTensor): ``(P, M, K) int32`` key columns of parent 1,
@@ -119,8 +121,9 @@ class DefaultCrossover(BaseCrossover):
 
         Notes:
             Delegates to the module-level
-            :func:`tensorneat.genome.operations.alignment.find_homologous`, which owns the
-            sorted-merge alignment; nothing family-specific is left to do here.
+            :func:`tensorneat.genome.operations.alignment.find_homologous`, the single
+            implementation the compatibility distance consumes too; nothing
+            family-specific is left to do here.
         """
         return find_homologous(keys1, keys2)
 
@@ -156,8 +159,9 @@ class DefaultCrossover(BaseCrossover):
             homologue is missing equal ``attrs1``, padding rows remain NaN.
 
         Notes:
-            One flat gather per attribute **row** (:func:`~.align.gather_attr_rows`), so the
-            cost is one op for the whole block instead of one per attribute column.
+            One flat gather per attribute **row**
+            (:func:`~..alignment.gather_attr_rows`), so the cost is one op for the whole
+            block instead of one per attribute column.
             ``I_INF`` rows are redirected to row ``0`` **before** the index arithmetic —
             ``I_INF * A`` would overflow ``int32`` — and the gathered value of a redirected
             row is discarded by the final ``select``, so the unmasked read can never

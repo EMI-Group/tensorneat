@@ -5,8 +5,8 @@ generation (centre reservation and member assignment), so the *same* population 
 re-sorted ``2 * species_size`` times per generation.
 This module splits that work: :func:`prepare_family` sorts one gene family of the population
 **once** per generation (packed key composites, the attribute rows permuted into the same
-order, and the valid-gene count), and :func:`match_rows` merges one centre genome against
-that digest with a single sort of the ``2 * M`` concatenation — no per-pair ``O(M^2)``
+order, and the valid-gene count), and :func:`measure_alignment` merges one centre genome
+against that digest with a single sort of the ``2 * M`` concatenation — no per-pair ``O(M^2)``
 matrix, no re-sort of the population and no key-row re-verification for a one- or two-column
 gene.
 
@@ -38,6 +38,12 @@ side, genes with equal key rows, which cannot pair across sides), so the cheap c
 sort is used; the emitted distances do not depend on the sort order because the per-gene
 terms are scattered back to the centre's own row order before the reduction (see
 :meth:`tensorneat.genome.operations.distance.base.BaseDistance.gene_measure`).
+
+Cost discipline: this module never calls ``enp.full`` directly — every rank-0 constant comes
+from the :class:`~.consts.ConstantPool` threaded in by the caller — and every row permutation
+is one hand-built flat gather (``reshape`` + ``add`` + ``gather``) instead of
+``common.tools.flat_gather``, whose out-of-range escape checks are pure overhead for indices
+this module has already clamped.
 """
 
 from typing import NamedTuple
@@ -49,10 +55,10 @@ from ....common import (
     I_INF,
     ConfigError,
     batch_offsets,
-    flat_gather,
     masked_flat_gather,
 )
 from ..alignment import key_rows
+from .consts import ConstantPool
 
 #: Width of the side tag carried in the low bits of the composite sort key.
 _TAG_BITS = 1
@@ -101,32 +107,69 @@ class FamilyDigest(NamedTuple):
     key_cols: evoxc.SymbolicTensor
 
 
-def _i32(value: int) -> evoxc.SymbolicTensor:
-    """Build a rank-0 ``int32`` constant inside the active trace.
+class AlignedGenes(NamedTuple):
+    """One centre family resolved against a digest: the merge's finished answer.
+
+    Produced by :func:`measure_alignment` and consumed by
+    :meth:`~tensorneat.genome.operations.distance.base.BaseDistance.distance_from_alignment`,
+    which is why the mask and both counts travel with the row table instead of being
+    recomputed from it: the merge already knows them, and a second ``not_equal``/``reduce_sum``
+    per family per call was pure duplication.
+
+    Attributes:
+        rows (evoxc.SymbolicTensor): ``(P, M) int32`` digest row of the homologue of each
+            centre gene, **redirected to row ``0``** where there is none — so the aligned
+            attribute gather needs no range check, no mask and no ``NaN`` fill.
+        homologous (evoxc.SymbolicTensor): ``(P, M) bool`` True where that row is a real
+            homologue (and not a centre padding row).
+        count (evoxc.SymbolicTensor): ``(P,) int64`` real genes of the centre genome — the
+            ``reduce_sum`` of the merge's own validity mask.
+        matched (evoxc.SymbolicTensor): ``(P,) int64`` number of homologous genes ``h``.
+    """
+
+    rows: evoxc.SymbolicTensor
+    homologous: evoxc.SymbolicTensor
+    count: evoxc.SymbolicTensor
+    matched: evoxc.SymbolicTensor
+
+
+def _key_width(name: str, gene, keys: evoxc.SymbolicTensor) -> int:
+    """Validate one payload key array against the gene and return its static width.
 
     Args:
-        value: Static integer baked into the trace.
+        name: Operator name used in the error message.
+        gene: Node or connection gene declaring ``key_width``.
+        keys: ``(P, M)`` (one-column node key) or ``(P, M, K)`` key array.
 
     Returns:
-        Rank-0 ``int32`` tensor.
+        int: the number of key columns, ``1`` for a rank-2 array.
+
+    Raises:
+        ConfigError: If the array is neither 2-D nor 3-D, or if its key width is not the
+            gene's ``key_width`` — the digest is built and consumed with one gene family at a
+            time, so a mismatched width is a configuration error rather than a silent
+            reinterpretation.
 
     Notes:
-        Spelled out because an ``int32`` tensor plus a Python literal promotes to ``int64``
-        in ``evoxc``, which would widen every index computation below.
+        Static shapes only: the width is read off ``Shape`` and no graph op is emitted, so a
+        one-column node key needs neither a reshape nor a slice to be folded.
     """
-    return enp.full((), value, dtype=evoxc.int32)
-
-
-def _i64(value: int) -> evoxc.SymbolicTensor:
-    """Build a rank-0 ``int64`` constant inside the active trace.
-
-    Args:
-        value: Static integer baked into the trace.
-
-    Returns:
-        Rank-0 ``int64`` tensor — the dtype of every composite in this module.
-    """
-    return enp.full((), value, dtype=evoxc.int64)
+    rank = len(keys.shape)
+    if rank == 2:
+        width = 1
+    elif rank == 3:
+        width = int(keys.shape[-1])
+    else:
+        raise ConfigError(
+            "gene key tables must be (P, M) or (P, M, K), "
+            f"got shape {tuple(keys.shape)}"
+        )
+    if width != int(gene.key_width):
+        raise ConfigError(
+            f"{name}: {type(gene).__name__} declares {gene.key_width} key column(s) but the "
+            f"payload key array carries {width}"
+        )
+    return width
 
 
 def _column(table: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
@@ -149,41 +192,14 @@ def _column(table: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
     )
 
 
-def _key_table(
-    name: str, gene, keys: evoxc.SymbolicTensor
-) -> evoxc.SymbolicTensor:
-    """Normalise one payload key array to the ``(P, M, K)`` key-column block.
-
-    Args:
-        name: Operator name used in the error message.
-        gene: Node or connection gene declaring ``key_width``.
-        keys: ``(P, M)`` (one-column node key) or ``(P, M, K)`` key array.
-
-    Returns:
-        ``(P, M, K)`` key-column block.
-
-    Raises:
-        ConfigError: If the block's key width is not the gene's ``key_width`` — the digest
-            is built and consumed with one gene family at a time, so a mismatched width is a
-            configuration error rather than a silent reinterpretation.
-    """
-    table = key_rows(keys)
-    width = int(table.shape[-1])
-    if width != int(gene.key_width):
-        raise ConfigError(
-            f"{name}: {type(gene).__name__} declares {gene.key_width} key column(s) but the "
-            f"payload key array carries {width}"
-        )
-    return table
-
-
 def _pack(
-    table: evoxc.SymbolicTensor,
+    keys: evoxc.SymbolicTensor, pool: ConstantPool
 ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
     """Fold the first key columns of one gene family into injective ``int64`` composites.
 
     Args:
-        table: ``(P, M, K) int32`` key-column block, ``I_INF`` padded.
+        keys: ``(P, M)`` or ``(P, M, K) int32`` key array, ``I_INF`` padded.
+        pool (ConstantPool): Per-trace rank-0 constant pool.
 
     Returns:
         ``(pack (P, M) int64, valid (P, M) bool)`` — the folded key value and the row's
@@ -202,18 +218,24 @@ def _pack(
         whole composite with the side's sentinel.  (Gene keys are non-negative ``int32`` by
         contract — the execution schedule treats a negative key as absent.)
         Only ``_FOLDED_KEYS`` columns are folded: ``2 * 31`` bits already fill the ``int64``
-        composite, so a third column is verified row-for-row by :func:`match_rows` instead.
+        composite, so a third column is verified row-for-row by :func:`measure_alignment`
+        instead.
+        A rank-2 key array is its own leading column, so a node key costs no slice and no
+        reshape at all; the leading column is read once and reused for the mask and the first
+        digit.
     """
-    leading = _column(table, 0)
-    valid = evoxc.not_equal(leading, _i32(I_INF))
-    width = int(table.shape[2])
-    composite = None
-    for index in range(min(width, _FOLDED_KEYS)):
-        digit = evoxc.cast(_column(table, index), evoxc.int64)
-        if composite is None:
-            composite = digit
-            continue
-        composite = evoxc.add(evoxc.multiply(composite, _i64(_KEY_BASE)), digit)
+    if len(keys.shape) == 2:
+        valid = evoxc.not_equal(keys, pool.i32(I_INF))
+        return evoxc.cast(keys, evoxc.int64), valid
+    leading = _column(keys, 0)
+    valid = evoxc.not_equal(leading, pool.i32(I_INF))
+    composite = evoxc.cast(leading, evoxc.int64)
+    width = int(keys.shape[2])
+    for index in range(1, min(width, _FOLDED_KEYS)):
+        composite = evoxc.add(
+            evoxc.multiply(composite, pool.i64(_KEY_BASE)),
+            evoxc.cast(_column(keys, index), evoxc.int64),
+        )
     return composite, valid
 
 
@@ -222,6 +244,7 @@ def _tagged(
     valid: evoxc.SymbolicTensor,
     tag: int,
     padding: int,
+    pool: ConstantPool,
 ) -> evoxc.SymbolicTensor:
     """Attach the side tag to a folded composite, or the side's padding sentinel.
 
@@ -230,6 +253,7 @@ def _tagged(
         valid: ``(P, M) bool`` real-gene mask.
         tag: ``_TAG_CENTRE`` or ``_TAG_POPULATION``.
         padding: The side's sentinel for absent rows.
+        pool (ConstantPool): Per-trace rank-0 constant pool.
 
     Returns:
         ``(P, M) int64`` sortable composite.
@@ -237,16 +261,21 @@ def _tagged(
     Notes:
         ``pack * 2 + tag`` keeps ``_TAG_BITS`` low bits for the side, and the multiplication
         cannot overflow: ``pack < 2**62`` and ``tag < 2`` keep the result below ``2**63``.
+        The centre's tag is ``0``, so its tagged value is exactly ``pack * 2`` and the ``add``
+        is skipped — the centre is tagged once per family per ``measure`` call and that
+        addition would be dead arithmetic.
     """
-    return evoxc.select(
-        valid,
-        evoxc.add(evoxc.multiply(pack, _i64(1 << _TAG_BITS)), _i64(tag)),
-        _i64(padding),
-    )
+    scaled = evoxc.multiply(pack, pool.i64(1 << _TAG_BITS))
+    if tag:
+        scaled = evoxc.add(scaled, pool.i64(tag))
+    return evoxc.select(valid, scaled, pool.i64(padding))
 
 
 def _gather_rows(
-    rows: evoxc.SymbolicTensor, order: evoxc.SymbolicTensor, width: int
+    rows: evoxc.SymbolicTensor,
+    order: evoxc.SymbolicTensor,
+    width: int,
+    pool: ConstantPool,
 ) -> evoxc.SymbolicTensor:
     """Permute the rows of a ``(P, M, W)`` block into a gene order.
 
@@ -254,21 +283,55 @@ def _gather_rows(
         rows: ``(P, M, W)`` block (attribute rows or key columns).
         order: ``(P, M) int32`` permutation (row ``j`` of the result is row ``order[j]``).
         width: Static row width ``W``.
+        pool (ConstantPool): Per-trace rank-0 constant pool.
 
     Returns:
         ``(P, M, W)`` permuted block.
+
+    Notes:
+        One flat gather with a ``row * W + column`` index block.  ``common.tools.flat_gather``
+        would add its out-of-range escape checks on top, which are dead weight here: ``order``
+        is a permutation of ``[0, M)``, so no index can escape.
     """
     pop_size, count = int(order.shape[0]), int(order.shape[1])
-    flat = evoxc.reshape(rows, (pop_size, count * width))
-    offsets = enp.reshape(
-        evoxc.multiply(order, _i32(width)), (pop_size, count, 1)
+    flat = evoxc.reshape(rows, (pop_size * count * width,))
+    offsets = enp.reshape(evoxc.multiply(order, pool.i32(width)), (pop_size, count, 1))
+    columns = enp.arange(0, width, dtype=evoxc.int32)
+    # Row stride as a ``(P, 1, 1)`` block: ``batch_offsets`` returns ``(P, 1)``, which would
+    # broadcast against the last two axes of a 3-D index block instead of the leading one.
+    rows_stride = enp.reshape(
+        enp.arange(0, pop_size * count * width, count * width, dtype=evoxc.int32),
+        (pop_size, 1, 1),
     )
-    columns = enp.reshape(enp.arange(0, width, dtype=evoxc.int32), (1, 1, width))
-    return flat_gather(flat, evoxc.add(offsets, columns))
+    index = evoxc.add(evoxc.add(offsets, columns), rows_stride)
+    return evoxc.reshape(evoxc.gather(flat, index, axis=0), (pop_size, count, width))
+
+
+def _permute(
+    block: evoxc.SymbolicTensor, order: evoxc.SymbolicTensor, pool: ConstantPool
+) -> evoxc.SymbolicTensor:
+    """Permute the columns of a ``(P, M)`` block into a gene order.
+
+    Args:
+        block: ``(P, M)`` block to permute.
+        order: ``(P, M) int32`` permutation of ``[0, M)``.
+        pool (ConstantPool): Per-trace rank-0 constant pool.
+
+    Returns:
+        ``(P, M)`` block whose column ``j`` is column ``order[j]`` of ``block``.
+
+    Notes:
+        The ``(P, M)`` twin of :func:`_gather_rows` (``W == 1``, so no column term and no
+        result reshape).
+    """
+    pop_size, count = int(block.shape[0]), int(block.shape[1])
+    flat = evoxc.reshape(block, (pop_size * count,))
+    index = evoxc.add(order, batch_offsets(pop_size, count))
+    return evoxc.gather(flat, index, axis=0)
 
 
 def prepare_family(
-    state, gene, keys: evoxc.SymbolicTensor, attrs: evoxc.SymbolicTensor
+    state, gene, keys: evoxc.SymbolicTensor, attrs: evoxc.SymbolicTensor, *, consts=None
 ) -> FamilyDigest:
     """Sort one gene family of a population into a reusable digest.
 
@@ -278,6 +341,9 @@ def prepare_family(
         keys: ``(P, M)`` or ``(P, M, K) int32`` key array of the population, ``I_INF``
             padded.
         attrs: ``(P, M, A) float32`` attribute array of the population, NaN padded.
+        consts (ConstantPool | None): Pool to draw rank-0 constants from; ``None`` starts a
+            private one.  Pass one pool for a whole ``prepare``/``measure`` call (or a whole
+            generation) so identical constants cost one op instead of one per use site.
 
     Returns:
         FamilyDigest: the packed composites (population tag) in ascending order with the
@@ -290,21 +356,152 @@ def prepare_family(
         The sort is *not* stable on purpose: ties are padding rows only (real keys are
         unique inside a genome), and the distances do not depend on the tie order.
     """
-    table = _key_table("prepare", gene, keys)
-    pack, valid = _pack(table)
-    tagged = _tagged(pack, valid, _TAG_POPULATION, _PAD_POPULATION)
+    pool = consts if consts is not None else ConstantPool()
+    width = _key_width("prepare", gene, keys)
+    pack, valid = _pack(keys, pool)
+    tagged = _tagged(pack, valid, _TAG_POPULATION, _PAD_POPULATION, pool)
     order = evoxc.cast(evoxc.argsort(tagged, axis=-1, stable=False), evoxc.int32)
-    keys_sorted = flat_gather(tagged, order)
-    attrs_sorted = _gather_rows(attrs, order, int(attrs.shape[-1]))
+    attrs_sorted = _gather_rows(attrs, order, int(attrs.shape[-1]), pool)
+    # A digest key block is always rank 3: the unf folded case keeps the *unpermuted* table
+    # (nothing reads it) but still in the documented ``(P, M, K)`` spelling.
     key_cols_sorted = (
-        _gather_rows(table, order, int(table.shape[-1]))
-        if int(table.shape[-1]) > _FOLDED_KEYS
-        else table
+        _gather_rows(keys, order, width, pool)
+        if width > _FOLDED_KEYS
+        else key_rows(keys)
     )
-    count = evoxc.cast(
-        evoxc.reduce_sum(evoxc.cast(valid, evoxc.int32), axes=1), evoxc.int32
+    count = evoxc.cast(evoxc.reduce_sum(valid, axes=1), evoxc.int32)
+    return FamilyDigest(
+        _permute(tagged, order, pool), attrs_sorted, count, key_cols_sorted
     )
-    return FamilyDigest(keys_sorted, attrs_sorted, count, key_cols_sorted)
+
+
+def measure_alignment(
+    gene,
+    keys: evoxc.SymbolicTensor,
+    digest_keys: evoxc.SymbolicTensor,
+    digest_key_cols: evoxc.SymbolicTensor,
+    *,
+    consts=None,
+) -> AlignedGenes:
+    """Locate, for every gene of a centre genome, its homologue row in the digest.
+
+    Args:
+        gene: Node or connection gene declaring the key width.
+        keys: ``(P, M)`` or ``(P, M, K) int32`` key array of the centre genome, ``I_INF``
+            padded.
+        digest_keys: ``(P, M) int64`` composites of the population, as produced by
+            :func:`prepare_family` — ascending, padding last.
+        digest_key_cols: ``(P, M, K) int32`` population key columns in the same order, the
+            exact-match oracle for a gene whose key width exceeds ``_FOLDED_KEYS``.
+        consts (ConstantPool | None): Pool to draw rank-0 constants from; ``None`` starts a
+            private one.
+
+    Returns:
+        AlignedGenes: the digest row, the homology mask, the centre's gene count and its
+        homologue count — everything the distance tail needs, so no consumer has to re-derive
+        a mask or a count from the row table.
+
+    Raises:
+        ConfigError: If the payload key width disagrees with the gene, or if the centre and
+            digest key tables carry a different gene-axis length.
+        evoxc.ShapeError: Propagated unchanged if the concatenation disagrees on shapes.
+
+    Notes:
+        One sort of the ``2 * M`` concatenation, one ``argsort`` of its permutation (the
+        inverse permutation, two ops — a scatter of the ranks cost eight and measured slower),
+        then **two centre-width gathers** — the successor of each centre gene in the merged
+        order and the digest row that successor carries.  Reading the sorted block itself
+        would be a ``2 * M``-wide gather of ``int64`` composites (6.5 ms against 1.9 ms for
+        everything else here at ``4P = 4000``); the inverse permutation is what lets every
+        later step stay at the centre's own width ``M``.
+        The fold is injective on the folded columns and the two sides carry different side
+        tags, so a homologous pair is exactly a centre gene whose *successor* in merged order
+        is the population composite ``composite + 1`` — no key-row gather and no
+        ``reduce_min`` — and the tag bit is checked explicitly, because
+        ``(population, centre)`` composites can also differ by one (that is what the second
+        tag bit used to rule out).
+        The successor position is clamped to ``2 * M - 1`` instead of being range-checked and
+        masked: the last merged position always holds a padded row (both sentinels sit above
+        every real composite), and no sentinel can equal a real ``composite + 1``, so the
+        clamped read cannot pass the homology test — one ``clamp`` in place of a ``less`` and
+        a ``select``, with no separate "in range" mask to carry.
+        A gene with more key columns than ``_FOLDED_KEYS`` verifies the whole key row of its
+        candidate pair against ``digest_key_cols``, so its homology is full-tuple key-row
+        equality, never a comparison truncated to the folded columns.
+        The query positions are the centre's own gene rows ``0..M-1``, so no second scatter
+        over the centre's row numbers and no full-size ``I_INF`` constant is needed to fill
+        the result.
+    """
+    pool = consts if consts is not None else ConstantPool()
+    width = _key_width("measure", gene, keys)
+    pop_size, count = int(keys.shape[0]), int(keys.shape[1])
+    if tuple(int(size) for size in digest_keys.shape) != (pop_size, count):
+        raise ConfigError(
+            f"measure: the centre's key table is {(pop_size, count)} but the digest's is "
+            f"{tuple(digest_keys.shape)}; pass one digest row per centre row"
+        )
+    pack, valid = _pack(keys, pool)
+    composite = _tagged(pack, valid, _TAG_CENTRE, _PAD_CENTRE, pool)
+    merged_width = 2 * count
+    # The digest side goes first so that the merged index of a population gene *is* its
+    # digest row: the tail then reads the row table as ``successor`` and needs no
+    # ``subtract(successor, count)`` (two ops and a constant per family per call).
+    merged = evoxc.concatenate((digest_keys, composite), axis=1)
+    merged_flat = evoxc.reshape(merged, (pop_size * merged_width,))
+    # ``int32`` indices: ``gather`` accepts ``int64`` too, but the 64-bit sort below and the
+    # 64-bit index blocks it would force cost ~10 % of this kernel's milliseconds for two
+    # saved casts (measured on the reference backend at P = 1000 and 4000).
+    order = evoxc.cast(evoxc.argsort(merged, axis=-1, stable=False), evoxc.int32)
+    # ``order[i]`` is the merged index that sorts to position ``i``, so sorting the permutation
+    # itself is its inverse: ``inverse[j]`` is the sorted position of merged index ``j`` — i.e.
+    # of the centre gene that sits there (centre genes occupy merged columns ``count..2*count-1``).
+    # ``order`` is a permutation of distinct values, so no tie-breaking (and no stability)
+    # enters here.
+    position = evoxc.slice(
+        evoxc.cast(evoxc.argsort(order, axis=-1, stable=False), evoxc.int32),
+        (0, count),
+        (pop_size, count),
+    )
+    offsets = batch_offsets(pop_size, merged_width)
+    # The last sorted position has no successor; clamping redirects that (necessarily
+    # non-homologous, see the docstring) read to the largest composite instead of masking it.
+    successor_position = evoxc.minimum(
+        evoxc.add(position, pool.i32(1)), pool.i32(merged_width - 1)
+    )
+    successor = evoxc.gather(
+        evoxc.reshape(order, (pop_size * merged_width,)),
+        evoxc.add(successor_position, offsets),
+        axis=0,
+    )
+    candidate = evoxc.gather(merged_flat, evoxc.add(successor, offsets), axis=0)
+    # The successor of a centre composite is a homologue exactly when it is the population
+    # composite of the same key — ``composite + 1``, one odd value.  A centre composite is
+    # always even (its tag is 0, and so is the centre padding sentinel) and so is the
+    # population padding sentinel, so equality with that odd value already proves the
+    # candidate is a real population gene: no separate tag test is needed.
+    homologous = evoxc.equal(candidate, evoxc.add(composite, pool.i64(1)))
+    # The digest side occupies merged columns ``0..count-1``, so the merged index of a
+    # population gene is its digest row: no offset arithmetic, one alias.
+    matched_col = successor
+    if width > _FOLDED_KEYS:
+        homologous = evoxc.logical_and(
+            homologous,
+            _key_row_matches(
+                keys,
+                digest_key_cols,
+                matched_col,
+                homologous,
+                width,
+                pool,
+            ),
+        )
+    rows = evoxc.select(homologous, matched_col, pool.i32(0))
+    return AlignedGenes(
+        rows,
+        homologous,
+        evoxc.reduce_sum(valid, axes=1),
+        evoxc.reduce_sum(homologous, axes=1),
+    )
 
 
 def match_rows(
@@ -312,6 +509,8 @@ def match_rows(
     keys: evoxc.SymbolicTensor,
     digest_keys: evoxc.SymbolicTensor,
     digest_key_cols: evoxc.SymbolicTensor,
+    *,
+    consts=None,
 ) -> evoxc.SymbolicTensor:
     """Locate, for every gene of a centre genome, its homologue row in the digest.
 
@@ -323,6 +522,8 @@ def match_rows(
             :func:`prepare_family` — ascending, padding last.
         digest_key_cols: ``(P, M, K) int32`` population key columns in the same order, the
             exact-match oracle for a gene whose key width exceeds ``_FOLDED_KEYS``.
+        consts (ConstantPool | None): Pool to draw rank-0 constants from; ``None`` starts a
+            private one.
 
     Returns:
         ``(P, M) int32`` row index **into the digest's sorted attribute block** per gene of
@@ -337,104 +538,38 @@ def match_rows(
         evoxc.ShapeError: Propagated unchanged if the concatenation disagrees on shapes.
 
     Notes:
-        One sort of the ``2 * M`` concatenation, then one ``scatter`` that turns its
-        permutation into the inverse permutation, then **two centre-width gathers** — the
-        successor of each centre gene in the merged order and the digest row that successor
-        carries.  Reading the sorted block itself would be a ``2 * M``-wide gather of
-        ``int64`` composites (6.5 ms against 1.9 ms for everything else here at
-        ``4P = 4000``); the inverse permutation is what lets every later step stay at the
-        centre's own width ``M``.
-        The fold is injective on the folded columns and the two sides carry different side
-        tags, so a homologous pair is exactly a centre gene whose *successor* in merged order
-        is the population composite ``composite + 1`` — no key-row gather and no
-        ``reduce_min`` — and the tag bit is checked explicitly, because
-        ``(population, centre)`` composites can also differ by one (that is what the second
-        tag bit used to rule out).
-        A gene with more key columns than ``_FOLDED_KEYS`` verifies the whole key row of its
-        candidate pair against ``digest_key_cols``, so its homology is full-tuple key-row
-        equality, never a comparison truncated to the folded columns.
-        The query positions are the centre's own gene rows ``0..M-1``, so the result is
-        written straight out of the ``scatter`` table — there is no second scatter over the
-        centre's row numbers and no full-size ``I_INF`` constant to fill it.
+        The merge itself is :func:`measure_alignment`; this entry point only re-spells its
+        ``I_INF``-free row table as the documented ``I_INF``-padded one, for callers that
+        hold nothing but rows.  The distance path skips that re-spelling and the mask/count
+        re-derivation by consuming :class:`AlignedGenes` directly.
     """
-    table = _key_table("measure", gene, keys)
-    pop_size, count = int(table.shape[0]), int(table.shape[1])
-    width = int(table.shape[2])
-    if tuple(int(size) for size in digest_keys.shape) != (pop_size, count):
-        raise ConfigError(
-            f"measure: the centre's key table is {(pop_size, count)} but the digest's is "
-            f"{tuple(digest_keys.shape)}; pass one digest row per centre row"
-        )
-    pack, valid = _pack(table)
-    composite = _tagged(pack, valid, _TAG_CENTRE, _PAD_CENTRE)
-    merged_width = 2 * count
-    merged = evoxc.concatenate((composite, digest_keys), axis=1)
-    merged_flat = evoxc.reshape(merged, (pop_size * merged_width,))
-    order = evoxc.cast(evoxc.argsort(merged, axis=-1, stable=False), evoxc.int32)
-    # ``order[i]`` is the merged index that sorts to position ``i``; scattering the ranks at
-    # those positions is the inverse permutation, so ``inv[j]`` is the sorted position of
-    # merged index ``j`` — i.e. of the centre gene that sits there (centre genes occupy
-    # ``merged`` positions ``0..count-1``).  Every position is written exactly once, so the
-    # scatter base is irrelevant and the rank block doubles as it.
-    offsets = batch_offsets(pop_size, merged_width)
-    ranks = enp.broadcast_to(enp.arange(0, merged_width, dtype=evoxc.int32), (pop_size, merged_width))
-    ranks_flat = evoxc.reshape(ranks, (pop_size * merged_width,))
-    inverse = evoxc.reshape(
-        evoxc.scatter(
-            ranks_flat,
-            evoxc.reshape(evoxc.add(order, offsets), (pop_size * merged_width,)),
-            ranks_flat,
-            axis=0,
-        ),
-        (pop_size, merged_width),
+    pool = consts if consts is not None else ConstantPool()
+    aligned = measure_alignment(
+        gene, keys, digest_keys, digest_key_cols, consts=pool
     )
-    position = evoxc.slice(inverse, (0, 0), (pop_size, count))
-    successor_position = evoxc.add(position, _i32(1))
-    in_range = evoxc.less(successor_position, _i32(merged_width))
-    # The last sorted position has no successor; redirect its (masked-out) read to slot 0.
-    safe_position = evoxc.select(in_range, successor_position, _i32(0))
-    successor = evoxc.gather(
-        evoxc.reshape(order, (pop_size * merged_width,)),
-        evoxc.add(safe_position, offsets),
-        axis=0,
-    )
-    candidate = evoxc.gather(
-        merged_flat, evoxc.add(successor, offsets), axis=0
-    )
-    # The successor of a centre composite is a homologue exactly when it is the population
-    # composite of the same key — ``composite + 1``, one odd value.  A centre composite is
-    # always even (its tag is 0, and so is the centre padding sentinel) and so is the
-    # population padding sentinel, so equality with that odd value already proves the
-    # candidate is a real population gene: no separate tag test is needed.
-    homologous = evoxc.equal(candidate, evoxc.add(composite, _i64(1)))
-    matched_col = evoxc.subtract(successor, _i32(count))
-    if width > _FOLDED_KEYS:
-        homologous = evoxc.logical_and(
-            homologous,
-            _key_row_matches(table, digest_key_cols, matched_col, homologous, width),
-        )
-    return evoxc.select(
-        in_range, evoxc.select(homologous, matched_col, _i32(I_INF)), _i32(I_INF)
-    )
+    rows = evoxc.select(aligned.homologous, aligned.rows, pool.i32(I_INF))
+    return evoxc.cast(rows, evoxc.int32)
 
 
 def _key_row_matches(
-    table: evoxc.SymbolicTensor,
+    keys: evoxc.SymbolicTensor,
     digest_key_cols: evoxc.SymbolicTensor,
     pop_col: evoxc.SymbolicTensor,
     mask: evoxc.SymbolicTensor,
     width: int,
+    pool: ConstantPool,
 ) -> evoxc.SymbolicTensor:
     """Compare the full key row of every centre gene against its candidate digest row.
 
     Args:
-        table: ``(P, M, K) int32`` centre key columns.
+        keys: ``(P, M, K) int32`` centre key columns.
         digest_key_cols: ``(P, M, K) int32`` population key columns, digest order.
         pop_col: ``(P, M) int32`` digest row of every centre gene's candidate partner
             (``successor - count``); out of range where ``mask`` is false.
         mask: ``(P, M) bool`` candidate mask; every gather is masked with it, so the
             out-of-range rows above never reach the backend.
         width: Static key width ``K``.
+        pool (ConstantPool): Per-trace rank-0 constant pool.
 
     Returns:
         ``(P, M) bool`` — True where every key column of the two rows is equal.
@@ -450,19 +585,19 @@ def _key_row_matches(
         the innermost one, where ``reduce_min`` costs an order of magnitude more than the
         ``logical_and`` fold it would replace.
     """
-    pop_size, count = int(table.shape[0]), int(table.shape[1])
+    pop_size, count = int(keys.shape[0]), int(keys.shape[1])
     digest_flat = evoxc.reshape(digest_key_cols, (pop_size, count * width))
-    safe_col = evoxc.select(mask, pop_col, _i32(0))
-    offsets = evoxc.multiply(safe_col, _i32(width))
+    safe_col = evoxc.select(mask, pop_col, pool.i32(0))
+    offsets = evoxc.multiply(safe_col, pool.i32(width))
     same = None
     for index in range(width):
         candidate = masked_flat_gather(
             digest_flat,
-            evoxc.add(offsets, _i32(index)),
+            evoxc.add(offsets, pool.i32(index)),
             mask=mask,
             fill=0,
         )
-        equal = evoxc.equal(_column(table, index), candidate)
+        equal = evoxc.equal(_column(keys, index), candidate)
         same = equal if same is None else evoxc.logical_and(same, equal)
     return same
 
@@ -509,4 +644,11 @@ class DistanceDigest(NamedTuple):
         return self._fields
 
 
-__all__ = ["DistanceDigest", "FamilyDigest", "match_rows", "prepare_family"]
+__all__ = [
+    "AlignedGenes",
+    "DistanceDigest",
+    "FamilyDigest",
+    "match_rows",
+    "measure_alignment",
+    "prepare_family",
+]

@@ -26,10 +26,11 @@ Delete-node never names an input row (`0..num_inputs-1`) or an output row (`N-nu
 
 ## Crossover semantics
 `DefaultCrossover` always keeps parent 1's structure and recombines attributes only: a gene whose exact key-column tuple has a homologue in parent 2 is crossed per attribute by `gene.crossover`, one with no homologue keeps parent 1's attributes, and padded rows stay padded.
-`alignment.find_homologous(keys1, keys2)` is the only aligner: hash → tagged `argsort` over the concatenation of both parents' hashes → adjacent `(parent 1, parent 2)` pair → full key-row confirmation. `O(M log M)`, never an `O(M^2)` scan, one batched kernel.
+`alignment.find_homologous(keys1, keys2)` is the only aligner and serves both crossover and distance: one packed `uint64` identity per key row (`row_identity`) → one `argsort` of the concatenated `2M` identities → each gene's rank as `argsort(order)` → successor test "the element right after me is a parent-2 row with my identity" → `_confirm_rows` for key columns past the packed prefix. `O(M log M)`, never an `O(M^2)` scan, one batched kernel.
 
 ## Distance semantics
 `DefaultDistance.gene_distance` = homologue table + `distance_from_rows`; the two-phase `BaseDistance.prepare`/`measure` build the same table through `digest.match_rows` and share the identical tail, so speciation runs `prepare` once and `measure` per centre at the same bits.
+`gene_distance` takes its homologue table from `alignment.find_homologous`, so both operators pay the same merge: `execute_distance` is **239 traced ops** (122 node family + 117 conn family) at `2.3 / 5.8 / 10.3 ms` for pop 100 / 500 / 1000, against 495 ops (248 + 247) at `5.4 / 15.5 / 30.0 ms` under the retired hash merge.
 Cost at pop 1000, per `measure` call over `4P = 4000` pairs: **232 traced ops, 31.3 ms → 7.8 µs per pair** (was 310 ops / 43.2 ms / 10.8 µs); `prepare` 114 ops, 3.9 ms; `Pipeline.step` 813 → 654 ms.
 `match_rows` (49 ops node / 55 conn, 6.7 / 14.9 ms) folds the key columns into injective `2**31`-radix int64 composites (never `key_span`-derived), concatenates the centre's block with the digest's **sorted** block, `argsort`s the `2M` merge, and turns that permutation into its inverse with one `scatter`; every later step then stays at the centre's own width `M` — two `flat_gather`s read the successor in merged order and the composite it carries, and a homologue is exactly "the successor is the population composite `composite + 1`", with no key-row gather and no `reduce_min`.
 That `+1` test needs no side-tag check: a centre composite is always even (tag `0`, and so is `_PAD_CENTRE`) and `_PAD_POPULATION` is even, so equality with an odd value already proves the neighbour is a real population gene.
@@ -49,12 +50,13 @@ Non-homologous slots are zeroed **before** the attribute `reduce_sum` (a `NaN * 
 ## Deviations from the pre-rewrite library (intentional)
 - The four structural operations are mutually exclusive through one shared draw; the legacy build gated each of them with an independent uniform and could apply several per individual.
 - `choose_node_key` takes the static row counts `num_inputs`/`num_outputs` (the legacy signature passed `input_idx`/`output_idx` lists); the four private mutation helpers take the trailing gate.
-- Alignment is the tagged-`argsort` merge over the concatenated key hashes (`_COLLISION_WINDOW`/`searchsorted` no longer exist); the collision window is closed by comparing the full key rows of the surviving pairs.
+- Alignment is the packed-identity rank merge over `row_identity` (`_COLLISION_WINDOW`/`searchsorted`/hash-and-confirm no longer exist in any form): the parent tag lives in the low 2 bits of the `uint64` sort key, so parent 1 sorts first inside a group of equal identities and the single `argsort` may run unstable; only key columns past the packed prefix are confirmed by `_confirm_rows`.
 - Non-finite distance weights are rejected as well as negative ones, and `compatibility_disjoint`/`compatibility_weight` are validated at construction.
 
 ## Test Strategy
 `test/unit/genome/test_mutation.py`, `test_crossover.py`, `test_distance.py` are the acceptance specs (their bodies are still `pytest.skip` placeholders, so they document the invariants rather than assert them).
 Until those bodies land, the verified evidence is scratch-kernel runs through `test/support/runner.run_defn` with hand-built payloads and a duck-typed stand-in genome: shapes/dtypes, `I_INF`⇔NaN padding pairing, key uniqueness, caps over repeated generations, add-node split output preservation, duplicate/cycle/in-degree refusal, crossover key alignment against a host `{key tuple: row}` oracle, and distance identity/symmetry/monotonicity/batching/determinism.
+The shared `find_homologous` is checked against that host oracle at key widths 1/2/3, including shuffled parent-2 rows and a case whose packed prefixes match while the third column differs (so `_confirm_rows` must reject); `execute_crossover` and `execute_distance` are additionally compared bit-for-bit against a frozen fixed-input oracle at `commit b18716e` on an evolved seed-42 population and on an `OriginConn` population.
 Trace a bound method through a closure (`lambda *a: obj.method(state, *a)`) and build rank-0 RNG keys *inside* the trace (`evoxc.random.key(seed)`), because the runner cannot carry an `evoxc` key as data.
 
 ## Known Issues
@@ -68,7 +70,7 @@ Trace a bound method through a closure (`lambda *a: obj.method(state, *a)`) and 
 ## Routing Table
 | Path | Responsibility |
 |---|---|
-| `./alignment.py` | Shared exact-key homologue table: `find_homologous(keys1, keys2)` (hash + tagged `argsort` merge) and `key_rows(keys)` (rank-2/rank-3 key-table normaliser). |
+| `./alignment.py` | The single shared homologue implementation: `find_homologous(keys1, keys2)` (packed-identity rank merge, consumed by crossover and distance alike), `row_identity`, `gather_attr_rows`, `key_rows` (rank-2/rank-3 key-table normaliser) and the private `_confirm_rows`/`_gather_rows`/`_flat_row_index`/`_pad_identity` helpers. |
 | `./mutation/` | Structural (add/delete node, add/delete conn) and value mutation: `BaseMutation`, `DefaultMutation`, `RecurrentMutation`. |
 | `./crossover/` | Outcome-preserving key alignment and attribute recombination: `BaseCrossover`, `DefaultCrossover`. |
 | `./distance/` | Compatibility distance (disjoint/excess + attribute term): `BaseDistance`, `DefaultDistance`. |

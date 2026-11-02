@@ -9,11 +9,12 @@ The operator is order-sensitive by contract: `(genome1, genome2)` = (winner, los
 ## API Surface
 `BaseCrossover.__call__(state, genome, key, node_keys1, node_attrs1, conn_keys1, conn_attrs1, node_keys2, node_attrs2, conn_keys2, conn_attrs2) -> GenomeTensors` — the generic driver: validates that all four arrays of both parents have identical shapes (`ConfigError`), `split_n(key, 2)` into one key per gene family, then per family `self.find_homologous(...)` + `self.crossover_gene_attrs(...)`, returning `GenomeTensors(node_keys1, recombined_node_attrs, conn_keys1, recombined_conn_attrs)`.
 `DefaultCrossover.__call__(...)` keeps the same signature and delegates to the base driver.
-`DefaultCrossover.find_homologous(keys1, keys2) -> (P, M) int32` delegates to `..align.find_homologous` (row into parent 2 per gene of parent 1, `I_INF` where absent or padded); it is the method the acceptance test traces, hence it takes no `state`.
-`DefaultCrossover.crossover_gene_attrs(state, gene, key, attrs1, homologous_rows, attrs2) -> (P, M, A) float32` redirects absent homologues to row `0` (`select`), makes ONE `align.gather_attr_rows` call for the whole `(P, M, A)` block, makes ONE batched `gene.crossover` call over that block, and selects `attrs1` where the homologue is `I_INF` (one rank-3 mask, so no per-column select).
+`DefaultCrossover.find_homologous(keys1, keys2) -> (P, M) int32` delegates to `../alignment.find_homologous` (row into parent 2 per gene of parent 1, `I_INF` where absent or padded); it is the method the acceptance test traces, hence it takes no `state`.
+`DefaultCrossover.crossover_gene_attrs(state, gene, key, attrs1, homologous_rows, attrs2) -> (P, M, A) float32` redirects absent homologues to row `0` (`select`), makes ONE `../alignment.gather_attr_rows` call for the whole `(P, M, A)` block, makes ONE batched `gene.crossover` call over that block, and selects `attrs1` where the homologue is `I_INF` (one rank-3 mask, so no per-column select).
 Key tables are accepted as `(P, N)` (rank 2, the payload's node-key layout) or `(P, N, 1)`; `..alignment.key_rows` normalises them to `(P, N, K)` and any other rank raises `ConfigError`.
 
-## Alignment (`align.py`, a rank merge inside this node)
+## Alignment (`../alignment.py`, the rank merge shared with distance)
+This node no longer owns an aligner: `../alignment.py` holds the one implementation both crossover and compatibility distance consume, so the two operators cannot drift apart on what a "key row" is or on how a homologue is found.
 `find_homologous` = one `argsort` per gene family: pack each key row into one `uint64` identity, concat both parents' identities, `argsort` once, take each gene's rank as the inverse permutation, and read the successor (`rank + 1`) through two row gathers — the successor's identity must equal the gene's own identity with the parent-2 tag set.
 The parent tag lives in the low `_TAG_BITS` of the sort key (parent 1 = `0`), so inside a group of equal identities parent 1 sorts first and the ordering never depends on the sort being stable — which is why the sort runs unstable (4× faster on the reference interpreter).
 The successor index is clamped to the last position; the clamped gene is its own successor and its tag differs, so the clamp cannot invent a homologue.
@@ -29,7 +30,7 @@ The one precondition of the merge is the payload's own uniqueness invariant: the
 - A gene without a homologue keeps parent 1's attributes exactly, and `gene.attr_width == 0` returns `attrs1` unchanged (a zero-width row would trip `batch_offsets`' positive-length validation).
 - Crossover never changes structure, never fills a padded row from parent 2's row at the same index, and never mixes an `I_INF` into a float array.
 - Errors: a parent shape mismatch raises `ConfigError` (`TensorNEATError`); `evoxc` errors propagate unchanged.
-- Files ≤ ~1000 lines (`base.py` ~130, `default.py` ~190, `align.py` ~390).
+- Files ≤ ~1000 lines (`base.py` ~130, `default.py` ~185; the aligner lives in `../alignment.py`, ~425 lines).
 
 ## Measured Cost (numpy reference backend, build excluded, median of 5)
 `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)` + `DefaultCrossover()`: **145 traced ops**, `4.7 / 16.6 / 34.7 ms` at pop 100 / 500 / 1000.
@@ -43,12 +44,10 @@ Verified evidence until those bodies land: a scratch oracle (`{key tuple: row}` 
 
 ## Known Issues
 - `gene.crossover` (`../gene/base.py`) is now the crossover kernel's dominant cost: 7 traced ops but **7.3 ms (node) + 9.0 ms (conn) at pop 1000** — ~46 % of the kernel's runtime, element-bound on `(P, M, A)` float blocks (its per-column uniform draw, comparison and select). It is out of this node's write scope; the alignment is no longer the bottleneck.
-- `../alignment.py::find_homologous` (167/185 traced ops) is still the older hash+tagged-argsort+`masked_flat_scatter` merge and is what `distance/default.py` uses; porting `align.py`'s rank merge there needs a write scope above this node.
-- A gene family with more than two key columns (`OriginConn`'s `historical_marker`) pays one gather plus one `equal` per spare column in `_confirm_rows`; not exercised by the benchmark config (`DefaultConn` has two key columns).
+- A gene family with more than two key columns (`OriginConn`'s `historical_marker`) pays one gather plus one `equal` per spare column in `../alignment._confirm_rows`; not exercised by the benchmark config (`DefaultConn` has two key columns).
 
 ## Routing Table
 | File | Responsibility |
 |---|---|
 | `./base.py` | `BaseCrossover`: shape validation, per-family key split, generic recombination driver, `key_rows` misuse guard. |
 | `./default.py` | `DefaultCrossover`: `find_homologous` delegation and `crossover_gene_attrs` (homologue gather + single batched gene crossover). |
-| `./align.py` | The rank merge: `row_identity` (packed key prefix), `find_homologous`, `_confirm_rows`, `gather_attr_rows`, `_gather_rows`, `_flat_row_index`, `_pad_identity`. |
