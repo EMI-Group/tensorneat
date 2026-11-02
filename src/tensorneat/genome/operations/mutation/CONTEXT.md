@@ -3,7 +3,8 @@
 ## Intent
 Turn one population-wide RNG key into an edited gene payload: at most one structural change per individual (add/delete node, add/delete connection) gated by the operator's probabilities, followed by attribute mutation of every existing gene.
 The stage split exists because the structural stage is integer-key twiddling over the payload while the value stage is float arithmetic delegated to the gene objects; `BaseMutation.__call__` runs both from one `split_n(key, 2)`.
-Nothing here allocates keys: `new_node_keys (P,)` and `new_conn_keys (P, 3)` arrive caller-allocated and population-unique.
+Nothing here allocates keys: `new_node_keys (P,)` and `new_conn_keys (P, 3)` arrive caller-allocated.
+That allocation is **not** guaranteed fresh: `algorithm/neat/neat.py::_new_gene_keys` bases it on the pre-crossover parent population while the payload mutated is the crossover child, so a child can already own the key it is handed (see Known Issues); `plan_add_node` therefore validates the allocation it receives.
 
 ## Cost model (drives every design choice here)
 The backend is the evoxc reference numpy interpreter, so a traced op costs **dispatch (~10–15 µs) plus array traffic (~0.2 µs per 1 000 elements at pop 1000)**: both op count and element volume are budget.
