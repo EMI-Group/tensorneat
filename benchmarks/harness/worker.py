@@ -384,8 +384,10 @@ def main(argv: list[str] | None = None) -> int:
 
             # The old side consumes no generation while compiling, the new side consumes one
             # (its build runs a real generation). Skipping that one from the warmup makes both
-            # sides time the same generation index; the warmup fitness values still enter the
-            # quality curve, so both sides' curves cover the same generations too.
+            # sides' *timed* samples cover the same absolute generation indices, but the skipped
+            # generation is not recorded: the new side's quality curve starts one generation
+            # later and is one entry shorter, so `final_best_fitness` is compared at each side's
+            # own last recorded generation.
             untimed = max(0, args.warmup - consumed)
             fitness_curve = []
             for _ in range(untimed):
