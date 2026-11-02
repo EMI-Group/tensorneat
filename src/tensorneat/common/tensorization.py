@@ -245,11 +245,14 @@ def derive_schedule(
             max_in_degree (int): ``K``; key_span (int): ``S``, the key-magnitude
             bound of the ``(P, S + 1)`` key→slot table. All trace-time statics.
         acyclic (bool): ``False`` (default) keeps live-cycle detection, so a
-            genome on or downstream of a cycle gets ``I_INF`` levels. ``True``
-            asserts that the population is cycle-free and drops that detection
-            from :func:`node_levels`, roughly halving the level cost; a cyclic
-            genome then gets a saturated level instead of ``I_INF``. A
-            feed-forward genome may pass ``True``, a recurrent one may not.
+            genome on or downstream of a cycle gets ``I_INF`` levels — but it pays
+            for that only where a cycle exists: :func:`node_levels` runs the
+            level-only relaxation first and a violation test sends the population
+            through the cycle-detecting path inside ``evoxc.cond`` only when some
+            member holds a cycle. ``True`` asserts that the population is
+            cycle-free and drops both, so a cyclic genome then gets a saturated
+            level instead of ``I_INF``; a feed-forward genome may pass ``True``, a
+            recurrent one may not.
 
     The statics are positional-or-keyword (not keyword-only), because
     ``evoxc.build`` mirrors a positional call while
@@ -278,7 +281,9 @@ def derive_schedule(
            ``col = rank - start[dst]``; ``in_valid`` is then free.
         5. :func:`node_levels` — longest-path relaxation in a ``while_loop``,
            inputs pinned to level 0, cycles reported as ``I_INF`` unless
-           ``acyclic`` asserts there are none.
+           ``acyclic`` asserts there are none; the cycle-detecting relaxation runs
+           only where :func:`_cycle_violation` finds an edge the levels
+           contradict.
         6. ``node_exists``, ``topo_key``, ``input_slot`` and ``output_slot`` are
            then free (``key != I_INF``/not ``NaN``, ``level * N + slot``, and two
            lookups of the shared key vectors).
@@ -323,7 +328,9 @@ def derive_schedule(
         rank, cc, dst, src, edge_valid, max_nodes, max_in_degree
     )
     in_valid = enp.not_equal(in_conn, _iinf_like(in_conn))
-    node_level = node_levels(in_conn, in_src, input_slot, max_nodes, acyclic)
+    node_level = node_levels(
+        in_conn, in_src, input_slot, max_nodes, acyclic, (src, dst, edge_valid)
+    )
     node_exists = _key_present(node_keys)
     slots = _node_slots(pop_size, max_nodes)
     has_level = enp.not_equal(node_level, _iinf_like(node_level))
@@ -715,7 +722,7 @@ def _window_table(block, updates, pop_size, max_nodes, max_in_degree):
     )
 
 
-def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False):
+def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=None):
     """Longest-path depth of every node (the level-synchronous schedule).
 
     Args:
@@ -725,13 +732,16 @@ def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False):
             exactly the padded positions — those route to the dump column.
         input_slot: ``(P, I)`` ``int32`` slots of the input nodes, pinned to 0.
         max_nodes (int): ``N``; the slot count and the scale of the loop cap.
-        acyclic (bool): ``False`` (default) detects live cycles and reports every
-            node on or downstream of one as ``I_INF``. ``True`` asserts that the
-            caller's population holds no cycle: the detection is dropped, so a
-            cyclic genome would receive a saturated (wrong) level instead of
-            ``I_INF``. ``True`` roughly halves the per-iteration cost (one
-            relaxation instead of two, no snapshot, no cycle test) and caps the
-            loop at ``N`` steps instead of ``2N``.
+        acyclic (bool): ``False`` (default) keeps the live-cycle semantics and pays
+            for them only where a cycle exists: the level-only relaxation runs
+            first, :func:`_cycle_violation` tests its output, and the
+            cycle-detecting fallback runs inside ``evoxc.cond`` only for a
+            population that fails that test. ``True`` asserts that the population
+            is cycle-free and drops test and fallback, so a cyclic genome then
+            receives a saturated (wrong) level instead of ``I_INF``.
+        edges: ``(src, dst, edge_valid)`` — the ``(P, C)`` endpoint slots and the
+            "both endpoints matched" mask of the connection rows; required when
+            ``acyclic`` is ``False``, being the fallback's trigger.
 
     Returns:
         ``(P, N)`` ``int32`` levels: ``0`` for input nodes, ``max(pred) + 1``
@@ -739,162 +749,250 @@ def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False):
         inputs, or (only with ``acyclic=False``) a node on / downstream of a cycle.
 
     Raises:
-        tensorneat.common.errors.ConfigError: If ``max_nodes`` is not positive or
-            disagrees with ``in_conn``.
+        tensorneat.common.errors.ConfigError: If a static is not positive or
+            disagrees with a tensor shape, or if ``acyclic`` is ``False`` without
+            the ``edges`` triple.
 
     Notes:
-        One ``evoxc.while_loop`` of max-plus relaxations over the ``(P, N, K)``
-        window, ``x[i] = max(x[i], max_k(x[in_src[i, k]] + 1))``, with ``-1``
-        meaning "not settled". The window's flat index block depends only on
-        ``in_src``, so it is built once outside the loop
-        (:func:`~tensorneat.common.tools.prepare_flat_index`); an iteration only
-        concatenates its ``(P, N)`` state to a one-cell ``-2`` dump column,
-        gathers through that block and folds the ``K`` candidates pairwise
-        (0.30 ms for the fold against 1.26 ms for one ``reduce_max`` over the
-        trailing axis at ``P=1000, N=50, K=8``).
+        A max-plus relaxation ``x[i] = max(x[i], max_k(x[in_src[i, k]] + 1))`` in an
+        ``evoxc.while_loop``, with ``-1`` = "not settled" and ``-2`` the dump cell's
+        value (so an unsettled predecessor is neutral and no mask is needed). The
+        window's flat index block depends only on ``in_src`` and is built once
+        outside the loop (:func:`~tensorneat.common.tools.prepare_flat_index`); an
+        iteration concatenates its ``(P, N)`` state to a one-cell ``-2`` dump
+        column, gathers through that block and folds the ``K`` candidates pairwise
+        (0.30 ms against 1.26 ms for one ``reduce_max`` over the trailing axis at
+        ``P=1000, N=50, K=8``).
 
-        ``level`` is seeded at ``0`` on the input slots (re-pinned every
-        iteration) and ``-1`` elsewhere; ``-2 + 1 = -1`` keeps an unsettled
-        predecessor neutral, so ``maximum(values, best + 1)`` needs no mask.
-        ``reach`` (only with ``acyclic=False``) is seeded at ``0`` on **every**
-        slot and never re-pinned, so it is the longest *walk* ending at each node
-        and grows without bound exactly on the nodes reachable from a cycle (a
-        walk may start on the cycle, which is why a pinned input does not freeze
-        it). Snapshotting it after iteration ``N`` of a loop that may run ``2N``
-        separates those nodes (growth between the snapshots) from the acyclic
-        ones, which converged within ``N - 1``: they become ``I_INF`` unless
-        pinned, and a ``level`` still ``-1`` marks nodes unreachable from inputs.
+        ``level`` is seeded at ``0`` on the input slots, re-pinned every iteration,
+        and at ``-1`` elsewhere. The fallback relaxes a second state, ``reach``: the
+        longest *walk* ending at each node, seeded at ``0`` on every slot and never
+        re-pinned, so it grows without bound exactly on the nodes reachable from a
+        cycle (a walk may start on the cycle, which is why a pinned input does not
+        freeze it). Snapshotting it after iteration ``N`` of a loop that may run
+        ``2N`` separates those nodes (growth between the snapshots) from the
+        acyclic ones, which converged within ``N - 1``; a ``level`` still ``-1``
+        marks a node unreachable from the inputs.
 
-        A feedforward population leaves after ``depth`` iterations (``changed ==
-        False``) at ``O(N * K)`` per iteration; only a reachable cycle pays ``2N``.
-        """
+        Both campaigns are one ``settle(cap, detect_cycles)``; the level-only one
+        leaves after ``depth`` iterations (``changed`` turns false) at ``O(N * K)``
+        per iteration, and only the fallback can reach its cap.
+    """
     max_nodes = _positive_static(max_nodes, "max_nodes")
     pop_size, nodes, width = in_conn.shape
     pop_size, nodes, width = int(pop_size), int(nodes), int(width)
     if nodes != max_nodes:
         raise ConfigError(f"in_conn node axis {nodes} does not match max_nodes {max_nodes}")
-    # The carrier holds only ``-2``, ``-1`` and settled levels, and the loop
-    # runs at most ``2N`` times, so a cyclic population reaches at most
-    # ``2N`` and an acyclic one at most ``N - 1``. Pick the narrowest integer
-    # that holds every value it can reach — a quarter of the ``int32`` gather
-    # traffic at ``N <= 127`` — and cast the result back at the end.
-    # ``no_snapshot`` sits above any reachable walk length, so "no snapshot
-    # taken yet" never reads as growth.
-    if acyclic and max_nodes <= 127:
-        value_dtype, no_snapshot = evoxc.int8, 127
-    elif acyclic and max_nodes < 32767:
-        value_dtype, no_snapshot = evoxc.int16, 32767
-    elif not acyclic and 2 * max_nodes < 32767:
-        value_dtype, no_snapshot = evoxc.int16, 32767
-    else:
-        value_dtype, no_snapshot = evoxc.int32, I_INF
-    # The dump column sits one past the last node slot and holds ``-2``: after
-    # the ``+1`` of the relaxation that is ``-1``, i.e. "this edge contributes
-    # nothing", so neither the gathered block nor the reduction needs a mask.
-    # ``in_src`` is ``I_INF`` in exactly the padded window positions, so
-    # clamping it to the slot count routes those at the dump column without a
-    # separate mask and without an ``(P, N, K)`` constant.
+    edge_src = edge_dst = edge_valid = None
+    if not acyclic:
+        if edges is None:
+            raise ConfigError(
+                "node_levels: acyclic=False needs the (src, dst, edge_valid) triple "
+                "of the connection rows for its in-graph cycle test"
+            )
+        edge_src, edge_dst, edge_valid = edges
+        for name, tensor in (
+            ("src", edge_src),
+            ("dst", edge_dst),
+            ("edge_valid", edge_valid),
+        ):
+            if int(tensor.shape[0]) != pop_size:
+                raise ConfigError(
+                    f"node_levels: {name} population axis {int(tensor.shape[0])} does "
+                    f"not match in_conn {pop_size}"
+                )
+            if int(tensor.shape[1]) != int(edge_src.shape[1]):
+                raise ConfigError(
+                    f"node_levels: {name} connection axis {int(tensor.shape[1])} does "
+                    f"not match src {int(edge_src.shape[1])}"
+                )
+    # The dump column sits one past the last node slot and holds ``-2``: after the
+    # ``+1`` of the relaxation that is ``-1``, i.e. "this edge contributes nothing",
+    # so neither the gathered block nor the reduction needs a mask. ``in_src`` is
+    # ``I_INF`` in exactly the padded window positions, so clamping it to the slot
+    # count routes those at the dump column without a separate mask and without an
+    # ``(P, N, K)`` constant.
     index = evoxc.minimum(in_src, _scalar_constant(nodes, evoxc.int32))
     flat_index = prepare_flat_index((pop_size, nodes + 1), index)
-    dump = enp.full((pop_size, 1), -2, dtype=value_dtype)
     pinned = _pinned_mask(input_slot, _node_slots(pop_size, nodes))
-    zero_level = enp.zeros((pop_size, nodes), dtype=value_dtype)
-    minus_one = enp.full((pop_size, nodes), -1, dtype=value_dtype)
-    one = _scalar_constant(1, value_dtype)
     step_one = _scalar_constant(1, evoxc.int32)
 
-    def gather_best(values):
-        """Per-node max over the gathered incoming sources (``-2`` = padding).
+    def settle(cap, detect_cycles):
+        """One relaxation campaign; ``(level, blank)`` in the raw carrier dtype."""
+        value_dtype, no_snapshot = _carrier(cap)
+        dump = enp.full((pop_size, 1), -2, dtype=value_dtype)
+        zero_level = enp.zeros((pop_size, nodes), dtype=value_dtype)
+        minus_one = enp.full((pop_size, nodes), -1, dtype=value_dtype)
+        one = _scalar_constant(1, value_dtype)
 
-        The ``K`` candidates are folded pairwise rather than with one
-        ``reduce_max``: on the numpy reference backend ``np.max`` over the
-        trailing ``K`` axis of the ``(P, N, K)`` gather costs about five times
-        the chain of ``(P, N)`` ``maximum`` ops (1.13 vs 0.21 ms at
-        ``P=1000, N=50, K=8``).
-        """
-        source = flat_gather_prepared(
-            evoxc.concatenate([values, dump], axis=1),
-            flat_index,
-            (pop_size, nodes, width),
-        )
-        best = evoxc.slice(source, (0, 0, 0), (pop_size, nodes, 1))
-        for k in range(1, width):
-            best = evoxc.maximum(
-                best, evoxc.slice(source, (0, 0, k), (pop_size, nodes, 1))
+        def gather_best(values):
+            """Per-node max over the gathered incoming sources (``-2`` = padding)."""
+            source = flat_gather_prepared(
+                evoxc.concatenate([values, dump], axis=1),
+                flat_index,
+                (pop_size, nodes, width),
             )
-        return evoxc.reshape(best, (pop_size, nodes))
+            best = evoxc.slice(source, (0, 0, 0), (pop_size, nodes, 1))
+            for k in range(1, width):
+                best = evoxc.maximum(
+                    best, evoxc.slice(source, (0, 0, k), (pop_size, nodes, 1))
+                )
+            return evoxc.reshape(best, (pop_size, nodes))
 
-    def relax(values):
-        """One max-plus step of a longest-walk relaxation (``-1`` = not settled)."""
-        best = gather_best(values)
-        # ``best < 0`` means "no settled predecessor": either every slot is the
-        # ``-2`` dump or the best real predecessor is itself still ``-1``. Both
-        # must leave ``values`` untouched instead of settling the node at ``0``
-        # (``maximum(values, -1)`` is ``values`` because ``values >= -1``).
-        return evoxc.maximum(
-            values,
-            evoxc.select(enp.greater(best, -1), evoxc.add(best, one), minus_one),
-        )
+        def relax(values):
+            """One max-plus step of a longest-walk relaxation (``-1`` = unsettled)."""
+            best = gather_best(values)
+            # ``best < 0`` means "no settled predecessor": either every slot is the
+            # ``-2`` dump or the best real predecessor is itself still ``-1``. Both
+            # must leave ``values`` untouched instead of settling the node at ``0``
+            # (``maximum(values, -1)`` is ``values`` because ``values >= -1``).
+            return evoxc.maximum(
+                values,
+                evoxc.select(enp.greater(best, -1), evoxc.add(best, one), minus_one),
+            )
 
-    def keep_going(state, limit):
-        """Loop condition; both branches carry ``(step, ..., changed)``."""
-        return enp.logical_and(enp.less(state[0], limit), state[-1])
+        def keep_going(state):
+            """Loop condition; both campaigns carry ``(step, ..., changed)``."""
+            return enp.logical_and(enp.less(state[0], cap), state[-1])
 
+        if not detect_cycles:
+            def body(state):
+                step, level, _changed = state
+                next_level = evoxc.select(pinned, zero_level, relax(level))
+                next_step = evoxc.add(step, step_one)
+                moved = enp.not_equal(next_level, level)
+                return (next_step, next_level, evoxc.reduce_max(moved))
+
+            _step, level, _changed = evoxc.while_loop(
+                keep_going,
+                body,
+                (
+                    enp.zeros((), dtype=evoxc.int32),
+                    evoxc.select(pinned, zero_level, minus_one),
+                    enp.full((), True, dtype=evoxc.bool_),
+                ),
+            )
+            blank = enp.logical_and(enp.logical_not(pinned), enp.less(level, 0))
+        else:
+            def body(state):
+                step, level, reach, reach_at, _changed = state
+                next_level = evoxc.select(pinned, zero_level, relax(level))
+                next_reach = relax(reach)
+                next_step = evoxc.add(step, step_one)
+                snapshot = enp.equal(next_step, max_nodes)
+                moved = enp.logical_or(
+                    enp.not_equal(next_level, level), enp.not_equal(next_reach, reach)
+                )
+                return (
+                    next_step,
+                    next_level,
+                    next_reach,
+                    evoxc.select(snapshot, next_reach, reach_at),
+                    evoxc.reduce_max(moved),
+                )
+
+            _step, level, reach, reach_at, _changed = evoxc.while_loop(
+                keep_going,
+                body,
+                (
+                    enp.zeros((), dtype=evoxc.int32),
+                    evoxc.select(pinned, zero_level, minus_one),
+                    zero_level,
+                    enp.full((pop_size, nodes), no_snapshot, dtype=value_dtype),
+                    enp.full((), True, dtype=evoxc.bool_),
+                ),
+            )
+            # growth between the snapshots, or never reached from the inputs
+            blank = enp.logical_and(
+                enp.logical_not(pinned),
+                enp.logical_or(enp.greater(reach, reach_at), enp.less(level, 0)),
+            )
+        return level, blank
+
+    def answer(level, blank):
+        """Map a campaign's raw carrier levels onto the public ``int32`` answer."""
+        level = evoxc.cast(level, evoxc.int32)
+        return evoxc.select(blank, _iinf_like(level), level)
+
+    fast_level, fast_blank = settle(max_nodes, False)
     if acyclic:
-        def body(state):
-            step, level, _changed = state
-            next_level = evoxc.select(pinned, zero_level, relax(level))
-            next_step = evoxc.add(step, step_one)
-            moved = enp.not_equal(next_level, level)
-            changed = evoxc.reduce_max(moved)
-            return (next_step, next_level, changed)
+        return answer(fast_level, fast_blank)
+    return evoxc.cond(
+        _cycle_violation(fast_level, edge_src, edge_dst, edge_valid, nodes),
+        lambda: answer(*settle(2 * max_nodes, True)),
+        lambda: answer(fast_level, fast_blank),
+    )
 
-        _step, level, _changed = evoxc.while_loop(
-            lambda state: keep_going(state, max_nodes),
-            body,
-            (
-                enp.zeros((), dtype=evoxc.int32),
-                evoxc.select(pinned, zero_level, minus_one),
-                enp.full((), True, dtype=evoxc.bool_),
-            ),
-        )
-        blank = enp.logical_and(enp.logical_not(pinned), enp.less(level, 0))
-    else:
-        def body(state):
-            step, level, reach, reach_at, _changed = state
-            next_level = evoxc.select(pinned, zero_level, relax(level))
-            next_reach = relax(reach)
-            next_step = evoxc.add(step, step_one)
-            snapshot = enp.equal(next_step, max_nodes)
-            moved = enp.logical_or(
-                enp.not_equal(next_level, level), enp.not_equal(next_reach, reach)
-            )
-            changed = evoxc.reduce_max(moved)
-            return (
-                next_step,
-                next_level,
-                next_reach,
-                evoxc.select(snapshot, next_reach, reach_at),
-                changed,
-            )
 
-        _step, level, reach, reach_at, _changed = evoxc.while_loop(
-            lambda state: keep_going(state, 2 * max_nodes),
-            body,
-            (
-                enp.zeros((), dtype=evoxc.int32),
-                evoxc.select(pinned, zero_level, minus_one),
-                zero_level,
-                enp.full((pop_size, nodes), no_snapshot, dtype=value_dtype),
-                enp.full((), True, dtype=evoxc.bool_),
-            ),
+def _carrier(cap):
+    """``(dtype, no_snapshot)``: the narrowest integer carrier for a ``cap``-step loop.
+
+    A relaxation value lies in ``[-2, cap]`` (``-2`` the dump cell, ``0`` a pinned
+    input, ``cap`` the largest level or walk a capped loop can reach), so ``int8``
+    serves ``cap <= 127`` and ``int16`` serves ``cap < 32767``; the choice follows
+    the static shape, never the data. ``no_snapshot`` is the cycle-detecting
+    campaign's "no snapshot taken yet" sentinel and must sit above every reachable
+    walk length (``I_INF`` for ``int32``, where no larger value exists).
+    """
+    if cap <= 127:
+        return evoxc.int8, 127
+    if cap < 32767:
+        return evoxc.int16, 32767
+    return evoxc.int32, I_INF
+
+
+def _cycle_violation(level, src, dst, edge_valid, max_nodes):
+    """0-d bool: some member has an edge whose settled levels are not increasing.
+
+    Args:
+        level: ``(P, N)`` levels of the level-only relaxation, **before** the
+            ``I_INF`` mapping — i.e. ``-1`` for "never settled" and ``0 .. N``
+            elsewhere; any integer dtype.
+        src: ``(P, C)`` ``int32`` source slots, ``I_INF`` on an absent row or an
+            unmatched key; dst: the destination slots, likewise.
+        edge_valid: ``(P, C)`` ``bool`` — the row is a real connection and both of
+            its endpoint keys matched a node.
+        max_nodes (int): ``N``.
+
+    Returns:
+        A 0-d ``bool``: ``True`` iff at least one member has a valid edge ``(u, v)``
+        with ``level[u] >= level[v]``.
+
+    Notes:
+        The exactness test of the ``acyclic=False`` fast path. A member whose levels
+        settled satisfies ``level[v] = max(level[preds]) + 1 > level[u]`` on every
+        edge, and every cycle breaks it: a reachable one grows until the cap, one
+        through a pinned input leaves its non-pinned successors growing, and an
+        unreachable one leaves both endpoints at ``-1``. A member with an
+        *unreachable edge* (a connection whose source never settles) violates it
+        too, which costs a fallback and never a wrong answer.
+
+        Two ``(P, C)`` gathers over the ``(P, N + 1)`` level vector: a slot is
+        clamped to the trailing ``-2`` dump cell, so an ``I_INF`` endpoint cannot
+        index out of range, and ``edge_valid`` masks the half-matched rows the dump
+        value would otherwise read as a violation. One ``reduce_max`` per member,
+        then one over the population — data for ``evoxc.cond``, never Python control
+        flow.
+    """
+    pop_size, nodes = int(level.shape[0]), int(level.shape[1])
+    padded = evoxc.concatenate(
+        [level, enp.full((pop_size, 1), -2, dtype=level.dtype)], axis=1
+    )
+
+    def levels_at(slots):
+        """``(P, C)`` levels of those slots; ``I_INF`` reads the ``-2`` dump cell."""
+        index = evoxc.minimum(slots, _scalar_constant(nodes, evoxc.int32))
+        return flat_gather_prepared(
+            padded,
+            prepare_flat_index((pop_size, nodes + 1), index),
+            (int(slots.shape[0]), int(slots.shape[1])),
         )
-        blank = enp.logical_and(
-            enp.logical_not(pinned),
-            enp.logical_or(enp.greater(reach, reach_at), enp.less(level, 0)),
-        )
-    level = evoxc.cast(level, evoxc.int32)
-    return evoxc.select(blank, _iinf_like(level), level)
+
+    backward = enp.logical_and(
+        edge_valid, enp.greater_equal(levels_at(src), levels_at(dst))
+    )
+    per_member = evoxc.reduce_max(evoxc.cast(backward, evoxc.int32), axes=(1,))
+    return enp.greater(evoxc.reduce_max(per_member), _scalar_constant(0, evoxc.int32))
 
 
 def _pinned_mask(input_slot, slots):
