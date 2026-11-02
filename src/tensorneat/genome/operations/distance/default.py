@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import evoxc
 import evoxc.numpy as enp
 
-from ....common import I_INF, ConfigError, State, masked_flat_gather
+from ....common import I_INF, ConfigError, State
 from ...utils import valid_count
 from ..alignment import find_homologous, key_rows
 from .base import BaseDistance
@@ -240,23 +240,33 @@ class DefaultDistance(BaseDistance):
             The count ``non_homologous = cnt1 + cnt2 - 2 * h`` charges a key missing from
             either parent once, so *disjoint* and *excess* genes share the term.  The aligned
             attribute rows are fetched from the flattened ``(P, M * A)`` view with
-            ``masked_flat_gather`` and a ``NaN`` fill, and the per-gene distances are zeroed on
-            the non-homologous slots **before** the ``reduce_sum`` — a ``NaN * 0`` product
-            would otherwise poison the whole sum.  The reduction runs over parent 1's own row
-            order in both routes, which is what keeps the float sum bit-identical.
+            attribute rows are fetched with **one unmasked** ``(P, M, A)`` gather: ``rows`` is
+            redirected to row ``0`` where it is absent, so no ``I_INF`` index reaches the
+            backend, and the per-gene distances are zeroed on the non-homologous slots
+            **before** the ``reduce_sum`` — a ``NaN * 0`` product would otherwise poison the
+            whole sum.  That masking is also what makes the ``NaN`` fill unnecessary: the
+            gathered values at absent slots are never read.  The reduction runs over parent
+            1's own row order in both routes, which is what keeps the float sum bit-identical.
         """
         pop_size, count = int(attrs1.shape[0]), int(attrs1.shape[1])
         attr_width = int(attrs1.shape[-1])
 
         homologous = evoxc.not_equal(rows, _scalar(I_INF, evoxc.int32))
-        homologous_count = valid_count(rows)
+        # ``h`` is the number of aligned genes: the ``bool`` mask reduced to a count, one
+        # reduce over the gene axis (``evoxc`` returns ``int64`` whatever the input dtype).
+        homologous_count = evoxc.cast(
+            evoxc.reduce_sum(evoxc.cast(homologous, evoxc.int32), axes=1), evoxc.int32
+        )
         non_homologous = evoxc.subtract(
             evoxc.add(cnt1, cnt2),
             evoxc.multiply(_scalar(2, evoxc.int32), homologous_count),
         )
 
         # Attribute row of parent 2 behind every gene of parent 1: the row offset is
-        # ``row * A`` and the ``(P, M, A)`` block adds the within-row column.
+        # ``row * A`` and the ``(P, M, A)`` block adds the within-row column.  ``rows`` is
+        # redirected to row ``0`` before the multiply, so no ``I_INF`` index reaches the
+        # backend and the flat index needs no range check of its own; absent slots read a
+        # real row and are masked out of the sum below instead of being filled with ``NaN``.
         safe_rows = evoxc.select(homologous, rows, _scalar(0, evoxc.int32))
         row_offsets = enp.reshape(
             evoxc.multiply(safe_rows, _scalar(attr_width, evoxc.int32)),
@@ -265,14 +275,22 @@ class DefaultDistance(BaseDistance):
         columns = enp.reshape(
             enp.arange(0, attr_width, dtype=evoxc.int32), (1, 1, attr_width)
         )
-        homologous_attrs = masked_flat_gather(
-            evoxc.reshape(attrs2, (pop_size, count * attr_width)),
-            evoxc.add(row_offsets, columns),
-            mask=enp.broadcast_to(
-                enp.reshape(homologous, (pop_size, count, 1)),
-                (pop_size, count, attr_width),
+        homologous_attrs = evoxc.reshape(
+            evoxc.gather(
+                evoxc.reshape(attrs2, (pop_size * count * attr_width,)),
+                evoxc.add(
+                    evoxc.add(row_offsets, columns),
+                    enp.reshape(
+                        enp.arange(
+                            0, pop_size * count * attr_width, count * attr_width,
+                            dtype=evoxc.int32,
+                        ),
+                        (pop_size, 1, 1),
+                    ),
+                ),
+                axis=0,
             ),
-            fill=float("nan"),
+            (pop_size, count, attr_width),
         )
         pair_distance = gene.distance(state, attrs1, homologous_attrs)
         attribute_distance = evoxc.reduce_sum(

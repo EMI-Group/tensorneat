@@ -29,8 +29,12 @@ Delete-node never names an input row (`0..num_inputs-1`) or an output row (`N-nu
 `alignment.find_homologous(keys1, keys2)` is the only aligner: hash → tagged `argsort` over the concatenation of both parents' hashes → adjacent `(parent 1, parent 2)` pair → full key-row confirmation. `O(M log M)`, never an `O(M^2)` scan, one batched kernel.
 
 ## Distance semantics
-`DefaultDistance.gene_distance` = homologue table + `distance_from_rows`; the two-phase `BaseDistance.prepare`/`measure` build the same table through `digest.match_rows` (injective `2**31`-radix int64 composites — never `key_span`-derived — one sort, adjacent-pair plus side-tag test) and share the identical tail, so speciation runs `prepare` once and `measure` per centre at the same bits: 25.4 → 14.5 ms per call and 1103 → 486 ms per speciate at pop 1000, 547 → 309 traced ops.
-Non-homologous slots are zeroed **before** the attribute `reduce_sum` (a `NaN * 0` product would poison the sum), the attribute term uses `BaseGene.distance` (`|delta|` for float columns, `!=` for int option columns), and the quotient is `select`-guarded so no pair can be `inf`/NaN.
+`DefaultDistance.gene_distance` = homologue table + `distance_from_rows`; the two-phase `BaseDistance.prepare`/`measure` build the same table through `digest.match_rows` and share the identical tail, so speciation runs `prepare` once and `measure` per centre at the same bits.
+Cost at pop 1000, per `measure` call over `4P = 4000` pairs: **232 traced ops, 31.3 ms → 7.8 µs per pair** (was 310 ops / 43.2 ms / 10.8 µs); `prepare` 114 ops, 3.9 ms; `Pipeline.step` 813 → 654 ms.
+`match_rows` (49 ops node / 55 conn, 6.7 / 14.9 ms) folds the key columns into injective `2**31`-radix int64 composites (never `key_span`-derived), concatenates the centre's block with the digest's **sorted** block, `argsort`s the `2M` merge, and turns that permutation into its inverse with one `scatter`; every later step then stays at the centre's own width `M` — two `flat_gather`s read the successor in merged order and the composite it carries, and a homologue is exactly "the successor is the population composite `composite + 1`", with no key-row gather and no `reduce_min`.
+That `+1` test needs no side-tag check: a centre composite is always even (tag `0`, and so is `_PAD_CENTRE`) and `_PAD_POPULATION` is even, so equality with an odd value already proves the neighbour is a real population gene.
+`distance_from_rows` (70 ops node / 49 conn, 5.1 / 2.5 ms) fetches the aligned attribute rows with **one unmasked** `(P, M, A)` gather — `rows` is redirected to row `0` where it is absent, so no `I_INF` index reaches the backend and no `NaN` fill is needed — and counts homologous genes as `reduce_sum` of the mask itself instead of a second `valid_count` pass over the keys.
+Non-homologous slots are zeroed **before** the attribute `reduce_sum` (a `NaN * 0` product would poison the sum), the attribute term uses `BaseGene.distance` (`|delta|` for float columns, `!=` for int option columns) and folds from the first column's term instead of an all-zero block (no `add`, no full-size `zeros` graph constant), and the quotient is `select`-guarded so no pair can be `inf`/NaN.
 
 ## Constraints
 - No `jax`/`torch`/`numpy.random`; no `vmap`/`scan`/`while_loop`/`cond`; no Python loop over individuals — operators are already batched and never sit inside the `grad` graph, so `argsort` is legal here.
@@ -39,6 +43,8 @@ Non-homologous slots are zeroed **before** the attribute `reduce_sum` (a `NaN * 
 - Rank-0 integer constants are built with `enp.full((), value, dtype=evoxc.int32)` — an `int32` tensor plus a Python literal promotes to `int64`.
 - Configuration violations raise `ConfigError` (a `TensorNEATError` subclass) at construction time; `evoxc` errors are never caught or re-wrapped.
 - Files ≤ ~1000 lines (`mutation/default.py` is the largest at ~570).
+- Traced-op budget is the lever here, but element volume is close behind: `match_rows` is `(P, 2M)` **int64** blocks (6.4 MB each at `4P`, `max_conns=100`), which is why the conn family costs twice the node family at the same op count.
+- `measure` holds one `(P, M, A)` and one `(P, 2M)` temporary per call and the digest holds four arrays per family; peak RSS at pop 1000 is 2132 MiB (pop 500: 1129 MiB), so a new full-size temporary in this path is a real regression even when it saves ops.
 
 ## Deviations from the pre-rewrite library (intentional)
 - The four structural operations are mutually exclusive through one shared draw; the legacy build gated each of them with an independent uniform and could apply several per individual.
@@ -52,7 +58,7 @@ Until those bodies land, the verified evidence is scratch-kernel runs through `t
 Trace a bound method through a closure (`lambda *a: obj.method(state, *a)`) and build rank-0 RNG keys *inside* the trace (`evoxc.random.key(seed)`), because the runner cannot carry an `evoxc` key as data.
 
 ## Known Issues
-- `pytest test/unit/genome` cannot collect while `src/tensorneat/pipeline.py` keeps a module-level `import jax`: every fixture resolves through `import tensorneat`, so all modules error before reaching this node. With a throwaway `jax` stub on `PYTHONPATH` the suite collects and reports `85 skipped`.
+- `pytest test/unit/genome` collects and reports all-skips: the module bodies never trace an operator, so no change in this node is gated by them — the evidence is a bit-exact A/B over `fitness_history`, the four payload arrays, the ten `SpeciesState` leaves and `randkey` per generation (method pointers are not stable hashes, so the run is the fingerprint).
 - `test/support/oracle.py::schedule` still passes a `level=` keyword that `common.tensorization.Transformed` no longer declares (the field is `node_level`), so oracle-based forward checks cannot run until the test-support owner updates it.
 - `BaseGenome.check_cycles` and the genome statics the mutation operator reads are implemented in `genome/base.py`; this node only calls them, so a mutation kernel traced against a real genome needs that node finished.
 

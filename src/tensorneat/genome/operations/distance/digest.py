@@ -45,7 +45,13 @@ from typing import NamedTuple
 import evoxc
 import evoxc.numpy as enp
 
-from ....common import I_INF, ConfigError, flat_gather, flat_scatter, masked_flat_gather
+from ....common import (
+    I_INF,
+    ConfigError,
+    batch_offsets,
+    flat_gather,
+    masked_flat_gather,
+)
 from ..alignment import key_rows
 
 #: Width of the side tag carried in the low bits of the composite sort key.
@@ -331,19 +337,25 @@ def match_rows(
         evoxc.ShapeError: Propagated unchanged if the concatenation disagrees on shapes.
 
     Notes:
-        One sort of the ``2 * M`` concatenation, one flat gather of its permutation (the
-        sorted block for free, instead of a second comparison sort) and one adjacency
-        comparison.
+        One sort of the ``2 * M`` concatenation, then one ``scatter`` that turns its
+        permutation into the inverse permutation, then **two centre-width gathers** — the
+        successor of each centre gene in the merged order and the digest row that successor
+        carries.  Reading the sorted block itself would be a ``2 * M``-wide gather of
+        ``int64`` composites (6.5 ms against 1.9 ms for everything else here at
+        ``4P = 4000``); the inverse permutation is what lets every later step stay at the
+        centre's own width ``M``.
         The fold is injective on the folded columns and the two sides carry different side
-        tags, so a homologous pair is exactly an adjacent ``(centre, population)`` pair whose
-        composites differ by one — no key-row gather and no ``reduce_min`` — and the tag bit
-        is checked explicitly, because ``(population, centre)`` composites can also differ by
-        one (that is what the second tag bit used to rule out).
+        tags, so a homologous pair is exactly a centre gene whose *successor* in merged order
+        is the population composite ``composite + 1`` — no key-row gather and no
+        ``reduce_min`` — and the tag bit is checked explicitly, because
+        ``(population, centre)`` composites can also differ by one (that is what the second
+        tag bit used to rule out).
         A gene with more key columns than ``_FOLDED_KEYS`` verifies the whole key row of its
         candidate pair against ``digest_key_cols``, so its homology is full-tuple key-row
         equality, never a comparison truncated to the folded columns.
-        The matched population column is written into the centre's *own* row through a
-        ``flat_scatter`` whose masked writes land in a trailing dump column.
+        The query positions are the centre's own gene rows ``0..M-1``, so the result is
+        written straight out of the ``scatter`` table — there is no second scatter over the
+        centre's row numbers and no full-size ``I_INF`` constant to fill it.
     """
     table = _key_table("measure", gene, keys)
     pop_size, count = int(table.shape[0]), int(table.shape[1])
@@ -355,87 +367,102 @@ def match_rows(
         )
     pack, valid = _pack(table)
     composite = _tagged(pack, valid, _TAG_CENTRE, _PAD_CENTRE)
+    merged_width = 2 * count
     merged = evoxc.concatenate((composite, digest_keys), axis=1)
+    merged_flat = evoxc.reshape(merged, (pop_size * merged_width,))
     order = evoxc.cast(evoxc.argsort(merged, axis=-1, stable=False), evoxc.int32)
-    # The permutation is already in hand, so a flat gather of it produces the sorted block
-    # for one cheap gather instead of a second comparison sort of the same data.
-    values = flat_gather(merged, order)
-    pair_count = 2 * count - 1
-    left = evoxc.slice(values, (0, 0), (pop_size, pair_count))
-    right = evoxc.slice(values, (0, 1), (pop_size, pair_count))
-    adjacent = evoxc.equal(right, evoxc.add(left, _i64(1)))
-    population_tagged = evoxc.equal(
-        evoxc.bitwise_and(right, _i64(1)), _i64(_TAG_POPULATION)
+    # ``order[i]`` is the merged index that sorts to position ``i``; scattering the ranks at
+    # those positions is the inverse permutation, so ``inv[j]`` is the sorted position of
+    # merged index ``j`` — i.e. of the centre gene that sits there (centre genes occupy
+    # ``merged`` positions ``0..count-1``).  Every position is written exactly once, so the
+    # scatter base is irrelevant and the rank block doubles as it.
+    offsets = batch_offsets(pop_size, merged_width)
+    ranks = enp.broadcast_to(enp.arange(0, merged_width, dtype=evoxc.int32), (pop_size, merged_width))
+    ranks_flat = evoxc.reshape(ranks, (pop_size * merged_width,))
+    inverse = evoxc.reshape(
+        evoxc.scatter(
+            ranks_flat,
+            evoxc.reshape(evoxc.add(order, offsets), (pop_size * merged_width,)),
+            ranks_flat,
+            axis=0,
+        ),
+        (pop_size, merged_width),
     )
-    homologous = evoxc.logical_and(adjacent, population_tagged)
-    centre_col = evoxc.slice(order, (0, 0), (pop_size, pair_count))
-    matched_col = evoxc.subtract(
-        evoxc.slice(order, (0, 1), (pop_size, pair_count)), _i32(count)
+    position = evoxc.slice(inverse, (0, 0), (pop_size, count))
+    successor_position = evoxc.add(position, _i32(1))
+    in_range = evoxc.less(successor_position, _i32(merged_width))
+    # The last sorted position has no successor; redirect its (masked-out) read to slot 0.
+    safe_position = evoxc.select(in_range, successor_position, _i32(0))
+    successor = evoxc.gather(
+        evoxc.reshape(order, (pop_size * merged_width,)),
+        evoxc.add(safe_position, offsets),
+        axis=0,
     )
+    candidate = evoxc.gather(
+        merged_flat, evoxc.add(successor, offsets), axis=0
+    )
+    # The successor of a centre composite is a homologue exactly when it is the population
+    # composite of the same key — ``composite + 1``, one odd value.  A centre composite is
+    # always even (its tag is 0, and so is the centre padding sentinel) and so is the
+    # population padding sentinel, so equality with that odd value already proves the
+    # candidate is a real population gene: no separate tag test is needed.
+    homologous = evoxc.equal(candidate, evoxc.add(composite, _i64(1)))
+    matched_col = evoxc.subtract(successor, _i32(count))
     if width > _FOLDED_KEYS:
         homologous = evoxc.logical_and(
             homologous,
-            _key_rows_equal(
-                table, digest_key_cols, centre_col, matched_col, homologous, width
-            ),
+            _key_row_matches(table, digest_key_cols, matched_col, homologous, width),
         )
-    # One extra trailing column absorbs every dropped write: masked-out positions carry a
-    # centre column outside ``[0, count)`` and a population column that may be negative.
-    table_out = enp.full((pop_size, count + 1), I_INF, dtype=evoxc.int32)
-    destination = evoxc.select(homologous, centre_col, _i32(count))
-    scattered = flat_scatter(table_out, destination, matched_col)
-    return evoxc.slice(scattered, (0, 0), (pop_size, count))
+    return evoxc.select(
+        in_range, evoxc.select(homologous, matched_col, _i32(I_INF)), _i32(I_INF)
+    )
 
 
-def _key_rows_equal(
+def _key_row_matches(
     table: evoxc.SymbolicTensor,
     digest_key_cols: evoxc.SymbolicTensor,
-    centre_col: evoxc.SymbolicTensor,
     pop_col: evoxc.SymbolicTensor,
     mask: evoxc.SymbolicTensor,
     width: int,
 ) -> evoxc.SymbolicTensor:
-    """Compare the full key rows of candidate ``(centre, population)`` pairs.
+    """Compare the full key row of every centre gene against its candidate digest row.
 
     Args:
         table: ``(P, M, K) int32`` centre key columns.
         digest_key_cols: ``(P, M, K) int32`` population key columns, digest order.
-        centre_col: ``(P, L) int32`` centre row of every candidate, out of range where the
-            candidate is masked out.
-        pop_col: ``(P, L) int32`` population row of every candidate, likewise.
-        mask: ``(P, L) bool`` candidate mask; every gather is masked with it, so the
+        pop_col: ``(P, M) int32`` digest row of every centre gene's candidate partner
+            (``successor - count``); out of range where ``mask`` is false.
+        mask: ``(P, M) bool`` candidate mask; every gather is masked with it, so the
             out-of-range rows above never reach the backend.
         width: Static key width ``K``.
 
     Returns:
-        ``(P, L) bool`` — True where every key column of the two rows is equal.
+        ``(P, M) bool`` — True where every key column of the two rows is equal.
+
+    Raises:
+        evoxc.ShapeError: Propagated unchanged if a key width disagrees.
 
     Notes:
         Only called for a gene whose key width exceeds ``_FOLDED_KEYS`` (a
         ``historical_marker`` column does not fit the ``int64`` composite).
-        The comparison is unrolled one column at a time — the key axis is the innermost one,
-        and an innermost-axis ``reduce_min`` over it costs an order of magnitude more than
-        the ``logical_and`` fold it would replace.
+        The comparison is unrolled one column at a time against the *centre's* row (no
+        centre-side gather at all — the query is already row-aligned), and the key axis is
+        the innermost one, where ``reduce_min`` costs an order of magnitude more than the
+        ``logical_and`` fold it would replace.
     """
     pop_size, count = int(table.shape[0]), int(table.shape[1])
-    centre_flat = evoxc.reshape(table, (pop_size, count * width))
-    pop_flat = evoxc.reshape(digest_key_cols, (pop_size, count * width))
+    digest_flat = evoxc.reshape(digest_key_cols, (pop_size, count * width))
+    safe_col = evoxc.select(mask, pop_col, _i32(0))
+    offsets = evoxc.multiply(safe_col, _i32(width))
     same = None
     for index in range(width):
-        slot = _i32(index)
-        centre_rows = masked_flat_gather(
-            centre_flat,
-            evoxc.add(evoxc.multiply(centre_col, _i32(width)), slot),
+        candidate = masked_flat_gather(
+            digest_flat,
+            evoxc.add(offsets, _i32(index)),
             mask=mask,
             fill=0,
         )
-        pop_rows = masked_flat_gather(
-            pop_flat,
-            evoxc.add(evoxc.multiply(pop_col, _i32(width)), slot),
-            mask=mask,
-            fill=0,
-        )
-        equal = evoxc.equal(centre_rows, pop_rows)
+        equal = evoxc.equal(_column(table, index), candidate)
         same = equal if same is None else evoxc.logical_and(same, equal)
     return same
 
