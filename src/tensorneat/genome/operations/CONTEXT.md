@@ -42,14 +42,16 @@ The merge algebra (injective `2**31` fold, digest-side-first concatenation so a 
 Non-homologous slots are zeroed **before** the attribute `reduce_sum` (a `NaN * 0` product would poison the sum), the attribute term uses `BaseGene.distance` (`|delta|` for float columns, `!=` for int option columns), and the empty-pair guard folds into `maximum(float32(max(cnt1, cnt2)), 1.0)` with one `divide` so no pair can be `inf`/NaN.
 
 ## Constraints
-- No `jax`/`torch`/`numpy.random`; no `vmap`/`scan`/`while_loop`/`cond`; no Python loop over individuals — operators are already batched and never sit inside the `grad` graph, so `argsort` is legal here.
+- No `jax`/`torch`/`numpy.random`; no `vmap`/`scan` over individuals; no Python loop over individuals — operators are already batched and never sit inside the `grad` graph, so `argsort` is legal here.
+- `while_loop` is allowed only where it replaces a statically unbounded unroll of *identical* work: the cycle check uses one region, and its per-hop frontier stays flat (`(P*(N+1),)` with one trailing dump column) so a hop is four `O(E)` ops.
 - Static Python `if` is used only for host configuration (probabilities, `network_type`, key width); every per-individual decision is a `select`/mask.
-- evoxc's numpy backend raises on an out-of-range gather/scatter index, so every index is masked or clamped before it reaches the backend (`masked_flat_gather`/`masked_flat_scatter` from `common.tools`).
-- Rank-0 integer constants are built with `enp.full((), value, dtype=evoxc.int32)` — an `int32` tensor plus a Python literal promotes to `int64`.
+- evoxc's numpy backend raises on an out-of-range gather/scatter index, so every index is masked or clamped before it reaches the backend (`masked_flat_gather`/`masked_flat_scatter` from `common.tools`, or a caller-provided *in-range* index where the code already guarantees it).
+- Rank-0 constants cost one traced op each and evoxc never deduplicates them: build each distinct value **once per trace** (a `ConstantPool`-style bundle threaded through the kernel, or the entry point's own bundle) rather than at every use site; a bare Python literal additionally promotes `int32`/`float32` to `int64`/`float64`, so the typed constant is still required.
 - Configuration violations raise `ConfigError` (a `TensorNEATError` subclass) at construction time; `evoxc` errors are never caught or re-wrapped.
-- Files ≤ ~1000 lines (`mutation/default.py` is the largest at ~570).
-- Traced-op budget is the lever here, but element volume is close behind: `match_rows` is `(P, 2M)` **int64** blocks (6.4 MB each at `4P`, `max_conns=100`), which is why the conn family costs twice the node family at the same op count.
-- `measure` holds one `(P, M, A)` and one `(P, 2M)` temporary per call and the digest holds four arrays per family; peak RSS at pop 1000 is 2132 MiB (pop 500: 1129 MiB), so a new full-size temporary in this path is a real regression even when it saves ops.
+- Files ≤ ~1000 lines (`mutation/base.py` 738 is the largest, then `distance/digest.py` 654, `distance/base.py` 588, `operation/alignment.py` 424).
+- Traced-op budget is the lever here, but element volume is close behind and it is what the clock pays at pop ≥ 500: the merge's `(P, 2M)` **int64** blocks are 6.4 MB each at `4P`/`max_conns=100`, which is why the conn family costs twice the node family at the same op count.
+- Element-volume rules are layout-specific and measured, not guessed: an innermost-axis reduce over the `(P, N, K)` incoming window is 10-20× an ordinary op (fold the `K` slices), while for the `(P, max_conn_tries, E)` slabs of the recurrent add-connection the **contiguous innermost** axis is the cheap one (`axes=2` 0.82 ms vs transposed 1.65 ms).
+- `measure` holds one `(P, M, A)` and one `(P, 2M)` temporary per call and the digest four arrays per family; peak RSS at pop 1000 is ~2.1 GiB (pop 500: ~1.1 GiB), so a new full-size temporary in this path is a real regression even when it saves ops.
 
 ## Deviations from the pre-rewrite library (intentional)
 - The four structural operations are mutually exclusive through one shared draw; the legacy build gated each of them with an independent uniform and could apply several per individual.
