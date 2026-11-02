@@ -360,7 +360,7 @@ def prepare_family(
     width = _key_width("prepare", gene, keys)
     pack, valid = _pack(keys, pool)
     tagged = _tagged(pack, valid, _TAG_POPULATION, _PAD_POPULATION, pool)
-    order = evoxc.argsort(tagged, axis=-1, stable=False)
+    order = evoxc.cast(evoxc.argsort(tagged, axis=-1, stable=False), evoxc.int32)
     attrs_sorted = _gather_rows(attrs, order, int(attrs.shape[-1]), pool)
     # A digest key block is always rank 3: the unf folded case keeps the *unpermuted* table
     # (nothing reads it) but still in the documented ``(P, M, K)`` spelling.
@@ -443,24 +443,30 @@ def measure_alignment(
     pack, valid = _pack(keys, pool)
     composite = _tagged(pack, valid, _TAG_CENTRE, _PAD_CENTRE, pool)
     merged_width = 2 * count
-    merged = evoxc.concatenate((composite, digest_keys), axis=1)
+    # The digest side goes first so that the merged index of a population gene *is* its
+    # digest row: the tail then reads the row table as ``successor`` and needs no
+    # ``subtract(successor, count)`` (two ops and a constant per family per call).
+    merged = evoxc.concatenate((digest_keys, composite), axis=1)
     merged_flat = evoxc.reshape(merged, (pop_size * merged_width,))
-    order = evoxc.argsort(merged, axis=-1, stable=False)
+    # ``int32`` indices: ``gather`` accepts ``int64`` too, but the 64-bit sort below and the
+    # 64-bit index blocks it would force cost ~10 % of this kernel's milliseconds for two
+    # saved casts (measured on the reference backend at P = 1000 and 4000).
+    order = evoxc.cast(evoxc.argsort(merged, axis=-1, stable=False), evoxc.int32)
     # ``order[i]`` is the merged index that sorts to position ``i``, so sorting the permutation
     # itself is its inverse: ``inverse[j]`` is the sorted position of merged index ``j`` — i.e.
-    # of the centre gene that sits there (centre genes occupy positions ``0..count-1``).
+    # of the centre gene that sits there (centre genes occupy merged columns ``count..2*count-1``).
     # ``order`` is a permutation of distinct values, so no tie-breaking (and no stability)
     # enters here.
     position = evoxc.slice(
-        evoxc.argsort(order, axis=-1, stable=False), (0, 0), (pop_size, count)
+        evoxc.cast(evoxc.argsort(order, axis=-1, stable=False), evoxc.int32),
+        (0, count),
+        (pop_size, count),
     )
     offsets = batch_offsets(pop_size, merged_width)
     # The last sorted position has no successor; clamping redirects that (necessarily
     # non-homologous, see the docstring) read to the largest composite instead of masking it.
-    successor_position = evoxc.clamp(
-        evoxc.add(position, pool.i32(1)),
-        pool.i32(0),
-        pool.i32(merged_width - 1),
+    successor_position = evoxc.minimum(
+        evoxc.add(position, pool.i32(1)), pool.i32(merged_width - 1)
     )
     successor = evoxc.gather(
         evoxc.reshape(order, (pop_size * merged_width,)),
@@ -474,7 +480,9 @@ def measure_alignment(
     # population padding sentinel, so equality with that odd value already proves the
     # candidate is a real population gene: no separate tag test is needed.
     homologous = evoxc.equal(candidate, evoxc.add(composite, pool.i64(1)))
-    matched_col = evoxc.subtract(successor, pool.i32(count))
+    # The digest side occupies merged columns ``0..count-1``, so the merged index of a
+    # population gene is its digest row: no offset arithmetic, one alias.
+    matched_col = successor
     if width > _FOLDED_KEYS:
         homologous = evoxc.logical_and(
             homologous,
