@@ -1,22 +1,15 @@
-"""Fixtures shared by the ``./unit/problem`` suites: four lazily resolved inputs,
-one fake execution schedule and the two graph runners.
+"""Fixtures shared by the ``./unit/problem`` suites: the resolved inputs, one
+fake execution schedule and the two graph runners.
 
-Two kinds of fixture live here, and both exist so that a module in this
-directory stays *collectable* (and honest) before ``src/`` is finished.
-
-**Inputs, resolved lazily.** ``import tensorneat`` still raises
-``NotImplementedError``: ``tensorneat/algorithm/base.py`` evaluates ``State()``
-as a default argument while its class body is being created, and ``State`` is a
-design skeleton. A module-scope ``from tensorneat.problem import XOR`` would
-therefore turn every module here into a collection error instead of a named
-skip. ``tensorneat.problem``, ``tensorneat.common``, ``tensorneat.algorithm``,
-``support.payloads``, ``support.oracle`` and ``support.runner`` are each
-resolved through :func:`support.lazy.require` inside a fixture body, which
-converts *only* the pending-implementation ``NotImplementedError`` into a skip;
-an ``ImportError`` (the package is broken) still surfaces. ``import
-support.lazy`` itself is deferred for the same reason ``../conftest.py``
-prepends ``test/`` to ``sys.path``: it must happen once collection has set the
-path up, not while this file is imported.
+**Inputs, resolved inside a fixture body.** ``tensorneat.problem``,
+``tensorneat.common``, ``tensorneat.algorithm``, ``support.payloads``,
+``support.oracle``, ``support.runner``, ``evoxc`` and ``evoxc.numpy`` are
+imported in the fixture body rather than at module scope, only because
+``../conftest.py`` prepends ``src/`` and ``test/`` to ``sys.path`` at collection
+time -- an import while this file is loaded would run too early. Every import is
+a plain statement: a broken or regressed module must surface as an error, never
+be converted into a skip, so a green run in this directory really executed every
+kernel it claims to.
 
 **Graph glue, one place.** ``support/runner.py`` is the only module allowed to
 call ``evoxc.build``/``run``/``lower``/``compile``/``load``
@@ -76,12 +69,12 @@ def problem():
         in ``tensorneat/problem/__init__.py``.
 
     Notes:
-        The import is deferred (see the module docstring); only the
-        pending-implementation ``NotImplementedError`` becomes a skip.
+        Imported in the body because ``../conftest.py`` sets ``sys.path`` at
+        collection time (see the module docstring).
     """
-    from support.lazy import require
+    import tensorneat.problem
 
-    return require("tensorneat.problem")
+    return tensorneat.problem
 
 
 @pytest.fixture(scope="module")
@@ -97,9 +90,9 @@ def common():
         Resolved separately from :func:`problem` so a test that only needs the
         error class does not depend on the problem subtree being importable.
     """
-    from support.lazy import require
+    import tensorneat.common
 
-    return require("tensorneat.common")
+    return tensorneat.common
 
 
 @pytest.fixture(scope="module")
@@ -116,9 +109,9 @@ def algorithm():
         One test in ``test_problem_api.py`` needs it; every other test in this
         directory works on a genome-free ``act_fn``.
     """
-    from support.lazy import require
+    import tensorneat.algorithm
 
-    return require("tensorneat.algorithm")
+    return tensorneat.algorithm
 
 
 @pytest.fixture(scope="module")
@@ -132,14 +125,13 @@ def payloads():
         when a payload is involved.
 
     Notes:
-        ``support.payloads`` imports ``tensorneat.common.tools`` at module
-        scope, so while ``src/`` is unfinished this fixture skips too -- naming
-        the payload module in the reason, which is what tells a reader which
-        slice is missing.
+        Only ``test_problem_api.py::test_the_input_and_output_arity_match_the_algorithm``
+        needs it; every other test in this directory works on a genome-free
+        ``act_fn``.
     """
-    from support.lazy import require
+    import support.payloads
 
-    return require("support.payloads")
+    return support.payloads
 
 
 @pytest.fixture(scope="module")
@@ -157,9 +149,9 @@ def oracle():
         Written from the documented algorithm, never by calling the kernel it
         checks (``../../support/CONTEXT.md``).
     """
-    from support.lazy import require
+    import support.oracle
 
-    return require("support.oracle")
+    return support.oracle
 
 
 @pytest.fixture(scope="module")
@@ -172,12 +164,12 @@ def runner():
 
     Notes:
         Suites call it through this fixture (and the two runners below) rather
-        than importing the names at module scope, so a support-slice regression
-        is reported once, as a skip naming ``support.runner``.
+        than importing the names at module scope, so ``support.runner`` stays the
+        single place that touches ``evoxc.build``/``run``/``lower``.
     """
-    from support.lazy import require
+    import support.runner
 
-    return require("support.runner")
+    return support.runner
 
 
 @pytest.fixture(scope="module")
@@ -194,9 +186,9 @@ def evoxc():
         dtypes/keys are different concerns, and a dummy ``act_fn`` usually
         needs both.
     """
-    from support.lazy import require
+    import evoxc
 
-    return require("evoxc")
+    return evoxc
 
 
 @pytest.fixture(scope="module")
@@ -212,9 +204,9 @@ def enp():
         dummy predictor is built from ``enp`` ops only -- ``np.*`` on a traced
         value would silently produce a host array at trace time.
     """
-    from support.lazy import require
+    from evoxc import numpy as enp
 
-    return require("evoxc.numpy")
+    return enp
 
 
 @pytest.fixture(scope="module")
@@ -227,21 +219,10 @@ def state(common):
         add normalization statistics).
 
     Notes:
-        ``State()`` is a skeleton right now, so this fixture skips with the
-        ``src`` slice named rather than erroring: ``import tensorneat.common``
-        can succeed while ``State.__init__`` still raises, so the
-        ``NotImplementedError`` is caught here and not only in
-        :func:`support.lazy.require`. It is module-scoped because ``State`` is
-        immutable: sharing one instance across a module cannot leak state into a
-        test.
+        Module-scoped because ``State`` is immutable: sharing one instance
+        across a module cannot leak state into a test.
     """
-    try:
-        return common.State()
-    except NotImplementedError as exc:  # src/ design skeleton, not a test failure
-        pytest.skip(
-            f"not implemented: common.State() raises {exc!r} "
-            "(owner: common/state.State.__init__)"
-        )
+    return common.State()
 
 
 @pytest.fixture(scope="module")

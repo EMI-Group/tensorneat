@@ -156,8 +156,9 @@ def apply_activation(
         act_ids: Same-shape integral ids *broadcastable* against ``z``, i.e. the
             position of the chosen kernel in ``act_fns``; ``-1`` means identity and
             is never an option index.
-        act_fns: The node gene's static option tuple; a rank-0 id outside
-            ``[0, len(act_fns))`` yields ``0.0`` (the cascade's initial value).
+        act_fns: The node gene's static option tuple; an id outside
+            ``[0, len(act_fns))`` yields ``z`` (identity, the cascade's initial
+            value, exactly as ``common.functions.act.apply_activation`` does).
 
     Returns:
         ``z``'s shape, ``float64``: ``act_fns[id](z)`` per element, ``z`` itself
@@ -174,10 +175,10 @@ def apply_activation(
         raise TypeError("every entry of act_fns must be callable")
     z = np.asarray(z, dtype=np.float64)
     ids = np.asarray(act_ids)
-    result = np.zeros_like(z)
+    result = z.copy()
     for index, fn in enumerate(fns):
         result = np.where(ids == index, fn(z), result)
-    return np.where(ids == -1, z, result)
+    return result
 
 
 # =========================================================== aggregation kernels

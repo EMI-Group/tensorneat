@@ -1,26 +1,36 @@
-"""Fixtures shared by the ``./unit/common`` suites: the three lazily resolved inputs.
+"""Fixtures shared by the ``./unit/common`` suites: the three resolved inputs.
 
-Every module in this directory needs one of three things that is not importable
-at *collection* time, so each is resolved through a fixture instead of a
-module-scope import:
+Every module in this directory needs one of three things that is better reached
+through a fixture than through a module-scope import:
 
-* ``tensorneat.common`` (:func:`common`). ``import tensorneat`` currently raises
-  ``NotImplementedError``: ``tensorneat/algorithm/base.py`` evaluates ``State()``
-  as a default argument while the class body is being created, and ``State`` is
-  a design skeleton. Deferring the import to fixture time keeps every module
-  collectable and turns the missing implementation into a named skip instead of
-  a collection error. Once ``src/`` is implemented, the import can move back to
-  module scope and this fixture becomes a one-line accessor.
-* ``support.payloads`` (:func:`payloads`) and ``support.oracle``
-  (:func:`oracle`). They are the hand-built gene payloads and the independent
-  numpy reference oracles documented in ``../../support/CONTEXT.md`` and land
-  with the support slice, so they are resolved with
-  :func:`pytest.importorskip` and reported as a skip while absent.
+* ``tensorneat.common`` (:func:`common`). A plain module-scoped accessor: the
+  package is implemented and ``import tensorneat.common`` succeeds, so the
+  fixture only keeps that import out of this file's module scope and gives every
+  test in the directory one spelling of it.
+* ``support.payloads`` (:func:`payloads`) and ``support.oracle`` (:func:`oracle`).
+  They are the hand-built gene payloads and the independent numpy reference
+  oracles documented in ``../../support/CONTEXT.md``, i.e. sibling deliverables
+  of this suite, so they are resolved with :func:`pytest.importorskip` and an
+  environment without them skips the dependent tests with a reason instead of
+  failing at collection.
 
-Nothing here imports ``jax``/``torch``, ``numpy`` or ``evoxc``: the fixtures
-return modules, and the suites import what they need from them. That keeps the
-per-test guard in ``../conftest.py`` (no optional framework may enter
-``sys.modules``) honest for every module in this directory.
+Nothing here imports ``jax``/``torch``, ``numpy``, ``evoxc`` or ``tensorneat``
+at module scope: the fixtures return modules, and the suites import what they
+need from them. That keeps the per-test guard in ``../conftest.py`` (no optional
+framework may enter ``sys.modules``) honest for every module in this directory.
+
+Known side effect of :func:`common`: ``import tensorneat.common`` executes
+``src/tensorneat/__init__.py``, which imports the legacy JAX ``pipeline.py``,
+so ``jax``/``jaxlib`` enter ``sys.modules`` the first time the fixture runs.
+``../conftest.py``'s guard freezes a session baseline at session start and
+records every import statement of a forbidden module, attributed to the file
+that executed it.
+It therefore does observe an import this fixture causes, at module scope or
+inside a test body, and not only a module arriving after the test began.
+It excuses an import executed from ``src/`` — which is exactly this
+``pipeline.py`` — and one executed from ``pytest.importorskip``.
+The cause lies in ``src/`` — the ``pipeline.py`` rewrite away from JAX — and
+``test/release_gate_no_jax.py`` is where that failure is owned.
 """
 
 from __future__ import annotations
@@ -35,18 +45,9 @@ def common():
     Returns:
         The imported package, so a test reads ``common.tools.flat_gather`` /
         ``common.State`` / ``common.tensorization.validate_schedule``.
-
-    Notes:
-        The import is deferred (see the module docstring): ``import tensorneat``
-        raises ``NotImplementedError`` from the ``src/`` design skeletons today,
-        and only that pending-implementation error is turned into a skip —
-        an ``ImportError`` or any other failure still surfaces as an error,
-        because those mean the package is broken, not unfinished.
     """
-    try:
-        import tensorneat.common as package
-    except NotImplementedError as exc:  # src/ design skeleton, not a test failure
-        pytest.skip(f"not implemented: importing tensorneat.common raises {exc!r}")
+    import tensorneat.common as package
+
     return package
 
 
@@ -55,13 +56,15 @@ def payloads():
     """The hand-built gene payloads of ``../../support/payloads.py``.
 
     Returns:
-        The ``support.payloads`` module: ``new_payload``, ``set_node``,
-        ``set_conn``, ``chain_payload``, ``skip_payload``, ``isolated_payload``,
-        ``ring_payload``, ``default_genome``, ``genome_state`` and ``I_INF``.
+        The ``support.payloads`` module: the ``Payload`` container plus
+        ``new_payload``, ``set_node``, ``set_conn``, the canonical topologies
+        ``chain_payload``, ``skip_payload``, ``isolated_payload`` and
+        ``ring_payload``, the ``default_genome``/``recurrent_genome``/
+        ``genome_state`` hosts, ``I_INF`` and the ``DEFAULT_*`` shape knobs.
 
     Notes:
-        ``importorskip`` (not a plain import) because the support slice is a
-        sibling deliverable: while it is missing the dependent tests skip with
+        ``importorskip`` (not a plain import) because the support modules are a
+        sibling deliverable: while one is missing the dependent tests skip with
         this reason instead of failing collection.
     """
     return pytest.importorskip(
@@ -76,8 +79,10 @@ def oracle():
 
     Returns:
         The ``support.oracle`` module: ``schedule`` (the reference tensorization
-        derivation) and, for the other suites, ``forward``/``func_fit_loss``/
-        ``cartpole_rollout``.
+        derivation), ``forward``, ``func_fit_loss``, ``cartpole_params`` /
+        ``cartpole_rollout``, the ``default_node_attrs_of`` /
+        ``default_conn_attr_of`` decoders, and the re-exported ``act_*`` /
+        ``agg_*`` kernels with ``apply_activation`` / ``apply_aggregation``.
 
     Notes:
         Oracle code is written from the documented algorithm, never by calling

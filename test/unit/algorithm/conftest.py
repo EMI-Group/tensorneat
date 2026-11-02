@@ -1,84 +1,80 @@
-"""Fixtures shared by the ``./unit/algorithm`` suites: the lazily resolved inputs.
-
-Every module in this directory depends on something that is **not importable at
-collection time**, so each is resolved through a fixture instead of a module-scope
-import:
-
-* the algorithm modules under test — ``tensorneat.algorithm.neat.species``
-  (:func:`species`), ``tensorneat.algorithm.neat.neat`` (:func:`neat_module`) —
-  and the two containers they share, ``tensorneat.common`` (:func:`common`) and
-  ``tensorneat.common.errors`` (:func:`errors`).  ``import tensorneat``
-  currently raises ``NotImplementedError``: ``tensorneat/algorithm/base.py``
-  evaluates ``State()`` as a default argument while the class body is being
-  created, and ``State`` is a design skeleton.  Deferring the import to fixture
-  time keeps every module collectable and turns the missing implementation into
-  a named skip instead of a collection error.  Once ``src/`` is implemented the
-  imports can move back to module scope and these fixtures become one-line
-  accessors.
-* ``support.payloads`` (:func:`payloads`) — the hand-built gene payloads and the
-  canonical genome factories of ``../../support``, a sibling deliverable, so it
-  is a skip while absent rather than a failure.  ``support.runner`` imports only
-  ``evoxc`` and is therefore safe to import at module scope; the suites do that
-  and never re-implement the build/run dance.
+"""Fixtures shared by the ``./unit/algorithm`` suites: modules, tables and graph runners.
 
 Two layers of fixtures
 ----------------------
-The ``scope="module"`` fixtures return **modules** and build nothing, so a suite
-that only needs ``TensorNEATError`` does not pay for a genome.  The
-function-scoped factories build the small host objects every suite shares — a
-``SpeciesController`` over ``P = 8`` / ``S = 4``, a ``SpeciesState`` from
-hand-written tables, a ``NEAT`` over the canonical genome — and may be written
-as plain constructor calls because their *first* argument is the module fixture,
-which skips before the body runs.
+The ``scope="module"`` fixtures return **modules** and build nothing, so a suite that
+only needs ``TensorNEATError`` does not pay for a genome.  The function-scoped
+factories build the small host objects every suite shares -- a ``SpeciesController``
+over ``P = 8`` / ``S = 4``, a ``SpeciesState`` from hand-written tables, a ``NEAT``
+over the canonical ``DefaultGenome`` -- and may be written as plain constructor calls
+because their *first* argument is a module fixture.
 
 How a kernel is executed
 ------------------------
 Only through ``support.runner`` (``run_defn`` for a ``@evoxc.defn`` or any plain
-closure, ``run_graph`` for an already traced ``Graph``).  ``evoxc.build`` turns
-only a ``numpy.ndarray`` argument into a graph input; every other argument is
-baked into the trace as a constant, so a test passes the tensor *leaves*
-positionally and rebuilds the immutable container (``State`` /
-``SpeciesState``) **inside** the traced closure.  :func:`species_kernel` is that
-closure for every ``SpeciesController`` helper that takes a ``SpeciesState``::
+closure).  ``evoxc.build`` turns only a ``numpy.ndarray`` argument into a graph input;
+every other argument is baked into the trace as a constant, so a test passes the
+tensor *leaves* positionally and rebuilds the immutable container (``State`` /
+``SpeciesState``) **inside** the traced closure.  Two runners cover the whole species
+surface:
 
-    spawn = species_kernel("_cal_spawn_numbers_by_rank", controller(...), bookkeeping)
+* :func:`species_kernel` -- ``run(method, bookkeeping, *extra)``.  The ten
+  ``SpeciesState`` fields travel first, in ``dataclasses.fields`` order, so the
+  runner never hard-codes the field list; the table is rebuilt inside the trace.
+* :func:`raw_kernel` -- ``run(method, *arrays)``.  No ``SpeciesState`` at all, for the
+  pure helpers (``_prefix_sum_exclusive``, ``_sort_desc_legacy``, ``_block_layout``).
 
-``run_defn`` returns host numpy leaves (``to_numpy`` unwraps a nested result),
-which is what lets a test compare against a plain-numpy oracle and print it on
-failure.  A ``Defn`` object is not callable and statics are passed positionally,
-so a kernel with keyword-only configuration is bound with ``functools.partial``.
+Both look the method up on the *class*, pass the controller explicitly for an
+instance method and omit it for a ``staticmethod`` (``inspect.getattr_static``
+decides), so the controller stays a host-side configuration value baked into the
+trace instead of something a test re-registers.  ``run_defn`` returns host numpy
+leaves, which is what lets a test compare against a plain-numpy oracle and print it
+on failure.
 
-Nothing here imports ``jax``/``torch`` or builds an evoxc graph.  The per-test
-guard in ``../conftest.py`` (no optional framework may enter ``sys.modules``)
-therefore stays honest for every module in this directory, and the numpy
-reference backend is the only one exercised.
+Import policy
+-------------
+``tensorneat`` is imported at module scope here: ``src/`` is implemented, so the
+former ``support.lazy.require`` skip dance is gone.  The import happens at collection
+time, before the per-test guard in ``../conftest.py`` snapshots ``sys.modules``.
+``import tensorneat`` still loads the legacy JAX ``src/tensorneat/pipeline.py``
+through ``tensorneat/__init__``, so this suite needs ``jax`` installed until that file
+becomes evoxc-native; no test *uses* jax, and the algorithm subtree itself is
+jax-free.  ``support.payloads`` is imported at module scope for the same reason.
+
+Nothing here builds a graph, and backend is always ``"numpy"``.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import inspect
 
 import numpy as np
 import pytest
 
-from support.lazy import require
+from support import payloads as payloads_module
 from support.runner import run_defn, to_numpy
 
-#: Population size of the hand-built tables.  Small on purpose: every assertion
-#: below is readable by hand, and the species algebra is O(species_size ×
-#: pop_size) so the whole suite stays under a second once implemented.
+import tensorneat.algorithm.neat.neat as neat_module_under_test
+import tensorneat.algorithm.neat.species as species_module
+import tensorneat.common as common_module
+import tensorneat.common.errors as errors_module
+
+#: Population size of the hand-built tables.  Small on purpose: every assertion in
+#: the suites is readable by hand, and the species algebra is O(species_size ×
+#: pop_size) so the whole directory stays under a few seconds.
 POP_SIZE = 8
 #: Species-slot capacity of the hand-built tables (two live, two dead by default).
 SPECIES_SIZE = 4
 #: Static node/connection capacities used by the fake payloads.
 MAX_NODES = 8
 MAX_CONNS = 16
-#: ``DefaultNode.length`` = one key column + ``bias, response, aggregation,
-#: activation``; ``DefaultConn.length`` = ``(input_index, output_index)`` +
-#: ``weight``.  Only the species centre tensors use them, and those are never
-#: read by the algebra under test except in ``speciate``.
-NODE_LEN = 5
-CONN_LEN = 3
+#: Gene widths of the default gene stack (``payloads`` documents the column order):
+#: ``DefaultNode`` has four attribute columns, ``DefaultConn`` two key columns
+#: (``input_index``/``output_index``, no ``historical_marker``) and one ``weight``.
+NODE_ATTR_WIDTH = 4
+CONN_KEY_WIDTH = 2
+CONN_ATTR_WIDTH = 1
 
 
 # --------------------------------------------------------------------------- #
@@ -93,14 +89,8 @@ def species():
     Returns:
         The imported module, so a test reads ``species.SpeciesController`` and
         constructs ``species.SpeciesState`` tables directly.
-
-    Notes:
-        The import is deferred (see the module docstring) and only the pending
-        ``NotImplementedError`` becomes a skip: an ``ImportError`` or any other
-        failure still surfaces, because those mean the package is broken, not
-        unfinished.
     """
-    return require("tensorneat.algorithm.neat.species")
+    return species_module
 
 
 @pytest.fixture(scope="module")
@@ -108,16 +98,16 @@ def neat_module():
     """The ``tensorneat.algorithm.neat.neat`` module: ``NEAT`` and ``_sanitize_fitness``.
 
     Returns:
-        The imported module.  It is named ``neat_module`` rather than ``neat`` so
-        an *algorithm instance* fixture can keep the shorter, more readable name
-        in the suites that need one.
+        The imported module.  It is named ``neat_module`` rather than ``neat`` so an
+        *algorithm instance* fixture keeps the shorter, more readable name in the
+        suites that need one.
 
     Notes:
-        ``_sanitize_fitness`` lives at module scope (it is a pure function of the
-        fitness vector and ``pop_size``), so it is reached through this module
-        rather than through an instance.
+        ``_sanitize_fitness`` lives at module scope (a pure function of the fitness
+        vector and ``pop_size``), so it is reached through this module rather than
+        through an instance.
     """
-    return require("tensorneat.algorithm.neat.neat")
+    return neat_module_under_test
 
 
 @pytest.fixture(scope="module")
@@ -126,10 +116,10 @@ def common():
 
     Returns:
         The imported package.  ``State`` is the immutable container the controller
-        methods receive; the suites build one with
-        :func:`algorithm_state` rather than constructing it themselves.
+        methods receive; the suites build one with :func:`algorithm_state` rather than
+        constructing it themselves.
     """
-    return require("tensorneat.common")
+    return common_module
 
 
 @pytest.fixture(scope="module")
@@ -137,10 +127,10 @@ def errors():
     """The ``tensorneat.common.errors`` module: the ``TensorNEATError`` family.
 
     Returns:
-        The imported module, so a constructor-rejection test asserts the
-        documented *type* (``errors.TensorNEATError``) rather than a message.
+        The imported module, so a constructor-rejection test asserts the documented
+        *type* (``errors.TensorNEATError``) rather than a message.
     """
-    return require("tensorneat.common.errors")
+    return errors_module
 
 
 @pytest.fixture(scope="module")
@@ -148,16 +138,10 @@ def payloads():
     """The hand-built payload builders of ``../../support/payloads.py``.
 
     Returns:
-        The ``support.payloads`` module: ``new_payload``, ``set_node``,
-        ``set_conn``, the canonical topologies, ``default_genome`` and
-        ``I_INF``.
-
-    Notes:
-        ``support.payloads`` imports ``tensorneat.common.tools`` at module scope,
-        so it is a skip while the package is a skeleton — exactly like the
-        modules under test.
+        ``support.payloads``: ``new_payload``, ``set_node``, ``set_conn``, the
+        canonical topologies, ``default_genome`` and ``I_INF``.
     """
-    return require("support.payloads")
+    return payloads_module
 
 
 # --------------------------------------------------------------------------- #
@@ -169,18 +153,18 @@ def payloads():
 def controller(species):
     """Factory: ``make(**overrides) -> SpeciesController`` over ``P = 8``, ``S = 4``.
 
-    Every constructor argument defaults to the value the suites assert against,
-    so a test overrides exactly the knob it is about::
+    Every constructor argument defaults to the value the suites assert against, so a
+    test overrides exactly the knob it is about::
 
         controller(spawn_number_change_rate=0.0, species_number_calculate_by="fitness")
 
     Returns:
-        A callable taking ``SpeciesController`` keyword arguments and returning
-        the controller.
+        A callable taking ``SpeciesController`` keyword arguments and returning the
+        controller.
 
     Notes:
-        The controller is a pure host-side configuration object (no tensor is
-        built in ``__init__``), which is why this factory is not traced.
+        The controller is a pure host-side configuration object (no tensor is built in
+        ``__init__``), which is why this factory is not traced.
     """
 
     def make(**overrides):
@@ -219,14 +203,20 @@ def species_state(species):
     ``5..7`` to key ``1``; ``next_species_key`` is ``2.0`` (``0`` is the initial
     species, so the counter starts at ``1`` and two keys are already in use).
 
+    The four centre fields are the **split payload arrays** of the documented
+    ``SpeciesState`` (``center_node_keys``/``center_node_attrs``/
+    ``center_conn_keys``/``center_conn_attrs``) -- never packed integer gene rows.
+    They are zero-filled here because the algebra under test does not read them; only
+    ``speciate`` does, and its suite overrides them with real payloads.
+
     Returns:
         A callable taking ``SpeciesState`` keyword overrides and returning the
         dataclass with every field present.
 
     Notes:
-        A dead slot is dead *only* because its key is ``NaN`` — the centre rows are
-        zero-filled integers here and are equally never read, which is what the
-        dead-slot test asserts.
+        A dead slot is dead *only* because its key is ``NaN`` -- its centre rows hold
+        stale zeros (``int32`` cannot carry ``NaN``) and are equally never read, which
+        is what the dead-slot test asserts.
     """
 
     def make(**overrides):
@@ -236,8 +226,10 @@ def species_state(species):
             last_improved=np.array([0.0, 3.0, np.nan, np.nan], np.float32),
             member_count=np.array([5.0, 3.0, np.nan, np.nan], np.float32),
             idx2species=np.array([0, 0, 0, 0, 0, 1, 1, 1], np.float32),
-            center_nodes=np.zeros((SPECIES_SIZE, MAX_NODES, NODE_LEN), np.int32),
-            center_conns=np.zeros((SPECIES_SIZE, MAX_CONNS, CONN_LEN), np.int32),
+            center_node_keys=np.zeros((SPECIES_SIZE, MAX_NODES), np.int32),
+            center_node_attrs=np.zeros((SPECIES_SIZE, MAX_NODES, NODE_ATTR_WIDTH), np.float32),
+            center_conn_keys=np.zeros((SPECIES_SIZE, MAX_CONNS, CONN_KEY_WIDTH), np.int32),
+            center_conn_attrs=np.zeros((SPECIES_SIZE, MAX_CONNS, CONN_ATTR_WIDTH), np.float32),
             next_species_key=np.float32(2.0),
         )
         fields.update(overrides)
@@ -250,34 +242,44 @@ def species_state(species):
 def algorithm_state(common, species_state):
     """Factory: wrap a ``SpeciesState`` into the ``State`` the controller methods take.
 
-    ``SpeciesController.update_species``/``speciate`` read ``state.species``,
-    ``state.pop_nodes``, ``state.pop_conns``, ``state.generation`` and (for the
-    parent draw) ``state.randkey``; this factory registers exactly those entries::
+    ``SpeciesController.speciate`` reads ``state.species``, the population payload and
+    ``state.generation``; ``update_species`` additionally reads ``state.randkey``.  The
+    payload is registered under the documented split keys
+    (``pop_node_keys``/``pop_node_attrs``/``pop_conn_keys``/``pop_conn_attrs``) or as
+    one ``pop`` entry holding a ``GenomeTensors``::
 
-        state = algorithm_state(bookkeeping, pop_nodes=nodes, pop_conns=conns,
+        state = algorithm_state(bookkeeping, pop=payload,
                                 generation=1.0, randkey=evoxc_key)
 
     Returns:
-        A callable ``make(bookkeeping, *, pop_nodes, pop_conns, generation=0.0,
-        randkey=None)`` returning a ``tensorneat.common.State``.
+        A callable ``make(bookkeeping, *, pop=None, generation=0.0, randkey=None)``
+        returning a ``tensorneat.common.State``.
 
     Notes:
         ``generation`` is stored as a 0-d ``float32`` because that is what the
         algorithm registers (stagnation arithmetic writes it into the float32
         ``last_improved`` field).  ``randkey`` is optional so a test about a
-        deterministic step (speciation, spawn allocation) cannot accidentally
-        depend on one.
+        deterministic step (speciation, spawn allocation) cannot accidentally depend
+        on one.  The payload arrays stay plain numpy: a runner hands them to
+        ``evoxc.build`` as graph inputs and rebuilds the container inside the trace.
     """
 
-    def make(bookkeeping, *, pop_nodes, pop_conns, generation=0.0, randkey=None):
+    def make(bookkeeping, *, pop=None, generation=0.0, randkey=None):
         entries = dict(
-            pop_nodes=pop_nodes,
-            pop_conns=pop_conns,
             generation=np.float32(generation),
             species=bookkeeping,
         )
         if randkey is not None:
             entries["randkey"] = randkey
+        if pop is not None:
+            split = getattr(pop, "_fields", None)
+            if split and len(split) == 4:
+                entries["pop_node_keys"] = np.asarray(pop.node_keys)
+                entries["pop_node_attrs"] = np.asarray(pop.node_attrs)
+                entries["pop_conn_keys"] = np.asarray(pop.conn_keys)
+                entries["pop_conn_attrs"] = np.asarray(pop.conn_attrs)
+            else:
+                entries["pop"] = pop
         return common.State(**entries)
 
     return make
@@ -287,8 +289,8 @@ def algorithm_state(common, species_state):
 def neat(neat_module, payloads):
     """Factory: ``make(**overrides) -> NEAT`` over the canonical ``DefaultGenome``.
 
-    The genome comes from ``payloads.default_genome()`` (2 inputs, 1 output,
-    ``max_nodes = 8``, ``max_conns = 16``, default gene/operator stack) and the
+    The genome comes from ``payloads.default_genome()`` (2 inputs, 1 output, its own
+    default ``max_nodes``/``max_conns`` and the default gene/operator stack) and the
     population/species sizes default to this suite's ``P = 8`` / ``S = 4`` with no
     ``pop_batch_size`` chunking.
 
@@ -296,56 +298,134 @@ def neat(neat_module, payloads):
         A callable taking ``NEAT`` keyword arguments and returning the algorithm.
 
     Notes:
-        The genome is constructed, never initialized: ``NEAT.setup`` is the
-        workload that draws the first population, and a test that only checks
-        constructor validation must not pay for it.
+        The genome is constructed, never initialized: ``NEAT.setup`` is the workload
+        that draws the first population, so a test that only checks constructor
+        validation must not pay for it.
     """
 
     def make(**overrides):
-        config = dict(genome=payloads.default_genome(), pop_size=POP_SIZE, species_size=SPECIES_SIZE)
+        config = dict(
+            genome=payloads.default_genome(), pop_size=POP_SIZE, species_size=SPECIES_SIZE
+        )
         config.update(overrides)
         return neat_module.NEAT(**config)
 
     return make
 
 
+# --------------------------------------------------------------------------- #
+# graph runners
+# --------------------------------------------------------------------------- #
+
+
+def _needs_controller(species, method_name):
+    """True when ``method_name`` is a plain instance method (vs. a ``staticmethod``)."""
+    raw = inspect.getattr_static(species.SpeciesController, method_name)
+    return not isinstance(raw, staticmethod)
+
+
+def _host(value, species):
+    """Host numpy view of a kernel result, including a returned ``SpeciesState``."""
+    value = to_numpy(value)
+    if isinstance(value, species.SpeciesState):
+        return {
+            field.name: to_numpy(getattr(value, field.name))
+            for field in dataclasses.fields(species.SpeciesState)
+        }
+    return value
+
+
 @pytest.fixture
 def species_kernel(species):
-    """Factory: run one ``SpeciesController`` method in a graph and return host numpy.
+    """Factory: run one ``SpeciesController`` method over a ``SpeciesState`` in a graph.
 
     Usage::
 
-        spawn = species_kernel("_cal_spawn_numbers_by_rank", controller(), bookkeeping)
+        spawn = species_kernel("_cal_spawn_numbers_by_rank", bookkeeping)
         winner, loser, elite = species_kernel(
-            "_pair_parents", controller(), bookkeeping, selection_key, spawn, fitness
+            "_pair_parents", bookkeeping, selection_key, spawn, fitness
         )
+        sorted_fields = species_kernel("_gather_species", bookkeeping, order)
 
-    The dataclass fields travel as graph inputs (in ``dataclasses.fields`` order, so
-    the fixture never hard-codes the field list) and any ``extra`` numpy array — a
-    selection key, a spawn vector, a fitness vector — travels after them.  The
-    ``SpeciesState`` is rebuilt inside the traced closure because
-    ``evoxc.build`` only turns an ``ndarray`` argument into an input.
+    The dataclass fields travel as graph inputs in ``dataclasses.fields`` order (the
+    fixture never hard-codes the field list) and any ``extra`` numpy array -- a
+    selection key, a spawn vector, a fitness vector -- travels after them.  The
+    ``SpeciesState`` is rebuilt inside the traced closure because ``evoxc.build`` only
+    turns an ``ndarray`` argument into an input.
 
     Returns:
-        A callable ``run(method_name, controller, bookkeeping, *extra)`` returning
-        the method's output with ``evoxc.Tensor`` leaves replaced by numpy.
-
-    Notes:
-        The method is looked up on the *class* and called with the controller
-        explicitly, so the controller stays a host-side static closure value rather
-        than something a test has to re-register inside the trace.
+        A callable ``run(method_name, bookkeeping, *extra, controller=None)``.  When
+        ``controller`` is omitted a default controller (this suite's standard
+        configuration) is built, so a test that only reads a documented default needs
+        no factory.  A ``SpeciesState`` result is returned as a field-name → numpy
+        ``dict``; anything else is returned as ``to_numpy`` produced it.
     """
     names = [field.name for field in dataclasses.fields(species.SpeciesState)]
 
-    def run(method_name, controller, bookkeeping, *extra):
+    def run(method_name, bookkeeping, *extra, controller=None):
+        if controller is None:
+            controller = species.SpeciesController(
+                pop_size=POP_SIZE,
+                species_size=SPECIES_SIZE,
+                max_stagnation=15,
+                species_elitism=2,
+                spawn_number_change_rate=0.5,
+                genome_elitism=2,
+                survival_threshold=0.1,
+                min_species_size=1,
+                compatibility_threshold=2.0,
+            )
         arrays = [np.asarray(getattr(bookkeeping, name)) for name in names]
         method = getattr(species.SpeciesController, method_name)
+        bound = _needs_controller(species, method_name)
 
         def kernel(*values):
             table = species.SpeciesState(*values[: len(names)])
-            return method(controller, table, *values[len(names) :])
+            tail = values[len(names) :]
+            if bound:
+                return method(controller, table, *tail)
+            return method(table, *tail)
 
-        return to_numpy(run_defn(kernel, *(arrays + list(extra))))
+        return _host(run_defn(kernel, *(arrays + list(extra))), species)
 
     return run
 
+
+@pytest.fixture
+def raw_kernel(species):
+    """Factory: run a ``SpeciesController`` helper that takes no ``SpeciesState``.
+
+    Usage::
+
+        loc, idx_in_block = raw_kernel("_block_layout", spawn)
+        prefix = raw_kernel("_prefix_sum_exclusive", values)
+        order = raw_kernel("_sort_desc_legacy", values)
+
+    Returns:
+        A callable ``run(method_name, *arrays, controller=None)`` returning host numpy.
+
+    Notes:
+        ``_block_layout`` is an instance method (it needs ``pop_size``/``species_size``)
+        while the two utilities are ``staticmethod``s; the runner decides from the
+        class attribute so the call sites stay uniform.
+    """
+    def run(method_name, *arrays, controller=None):
+        if controller is None:
+            controller = species.SpeciesController(
+                pop_size=POP_SIZE,
+                species_size=SPECIES_SIZE,
+                max_stagnation=15,
+                species_elitism=2,
+                spawn_number_change_rate=0.5,
+                genome_elitism=2,
+                survival_threshold=0.1,
+                min_species_size=1,
+                compatibility_threshold=2.0,
+            )
+        method = getattr(species.SpeciesController, method_name)
+        bound = _needs_controller(species, method_name)
+        if bound:
+            return _host(run_defn(lambda *values: method(controller, *values), *arrays), species)
+        return _host(run_defn(lambda *values: method(*values), *arrays), species)
+
+    return run
