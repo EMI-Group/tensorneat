@@ -243,7 +243,7 @@ def _skipped_record(protocol, case, args, thread_env: dict[str, str]) -> dict:
             f"{args.impl} is not applicable"
         ),
         case_config=case.as_dict(),
-        env=protocol.env_report(),
+        env=protocol.env_report(threads=args.threads),
         protocol=_protocol_block(
             warmup=args.warmup,
             timed=args.generations,
@@ -277,7 +277,7 @@ def _error_record(
     env: dict = {}
     if protocol is not None:
         try:
-            env = protocol.env_report()
+            env = protocol.env_report(threads=args.threads)
         except Exception:  # noqa: BLE001 - a broken probe must not lose the traceback
             env = {}
     return {
@@ -388,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
             status=protocol.STATUS_OK,
             case_config=case.as_dict(),
-            env=protocol.env_report(),
+            env=protocol.env_report(threads=args.threads),
             protocol=_protocol_block(
                 warmup=args.warmup,
                 timed=args.generations,
