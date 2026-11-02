@@ -29,6 +29,7 @@ version needed.
 from typing import NamedTuple
 import evoxc
 import evoxc.numpy as enp
+from ...window import fill
 from .consts import ConstantPool
 
 
@@ -46,11 +47,15 @@ class DenseLayout(NamedTuple):
         offsets (evoxc.SymbolicTensor): ``(P, 1) int32`` ``arange(0, P * (M + 1), M + 1)`` —
             the row stride of the flat reorder scatter.
         base (evoxc.SymbolicTensor): ``(P * (M + 1),) float32`` zero base of the reorder
-            buffer (the trailing column is the dump column and is never read).
+            buffer (the trailing column is the dump column and is never read).  Built with
+            :func:`~tensorneat.genome.window.fill`, i.e. one element plus a broadcast: an
+            ``enp.zeros`` of this shape would bake ``4 * P * (M + 1)`` bytes per family
+            (608 000 B for both families at ``P = 1000``).
         count_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` gene count ``M``.
         zeros (evoxc.SymbolicTensor): ``(P,) float32`` zeros — the attribute term of a family
             with no attribute column, so both families always contribute one and the shared
-            scalar tail is traced once for the pair (see :mod:`.dense`).
+            scalar tail is traced once for the pair (see :mod:`.dense`); also a
+            :func:`~tensorneat.genome.window.fill` rather than a population-sized constant.
         pad_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` never-owned padding slot ``width``.
         dump_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` dump slot ``width - 1``.
         span_u32 (evoxc.SymbolicTensor): rank-0 ``uint32`` key span ``S``, the range bound of
@@ -146,9 +151,9 @@ def build(
         evoxc.reshape(
             enp.arange(0, pop_size * stride, stride, dtype=evoxc.int32), (pop_size, 1)
         ),
-        enp.zeros((pop_size * stride,), dtype=evoxc.float32),
+        fill((pop_size * stride,), 0.0, evoxc.float32),
         count_i32,
-        enp.zeros((pop_size,), dtype=evoxc.float32),
+        fill((pop_size,), 0.0, evoxc.float32),
         pad_i32,
         dump_i32,
         span_u32,

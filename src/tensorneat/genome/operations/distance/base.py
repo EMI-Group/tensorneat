@@ -141,7 +141,13 @@ class BaseDistance(StatefulBaseClass):
 
         Returns:
             DistanceDigest: one sorted, tagged gene family per payload family — valid once per
-            generation, for any number of :meth:`measure` calls.
+            generation, for any number of :meth:`measure` calls — plus the two out-of-range
+            gene counts ``node_oor``/``conn_oor``: present genes whose key lies outside
+            ``[0, genome.key_span)``.  A non-zero count is the documented precondition failure
+            of the single-centre fast path (the dense table cannot address those genes and
+            treats them as absent, while the merge matches them exactly); the pipeline cannot
+            raise on it, so a caller that relies on the fast path checks the leaves on the host,
+            or configures ``DefaultDistance(dense_single_centre=False)``.
 
         Raises:
             ConfigError: If a key array is not 2-D/3-D, an attribute array is not 3-D, a key
@@ -209,8 +215,10 @@ class BaseDistance(StatefulBaseClass):
             conn.key_cols,
             node.dense,
             node.real,
+            node.oor,
             conn.dense,
             conn.real,
+            conn.oor,
             node.layout,
             conn.layout,
             tail_counts,

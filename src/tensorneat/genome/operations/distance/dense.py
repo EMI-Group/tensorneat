@@ -20,9 +20,14 @@ gene keys are non-negative ``int32`` values **below** ``genome.key_span``.  A ke
 (:mod:`tensorneat.common.tensorization`) — while the row-wise merge would still match it against
 the same out-of-range key in the other genome.  The two routes therefore agree on every payload
 whose keys respect the bound, and the algorithm's structural-key allocator is what keeps them
-there.  Two key rows with the same key tuple inside one genome are outside the payload contract
-as well (``alignment`` documents the same); the dump redirect makes them a last-writer-wins
-scatter rather than a crash.
+there.  The divergence is not silent: :func:`.digest.prepare_family` counts the present genes
+the table cannot address and :class:`.digest.DistanceDigest` carries the two per-individual
+counts as ``node_oor``/``conn_oor``.  Nothing here raises or branches on them; a caller that
+relies on this route asserts they are zero on the host (the same host-side pattern as
+``pipeline.py``'s ``max_overflow`` check) or keeps
+``DefaultDistance(dense_single_centre=False)``.  Two key rows with the same key tuple inside one
+genome are outside the payload contract as well (``alignment`` documents the same); the dump
+redirect makes them a last-writer-wins scatter rather than a crash.
 Static gate, never a runtime branch: a family takes this route only while its tables fit
 :data:`_DENSE_MAX_BYTES` (float32 bytes of the centre tables), and a pipeline whose *two*
 families both qualify is the only one that uses it at all — a partially dense ``measure`` would
@@ -251,6 +256,16 @@ def _family_terms(
     owner = evoxc.scatter(layout.owner, slot, layout.row_index, axis=0)
     owner_at = evoxc.gather(owner, pop_dense, axis=0)
     matched = evoxc.less(owner_at, layout.count_i32)
+    # Column the attribute values are written back at: the centre row of the homologue, or the
+    # dump column when there is none.  A slot-only match is enough while the key width fits the
+    # composite (the composite *is* the key tuple), so the redirect is free there — the star slot
+    # already sends an unusable population key to the never-owned padding cell, whose owner is
+    # ``count``.  With a trailing marker column the slot identifies ``(in, out)`` only, so a
+    # population gene that shares the endpoints but differs in the marker is *not* homologous and
+    # must not write its attribute distance into that centre row: one ``select`` keeps the
+    # attribute sum equal to the merge's (measured: without it ``OriginConn`` payloads diverge by
+    # ``compatibility_weight * |Δweight| / max(count)`` per shared-but-unmatched edge).
+    column = owner_at
     marker_columns = int(gene.key_width) - _FOLDED_KEYS
     if marker_columns > 0:
         markers = evoxc.scatter(
@@ -271,6 +286,7 @@ def _family_terms(
                     _column(pop_key_cols, _FOLDED_KEYS + index),
                 ),
             )
+        column = evoxc.select(matched, owner_at, layout.count_i32)
     attribute_distance = layout.zeros
     attr_width = int(attrs.shape[-1])
     if attr_width:
@@ -289,7 +305,7 @@ def _family_terms(
         # row-wise merge.
         attribute_distance = evoxc.reduce_sum(
             evoxc.slice(
-                reorder(pair, owner_at, layout, pop_size, count),
+                reorder(pair, column, layout, pop_size, count),
                 (0, 0),
                 (pop_size, count),
             ),

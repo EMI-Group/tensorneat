@@ -19,6 +19,12 @@ because it allocates structural keys per individual) still packs to its own comp
 of aliasing another gene's.  Composite equality is therefore key-row equality, and the legacy
 hash-then-verify pair (two key-row gathers plus a ``reduce_min``) disappears for a node key
 and for an ``(in_key, out_key)`` connection key.
+That out-of-range key is the one thing that can make the single-centre fast path
+(:mod:`.dense`) disagree with this module's merge, because the dense table cannot address it:
+:func:`prepare_family` therefore counts the present genes whose key falls outside
+``[0, key_span)`` and :class:`DistanceDigest` carries the two per-individual counts
+(``node_oor``/``conn_oor``) for a host-side assertion — two traced ops per family, no branch and
+no raise.
 
 Two folded columns are all an ``int64`` composite can hold: the fold needs ``2 * 31 = 62``
 bits and the low bit carries the side tag.  A gene with more key columns (``OriginConn``'s
@@ -116,6 +122,16 @@ class FamilyDigest(NamedTuple):
             :attr:`count` it excludes out-of-range keys, which the dense table cannot address.
             :attr:`dense` already carries that restriction, so the fast path reads the mask only
             through the star slot; the field stays as the documented population-side predicate.
+        oor (evoxc.SymbolicTensor): ``(P,) int64`` number of *present* genes whose key lies
+            outside ``[0, genome.key_span)`` — ``reduce_sum(present & ~real)``.  It is an
+            ``int64`` count because :func:`evoxc.reduce_sum` returns ``int64`` and the extra
+            ``cast`` would be a third traced op for a host-side diagnostic.  Non-zero means the
+            payload breaks the gene-key contract the execution schedule documents: the dense
+            route cannot address those genes and treats them as absent, so its answer can differ
+            from the sort/merge route, which matches them exactly.  Nothing here raises and no
+            traced value drives a branch — a caller that relies on the dense route asserts this
+            count is zero on the host (like ``pipeline.py``'s ``max_overflow`` check), or keeps
+            ``DefaultDistance(dense_single_centre=False)``.
         layout (DenseLayout): static scaffold of the single-centre fast path — owner-table base,
             centre-attribute base, row index, flat reorder offsets/buffer and the rank-0
             geometry scalars, all built once per generation (see :mod:`.layout`).
@@ -127,6 +143,7 @@ class FamilyDigest(NamedTuple):
     key_cols: evoxc.SymbolicTensor
     dense: evoxc.SymbolicTensor
     real: evoxc.SymbolicTensor
+    oor: evoxc.SymbolicTensor
     layout: DenseLayout
 
 
@@ -522,8 +539,9 @@ def prepare_family(
     Returns:
         FamilyDigest: the packed composites (population tag) in ascending order with the
         padding sentinel last, the attribute rows and key columns permuted into that order,
-        the number of real genes per individual, and the dense slot / real-gene pair the
-        single-centre fast path consumes.
+        the number of real genes per individual, the dense slot / real-gene pair the
+        single-centre fast path consumes, and the out-of-range gene count — the host-side
+        precondition check of that fast path (see :attr:`FamilyDigest.oor`).
 
     Notes:
         This is the phase that used to run once per distance call; it now runs once per
@@ -555,6 +573,12 @@ def prepare_family(
     )
     slot, real, _ = dense_rows(gene, key_span, keys, pool)
     count = evoxc.cast(evoxc.reduce_sum(valid, axes=1), evoxc.int32)
+    # Present genes the dense table cannot address, i.e. the rows whose key lies outside
+    # ``[0, key_span)``: both masks are already in hand, so this costs two traced ops
+    # (``reduce_sum`` + ``subtract``) and nothing per ``measure`` call.  It is the diagnostic a
+    # caller needs to know that the dense route and ``execute_distance`` may disagree here —
+    # see :attr:`FamilyDigest.oor`; no traced value branches on it.
+    oor = evoxc.subtract(count, evoxc.reduce_sum(real, axes=1))
     layout = build_layout(
         pool,
         pop_size=int(keys.shape[0]),
@@ -576,6 +600,7 @@ def prepare_family(
         key_cols_sorted,
         _permute(star, order, pool),
         _permute(real, order, pool),
+        oor,
         layout,
     )
 
@@ -817,8 +842,9 @@ class DistanceDigest(NamedTuple):
     """Prepared population digest for both gene families, one generation of reuse.
 
     Flattened field-by-field (rather than nesting two :class:`FamilyDigest` tuples) so the
-    value is an ordinary tuple of twelve tensors, the four payload arrays plus a count, a
-    sorted key block, a dense slot block and a real-gene mask per family.
+    value is an ordinary tuple of fourteen tensors, the four payload arrays plus a count, a
+    sorted key block, a dense slot block, a real-gene mask and an out-of-range gene count per
+    family.
 
     Attributes:
         node_keys (evoxc.SymbolicTensor): ``(P, N) int64`` packed node-key composites.
@@ -840,6 +866,15 @@ class DistanceDigest(NamedTuple):
         conn_dense (evoxc.SymbolicTensor): ``(P, E) int32`` dense key-table slot of each
             connection gene.
         conn_real (evoxc.SymbolicTensor): ``(P, E) bool`` in-range connection-gene mask.
+        node_oor (evoxc.SymbolicTensor): ``(P,) int64`` present node genes whose key lies outside
+            ``[0, genome.key_span)`` — the dense route's precondition as a host-readable count
+            (see :attr:`FamilyDigest.oor`).  Non-zero means the payload breaks the gene-key
+            contract: the single-centre fast path treats those genes as absent while
+            ``execute_distance`` matches them exactly, so a caller relying on the fast path
+            asserts this is zero, or passes ``DefaultDistance(dense_single_centre=False)``.
+        conn_oor (evoxc.SymbolicTensor): ``(P,) int64`` the same count for the connection family;
+            computed whether or not the dense route is enabled, so the diagnostic never depends
+            on the static gate.
         node_layout (DenseLayout): static scaffold of the node family's single-centre fast path.
         conn_layout (DenseLayout): static scaffold of the connection family's fast path.
         tail_counts (evoxc.SymbolicTensor): ``(2, P) int32`` the two families' population gene
@@ -858,8 +893,10 @@ class DistanceDigest(NamedTuple):
     conn_key_cols: evoxc.SymbolicTensor
     node_dense: evoxc.SymbolicTensor
     node_real: evoxc.SymbolicTensor
+    node_oor: evoxc.SymbolicTensor
     conn_dense: evoxc.SymbolicTensor
     conn_real: evoxc.SymbolicTensor
+    conn_oor: evoxc.SymbolicTensor
     node_layout: DenseLayout
     conn_layout: DenseLayout
     tail_counts: evoxc.SymbolicTensor
@@ -869,7 +906,7 @@ class DistanceDigest(NamedTuple):
         """Field names in payload order, for generic digest walks.
 
         Returns:
-            The twelve field names of the digest, node family first.
+            Every field name of the digest, node family first.
         """
         return self._fields
 
