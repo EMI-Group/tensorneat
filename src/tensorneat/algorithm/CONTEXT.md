@@ -104,8 +104,9 @@ One `genome.execute_distance` row (one centre against the whole population) cost
 Evaluation alone (30 / 135 / 280 ms) still exceeds the legacy per-generation budget at every size, so the genome/problem side is over budget as well as this subtree.
 
 ## Known Issues
-The repo-level performance contract is missed by ~5.9× / ~8.7× / ~13× at pop 100 / 500 / 1000 (see `## Measured Cost`).
-The dominant algorithm-side cost is `speciate` calling `execute_distance` `2 × species_size` times unconditionally; hoisting it to one batched pass — `D = execute_distance(centres tiled to (S·P), pop tiled to (S·P)) -> (S, P)` and indexing `D[slot]` inside the two scans — would replace `2·S` passes with 2 with identical masks and results, but it restructures what `## Speciation Without vmap-over-Control-Flow` documents and is therefore not implemented yet.
+The repo-level performance contract is missed by ~1.9× / ~7.4× / ~9.4× at pop 100 / 500 / 1000 (see `## Measured Cost`).
+From pop ≈ 300 upward `speciate` is ~88 % of `tell`, and it is per-pair bound: `DefaultDistance`'s `find_homologous` sorts `2·M` key rows for every pair, so the same population genome is re-sorted `species_size` times per phase — a genome-side "prepare the population once, measure many centres" API is the next real lever and lies outside this subtree.
+The pair count `2 · species_size · pop_size` itself is irreducible: each phase needs its own set of genuinely different centres, and a created species takes the first unassigned genome as its centre, so its row depends on every earlier assignment.
 `genome/base.py::_iinf` materialises a full-size `I_INF` constant, so tracing warns `Embedding a tensor of … bytes as a graph constant` from pop 500 (1.6 MB) upward (genome-owned; a rank-0 sentinel plus broadcasting would avoid it).
 `_sanitize_fitness`'s `f - f` finite test emits one numpy `RuntimeWarning: invalid value encountered in subtract` when a fitness is ±inf; the result is exact because the difference is only a `select` predicate.
 `test/unit/algorithm/**` is a spec written ahead of the implementation — its bodies are hard-coded `pytest.skip` (71 skipped), so it verifies nothing even against a working tree, and there is no `test/unit/algorithm/hyperneat/` directory at all; `test/parity/` needs the `bench` extra (JAX).
