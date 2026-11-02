@@ -193,23 +193,62 @@ class DefaultDistance(BaseDistance):
                 call.
 
         Notes:
+            The homologue table is :func:`~..alignment.find_homologous`; the rest of the
+            arithmetic — the aligned attribute gather, the attribute term and the scalar
+            formula — is :meth:`distance_from_rows`, shared with the digest-driven
+            :meth:`~..distance.base.BaseDistance.gene_measure`, so the pair-wise and the
+            two-phase route are bit-identical by construction.
+        """
+        rows = find_homologous(key_rows(keys1), key_rows(keys2))
+        return self.distance_from_rows(
+            state, gene, attrs1, attrs2, rows, valid_count(keys1), valid_count(keys2)
+        )
+
+    def distance_from_rows(
+        self,
+        state: State,
+        gene: "BaseGene",
+        attrs1: evoxc.SymbolicTensor,
+        attrs2: evoxc.SymbolicTensor,
+        rows: evoxc.SymbolicTensor,
+        cnt1: evoxc.SymbolicTensor,
+        cnt2: evoxc.SymbolicTensor,
+    ) -> evoxc.SymbolicTensor:
+        """Compatibility distance of one gene family from an aligned homologue table.
+
+        Args:
+            state (State): Immutable host configuration container.
+            gene ("BaseGene"): Node or connection gene supplying ``distance``.
+            attrs1 (evoxc.SymbolicTensor): ``(P, M, A) float32`` attributes of parent 1, in
+                *its own* row order.
+            attrs2 (evoxc.SymbolicTensor): ``(P, M, A) float32`` attributes of parent 2, in
+                *row-number order*: ``rows`` indexes this block directly.
+            rows (evoxc.SymbolicTensor): ``(P, M) int32`` row of ``attrs2`` homologous to each
+                gene of parent 1, ``I_INF`` where there is none.  The pair-wise path fills it
+                with parent-2 payload rows; the digest path fills it with parent-2 digest
+                positions — this function never interprets the number, it only gathers.
+            cnt1 (evoxc.SymbolicTensor): ``(P,) int32`` real genes of parent 1.
+            cnt2 (evoxc.SymbolicTensor): ``(P,) int32`` real genes of parent 2.
+
+        Returns:
+            evoxc.SymbolicTensor: ``(P,) float32`` where each entry is
+            ``(non_homologous_count * compatibility_disjoint
+            + homologous_attribute_distance * compatibility_weight) / max(cnt1, cnt2)``,
+            guarded to ``0`` for pairs where both genomes are empty in this gene family.
+
+        Notes:
             The count ``non_homologous = cnt1 + cnt2 - 2 * h`` charges a key missing from
             either parent once, so *disjoint* and *excess* genes share the term.  The aligned
-            attribute rows of parent 2 are fetched from the flattened ``(P, M * A)`` view
-            with ``masked_flat_gather`` and a ``NaN`` fill, and the per-gene distances are
-            zeroed on the non-homologous slots **before** the ``reduce_sum`` — a ``NaN * 0``
-            product would otherwise poison the whole sum.
+            attribute rows are fetched from the flattened ``(P, M * A)`` view with
+            ``masked_flat_gather`` and a ``NaN`` fill, and the per-gene distances are zeroed on
+            the non-homologous slots **before** the ``reduce_sum`` — a ``NaN * 0`` product
+            would otherwise poison the whole sum.  The reduction runs over parent 1's own row
+            order in both routes, which is what keeps the float sum bit-identical.
         """
-        key_rows1 = key_rows(keys1)
-        key_rows2 = key_rows(keys2)
-        pop_size, count = key_rows1.shape[0], key_rows1.shape[1]
-        attr_width = attrs1.shape[-1]
+        pop_size, count = int(attrs1.shape[0]), int(attrs1.shape[1])
+        attr_width = int(attrs1.shape[-1])
 
-        rows = find_homologous(key_rows1, key_rows2)
         homologous = evoxc.not_equal(rows, _scalar(I_INF, evoxc.int32))
-
-        cnt1 = valid_count(keys1)
-        cnt2 = valid_count(keys2)
         homologous_count = valid_count(rows)
         non_homologous = evoxc.subtract(
             evoxc.add(cnt1, cnt2),
