@@ -125,8 +125,8 @@ class BaseDistance(StatefulBaseClass):
 
         Args:
             state (State): Immutable host configuration container.
-            genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene`` and the static
-                ``key_span`` the composite packing is built against.
+            genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene`` (their key
+                widths and ``distance`` hooks).
             node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys, ``I_INF`` padded.
             node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs, NaN padded.
             conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys, ``I_INF``
@@ -139,8 +139,8 @@ class BaseDistance(StatefulBaseClass):
 
         Raises:
             ConfigError: If a key array is not 2-D/3-D, an attribute array is not 3-D, a key
-                array and its attribute array disagree on ``(P, M)``, the key width is not the
-                gene's, or the composite cannot be packed into ``int64`` at this ``key_span``.
+                array and its attribute array disagree on ``(P, M)``, or the key width is not
+                the gene's.
 
         Notes:
             A plain traced helper, never an ``evoxc.defn``: it is called from inside the
@@ -148,19 +148,17 @@ class BaseDistance(StatefulBaseClass):
         """
         payload = (node_keys, node_attrs, conn_keys, conn_attrs)
         _validate_single(type(self).__name__, "prepare", payload)
-        node = _digest.prepare_family(
-            state, genome.node_gene, node_keys, node_attrs, genome.key_span
-        )
-        conn = _digest.prepare_family(
-            state, genome.conn_gene, conn_keys, conn_attrs, genome.key_span
-        )
+        node = _digest.prepare_family(state, genome.node_gene, node_keys, node_attrs)
+        conn = _digest.prepare_family(state, genome.conn_gene, conn_keys, conn_attrs)
         return DistanceDigest(
             node.keys,
             node.attrs,
             node.count,
+            node.key_cols,
             conn.keys,
             conn.attrs,
             conn.count,
+            conn.key_cols,
         )
 
     def measure(
@@ -177,7 +175,7 @@ class BaseDistance(StatefulBaseClass):
 
         Args:
             state (State): Immutable host configuration container.
-            genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene`` and ``key_span``.
+            genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene``.
             node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` centre node keys — batch ``P``
                 matching the digest, or batch ``1`` (one centre) which is broadcast.
             node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` centre node attrs.
@@ -211,7 +209,7 @@ class BaseDistance(StatefulBaseClass):
             digest.node_keys,
             digest.node_attrs,
             digest.node_count,
-            genome.key_span,
+            digest.node_key_cols,
         )
         conn_distance = self.gene_measure(
             state,
@@ -221,7 +219,7 @@ class BaseDistance(StatefulBaseClass):
             digest.conn_keys,
             digest.conn_attrs,
             digest.conn_count,
-            genome.key_span,
+            digest.conn_key_cols,
         )
         return evoxc.add(node_distance, conn_distance)
 
@@ -234,7 +232,7 @@ class BaseDistance(StatefulBaseClass):
         digest_keys: evoxc.SymbolicTensor,
         digest_attrs: evoxc.SymbolicTensor,
         digest_count: evoxc.SymbolicTensor,
-        key_span: int,
+        digest_key_cols: evoxc.SymbolicTensor,
     ) -> evoxc.SymbolicTensor:
         """Compatibility distance of one gene family against a population digest.
 
@@ -247,7 +245,9 @@ class BaseDistance(StatefulBaseClass):
             digest_attrs (evoxc.SymbolicTensor): ``(P, M, A) float32`` population attributes
                 permuted into the digest's gene order.
             digest_count (evoxc.SymbolicTensor): ``(P,) int32`` real genes per individual.
-            key_span (int): Static key bound ``S`` of the genome.
+            digest_key_cols (evoxc.SymbolicTensor): ``(P, M, K) int32`` population key columns
+                in the digest's gene order — the exact-match oracle for a gene whose key
+                width exceeds the number of columns the composite folds.
 
         Returns:
             evoxc.SymbolicTensor: ``(P,) float32`` distances of this gene family, disjoint /
@@ -259,7 +259,7 @@ class BaseDistance(StatefulBaseClass):
             very tail ``gene_distance`` runs — which is what makes the two routes
             bit-identical rather than merely close.
         """
-        rows = _digest.match_rows(gene, keys, digest_keys, key_span)
+        rows = _digest.match_rows(gene, keys, digest_keys, digest_key_cols)
         return self.distance_from_rows(
             state, gene, attrs, digest_attrs, rows, valid_count(keys), digest_count
         )
@@ -330,9 +330,33 @@ def _validate_digest(name: str, payload: tuple, digest: DistanceDigest) -> int:
             f"{name}.measure: expected a DistanceDigest from prepare(), "
             f"got {type(digest).__name__}"
         )
-    for family, centre_keys, centre_attrs, digest_keys, digest_attrs, digest_count in (
-        ("node", payload[0], payload[1], digest.node_keys, digest.node_attrs, digest.node_count),
-        ("conn", payload[2], payload[3], digest.conn_keys, digest.conn_attrs, digest.conn_count),
+    for (
+        family,
+        centre_keys,
+        centre_attrs,
+        digest_keys,
+        digest_attrs,
+        digest_count,
+        digest_key_cols,
+    ) in (
+        (
+            "node",
+            payload[0],
+            payload[1],
+            digest.node_keys,
+            digest.node_attrs,
+            digest.node_count,
+            digest.node_key_cols,
+        ),
+        (
+            "conn",
+            payload[2],
+            payload[3],
+            digest.conn_keys,
+            digest.conn_attrs,
+            digest.conn_count,
+            digest.conn_key_cols,
+        ),
     ):
         if int(digest_keys.shape[1]) != int(centre_keys.shape[1]):
             raise ConfigError(
@@ -351,6 +375,12 @@ def _validate_digest(name: str, payload: tuple, digest: DistanceDigest) -> int:
             raise ConfigError(
                 f"{name}.measure: the {family} digest count must be (P,), got "
                 f"{tuple(digest_count.shape)}"
+            )
+        if int(digest_key_cols.shape[1]) != int(centre_keys.shape[1]):
+            raise ConfigError(
+                f"{name}.measure: the {family} digest key columns hold "
+                f"{int(digest_key_cols.shape[1])} gene rows but the centre's key array is "
+                f"{tuple(centre_keys.shape)}"
             )
     batch = int(digest.node_count.shape[0])
     if int(digest.conn_count.shape[0]) != batch:
