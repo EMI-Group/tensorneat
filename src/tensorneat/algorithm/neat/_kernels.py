@@ -400,6 +400,58 @@ def read_population(state: Any, pop: Any = None) -> Any:
     )
 
 
+#: Largest ``species_size * pop_size`` species table that keeps the lazy
+#: per-slot ``evoxc.cond`` distance rows; above it the unconditional per-slot
+#: call of the pre-gate implementation runs instead.
+#:
+#: The lazy ``cond`` only pays off while the species table is *sparse*, because a
+#: skipped slot still leaves the two ``if`` regions (and their carries) in the
+#: graph: it pays for the compatibility passes it cannot use, but carries the
+#: region overhead of every slot.  The table is sparse only on small populations
+#: -- 1-3 live slots out of 20 at pop 8/100, 20 of 20 at pop >= 500.
+#: Measured with one configuration per fresh process, ``Pipeline.step`` median of
+#: one warmup plus five timed steps after five setup steps (build excluded), two
+#: runs per configuration alternating the ungated tree and the gated tree:
+#:
+#: * pop 100 (3 live): 252.8 / 251.6 ms ungated vs 111.9 / 111.3 ms gated -- a
+#:   2.3x whole-generation win;
+#: * pop 200 (20 live): 454.3 / 485.0 ms vs 421.2 / 417.1 ms -- parity (the gated
+#:   build is 8-10 % ahead on this box, i.e. within run-to-run spread);
+#: * pop 300 (15 live): 553.5 / 558.4 ms vs 444.2 / 458.5 ms -- a 1.2x win;
+#: * pop 500 (20 live): 1101.7 / 1058.3 ms vs 1099.3 / 1074.0 ms -- parity, while
+#:   the *unconditional* ``cond`` build costs 1024.6 / 1029.6 ms against 801.8 /
+#:   816.7 ms ungated on the measurement box, a 26 % loss that lives in the
+#:   in-graph cost of the nested ``if`` regions and not in extra passes
+#:   (``tell`` 647.8 ms ungated vs 654.1 ms gated);
+#: * pop 1000 (20 live): 1976.4 / 2007.3 ms vs 2030.1 / 2048.5 ms -- parity
+#:   (+2.4 %, noise between two histories of the same graph).
+#:
+#: Hence a gate rather than an unconditional ``cond``: the crossover sits between
+#: the pop-300 and pop-500 tables, i.e. ``6000`` rows (``20 * 300``) is gated and
+#: ``10 000`` (``20 * 500``) is not.  ``GATED_ROWS`` is only ever compared against
+#: static Python ints, so the choice is made at trace time and costs no op.
+GATED_ROWS = 6000
+
+
+def gated(species_size: int, pop_size: int) -> bool:
+    """Whether ``speciate`` computes its distance rows lazily behind a ``cond``.
+
+    Args:
+        species_size (int): Static number of species slots ``S``.
+        pop_size (int): Static population size ``P``.
+
+    Returns:
+        bool: ``True`` when ``species_size * pop_size <= GATED_ROWS``, i.e. when
+            the species table is sparse enough that skipping dead/finished slots
+            buys more than the nested-``if`` regions cost (see ``GATED_ROWS``).
+
+    Note:
+        A pure host-side predicate on static ints: the caller branches on it with
+        an ordinary Python ``if`` at trace time, never with a traced ``cond``.
+    """
+    return species_size * pop_size <= GATED_ROWS
+
+
 def speciate(
     state: Any,
     species_state: Any,
@@ -408,6 +460,7 @@ def speciate(
     pop_size: int,
     species_size: int,
     compatibility_threshold: float,
+    gate: bool,
 ) -> tuple:
     """Reassign the population to species with two fixed-length scans.
 
@@ -425,9 +478,10 @@ def speciate(
     iteration with nothing to do performs no write, which reproduces the legacy
     early-exit ``while_loop`` on a static trip count.
 
-    Distance rows are computed **lazily, one slot at a time, behind a single
-    ``evoxc.cond`` per scan iteration**, the predicate being exactly the mask
-    that lets that iteration write:
+    **Gated path** (``gate`` is true, i.e. ``species_size * pop_size <=
+    GATED_ROWS``): distance rows are computed lazily, one slot at a time, behind
+    a single ``evoxc.cond`` per scan iteration, the predicate being exactly the
+    mask that lets that iteration write:
 
     * scan 1: ``live and any_pending`` -- a dead slot, or one reached after every
       genome has been claimed, can never claim anything;
@@ -443,18 +497,20 @@ def speciate(
 
     The gate is a *select* between two single branch bodies, not a copy of the
     kernel: exactly two compatibility-kernel copies exist in the whole graph, one
-    per scan, which keeps the per-generation graph at the ungated size.  That
-    matters because the saving depends on how sparse the species table is: at
-    ``pop_size=100`` only ~3 of the 20 slots are live, so 14-17 of the 20 passes
-    per phase never run, while at ``pop_size >= 500`` every slot is live, nothing
-    is skippable and the gated path costs exactly what the ungated one costs --
-    which is why no table of precomputed rows (and no chunking of one) is
-    materialised here.
-
-    Bit-identity also holds across *batch width*: the compatibility kernel is
-    row-independent (elementwise per-pair ops plus per-row reductions over the
-    gene axis, one sorted alignment per row), so one ``(k * P)`` batch returns
-    exactly the floats ``k`` batches of ``P`` do.
+    per scan, whatever the table width.
+    **Ungated path** (``gate`` is false): both scans call ``distance_fn`` once per
+    iteration, unconditionally -- the pre-gate behaviour, with no ``cond``, no
+    zero row and no pre-selected centre (scan 2 gathers its centre from the carry
+    *after* the create-scatter).  This is the faster graph as soon as the species
+    table is fully live: a skipped slot still leaves its ``if`` region and its
+    carries in the graph, so above ``GATED_ROWS`` that region overhead outweighs
+    what the skipping saves (see ``GATED_ROWS`` for the measurements).  ``gate``
+    is a static Python ``bool``, so exactly one of the two paths is traced.
+    Bit-identity holds across the two paths by construction -- both compute the
+    same ``(pop_size,)`` rows -- and across *batch width*: the compatibility
+    kernel is row-independent (elementwise per-pair ops plus per-row reductions
+    over the gene axis, one sorted alignment per row), so one ``(k * P)`` batch
+    returns exactly the floats ``k`` batches of ``P`` do.
     """
     keys_ext = enp.concatenate(
         [species_state.species_keys, enp.reshape(species_state.next_species_key, (1,))],
@@ -487,6 +543,38 @@ def speciate(
             ),
         )
 
+    def centre_rows(fields, slot):
+        """Gather the centre row held in ``slot`` of each of the four ``fields``.
+
+        The result is the input of :func:`centre_payload`: a tuple of 1-D rows,
+        one per split gene array.
+        """
+        return tuple(evoxc.gather(field, slot, axis=0) for field in fields)
+
+    def selected_centre(create, seed, slot, carry_centre):
+        """Centre rows of a scan-2 slot, chosen before the ``cond``.
+
+        ``pop[seed]`` for a slot that is creating a species, the carry row
+        otherwise; the create-scatters below leave that row untouched when
+        ``create`` is false, so both spellings agree.
+        """
+        return tuple(
+            evoxc.select(
+                create,
+                evoxc.gather(field, seed, axis=0),
+                evoxc.gather(centre_field, slot, axis=0),
+            )
+            for field, centre_field in zip(population_fields, carry_centre)
+        )
+
+    def row_of(centre):
+        """Unconditional distance row of one gathered centre, ``(P,)`` floats.
+
+        This is the ungated (pre-gate) formulation: one ``distance_fn`` call per
+        scan iteration, whatever the slot's liveness.
+        """
+        return distance_fn(state, centre_payload(centre), population)
+
     def gated_row(active, compute_row, operands):
         """One ``(pop_size,)`` compatibility row, computed only when ``active``.
 
@@ -508,51 +596,57 @@ def speciate(
         pending = evoxc.isnan(assign)
         any_pending = evoxc.reduce_max(pending, axes=0)
         claim = evoxc.logical_and(live, any_pending)
-
-        def compute_row(
-            centre_node_keys,
-            centre_node_attrs,
-            centre_conn_keys,
-            centre_conn_attrs,
-            centre_slot,
-            pop_node_keys,
-            pop_node_attrs,
-            pop_conn_keys,
-            pop_conn_attrs,
-        ):
-            """Distance row of the carry centre ``centre_slot``, ``(P,)`` floats.
-
-            The payload is built *in here* from the four carry arrays, so a
-            skipped slot pays neither the gather-and-broadcast nor the
-            compatibility kernel.
-            """
-            return distance_fn(
-                state,
-                centre_payload(
-                    tuple(
-                        evoxc.gather(field, centre_slot, axis=0)
-                        for field in (
-                            centre_node_keys,
-                            centre_node_attrs,
-                            centre_conn_keys,
-                            centre_conn_attrs,
-                        )
-                    )
-                ),
-                payload_like(
-                    population,
-                    pop_node_keys,
-                    pop_node_attrs,
-                    pop_conn_keys,
-                    pop_conn_attrs,
-                ),
+        if not gate:
+            distances = row_of(
+                centre_rows((node_keys, node_attrs, conn_keys, conn_attrs), slot)
             )
+        else:
 
-        distances = gated_row(
-            claim,
-            compute_row,
-            (node_keys, node_attrs, conn_keys, conn_attrs, slot) + population_fields,
-        )
+            def compute_row(
+                centre_node_keys,
+                centre_node_attrs,
+                centre_conn_keys,
+                centre_conn_attrs,
+                centre_slot,
+                pop_node_keys,
+                pop_node_attrs,
+                pop_conn_keys,
+                pop_conn_attrs,
+            ):
+                """Distance row of the carry centre ``centre_slot``, ``(P,)`` floats.
+
+                The payload is built *in here* from the four carry arrays, so a
+                skipped slot pays neither the gather-and-broadcast nor the
+                compatibility kernel.
+                """
+                return distance_fn(
+                    state,
+                    centre_payload(
+                        tuple(
+                            evoxc.gather(field, centre_slot, axis=0)
+                            for field in (
+                                centre_node_keys,
+                                centre_node_attrs,
+                                centre_conn_keys,
+                                centre_conn_attrs,
+                            )
+                        )
+                    ),
+                    payload_like(
+                        population,
+                        pop_node_keys,
+                        pop_node_attrs,
+                        pop_conn_keys,
+                        pop_conn_attrs,
+                    ),
+                )
+
+            distances = gated_row(
+                claim,
+                compute_row,
+                (node_keys, node_attrs, conn_keys, conn_attrs, slot)
+                + population_fields,
+            )
         # ``argmin_with_mask`` folds "nothing left to claim" into the ``I_INF``
         # sentinel index, which is clamped to row ``0`` before it is used.
         closest = evoxc.reshape(
@@ -629,16 +723,17 @@ def speciate(
         # The centre of this slot's row, selected before the ``cond`` so the
         # branch body exists once: ``pop[seed]`` for a creating slot, the carry
         # row otherwise (which the scatters below leave untouched when
-        # ``create`` is false).
-        centre = tuple(
-            evoxc.select(
+        # ``create`` is false).  Only the gated path needs it: the ungated one
+        # gathers its centre from the carry after the scatters, as it always did.
+        centre = (
+            selected_centre(
                 create,
-                evoxc.gather(field, seed, axis=0),
-                evoxc.gather(centre_field, slot, axis=0),
+                seed,
+                slot,
+                (node_keys, node_attrs, conn_keys, conn_attrs),
             )
-            for field, centre_field in zip(
-                population_fields, (node_keys, node_attrs, conn_keys, conn_attrs)
-            )
+            if gate
+            else ()
         )
         key_slot = evoxc.select(create, counter, key_slot)
         keys_ext = evoxc.scatter(keys_ext, slot, key_slot)
@@ -715,7 +810,12 @@ def speciate(
             )
 
         active = evoxc.logical_or(live, create)
-        distances = gated_row(active, compute_row, centre + population_fields)
+        if gate:
+            distances = gated_row(active, compute_row, centre + population_fields)
+        else:
+            distances = row_of(
+                centre_rows((node_keys, node_attrs, conn_keys, conn_attrs), slot)
+            )
         closer = evoxc.logical_or(unassigned, evoxc.less(distances, dist))
         within = evoxc.less(distances, float(compatibility_threshold))
         take = evoxc.logical_and(evoxc.logical_and(active, within), closer)

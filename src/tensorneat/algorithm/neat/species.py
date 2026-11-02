@@ -489,19 +489,23 @@ class SpeciesController(StatefulBaseClass):
             two fields.
 
         Note:
-            **Both scans compute their distance row lazily, behind one
-            ``evoxc.cond`` per iteration.**  The predicate is the mask that lets
-            the iteration write -- ``live and any-pending`` for scan 1,
-            ``live or create`` for scan 2 -- so a slot that cannot claim a
+            **Below ``_kernels.GATED_ROWS`` both scans compute their distance row
+            lazily, behind one ``evoxc.cond`` per iteration.**  The predicate is
+            the mask that lets the iteration write -- ``live and any-pending`` for
+            scan 1, ``live or create`` for scan 2 -- so a slot that cannot claim a
             genome (scan 1) or take a member (scan 2) never runs the
             compatibility kernel.  The skipped branch yields zeros, which the
             iteration's own write mask discards, so no reader ever consumes a
-            row that was not computed: the substitution is bit-identical.  Two
-            branch bodies exist in the whole graph, one per scan, so a species
-            table in which every slot is live (``pop_size >= 500``) costs exactly
-            what the ungated per-slot call costs, while the sparse
-            small-population case (``pop_size=100``: ~3 live of 20 slots) skips
-            14-17 of the 20 passes per phase (``_kernels.speciate``).
+            row that was not computed: the substitution is bit-identical.
+        Note:
+            **Above ``_kernels.GATED_ROWS`` both scans call ``distance_fn``
+            unconditionally, exactly as before the gate existed.**  The lazy
+            ``cond`` only wins while the species table is sparse (1-3 live slots
+            at pop 8/100, 20 of 20 at pop >= 500); once every slot is live its
+            ``if`` regions cost more than the passes they skip (26 % of a whole
+            generation at pop 500).  ``_kernels.gated`` is a pure predicate on
+            static ints, so one path is traced and the other never reaches the
+            graph.
         """
         population = self._population(state, pop)
         values = _kernels.speciate(
@@ -512,6 +516,7 @@ class SpeciesController(StatefulBaseClass):
             self.pop_size,
             self.species_size,
             self.compatibility_threshold,
+            _kernels.gated(self.species_size, self.pop_size),
         )
         return state.update(species=SpeciesState(*values))
 
