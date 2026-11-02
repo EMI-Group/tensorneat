@@ -4,7 +4,7 @@
 Everything in a NEAT generation that is neither network mathematics (genome) nor task evaluation (problem): the population payload, the generation counter, speciation, stagnation, spawn allocation, parent pairing, and the crossover/mutation dispatch.
 `NEAT` (`neat.py`) is the algorithm the pipeline drives; `SpeciesController` + `SpeciesState` (`species.py`) own the species algebra; `_distance.py` owns the compatibility-distance rows over one generation's population digest.
 Every kernel here is batch-first over `P = pop_size` and compiled by `pipeline.py` into the single per-generation evoxc graph, so no function may branch on a traced value or read the host.
-Measured on the numpy reference backend with the real `DefaultGenome(max_nodes=50, max_conns=100)` and `XOR`, `species_size=20`: `tell` runs in ~58 / ~393 / ~732 ms per generation at `P=100 / 500 / 1000`, of which `speciate` is 46 % / 78 % / 79 % and breeding 52 % / 21 % / 20 % (see `## Measured Cost`); the interpreter, not the data, dominates.
+Measured on the numpy reference backend with the real `DefaultGenome(max_nodes=50, max_conns=100)` and `XOR`, `species_size=20`: `Pipeline.step` runs in ~59 / ~335 / ~608 ms per generation at `P=100 / 500 / 1000`, of which `speciate` is 57 % / 78 % / 76 % and breeding 43 % / 21 % / 23 % (see `## Measured Cost`); the interpreter, not the data, dominates, and the padded gene axis is what multiplies every per-pair op.
 The layer's own work is one population digest plus `2 · ceil(species_size / 4)` distance calls in `speciate` and `O(pop_size)` selection/crossover/mutation; it never materialises a `max_nodes × max_nodes` tensor.
 
 ## Layout (five files, each under 1000 lines)
@@ -34,8 +34,8 @@ Module constant `SPAWN_MODES = ("rank", "fitness")`.
 
 `DistanceRows(genome, digest, population, pop_size, species_size)` — `_distance.py`, created per generation inside `NEAT.tell`:
 `__call__(state, centre, pop=None)` returns `(P,)` for a batch-1 or batch-`P` centre and `(S, P)` for a batch-`S` one; `row(state, centre)` and `matrix(state, centres)` are the explicit forms.
-It validates that the digest's population axis and the measured population's static shapes match `pop_size` (`TensorNEATError` otherwise) and memoises its tiled digest per block width.
-`tile_leading(x, blocks)` repeats the *population* (row `s*P + p` is `x[p]`) and `repeat_leading(x, repeats)` repeats each *centre* row (`k*repeats .. k*repeats+repeats-1` are `x[k]`), the two row orders `measure_distance` needs to see the pairs aligned.
+It validates that the digest's population axis and the measured population's static shapes match `pop_size` (`TensorNEATError` otherwise).
+`repeat_leading(x, repeats)` repeats each *centre* row (`k*repeats .. k*repeats+repeats-1` are `x[k]`), which is the row order `measure_distance`'s row-wise pairing needs.
 
 `SpeciesState` — frozen dataclass, one leaf per field, stored under `state.species`:
 `species_keys (S,) f32` (NaN = dead slot), `best_fitness (S,) f32`, `last_improved (S,) f32`, `member_count (S,) f32`, `idx2species (P,) f32` (NaN = unassigned, only inside `speciate`), `center_node_keys (S, N) i32`, `center_node_attrs (S, N, NA) f32`, `center_conn_keys (S, E, CK) i32`, `center_conn_attrs (S, E, CA) f32`, `next_species_key` (0-d f32).
@@ -192,6 +192,6 @@ The sparse/dense switch, the block size and the `cond` placement are all static 
 | `./neat.py` | `NEAT`: population cycle (`setup`/`ask`/`transform`/`forward`/`tell`), fitness sanitising, next-generation creation, `pop_batch_size` scan chunking, the per-generation distance digest wiring, host-side `show_details`. |
 | `./species.py` | `SpeciesState` (frozen dataclass) and `SpeciesController`: species fitness, stagnation, descending sort, spawn allocation, parent pairing, block layout, fixed-length speciation scans. |
 | `./_kernels.py` | Plain graph helpers behind `species.py`: constants, payload helpers, sort/prefix-sum primitives, membership, spawn allocation, block layout, parent pairing, `GATED_ROWS`/`gated` (the static lazy-row gate) and the two speciation scans, payload reading. |
-| `./_distance.py` | `DistanceRows` (digest-backed `distance_fn`, batch-1/`P` row and batch-`S` matrix forms), `CENTRES_PER_CALL`, `tile_leading`/`repeat_leading`. |
+| `./_distance.py` | `DistanceRows` (digest-backed `distance_fn`; population-shaped `(P,)` row and static-loop `(S, P)` matrix forms) and `repeat_leading`. |
 | `./_validation.py` | Host-side constructor validators shared by `species.py` and `neat.py`. |
 | `./__init__.py` | Re-exports `NEAT`, `SpeciesController`, `SpeciesState`. |
