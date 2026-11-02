@@ -46,11 +46,19 @@ The low bit of the sort key is the side tag (population `1`, centre `0`) and eac
 The centre's tag is `0`, so `_tagged` skips its `add` and costs one `multiply` plus one `select`.
 Injectivity plus the tag make a homologous pair exactly an adjacent `(centre, population)` pair whose composites differ by one; the parity is what proves the neighbour is a real population gene, so no separate tag test is needed.
 The merge concatenates the **digest side first** and the centre second: then the merged index of a population gene *is* its digest row, and the tail reads the row table straight off the successor with no offset arithmetic.
-Sequence per family: `concatenate` to `(P, 2M)`, one comparison `argsort` (not stable — the cheap one), its inverse via a second `argsort` of the permutation, then two centre-width gathers — the successor's merged index and the composite it carries.
+Sequence per family: `concatenate` to `(P, 2M)`, one **stable** `argsort`, its inverse via a second **stable** `argsort` of the permutation, then two centre-width gathers — the successor's merged index and the composite it carries.
 Nothing later is `2M`-wide: the homology test, the row table and both counts stay at the centre's own width `M`.
-The inverse permutation is the one measured formulation trade-off: `argsort(order)` is two ops, while scattering the ranks costs seven and is ~1 ms per call cheaper at pop 1000; the op budget (generation distance ≤1500) only fits the `argsort`, so it stays, and the scatter is the documented alternative if that budget ever moves.
+The inverse permutation is the one measured formulation trade-off: `argsort(order)` is two ops, while scattering the ranks costs four to eight, and with both sorts stable the `argsort` is also 1.05 → 0.29 ms at pop 1000, so the scatter is now behind on both counts.
 The successor position is clamped to `2 * M - 1` rather than range-checked and masked: the last merged position always holds a padded row (both sentinels sit above every real composite), and no sentinel equals a real `composite + 1`, so the clamped read cannot pass the homology test.
 `evoxc.slice(x, start, limit)` takes **lengths**, not end indices (`start + limit` is the exclusive end), which is why the centre slice is `((0, count), (pop_size, count))`.
+
+## Sort semantics (`stable=True` is a performance rule, not a tie rule)
+Every `argsort` in this module passes `stable=True`, and on the numpy reference interpreter that is where the time went: numpy's stable kind is timsort, which detects the runs the data already contains.
+The digest side of the merge is ascending by construction, so the merged sort sees one sorted run of `M` beside the centre's `M` shuffled values: **1.43 → 0.28 ms** per `(1000, 200)` `int64` block at `M = 100`, and the inverse permutation **1.05 → 0.29 ms**.
+`prepare_family` gains for the same reason (an evolved payload is a real-gene run followed by one long padding run): 1.51 → 1.25 ms (node) and 1.43 → 1.22 ms (conn) at `P = 1000`.
+This is safe rather than lucky because none of these sorts has a *meaningful* tie: a homologous pair differs by one, real composites are unique inside a genome, and the only equal values are padding rows, whose attributes are `NaN` on both sides and which can never pass the homology test — so tie order changes no emitted number.
+Stability also *pins* tie order to input order, which a comparison sort does not, and it is the tie semantics a compiled backend's count-mode `argsort` already has (rank sums plus an iota tie-break), so the reference interpreter and a compiled backend now agree on ties as well as on values.
+Rule for future work: before reaching for a smaller `O(M log M)` formulation, check whether `stable=True` (or `sort` in place of `argsort`) already removed the element volume — here it did, for zero traced ops.
 
 ## Cost (measured, numpy reference backend, seed-42 XOR population, build excluded)
 Per-call traced ops (before → after this node's op diet; the pair-wise column is `execute_distance`, measured on the same payloads):
@@ -63,22 +71,26 @@ Per-call traced ops (before → after this node's op diet; the pair-wise column 
 | `match_node` / `match_conn` (inside `measure`) | 49 / 54 | **35 / 43** |
 | `tail_node` / `tail_conn` | 70 / 49 | **61 / 40** |
 
+The stable-sort change added and removed nothing: `measure` is 151 and `prepare` 64 ops before and after it, and the whole-generation trace is 3785 ops either way.
+
 Whole-generation attribution (one trace of `pipeline._generation_kernel`, ops by `op.location.file`): **4860 → 3838** traced ops at pop 500/1000 (2852 → 2478 at pop 100).
 The distance files are **2236 → 1422** at pop 500/1000 (776 → 526 at pop 100) — `digest.py` 687, `default.py` 552, `consts.py` 163, `base.py` 20.
-Milliseconds, head-to-head in one process set (HEAD `b18716e` overlay vs this tree, median of two interleaved rounds, fresh process per config):
+Milliseconds, head-to-head in one process set (round 2: the pre-`stable=True` tree vs this one, median of two interleaved rounds, 2 rounds each, fresh process per config):
 
 | kernel | P=100 | P=500 | P=1000 |
 |---|---|---|---|
-| `measure_distance` | 2.18 → 1.77 | 5.37 → 4.76 | 8.95 → 8.87 |
-| `prepare_distance` | 1.06 → 0.69 | 2.40 → 1.75 | 4.30 → 3.12 |
-| `match_node` | 0.48 → 0.40 | 1.07 → 1.11 | 1.85 → 2.04 |
-| `match_conn` | 0.70 → 0.72 | 2.13 → 2.49 | 3.92 → 4.78 |
-| `tail_node` | 0.55 → 0.50 | 1.00 → 0.98 | 1.65 → 1.57 |
-| `tail_conn` | 0.37 → 0.31 | 0.59 → 0.53 | 0.84 → 0.79 |
-| `Pipeline.step` | 49.3 → 50.2 | 387 → 365 | 624 → 624 |
+| `measure_distance` | 1.79 → 1.41 | 4.67 → 3.36 | 8.59 → 5.58 |
+| `prepare_distance` | 0.70 → 0.58 | 1.75 → 1.49 | 3.04 → 2.29 |
+| `match_node` | 0.38 → 0.32 | 1.08 → 0.79 | 2.03 → 1.26 |
+| `match_conn` | 0.68 → 0.45 | 2.42 → 1.34 | 4.69 → 2.42 |
+| `tail_node` | 0.48 → 0.50 | 0.96 → 0.98 | 1.54 → 1.56 |
+| `tail_conn` | 0.29 → 0.31 | 0.51 → 0.53 | 0.76 → 0.77 |
+| `Pipeline.step` | 48 → 44 | 321 → 265 | 556 → 484 |
 
+Cumulative against the pre-op-diet tree (`b18716e`), measured in the same interleaving discipline: `measure` **2.18 → 1.41 / 5.37 → 3.36 / 8.95 → 5.58 ms** (−35 / −37 / −38 %), `prepare` **1.06 → 0.58 / 2.40 → 1.49 / 4.30 → 2.29** (−45 / −38 / −47 %), `Pipeline.step` **49 → 44 / 387 → 265 / 624 → 484** (−11 / −32 / −22 %).
 The op count is the deterministic result; the milliseconds are not.
-`prepare` gains 27–35 % because its ops carry real element volume (three `(P, M)` permutations), while at pop ≥500 the reference interpreter is **array-traffic bound, not dispatch bound**: ~600 removed scalar/constant ops moved the op count 21 % and the wall clock not at all, and the `2M`-wide `int64` sort that the two-op inverse forces now eats the constant saving inside `measure`.
+Round 1 (the op diet) removed 35 % of `measure`'s traced ops and moved its wall clock not at all, which is what identified round 2: at pop ≥500 the reference interpreter was **array-traffic bound**, and the traffic was the `(P, 2M)` `int64` sort that the two-op inverse forces.
+Stability removed that traffic without touching the arithmetic or the op count, so `measure` is now back to dispatch bound — 5.58 ms at pop 1000 is `match_node` 1.26 + `match_conn` 2.42 + the two tails 2.33, and the merge's remaining ~74 ops cost ~80 µs each.
 The box drifts ±30 % between sessions, so only the before/after pairs above (measured back to back) are comparable.
 
 ## Constraints
@@ -87,14 +99,15 @@ The box drifts ±30 % between sessions, so only the before/after pairs above (me
 - Never use `evoxc.gather(..., axis=1)`: it costs 105 ms at `(P=1000, M=100)`. Every row permutation here is a flat gather with a `p * R + col` index block (`common.tools.flat_gather` would add escape checks that a permutation cannot need).
 - Never build an `O(M^2)` per-pair comparison matrix: `(P, 100, 1) < (P, 1, 100)` is 3.3 ms and a `(P, 100, 100)` reduce is 4.4 ms.
 - Never derive a composite radix from `key_span`: structural keys are allocated per individual by `algorithm/` and can exceed `S`, so a `key_span`-based radix silently aliases genes (that is the failure the current base `2**31` fold removes).
-- Every `int64` block is element volume that shows up in the wall clock: `(P, 2M)` int64 is 6.4 MB at `4P = 4000`, `max_conns = 100`, and the merge holds two of them plus the `int32` permutation, which is why the connection family costs twice the node family at the same op count.
+- Every `int64` block is element volume that shows up in the wall clock: `(P, 2M)` int64 is 6.4 MB at `4P = 4000`, `max_conns = 100`, and the merge holds two of them plus the `int32` permutation — which is why the connection family costs twice the node family at the same op count, and why its sorts are the first thing to make cheap.
+- `stable=True` on every `argsort` is a performance constraint, not a taste: the reference interpreter's stable kind detects the runs this data already has (the digest half is ascending, an evolved payload is a real-gene run plus a padding run), and it costs zero traced ops. Do not drop the flag while "simplifying", and check it before replacing a sort with a smaller-but-more-op formulation — the `log2 M` galloping search was measured and lost to it (14.06 vs 8.60 ms per wide conn `measure` at pop 1000, 81 vs 41 ops).
 - `measure` holds one `(P, M, A)` and one `(P, 2M)` temporary per call and the digest holds four arrays per family; peak RSS at pop 1000 is 2132 MiB (pop 500: 1129 MiB), so a new full-size temporary in this path is a real regression even when it saves ops.
 - The attribute distance is masked to `0` **before** the `reduce_sum` (a `NaN * 0` product would poison the sum), and int option columns contribute `!=` (`1` per changed option) rather than `|id1 - id2|` — that rule lives in `BaseGene.distance`.
 - Disjoint and excess genes are counted by one term (`cnt1 + cnt2 - 2h`).
 - The non-empty guard rides on the denominator: `maximum(float32(max(cnt1, cnt2)), 1.0)`, so an empty pair yields `0.0 / 1.0` with no second `select`.
 - Key tables are accepted as `(P, M)` or `(P, M, K)` via `alignment.key_rows`; rank-0 integer constants come from the pool (`enp.full((), v, dtype=...)` underneath) because a Python literal would widen an `int32` tensor to `int64`.
 - Errors: a parent shape mismatch, a wrong key width, a digest built for another gene axis, or a centre batch that is neither `1` nor `P` raises `ConfigError` (`TensorNEATError`); `evoxc` errors propagate unchanged.
-- Files ≤ ~1000 lines (`digest.py` 654, `base.py` 588, `default.py` 385, `consts.py` 101).
+- Files ≤ ~1000 lines (`digest.py` 672, `base.py` 588, `default.py` 385, `consts.py` 101).
 
 ## Bit-identity argument
 `__call__`/`gene_distance` and `prepare`+`measure` differ only in how the homologue table is produced (`alignment.find_homologous` vs `digest.measure_alignment`), and both feed the *same* tail.
@@ -105,16 +118,17 @@ The reduction runs in parent-1 row order in both routes, so even the float summa
 ## Test Strategy
 `test/unit/genome/test_distance.py` is the acceptance spec (its bodies are `pytest.skip` placeholders): zero at identity (including an all-padded pair), symmetry within one ulp for unequal sizes, strict monotonicity in one added non-homologous gene, the `|delta| * compatibility_weight` attribute term with a `1 : 2` ratio, int columns contributing `1`, empty pairs `0` and never NaN, batched call equal to per-pair calls, and determinism.
 Verified evidence until those bodies land:
-- Byte-identity against the pre-change outputs on a real seed-42 evolved pop-100 payload: the eight digest leaves (same order, dtypes and shapes), `measure_distance` and `execute_distance` all `tobytes()`-equal (never `np.array_equal` — NaN is not equal to itself).
-- Wide-path equivalence at pop 100/500/1000: `DistanceRows.matrix` (4-centre blocks, `K * P` rows) and `DistanceRows.row` (batch-1 broadcast) both equal the pair-wise `execute_distance` result for every centre against every population row — 8000 pairs, `maxdiff = 0`, zero bytewise mismatches.
-- Determinism (two same-seed pipelines give identical fitness arrays) and a 5-generation seed-42 pop-100 `fitness_history` byte-identical to the pre-change snapshot.
+- Byte-identity against the frozen pre-change tree on a real evolved seed-42 population: the eight digest leaves (same order, dtypes and shapes), `measure_distance` and `execute_distance` all `tobytes()`-equal (never `np.array_equal` — NaN is not equal to itself), together with `execute_crossover` and both mutations.
+- Wide-path equivalence at pop 100/500/1000: `DistanceRows.matrix` (4-centre blocks, `K * P` rows, digest tiled by `concatenate` of whole population blocks — `np.repeat` tiles it wrongly and shows 395 mismatches) and `DistanceRows.row` (batch-1 broadcast) both equal the pair-wise `execute_distance` result for every centre against every population row — 8000 pairs, `maxdiff = 0.0`, zero bytewise mismatches.
+- Determinism (two same-seed pipelines give identical fitness arrays at pop 100 and 1000) and a 5-generation seed-42 pop-100 `fitness_history` byte-identical to the pre-change snapshot.
 - `pytest test/parity` 53 passed; `pytest test/unit` keeps its five pre-existing failures (four stale `xfail(strict=True)` in `test/unit/algorithm/test_neat_tell.py` and `test_speciation.py::test_centre_genes_keep_the_split_payload_contract`), unchanged by this node.
+The stable-sort round re-ran all four gates unchanged (`FAILURES: none`, 0 mismatches at the three pops, snapshot identical, same pytest counts), which is the evidence for the claim that stability changes no emitted number — the sorts' only ties are padding rows whose attributes are `NaN` on both sides.
 
 ## Remaining hot spots
-`match_conn` is the single most expensive piece of `measure` (4.8 ms of ~8.9 ms at pop 1000, ~20 % of the generation's distance milliseconds) and it is dominated by element volume: the `(P, 2M)` int64 sort at `M = max_conns = 100`, plus the two `2M`-wide gathers, whose cost is close to independent of the op count.
-`tail_node` is the next (1.6 ms) because `gene.distance` emits per-attribute-column arithmetic (four node columns versus one connection column).
-A merge that searched instead of sorted would be the structural next step: a `log2 M`-step binary search of each centre composite against the digest's sorted block reads ~4 × `(P, M)` int64 (1.6 MB at `4P`) instead of one `(P, 2M)` sort plus its inverse (12.8 MB of traffic), i.e. roughly 2–3× less work at `M = 100`, at ~5 extra ops.
-Padded shapes still decide the bill: `M` is `max_nodes`/`max_conns` (50/100 in the benchmark) while an evolved genome holds 3–5 nodes and 0–4 connections.
+`match_conn` is still the largest piece of `measure` (2.42 ms of 5.58 ms at pop 1000) but it is no longer traffic bound: with both sorts stable the merge's `int64` blocks move 4.5× faster, so what is left is its ~74 traced ops (≈80 µs each) plus the two `2M`-wide flat gathers, whose cost is close to independent of the op count.
+`tail_node` (1.56 ms, 28 % of `measure`) is second only because `gene.distance` emits per-attribute-column arithmetic (four node columns against one connection column) — that arithmetic lives in `../../gene/base.py`, not here.
+A merge that searched instead of sorted was the leading idea and it **lost**: a `log2 M`-step galloping search of each centre composite in the digest's ascending block reads ~4 × `(P, M)` int64 instead of one `(P, 2M)` sort, but at `M = 100` it needs ~36 steps of ~4 ops each (81 ops vs 41 for the whole merge) and measured **14.06 ms vs 8.60 ms** per wide conn `measure` at pop 1000 — the op dispatch it adds costs more than the bytes it saves once the sort is stable.
+The next levers here are therefore op count (`_pack`'s per-column slice+reshape, the two `reduce_sum` counts, both of which the `AlignedGenes` contract needs) and padded shapes: `M` is `max_nodes`/`max_conns` (50/100 in the benchmark) while an evolved genome holds 3–5 nodes and 0–4 connections.
 
 ## Cross-node needs (measured here, owned elsewhere)
 `algorithm/neat/_distance.py` (`DistanceRows`, 188 generation ops) and `genome/base.py::prepare_distance/measure_distance` should thread **one `ConstantPool` per generation** into `prepare`/`measure`; the pool already accepts it, and the ~163 constants the distance files still emit per generation would collapse to the handful of distinct values (~150 ops).
@@ -126,6 +140,6 @@ Padded shapes still decide the bill: `M` is `max_nodes`/`max_conns` (50/100 in t
 |---|---|
 | `./base.py` | `BaseDistance`: pair-wise `__call__`, the two-phase `prepare` / `measure` drivers, `_measure_family`, `gene_measure`, the `distance_from_alignment` adapter, and payload/digest validation (`_validate_single`, `_validate_digest`, `_broadcast_payload`). |
 | `./default.py` | `DefaultDistance`: weights and their validation, `gene_distance` (pair-wise alignment hook), `distance_from_alignment` (the scalar tail both routes share) and `distance_from_rows` (its row-table spelling). |
-| `./digest.py` | `FamilyDigest`/`DistanceDigest`, the injective `2**31` composite fold (`_pack`, `_tagged`, tags, padding sentinels), the per-column/permutation helpers (`_column`, `_gather_rows`, `_permute`), `prepare_family` (sort once per generation), `measure_alignment`/`AlignedGenes` (the merge) and `match_rows` (row-table adapter). |
+| `./digest.py` | `FamilyDigest`/`DistanceDigest`, the injective `2**31` composite fold (`_pack`, `_tagged`, tags, padding sentinels), the per-column/permutation helpers (`_column`, `_gather_rows`, `_permute`), `prepare_family` (sort once per generation), `measure_alignment`/`AlignedGenes` (the merge, both sorts `stable=True`) and `match_rows` (row-table adapter). |
 | `./consts.py` | `ConstantPool`: per-trace rank-0 constant memoisation (`i32`/`i64`/`f32`), the reason constants are not deduplicated by evoxc. |
 | `./__init__.py` | Re-exports `BaseDistance`, `DefaultDistance`, `DistanceDigest`, `FamilyDigest`. |
