@@ -724,14 +724,14 @@ class BaseGene(StatefulBaseClass):
         Returns:
             ``(*shape,)`` float32 distances, one per aligned pair.
         """
-        total = enp.zeros(tuple(attrs1.shape[:-1]), dtype=evoxc.float32)
+        total = None
         for index, spec in enumerate(self.attr_specs):
             first, second = column(attrs1, index), column(attrs2, index)
             if spec.kind == "float":
                 term = evoxc.abs(evoxc.subtract(first, second))
             else:
                 term = evoxc.cast(evoxc.not_equal(first, second), evoxc.float32)
-            total = evoxc.add(total, term)
+            total = term if total is None else evoxc.add(total, term)
         return total
 
     def hash(self, keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:

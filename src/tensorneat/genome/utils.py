@@ -26,6 +26,7 @@ import numpy as np
 from ..common import (
     I_INF,
     ConfigError,
+    batch_offsets,
     fetch_first,
     fetch_random,
     flat_scatter,
@@ -514,12 +515,15 @@ def check_cycles(
     Notes:
         Cost is split so that no ``max_nodes**2`` adjacency matrix is built: resolving the
         ``E`` edge endpoints to node rows is one ``O(E * N)`` key match (keys are arbitrary,
-        so *some* match against the row table is unavoidable), and each hop costs a
-        ``O(E)`` masked gather of the source-side reachability plus a ``O(E)`` masked
-        scatter back onto the destination rows — the scatter is masked so a dropped write
-        cannot clear an already-reachable row (``scatter`` is set-only, so a plain write of
-        ``False`` would).  A dense adjacency would cost ``O(N**2)`` per hop on top of the
-        same match, and would have to be materialised from the keys anyway.
+        so *some* match against the row table is unavoidable), and each hop costs four traced
+        ops over ``O(E)`` elements — a gather of the source-side reachability, the ``and``
+        with the live-edge mask, the dump-column ``select`` and the scatter back onto the
+        destination rows.  The frontier and its index blocks stay **flat** across hops (one
+        trailing dump column absorbs the refused edges), because ``scatter`` is set-only: a
+        plain write of ``False`` onto a real destination row would clear reachability, so
+        those writes go to the dump column instead.  A dense adjacency would cost
+        ``O(N**2)`` per hop on top of the same match, and would have to be materialised from
+        the keys anyway.
     """
     pop_size, node_count = node_keys.shape
     edge_count = conn_keys.shape[1]
@@ -531,26 +535,39 @@ def check_cycles(
     edge_dst, edge_dst_hit = _node_rows(conn_keys[:, :, 1], node_keys, node_present)
     edge_valid = evoxc.logical_and(edge_src_hit, edge_dst_hit)
 
-    # Seed the frontier at the destination and grow it one hop at a time; the trailing
-    # column is the dump slot of `masked_flat_scatter`.
-    dump = enp.zeros((pop_size, 1), dtype=evoxc.bool_)
-    seed = masked_flat_scatter(
-        enp.zeros((pop_size, node_count + 1), dtype=evoxc.bool_),
-        enp.reshape(dst_row, (pop_size, 1)),
-        enp.full((pop_size, 1), True, dtype=evoxc.bool_),
-        enp.reshape(dst_hit, (pop_size, 1)),
+    # Seed the frontier at the destination and grow it one hop at a time, on a **flat**
+    # frontier with one trailing dump column: the per-hop index blocks are built once, every
+    # hop is then one gather, one ``and``, one ``select`` and one scatter, and nothing needs
+    # the escape checks and fill masks of ``masked_flat_gather``/``masked_flat_scatter``
+    # (``_node_rows`` already answers an in-range row, and a refused edge writes the dump
+    # column instead of clearing a real node).
+    width = node_count + 1
+    offsets = batch_offsets(pop_size, width)
+    padded = enp.reshape(
+        masked_flat_scatter(
+            enp.zeros((pop_size, width), dtype=evoxc.bool_),
+            enp.reshape(dst_row, (pop_size, 1)),
+            enp.full((pop_size, 1), True, dtype=evoxc.bool_),
+            enp.reshape(dst_hit, (pop_size, 1)),
+        ),
+        (pop_size * width,),
     )
-    reachable = evoxc.slice(seed, (0, 0), (pop_size, node_count))
-    live_updates = enp.full((pop_size, edge_count), True, dtype=evoxc.bool_)
+    edge_positions = pop_size * edge_count
+    src_flat = enp.reshape(evoxc.add(edge_src, offsets), (edge_positions,))
+    dst_flat = enp.reshape(evoxc.add(edge_dst, offsets), (edge_positions,))
+    dump_flat = enp.reshape(
+        enp.broadcast_to(evoxc.add(offsets, _i32(node_count)), (pop_size, edge_count)),
+        (edge_positions,),
+    )
+    valid_flat = enp.reshape(edge_valid, (edge_positions,))
     for _ in range(node_count - 1):
-        live = masked_flat_gather(reachable, edge_src, mask=edge_valid, fill=False)
-        padded = evoxc.concatenate((reachable, dump), axis=1)
-        reachable = evoxc.slice(
-            masked_flat_scatter(padded, edge_dst, live_updates, live),
-            (0, 0),
-            (pop_size, node_count),
+        live = evoxc.logical_and(
+            enp.reshape(evoxc.gather(padded, src_flat, axis=0), (edge_positions,)),
+            valid_flat,
         )
+        padded = evoxc.scatter(padded, evoxc.select(live, dst_flat, dump_flat), live)
 
+    reachable = evoxc.reshape(padded, (pop_size, width))
     reached = enp.reshape(
         masked_flat_gather(
             reachable,
