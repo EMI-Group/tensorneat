@@ -30,7 +30,8 @@ stays importable by name and picklable as a gene option. Each one is a thin
 wrapper over a private ``_body(window)`` that takes the shared
 :class:`_Window` of one ``(z, mask)`` pair; the dispatcher calls the bodies and
 reuses one window, which is what keeps a multi-option dispatch from rebuilding
-the same neutral-padded tensor once per option (see the ``Cost`` note on
+the same neutral-padded tensor, the same ``(P, N, K)`` reduction and the same
+scalar constant once per option (see the ``Notes`` of
 :func:`apply_aggregation`).
 
 Two static flags are attached to a kernel and read by the dispatcher:
@@ -57,18 +58,26 @@ from ..tools import flat_gather
 class _Window:
     """Memo of the shared masked reductions of one ``(z, mask)`` incoming window.
 
-    Trace-time scaffolding only: it holds no tensor of its own, and each accessor
-    emits at most one graph op *per distinct argument*, so the options of one
-    dispatch share the neutral-padded tensor and the live-edge count instead of
-    rebuilding them per option. Nothing here is data dependent -- reuse is exact,
-    not approximate:
+    Trace-time scaffolding only: it owns no input data (``z`` and ``mask`` stay
+    borrowed), and each accessor memoises the one graph value it derives, so the
+    options of one dispatch share the neutral-padded tensor, the live-edge
+    count, the zero-padded total and the scalar constants instead of rebuilding
+    them per option. Nothing here is data dependent -- reuse is exact, not
+    approximate:
 
     * :meth:`padded` returns ``select(mask, z, neutral)``, byte for byte the
       expression every kernel documents for its own neutral element, so sharing
       it between :func:`sum`, :func:`mean` and :func:`maxabs` (all neutral
       ``0.0``) cannot change a result.
+    * :meth:`total` returns ``reduce_sum(padded(0.0), -1)``, the body shared by
+      :func:`sum` and :func:`mean`.
     * :meth:`count` returns ``reduce_sum(cast(mask, float32), -1)``, the count
       :func:`mean` divides by and the ``has_valid`` guard compares against.
+    * :meth:`scalar` returns a 0-d float32 constant, so every literal the
+      dispatch needs (the ``0.0`` of the padding *and* of the ``else`` / guard
+      values, the ``1.0`` of :func:`product`'s neutral and of :func:`mean`'s
+      divisor floor) is one graph constant instead of one per use site --
+      ``evoxc`` has no common-subexpression elimination for constants.
 
     Parameters
     ----------
@@ -78,13 +87,45 @@ class _Window:
         ``True`` for real incoming edges.
     """
 
-    __slots__ = ("_z", "_mask", "_padded", "_count")
+    __slots__ = ("_z", "_mask", "_padded", "_count", "_total", "_scalars")
 
     def __init__(self, z: Any, mask: Any) -> None:
         self._z = z
         self._mask = mask
         self._padded: dict[float, Any] = {}
         self._count: Any = None
+        self._total: Any = None
+        self._scalars: dict[float, Any] = {}
+
+    def scalar(self, value: float):
+        """0-d ``float32`` constant, built once per distinct ``value``.
+
+        Parameters
+        ----------
+        value : float
+            The literal to materialise (``0.0``, ``1.0``, ``-inf``, ``+inf``
+            appear as neutral elements, ``else`` values and guard bounds).
+
+        Returns
+        -------
+        ``() float32``
+            A scalar tensor, broadcast by every consumer that needs a full
+            ``(P, N)`` or ``(P, N, K)`` operand.
+
+        Notes
+        -----
+        A Python literal passed straight to ``evoxc.select`` / ``evoxc.greater``
+        becomes its own ``constant`` op at every call site, and ``evoxc`` does
+        not merge them, so routing every literal of one dispatch through this
+        memo is what keeps a multi-option dispatch from emitting the same
+        ``0.0`` four times.
+        """
+        key = float(value)
+        cached = self._scalars.get(key)
+        if cached is None:
+            cached = enp.full((), value, dtype=evoxc.float32)
+            self._scalars[key] = cached
+        return cached
 
     def padded(self, neutral: float):
         """``select(mask, z, neutral)``, built once per distinct ``neutral``.
@@ -104,9 +145,28 @@ class _Window:
         key = float(neutral)
         cached = self._padded.get(key)
         if cached is None:
-            cached = evoxc.select(self._mask, self._z, neutral)
+            cached = evoxc.select(self._mask, self._z, self.scalar(neutral))
             self._padded[key] = cached
         return cached
+
+    def total(self):
+        """``reduce_sum(padded(0.0), -1)``, built once.
+
+        Returns
+        -------
+        ``(P, N) float32``
+            Sum of the masked-in contributions of every node slot, ``0.0`` for
+            an all-``False`` column.
+
+        Notes
+        -----
+        :func:`sum` returns it as is and :func:`mean` divides it by
+        :meth:`count`, so one ``(P, N, K)`` reduction serves both options of a
+        dispatch instead of one reduction each.
+        """
+        if self._total is None:
+            self._total = evoxc.reduce_sum(self.padded(0.0), axes=-1)
+        return self._total
 
     def count(self):
         """``reduce_sum(cast(mask, float32), -1)``, built once.
@@ -125,7 +185,7 @@ class _Window:
 
 def _sum_body(window: _Window):
     """Body of :func:`sum` (see its docstring for the contract)."""
-    return evoxc.reduce_sum(window.padded(0.0), axes=-1)
+    return window.total()
 
 
 def sum(z, mask):
@@ -315,8 +375,8 @@ maxabs.zero_on_empty = True
 
 def _mean_body(window: _Window):
     """Body of :func:`mean` (see its docstring for the contract)."""
-    total = evoxc.reduce_sum(window.padded(0.0), axes=-1)
-    return evoxc.divide(total, evoxc.maximum(window.count(), 1.0))
+    floor = evoxc.maximum(window.count(), window.scalar(1.0))
+    return evoxc.divide(window.total(), floor)
 
 
 def mean(z, mask):
@@ -343,8 +403,10 @@ def mean(z, mask):
     ``all(~mask) -> 0.0`` short-circuit in the dispatcher. The ``maximum(count, 1)``
     floor reproduces that value without relying on the guard, which makes the
     kernel safe to call standalone -- and is why it is ``zero_on_empty``.
-    The zero-padded sum and the count are both shared with the other options of
-    the same dispatch (see :class:`_Window`).
+    The zero-padded sum it divides and the count it floors are both shared with
+    the other options of the same dispatch (see :class:`_Window`), so a
+    dispatch holding :func:`sum` and :func:`mean` reduces the ``(P, N, K)``
+    window once, not twice.
     """
     return _mean_body(_Window(z, mask))
 
@@ -393,17 +455,27 @@ def apply_aggregation(
     ``evoxc.cond`` needs a 0-d predicate, so the dispatch is an elementwise
     ``select`` cascade: every option is evaluated on the whole ``(P, N, K)``
     tensor and selected per node with ``select(agg_ids == i, ...)``. The cost is
-    therefore ``len(agg_fns)`` reductions over ``(P, N, K)`` plus
-    ``len(agg_fns)`` ``equal``/``select`` pairs over ``(P, N)``; the padding and
-    the live-edge count are *not* per option:
+    one ``constant``/``equal``/``select`` triple over ``(P, N)`` per option plus
+    its reductions over ``(P, N, K)`` -- at most one per option, fewer when
+    options share one. The padding, the live-edge count and the scalar literals
+    are *not* per option:
 
     * every kernel that shares a neutral element shares one
       ``select(mask, z, neutral)`` through :class:`_Window` (:func:`sum`,
-      :func:`mean` and :func:`maxabs` all pad with ``0.0``), and
+      :func:`mean` and :func:`maxabs` all pad with ``0.0``),
+    * :func:`sum` and :func:`mean` share one ``(P, N, K)`` ``reduce_sum``, and
     * :func:`mean` and the ``has_valid`` guard share one live-edge count.
 
-    For the canonical list that is 4 padded tensors instead of 6 and one count
-    instead of two -- 5 fewer ops per level, 4 of them ``(P, N, K)``-sized.
+    Every scalar the cascade needs -- the ``0.0`` of the first ``select``'s
+    ``else`` value and of the guard's bound and rewrite, the ``1.0`` of
+    :func:`product`'s neutral and of :func:`mean`'s divisor floor -- is one
+    ``constant`` op per distinct value through :meth:`_Window.scalar`
+    (``evoxc`` does not eliminate duplicate constants).
+
+    Measured graph ops at ``(P, N, K) = (100, 50, 8)`` int32 ids: 7 for a
+    one-option :func:`sum` list, 12 for one-option :func:`max` (its extra four
+    are the ``has_valid`` guard and the live-edge count), and 57 for the
+    canonical list.
 
     The ``has_valid`` guard (a final ``select(count > 0, result, 0.0)``) is
     emitted only when some option is not ``zero_on_empty`` -- i.e. when a
@@ -416,7 +488,10 @@ def apply_aggregation(
 
     An id outside ``[0, len(agg_fns))`` yields ``0.0`` (the first ``select``'s
     ``else`` value); the pre-rewrite ``lax.switch`` clamped such ids to the last
-    option, an unreachable divergence for well-formed genomes.
+    option, an unreachable divergence for well-formed genomes. That ``else``
+    value is why a single-option list still pays its ``select``: the id column
+    is gene data, so the option cannot be selected statically even when the list
+    has one entry.
     """
     ids = agg_ids if agg_ids.dtype == evoxc.int32 else evoxc.cast(agg_ids, evoxc.int32)
     window = _Window(z, mask)
@@ -428,7 +503,7 @@ def apply_aggregation(
         # option list keeps exactly ``0.0``, the value the pre-rewrite cascade's
         # zeroed accumulator produced (no separate ``enp.zeros`` accumulator op).
         out = evoxc.select(
-            evoxc.equal(ids, index), value, 0.0 if out is None else out
+            evoxc.equal(ids, index), value, window.scalar(0.0) if out is None else out
         )
     if out is None:  # an empty option list: every node aggregates to 0.0
         return enp.zeros(z.shape[:-1], dtype=evoxc.float32)
@@ -437,4 +512,5 @@ def apply_aggregation(
     # ``has_valid``: a node with no real incoming edge gets exactly ``0.0``, so
     # the ``-inf`` / ``+inf`` neutral padding of ``max`` / ``min`` cannot leak
     # into a node value (and a padded product cannot become ``1``).
-    return evoxc.select(evoxc.greater(window.count(), 0.0), out, 0.0)
+    zero = window.scalar(0.0)
+    return evoxc.select(evoxc.greater(window.count(), zero), out, zero)
