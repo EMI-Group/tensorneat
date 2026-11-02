@@ -54,7 +54,7 @@ A probability of `0` is a true identity — the plan is elided at trace time, ke
 Key resolution is a **merge join**: every query and every node folds its key and payload into one injective `int64` composite, the `(P, N + Q)` merge (`Q = 2E + 2`) is sorted once, `cumsum` of the node tags gives the rank of the first node at or after each position, and one flat `gather` reads the row; the low field keeps queries in `[0, Q)` and nodes in `[Q, Q + N)` in ascending row order, so that first node is the *smallest* row carrying the key — the same row the previous `argmax(argmax(match))` produced.
 No dense key→row table is possible: the algorithm allocates node keys as `max_node_key + 1 + arange(P)`, so a real pop-100 run reaches keys 225–249 with `key_span=150` and keeps growing; keys must be treated as arbitrary `int32`.
 Result: 106 traced ops (up from 64) but 7.6 ms at pop 1000 (from 23.0), 4.2 ms at 500 and 1.4 ms at 100 — the join trades ~42 cheap ops for a 40× volume cut.
-The call site is **statically gated** on `genome.network_type == "feedforward" or self.p_recur > 0.0`: those are the only two consumers (the acyclicity veto for a feedforward genome, and the `p_recur` requirement built only when `p_recur > 0`), so a recurrent genome with `p_recur == 0` traces neither the region nor its ops (`execute_mutation` 350 → 241 traced ops, 34.1 → 16.7 ms at pop 1000); `p_recur > 0` (361 ops) and feedforward (325) are unchanged.
+The call site is **statically gated** on `genome.network_type == "feedforward" or self.p_recur > 0.0`: those are the only two consumers (the acyclicity veto for a feedforward genome, and the `p_recur` requirement built only when `p_recur > 0`), so a recurrent genome with `p_recur == 0` traces neither the region nor its ops (`execute_mutation` 423 → 325 traced ops, 31.2 → 14.2 ms at pop 1000, 2.2×); the gate does not touch `p_recur > 0` (434 → 445, the +11 being the add-node guard) or the feedforward path.
 A feedforward genome's add-conn can close a cycle, so that branch keeps the predicate unconditionally.
 
 ## Constraints
@@ -72,12 +72,14 @@ A feedforward genome's add-conn can close a cycle, so that branch keeps the pred
 ## Measured cost (numpy reference interpreter, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100)`, build excluded, one warmup + median of 5, RNG key created inside the trace)
 | kernel | pop | traced ops | ms |
 | --- | --- | --- | --- |
-| `DefaultMutation` `execute_mutation` | 100 / 500 / 1000 | **462** | 5.6 / 13.6 / 24.0 |
-| `RecurrentMutation` `execute_mutation` (`p_recur=0.1`) | 100 / 500 / 1000 | **498** | 6.0 / 15.2 / 28.3 |
-| `RecurrentMutation` `execute_mutation` (`p_recur=0.0`, cycle elided) | 1000 | **241** (was 350) | 16.7 (was 34.1) |
+| `DefaultMutation` `execute_mutation` | 100 / 500 / 1000 | **409** (398 before the add-node guard) | 5.8 / 17.9 / 32.6 |
+| `RecurrentMutation` `execute_mutation` (`p_recur=0.1`) | 1000 | **445** (434) | ~35 |
+| `RecurrentMutation` `execute_mutation` (`p_recur=0.0`, cycle elided) | 1000 | **325** (423) | 14.2 (31.2) |
 | `degree.in_degree` (diagnostic) | 100 / 500 / 1000 | 15 | 0.29 / 1.08 / 2.11 |
+
+These are single traced graphs that already include the gene-side `mutate`/`new_identity_attrs` calls; the earlier per-file "ledger" added those twice and over-reported both `DefaultMutation` (462) and `p_recur=0.1` (498) by 53 ops — do not reuse that sum.
 The box drifts ±10–30 %, so op counts and same-process A/B ratios are the load-bearing numbers.
-The add-node validation is +11 traced ops (406 → 417 at the reproducer's shapes, `max_nodes=16`): median-of-5 run time unchanged within noise at pop 100/500/1000 (5.9 / 17.1 / 29.8 ms).
+The add-node validation is +11 traced ops (398 → 409 for `DefaultMutation` on the reference genome, 407 → 418 on the reproducer's `OriginNode`/`OriginConn` one): median-of-5 run time unchanged within noise at pop 100/500/1000.
 Per-file op ledger (`mutledger2.py`, pop 100): default 462 = `cycle.py` 106 + `base.py` 74 + `arrays.py` 66 + `default.py` 54 + `plan.py` 17 + ~145 gene/tools-side; recurrent 498 = `cycle.py` 106 + `arrays.py` 76 + `base.py` 74 + `recurrent.py` 59 + `default.py` 21 + `plan.py` 17 + the same ~145.
 Remaining reducible blocks, in order: `closes_cycle`'s 106 (its own 7.6 ms at pop 1000; inside it the int64 `sort` of the `(P, 252)` merge ~1.7 ms, the `cumsum` rank ~3.1 ms, the transpose-back `scatter` ~1.5 ms), the gene-side `node_gene.mutate`/`conn_gene.mutate` (~65 ops, owner `../gene/`), and `arrays.py`'s remaining static constants.
 Whole-generation context: `Pipeline.step` at pop 100/500/1000 is 45 / 336 / 603 ms, of which mutation is now ~5.6 / 13.6 / 24 ms — `speciate` dominates a generation, so a mutation-only cut moves `step` by a few percent.
