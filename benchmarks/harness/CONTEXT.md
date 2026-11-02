@@ -8,7 +8,7 @@ This package is import-safe for both sides: nothing here imports `jax`, `tensorn
 - `adapters/__init__.py` — `get_adapter(impl)`; the adapter contract (below).
 - `adapters/old.py` — `tensorneat_legacy` + JAX; one-off cost is `jax.jit(pipeline.step).lower(state).compile()`.
 - `adapters/new.py` — `src/tensorneat` + evoxc; one-off cost is the first `Pipeline.step` call (the build), and it asserts no `jax`/`torch` module was pulled in.
-- `reporter.py` — assembles `RESULTS.md` from aggregated records + run metadata (environment incl. load, protocol, case matrix, per-case tables, verdict, per-repeat quality curves, reference baseline, fairness, reproduce block) and decides which companion files (`BACKENDS.md`/`THREADS.md`) are next to the report.
+- `reporter.py` — assembles `RESULTS.md` from aggregated records + run metadata (title and optional note, environment incl. load and the code-scope dirty state, protocol, case matrix, per-case tables, verdict, per-repeat quality curves, reference baseline, fairness, reproduce block) and decides which companion files (`BACKENDS.md`/`THREADS.md`) are next to the report.
 - `report_format.py` — shared null-safe cell/table formatters and document accessors (`_cell`, `_table`, `_num`, `_gens_to_target`, repo-relative paths, case order, companion-file probe); presentation only.
 - `report_sections.py` — the data-derived `## Headline: old vs new` table (median speed-up, per-repeat range, quality overlap) and the `## Why the new side wins and loses` narrative incl. the generated memory paragraph, all written from the measured numbers rather than assuming a winner.
 ## Report Document
