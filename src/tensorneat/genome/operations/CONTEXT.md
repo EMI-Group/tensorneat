@@ -26,7 +26,7 @@ Delete-node never names an input row (`0..num_inputs-1`) or an output row (`N-nu
 
 ## Crossover semantics
 `DefaultCrossover` always keeps parent 1's structure and recombines attributes only: a gene whose exact key-column tuple has a homologue in parent 2 is crossed per attribute by `gene.crossover`, one with no homologue keeps parent 1's attributes, and padded rows stay padded.
-`alignment.find_homologous(keys1, keys2)` is the only aligner: hash → tagged `argsort` over the concatenation of both parents' hashes → adjacent `(parent 1, parent 2)` pair → full key-row confirmation. `O(M log M)`, never an `O(M^2)` scan, one batched kernel.
+`alignment.find_homologous(keys1, keys2)` is the only aligner and serves both crossover and distance: one packed `uint64` identity per key row (`row_identity`) → one `argsort` of the concatenated `2M` identities → each gene's rank as `argsort(order)` → successor test "the element right after me is a parent-2 row with my identity" → `_confirm_rows` for key columns past the packed prefix. `O(M log M)`, never an `O(M^2)` scan, one batched kernel.
 
 ## Distance semantics
 `DefaultDistance.gene_distance` = homologue table + `distance_from_rows`; the two-phase `BaseDistance.prepare`/`measure` build the same table through `digest.match_rows` and share the identical tail, so speciation runs `prepare` once and `measure` per centre at the same bits.
