@@ -41,6 +41,38 @@ import evoxc.numpy as enp
 
 from tensorneat.common.errors import TensorNEATError
 
+#: Maximum number of species centres measured by one ``measure_distance`` call.
+#:
+#: One call over the whole species table is the cheapest in dispatch terms, but
+#: the compatibility kernel's transient arrays scale with ``centres * pop_size``
+#: (the ``(rows, 2 * max_conns, key_width)`` masked gather of the long-key
+#: verification alone is hundreds of MB at ``20 * 1000`` rows) and the numpy
+#: reference interpreter keeps every intermediate of a run alive, so a
+#: generation's footprint is the sum of them.  Grouping also keeps each group's
+#: ``(rows, 2 * max_conns)`` sort inside the cache: at pop 1000, 20 centres in one
+#: call cost 726 ms of ``speciate`` against 568 ms at 4 per call (500: 496 vs
+#: 300 ms), and 8 per call is already worse again (763 / 340 ms).  The rows are
+#: identical either way, because the compatibility kernel is row-independent.
+#: The gate keeps the sparse regime on its lazy per-slot path, so this only ever
+#: groups the dense regime's rows.
+CENTRES_PER_CALL = 4
+
+
+def _rows(payload: Any, start: int, count: int) -> Any:
+    """Slice ``count`` consecutive rows out of every field of a payload.
+
+    Args:
+        payload (Any): Payload whose fields are batch-first ``(K, *rest)``.
+        start (int): Static first row.
+        count (int): Static number of rows.
+
+    Returns:
+        Any: Payload of the same type with ``(count, *rest)`` fields.
+    """
+    rank = len(payload[0].shape)
+    slicer = (slice(start, start + count),) + (slice(None),) * (rank - 1)
+    return type(payload)(*(field[slicer] for field in payload))
+
 
 def tile_leading(x: Any, blocks: int) -> Any:
     """Stack ``blocks`` copies of a batch-first tensor along axis 0.
@@ -205,7 +237,7 @@ class DistanceRows:
         return self.genome.measure_distance(state, centre, self.digest)
 
     def matrix(self, state: Any, centres: Any) -> Any:
-        """``(S, P)`` distance matrix of a whole species table in one call.
+        """``(S, P)`` distance matrix of a whole species table.
 
         Args:
             state (Any): Shared state.
@@ -219,10 +251,43 @@ class DistanceRows:
         Note:
             ``K == 1`` takes the narrow path: the genome kernel already
             broadcasts a single centre, so tiling would only duplicate work.
+            Otherwise the centres are measured in groups of at most
+            ``CENTRES_PER_CALL`` rows.  One call over the whole table is the
+            fastest option, but its transient arrays grow with ``K * P`` -- an
+            ``(K * P, 2 * max_conns, key_width)`` masked gather alone is
+            hundreds of MB at ``K = 20``, ``P = 1000`` -- and the reference
+            interpreter keeps every intermediate alive for the whole run.
+            Grouping bounds that peak while costing one extra dispatch per
+            group; the rows are identical either way, because the compatibility
+            kernel is row-independent.
         """
         count = int(centres[0].shape[0])
         if count == 1:
             return evoxc.reshape(self.row(state, centres), (1, self.pop_size))
+        block = min(count, CENTRES_PER_CALL)
+        if block == count:
+            return self._measure_block(state, centres, count)
+        return evoxc.concatenate(
+            [
+                self._measure_block(
+                    state, _rows(centres, start, min(block, count - start)), min(block, count - start)
+                )
+                for start in range(0, count, block)
+            ],
+            axis=0,
+        )
+
+    def _measure_block(self, state: Any, centres: Any, count: int) -> Any:
+        """Measure ``count`` centres against the population in one wide call.
+
+        Args:
+            state (Any): Shared state.
+            centres (Any): Centre payload of exactly ``count`` rows.
+            count (int): Static number of centres in ``centres``.
+
+        Returns:
+            Any: ``(count, P)`` float32 distances.
+        """
         wide_centres = type(centres)(
             *(repeat_leading(field, self.pop_size) for field in centres)
         )
