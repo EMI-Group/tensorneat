@@ -22,7 +22,7 @@ Runtime inputs (batch-first, population on axis 0); the five statics are **posit
 - `node_keys (P, max_nodes)` `int32` (or `float32`) — node key column; `I_INF`/`NaN` marks an absent row.
 - `conn_in (P, max_conns)`, `conn_out (P, max_conns)` — connection endpoint keys, same dtype as `node_keys`.
 - `input_keys (I,)`, `output_keys (O,)` — keys of the input/output nodes, shared by every genome (no batch axis).
-- statics `pop_size P`, `max_nodes N`, `max_conns C`, `max_in_degree K`, `key_span S` — the Pipeline's shape signature, and therefore the cache key of the compiled executable.
+- statics `pop_size P`, `max_nodes N`, `max_conns C`, `max_in_degree K`, `key_span S` — the Pipeline's shape signature, and therefore the cache key of the compiled executable — plus a trailing `acyclic=False`, a caller assertion that the population contains no cycle (a build-time knob, not part of the shape signature).
 
 Fields, all batch-first, in `Transformed` (a `NamedTuple`):
 
@@ -55,35 +55,51 @@ Invariances the consumers may rely on:
 Derivation recipe (validated against a numpy oracle, keep the shape of it):
 1. dense key→slot table `(P, S+1) int32` (trailing column = write dump), one flat scatter over node keys.
 2. `src`, `dst` = flat gather from that table with sanitized keys (`absent -> 0`, clamp to `[0, S-1]`), then `edge_valid = row present & table hit`, and `node_exists` from the node key column.
-3. `rank` = global rank of each edge in the `(dst, conn_index)` order: stable `argsort` of `dst_sorted * C + index`, then one flat scatter of `arange(C)`.
-4. `cc[i]` = number of edges with `dst <= i`: one stable `argsort` of the combined `(edge dsts * 2, node slots * 2 + 1)` array, one flat scatter for its inverse; `cc[i] = inv[C + i] - i`.
-5. `start[i] = cc[i-1]` (0 for `i = 0`), `col = rank - start[dst]`.
-6. `in_conn`/`in_src` = flat scatter of conn ids/src into `(P, N*K + 1)` at `dst*K + col`; edges with `col >= K` (or invalid) go to the dump slot; `edge_overflow = reduce_sum(col >= K & edge_valid)`; `in_valid = in_conn != I_INF`.
-7. `node_level` = `while_loop` longest-path relaxation over the `(P, N, K)` table, inputs pinned to 0, capped at `2N` iterations (a snapshot at `N` distinguishes a live cycle from a long acyclic path); unresolved present nodes are cyclic.
-8. `topo_key`, `input_slot`, `output_slot` are then free.
+3. `edge_order` — **one** stable `argsort` of the combined `(edge key 2*dst, node key 2*slot + 1)` array, built in the narrowest integer dtype that holds its `2N + 2` sentinel (`int8` up to N=62, `int16` up to N=16382, else `int32`); its inverse permutation `inv` yields **both** `cc[i] = inv[C + i] - i` (edges with `dst <= i`) and each edge's global rank `rank[c] = inv[c] - dst[c]` (the node entries below `dst[c]` precede it, and edges of one `dst` keep connection order).
+4. `start[i] = cc[i-1]` (0 for `i = 0`), `col = rank - start[dst]`.
+5. `in_conn`/`in_src` = flat scatter of conn ids/src into `(P, N*K + 1)` at `dst*K + col`; edges with `col >= K` (or invalid) go to the dump slot; `edge_overflow = reduce_sum(col >= K & edge_valid)`; `in_valid = in_conn != I_INF`.
+6. `node_level` = `while_loop` longest-path relaxation over the `(P, N, K)` table, inputs pinned to 0, in the narrowest carrier dtype. The default runs the level-only relaxation (cap `N`) and then decides **in-graph** with `evoxc.cond` whether any valid edge violates `level[dst] > level[src]`: no violation ⇔ acyclic (a cycle always leaves one violation), and the level-only answer is then exact; a violation runs the two-relaxation machinery (`level` + `reach`, cap `2N`, snapshot at `N`) that reports every node on/after a live cycle as `I_INF`. `acyclic=True` returns the level-only answer directly.
+7. `topo_key`, `input_slot`, `output_slot` are then free.
 
 Cost: `O(P * (S + C log C + N*K*D))` with `D` = max depth, i.e. edge-proportional except for the `N*K` padding and the one-off `key_span` table; **no `cumsum`, no scatter-with-reduce, no `max_nodes**2` matrix**.
 `transform` runs once per generation, so its cost is amortized over the whole generation.
 
 ## Measured cost
-Depth-qualified, on the numpy reference backend, shape signature `N=50 C=200 K=8 S=64`, 46 present node rows (4 padded), 2 inputs, 2 outputs; every figure is the **median of 3 campaigns × 15 timed `evoxc.run` calls** with the build cached (one `evoxc.build` per shape, timed once and reported separately), single-threaded (1 BLAS/OpenMP thread), INTEL Xeon Platinum 8568Y+, Linux 6.8 x86_64/glibc 2.39, CPython 3.14.8, numpy 2.5.4, evoxc 0.1.0 from `/root/evoxc`, ms:
+Depth-qualified, on the numpy reference backend, shape signature `N=50 C=200 K=8 S=64`, 46 present node rows (4 padded), 2 inputs, 2 outputs, a layered feed-forward DAG population; every figure is the **median of 15 timed `evoxc.run` calls** with the build cached, single-threaded (1 BLAS/OpenMP thread), ms.
+"before" is the original two-sort / two-relaxation implementation, "after" is the current one; the single-cell cells were measured interleaved in one session and the box drifts ±30 % between and within sessions, so the *ratio* is the load-bearing number:
 
-| topology | live edges | depth | P=100 run (of which `node_levels`) | P=500 | P=1000 |
-|---|---|---|---|---|---|
-| feed-forward DAG, depth 5 (payload filled to `C`) | 200 | 5 | 9.0 (4.8) | 40.7 (17.0) | 74.2 (32.7) |
-| feed-forward DAG, depth 18 (adjacent levels only → short fill) | 111 | 18 | 18.5 (14.8) | 60.8 (52.6) | 117.4 (98.3) |
-| feed-forward DAG, depth 18, payload filled to `C` (forward jumps) | 200 | 18 | 18.5 (15.1) | 63.8 (51.7) | 124.0 (98.2) |
-| random, cyclic (worst case: the relaxation hits the `2N` cap) | 200 | — | 79.5 (75.1) | 280.4 (268.6) | 547.9 (507.7) |
+| topology | P=100 | P=500 | P=1000 | speed-up at P=1000 |
+|---|---|---|---|---|
+| depth 5, 200 live edges | 10.7 → 5.9 | 34.4 → 16.6 | 83.2 → 30.5 | 2.7× |
+| depth 8, 200 live edges | 12.7 → 5.6 | 40.7 → 13.3 | 97.1 → 33.1 | 2.9× |
+| depth 18, 111 live edges | 20.7 → 8.5 | 66.9 → 20.2 | 144.5 → 33.8 | 4.3× |
+| random cyclic, 200 live edges | 92.6 → 67.7 | 311.1 → 149.9 | 607.6 → 245.9 | 2.5× |
 
-One-off `build` (cached per shape by the Pipeline, so not paid per generation): P=100 86–103 ms, P=500 270–330 ms, P=1000 595–630 ms.
+Single-cell interleaved protocol (three alternating rounds of 15 runs, P=1000, depth 8): before 103.5 / 102.4 / 105.2 ms, after 33.6 / 33.4 / 33.5 ms, `acyclic=True` 30.2 / 32.1 / 30.2 ms — ~3.1×, and the cycle-safe default is within ~10 % of the explicit acyclic assertion.
+One-off `build` (cached per shape by the Pipeline, so not paid per generation): P=100 ~65 ms, P=500 ~140 ms, P=1000 ~280 ms; the default traces both `cond` branches (+2–6 % over `acyclic=True`).
 
-Interpretation — the numbers behave like the `O(P · (C log C + N·K·D))` formula:
+Where the time now goes (nesting-aware exclusive per-op profile, P=1000, depth 8, default path, 580 dispatches): `gather` 16 ops 7.3 ms · `select` 47 ops 6.6 ms · `scatter` 4 ops 4.0 ms (≈1 µs per 200 k-element scatter — the most expensive op per element) · `add` 32 ops 2.6 ms · `maximum` 72 ops 1.7 ms (the `K` fold: 8 slices per relaxation step) · `while` own overhead 1.5 ms · `reduce_max` 12 ops 1.2 ms · `argsort` 1 op 1.2 ms · `cast` 18 ops 1.1 ms · `reshape` 91 ops 0.9 ms; every other op kind under 1 ms.
 
-- **Linear in P.** Depth-5 run: 9.0 → 40.7 → 74.2 ms for P = 100 → 500 → 1000 (×4.6 then ×1.8), i.e. ≈ `1.7 ms + 0.073 ms` per member at depth 5; per-member cost falls from 0.090 to 0.074 ms only because the fixed per-run prologue/epilogue is amortised. `node_levels` alone is 4.8 → 17.0 → 32.7 ms (×3.5, ×1.9): linear.
-- **Linear in depth, and depth is the dominant factor.** With the shapes *and* the live-edge count held fixed (row 1 vs row 3), P=1000 goes 74.2 → 124.0 ms while `node_levels` alone goes 32.7 → 98.2 ms (×3.00) — the relaxation's trip count is `D + 1` = 6 → 19 iterations (×3.17), i.e. ≈ 5.2–5.5 ms per iteration at P=1000 over the `(P, N, K)` window with its two relaxations. The remainder (total − `node_levels`, ≈19–42 ms at P=1000) is depth-independent: the two stable `argsort`s (`edge_group_rank`, `cum_in_degree`, `O(C log C)`) plus the `(P, N·K)` window zero-fill/scatter, i.e. the `C log C` and `N·K` terms. It is data- and layout-sensitive — numpy's stable sort is much faster on run-rich and `I_INF`-padded columns, so the 111-edge payload leaves a 19 ms remainder where the 200-edge depth-5 population leaves 41 ms — hence a range, not a constant.
-- **Cyclic worst case.** 100 relaxation iterations instead of 6: `node_levels` is ×15.5 the depth-5 figure (trip-count ratio 16.7) and 93–96 % of the whole run. A population without a reachable cycle never pays this — in a real run most members are acyclic and the schedule is one shared traversal per population, not per network.
-- **Lever, not implemented.** `node_levels` carries *two* max-plus relaxations in one loop body: `level` (the answer) and `reach` (only there to tell a live cycle from a long acyclic path). Skipping `reach` for a caller that can guarantee acyclicity would roughly halve the trip cost — the dominant term — but it needs a static "acyclic" flag in the Pipeline's shape signature (and therefore in the executable cache key). Not wired up.
-- `incoming_table` (through `_window_table`) and `node_levels` embed `(P, N·K+1)`/`(P, N·K)` int32 buffers as graph constants: at P=1000 that is 9 constants above evoxc's 1 MiB threshold, ≈14.4 MB total (warned and ignored). P ≤ 500 stays below the threshold (800 KB). A build-time cost, not a per-run one.
+Interpretation:
+
+- **Per-op interpreter overhead is a first-class term.** 580 dispatches at ~10–15 µs of numpy-call/dispatch cost is 6–9 ms of the ~33 ms, so op *count* matters as much as op size: one removed `(P, N)` select is worth ~50 µs, and the tail is many small `(P, C)`/`(P, N)` ops rather than one big pass.
+- **Depth no longer dominates.** Rows depth 5 and depth 18 with the same live-edge count differ by ~10 % (30.5 vs 33.8 ms at P=1000) although the relaxation trip count is 6 vs 19: the loop is now cheap (one `(P, N, K)` gather plus a `K` fold per iteration in a narrow carrier), and the depth-independent window build (the `in_conn`/`in_src` scatters), the one sort and the key tables hold the remaining cost.
+- **The sort is no longer a term.** One `int16` stable `argsort` (1.2 ms) replaced two `int32` ones (~12 ms): numpy's stable sort has a radix fast path for `int8`/`int16` and falls back to a slow general path for `int32` (see the idioms list).
+- **A cyclic population pays ~2.5× an acyclic one** (245.9 vs 33.1 ms at depth 8): the default's level-only campaign runs first and the `cond` fallback then runs the full two-relaxation machinery. Cycles are the RecurrentGenome's business; a feed-forward population never pays it.
+- **Share of a generation.** `Pipeline.step` (XOR, `DefaultGenome`, `NEAT`, pop 1000, build excluded) moves 725 → 713 ms while the schedule goes 103 → 33 ms, i.e. the schedule is now ~5 % of a generation — further schedule work cannot move the generation figure; `speciate`/`breed`/mutation (in `algorithm/`) own it.
+
+Rejected levers (measured; do not re-derive):
+
+- **Dense `(N, N)` adjacency / max-plus matrix power** for the level relaxation: `P·N·N` = 2.5 M element-ops per iteration against `P·N·K` = 400 k for the window relaxation, and max-plus has no matmul form (it would need `N` elementwise `maximum`s), so it is ≥ 6× worse at `K=8`.
+- **One-hot / einsum counting for `rank` and `cc`**: the prefix count per edge is a `(P, C, C)` (40 M at P=1000) or `(P, C, N)` (10 M) tensor against a 250 k-element sort — the sort wins by an order of magnitude at these sizes.
+- **Static Python unrolling of the relaxation** to a `max_depth` static: per-iteration work is unchanged, the loop overhead it removes is ~1.5 ms in total, and the unroll bound must be `≥ depth` for every member, so a `max_depth = 16` unroll runs more iterations than the 6–19 the convergent loop actually needs.
+- **One gather over a stacked `(P, 2, N, K)` `level`/`reach` carrier** instead of two: same copied volume, one dispatch less — measured slower.
+- **Fusing the two cycle-violation gathers** (`src`/`dst` interleaved) and **casting the violation mask to `int8`**: both inside noise (36.4 vs 35.8 ms), rejected.
+- **Per-member `cond`** (one branch per population member): `vmap` over control flow is deferred in evoxc and the batch axis must be explicit — not expressible.
+- **`reduce_max` over the `K` axis** instead of the pairwise `maximum` fold: 1.26 vs 0.30 ms per level at P=1000 (numpy's `np.max` over a trailing 8-axis is slower than seven `(P, N)` `maximum`s).
+- **A `-2**30` sentinel instead of the `select(greater(best, -1), best + 1, -1)` guard**: an unsettled predecessor would settle its child at `0`; caught by the field-by-field diff.
+- **A trusted, guard-free index block everywhere** (the escape test is what makes the backend *raise* instead of reading a neighbouring row): only offered as an opt-in `trusted=True` and only used where the index range is provably inside the table.
+
 Reproduction (build **once**, then time `evoxc.run` only — `run_defn` per iteration would time the build; the synthetic `tensorneat` package lets the snippet run from `src/` without installing the package):
 
 ```
@@ -153,30 +169,25 @@ def timed(exe, run_args, repeat=15):
         t0 = time.perf_counter(); evoxc.run(exe, *run_args); out.append(time.perf_counter() - t0)
     return statistics.median(out) * 1e3
 
-for label, depth, dense in (("dag_d5", 5, False), ("dag_d18", 18, False),
-                            ("dag_d18d", 18, True), ("cyclic", 0, False)):
+for label, depth in (("dag_d5", 5), ("dag_d8", 8), ("dag_d18", 18), ("cyclic", 0)):
     for pop_size in (100, 500, 1000):
         rng = np.random.default_rng(2024 + pop_size + depth)
-        edges = cyclic(rng) if depth == 0 else layered_dag(depth, rng, dense)
-        args = payload(pop_size, edges, rng)
+        edges = cyclic(rng) if depth == 0 else layered_dag(depth, rng)
+        base = payload(pop_size, edges, rng)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            exe = build_defn(tensorization.derive_schedule, *args)
-        run_args = tuple(tensor(a) if isinstance(a, np.ndarray) else a for a in args)
-        total = timed(exe, run_args)          # time the schedule before building anything else
-        out = evoxc.run(exe, *run_args)       # its own inputs feed the node_levels measurement
-        lvl = (np.asarray(out.in_conn.numpy()), np.asarray(out.in_src.numpy()),
-               np.asarray(out.input_slot.numpy()), N)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            lvl_exe = build_defn(tensorization.node_levels, *lvl)
-        lvl = tuple(tensor(a) if isinstance(a, np.ndarray) else a for a in lvl)
+            exe = build_defn(tensorization.derive_schedule, *base)          # cycle-safe default
+            acy = build_defn(tensorization.derive_schedule, *base, True)    # acyclic=True
+        run_args = tuple(tensor(a) if isinstance(a, np.ndarray) else a for a in base)
         print(f"{label:8s} P={pop_size:5d} edges={len(edges):3d} "
-              f"run={total:7.2f}ms node_levels={timed(lvl_exe, lvl):7.2f}ms")
+              f"run={timed(exe, run_args):7.2f}ms  "
+              f"acyclic={timed(acy, run_args + (True,)):7.2f}ms", flush=True)
 PY
 ```
 
-Keeping the measurement order fixed matters: building the `node_levels` executable between the two timings changes the heap layout and the same payload then measures ~25 % faster (the depth-5 cells above would read 8.8 / 29.9 / 58.1 ms). Time the full schedule first.
+Measure a cell you intend to compare in a fresh process: building several executables in one process changes the heap layout and later cells then read up to 25 % faster.
+`evoxc.build` takes a static either positionally (as above) or through `functools.partial(derive_schedule.fn, ...)`; the `@evoxc.defn` object itself is not callable.
+The nesting-aware per-op profile of the same graph is a one-file monkeypatch of `evoxc.backends.numpy.kernels.dispatch` (time each kernel, subtract the nested time of the ops it runs, report exclusive time per op name); re-derive it whenever a change has to be attributed to an op.
 
 ## Forward-side contract (consumed by `genome`)
 Per level `l = 0 .. reduce_max(node_level)`:
@@ -199,10 +210,12 @@ About 54 % of the one-option figure is the mandatory `select(mask, z, 0.0)` pass
 `TensorNEATError(Exception)` root; subclasses `ConfigError`, `ShapeBoundError` (a static schedule bound was exceeded: `max_in_degree`, `key_span`, `max_conns`), `GraphError` (cycle where feedforward is required, missing input/output node), `BackendMismatchError`. Backend/shape errors from evoxc are **never** re-wrapped; only validation raises these.
 
 ### `tools.py`
-Sentinels `I_INF`, `KEY_MAX`; `batch_offsets(p, r)`, `flat_gather(x, idx)`, `masked_flat_gather(x, idx, mask=None, fill=nan)`, `flat_scatter(x, idx, upd)`, `masked_flat_scatter(x, idx, upd, mask)` (dump-slot routing); `fetch_first`, `fetch_random`, `rank_elements`, `argmin_with_mask`; mutation kernels `mutate_float`, `mutate_int(key, val, options, replace_rate)` (no `random.choice` in evoxc: `gather(options, randint)`); `to_numpy(tensor)` — the host-side array accessor every logging/checkpoint path uses, re-exported by `common.__init__`: it returns a `numpy.ndarray` unchanged, else calls a callable `.numpy()`, else falls back to `np.asarray`, and `evoxc.Tensor` deliberately has **no** `__array__` (so `np.asarray` would leave it untouched); `hash_rows` — **host-only** row hash for `genome.hash()` (numpy `view(np.uint32)`), never called inside a graph.
+Sentinels `I_INF`, `KEY_MAX`; `batch_offsets(p, r)`, `prepare_flat_index(x, idx, present=None, fallback=0)` (the flat `(P, n)` index block of a batched gather/scatter, reusable across calls), `flat_gather_prepared(x, flat_idx, shape)`, `flat_scatter_prepared(x, flat_idx, updates)`, `flat_gather(x, idx)`, `masked_flat_gather(x, idx, mask=None, fill=nan)`, `flat_scatter(x, idx, upd)`, `masked_flat_scatter(x, idx, upd, mask)` (dump-slot routing); `fetch_first`, `fetch_random`, `rank_elements`, `argmin_with_mask`; mutation kernels `mutate_float`, `mutate_int(key, val, options, replace_rate)` (no `random.choice` in evoxc: `gather(options, randint)`); `to_numpy(tensor)` — the host-side array accessor every logging/checkpoint path uses, re-exported by `common.__init__`: it returns a `numpy.ndarray` unchanged, else calls a callable `.numpy()`, else falls back to `np.asarray`, and `evoxc.Tensor` deliberately has **no** `__array__` (so `np.asarray` would leave it untouched); `hash_rows` — **host-only** row hash for `genome.hash()` (numpy `view(np.uint32)`), never called inside a graph.
+Every flat-index helper takes `trusted=False`: the default emits the escape guard (`select` + `less`/`greater_equal`/`logical_or` + redirect select) that makes the backend **raise** on an out-of-range index instead of silently reading a neighbouring row, and `trusted=True` skips it for a caller that has *proved* every index lies inside `[0, R)` (the schedule uses it for `key_slot_table`, `slot_lookup`, the `(P, N*K)` window scatters and both inverse-permutation scatters). Never pass `trusted=True` on data you have not bounded: the raise is the contract that replaces silent corruption.
 
 ### `tensorization.py`
-`Transformed` `NamedTuple`; `derive_schedule` (`@evoxc.defn`); the internal steps as plain helper functions (`key_slot_table`, `slot_lookup`, `edge_group_rank`, `cum_in_degree`, `incoming_table`, `node_levels`) so they are individually testable, plus the two private bodies `_window_table` (the single copy of `incoming_table`'s masked-scatter → slice → reshape pass, used for `in_conn` and `in_src`) and `_host_array` (which converts through `tools.to_numpy`); `validate_schedule(transformed)` host-side invariant checker used by tests.
+`Transformed` `NamedTuple`; `derive_schedule(node_keys, conn_in, conn_out, input_keys, output_keys, pop_size, max_nodes, max_conns, max_in_degree, key_span, acyclic=False)` (`@evoxc.defn`, statics positional-or-keyword with `acyclic` trailing); `edge_order(dst, edge_valid, max_nodes, max_conns) -> (rank, cc)` — the one merged sort `derive_schedule` uses; the internal steps as plain helper functions (`key_slot_table`, `slot_lookup`, `edge_group_rank`, `cum_in_degree`, `incoming_table`, `node_levels`) so they are individually testable (the two sort helpers keep their own sort when called standalone, so a caller pays for what it asks for); `node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=None)` where `edges` is the `(src, dst, edge_valid)` triple the cycle test needs (`ConfigError` when `acyclic=False` and it is missing); the two private bodies `_window_table` (the single copy of `incoming_table`'s masked-scatter → slice → reshape pass, used for `in_conn` and `in_src`) and `_host_array` (which converts through `tools.to_numpy`); `validate_schedule(transformed)` host-side invariant checker used by tests.
+The narrow integer carriers are a contract detail, not a knob: the level relaxation and both sort keys are built in the smallest of `int8`/`int16`/`int32` that provably holds every reachable value *and* its "after everything" sentinel (a real value inside the dtype, never `I_INF`), with the thresholds documented next to each builder; results are cast back to `int32` on the way out.
 
 ### `functions/`
 Exports exactly `ACT`, `AGG`, `FunctionManager`, `apply_activation(z, act_ids, act_fns=ACT_FUNCS)`, `apply_aggregation(values, mask, agg_ids, agg_fns=AGG_FUNCS)`: `ACT`/`AGG` are `FunctionManager`s over 12 activations and 6 aggregations in a fixed, parity-critical order; activations are elementwise `(z) -> z'`, aggregations reduce the last axis of a `(P, N, K)` contribution tensor with neutral padding and are `NaN`-aware through the `mask`. `ACT.name_of(func)`/`AGG.name_of(func)` are the reverse registry lookups. See `functions/CONTEXT.md`.
@@ -210,7 +223,8 @@ Both dispatchers run once per unrolled depth level, so they emit only what the i
 No ids `cast` when the id column is already `int32` (the node gene's `prepare` casts once per forward pass); a `float32`/`int64` gene column is still cast inside the dispatcher.
 No `equal`/`select` pair for an option whose kernel is the identity (the `identity` kernel carries the static `is_identity` flag), because selecting it would rewrite the accumulator with itself.
 `apply_aggregation` shares the neutral-padded window (`select(mask, z, neutral)`) and the live-edge count between its options through one `_Window` memo, and emits the `has_valid` guard only when some option is not `zero_on_empty` (`sum`/`mean`/`maxabs` are; `product`/`max`/`min` and unannotated custom kernels are not).
-Measured graph ops (`evoxc.trace`, numpy backend, `(P, N, K) = (100, 50, 8)`): `apply_activation` 10 with one option / 74 with the canonical 12, `apply_aggregation` 8 / 62 with the canonical 6, one agg∘act level 17 / 135, and a whole `DefaultGenome.forward` (16 unrolled levels, `max_nodes=50`, `max_conns=100`) 621 / 2509.
+Measured graph ops (`evoxc.trace`, numpy backend, `(P, N, K) = (100, 50, 8)`): `apply_activation` 5 with one option (`tanh`; 10 when the kernel itself needs more ops) / 74 with the canonical 12, `apply_aggregation` 7 with one `sum` (12 with `max`) / 57 with the canonical 6, one agg∘act level 11 / 130, and a whole `DefaultGenome.forward` (16 unrolled levels, `max_nodes=50`, `max_conns=100`) 621 / 2509 before the shared-constant and shared-reduce pass.
+`_Window` also memoises the total (`reduce_sum(padded(0.0), -1)`, shared by `sum` and `mean`, one `(P, N, K)` reduce instead of two — 0.80 ms at P=1000) and one 0-d `float32` `constant` per distinct literal (evoxc does not CSE duplicate constants; op-count-only, ~5 µs per op).
 The `equal`+`select` of a one-option dispatch is not removable: the `-1` identity id on the output rows (plus the documented out-of-range → identity / → `0.0` fallbacks) needs a predicate, so a one-option level is the kernel call plus two selector ops.
 
 ### `host_graph.py`
@@ -230,6 +244,9 @@ That off-by-`I` slice is legacy-identical (`benchmarks/legacy_jax/tensorneat_leg
 - `gather(x, idx, axis)` / `scatter(x, idx, upd, axis)` are **not** batched `take_along_axis`: the index tensor replaces the axis, so per-row indexing is impossible unless the source is flattened. Hence `cpu`-side kernels always go through `tools.flat_gather` / `tools.flat_scatter`, which flatten to 1-D (`flat = row * R + col`) and reshape back.
 - `scatter` is set-only (no add/max modes) and `reductions` have no `where=`/`initial=`; masked reduction is done by padding with the neutral element (`0`, `-inf`, `+inf`, `1`) before `reduce_*`.
 - `argsort` returns int64; its inverse permutation is a `flat_scatter` of `arange(n)`; `stable=True` is required for tie-breaking (group ranks).
+- **`argsort(kind="stable")` has a radix fast path for `int8`/`int16` and a slow general path for `int32`/`int64`**: `(1000, 250)` costs 7.4 ms as `int32` but 1.0 ms as `int16` and 0.62 ms as `int8`. Anything sorted here must be keyed in the narrowest integer dtype that fits its range *including* the sentinel (unstable `kind` is not an option: the schedule needs in-group order).
+- `evoxc.cond` accepts a `while_loop` in each branch on the numpy backend (both branches are traced, one is executed), so a cheap "fast path + expensive fallback" decision is expressible in-graph.
+- `cast(x, uint32)` maps a negative integer to a huge unsigned value, which makes a one-comparison range test (`cast(keys, uint32) < span`) cover both bounds.
 - There is no `broadcast_to` on `evoxc` (use `enp.broadcast_to`), no `searchsorted`, no `choice`, no `bitcast`, no `where` (it is `evoxc.select(pred, on_true, on_false)`).
 - Control flow (`evoxc.while_loop`/`cond`/`scan`) is traced into regions: loop bodies must keep shapes/dtypes fixed, conditions must be scalar tensors, and no `vmap` may be applied over them.
 - `evoxc.slice(x, start, lengths)` takes per-axis tuples; `evoxc.reshape`/`transpose` are the only structural ops needed here.
@@ -238,7 +255,7 @@ That off-by-`I` slice is legacy-identical (`benchmarks/legacy_jax/tensorneat_leg
 ## Constraints
 - No `jax`/`torch`/`numpy.random` in graph code; randomness is `evoxc.random` stateless keys (`key(seed)`, `split`, `randint(key, shape, low, high)`, `uniform`, `normal`, `permutation`).
 - Files ≤ ~1000 lines; shared math lives here, never duplicated in `genome`/`algorithm`.
-- `tensorization.py` sits at ~1000 lines on purpose: it is one responsibility (derive the schedule) with a long derivation docstring per step, and splitting it would separate the recipe from the kernels that implement it.
+- `tensorization.py` sits at ~1010 lines on purpose: it is one responsibility (derive the schedule) with the derivation recipe, the contract and the measured-cost/rejected-lever record next to the kernels, and splitting it would separate the recipe from the code that implements it. Condense prose before adding code.
 - Inside this node one rule has one owner: `tools` owns the positive-static validator (`_positive_static`, used by `batch_offsets` and by every static in `tensorization`), the rank-0 scalar-constant builder (`_scalar_constant`) and the host-side array accessor (`to_numpy`, which `tensorization._host_array` converts through); those three are imported, never re-written. `host_graph` keeps its own `_I_INF` literal on purpose — `tools` pulls in `evoxc` and that module is deliberately backend-free.
 - Nothing in this node imports from `genome`, `algorithm`, `problem`, `pipeline`, `benchmarks`, or `test`.
 - Every public function carries a napoleon docstring stating shapes, dtypes, sentinels, and the invariances it relies on.
@@ -255,11 +272,13 @@ That off-by-`I` slice is legacy-identical (`benchmarks/legacy_jax/tensorneat_leg
 - `key_span S` is a static bound on key magnitude: keys must stay compact (hidden-node key compaction on mutation) or the table grows; `S` is part of the shape signature and rebuilds on overflow.
 - The ACT/AGG dispatch is at its op floor for the documented id contract, and the remaining cost is data movement: `sum`/`mean`/`maxabs` still need one `select(mask, z, 0.0)` over `(P, N, K)` per level, so the forward pass would gain only from a caller that guarantees dead message slots are already exactly `0.0` (today the genome only NaN-sanitises them, and it owns that contract).
 - evoxc does not CSE equal literals, so each dispatch emits one `constant` per distinct literal (3 for a one-option level, 18 for the canonical aggregation list); sharing them across the unrolled levels needs a graph-level constant cache, which evoxc does not expose.
-- `agg.maxabs` pays the guarded `tools.flat_gather`: `_flat_index_block` emits `less`/`greater_equal`/`logical_or`/`select` plus a `(P, 1)` `arange` constant (4 KB at P=1000) even though an `argmax` result is provably inside `[0, K)`; no trusted, guard-free gather variant exists. `maxabs` is not an option of the default genome, so the default XOR path never pays it (3.19 vs 2.34 ms per level at P=1000).
+- `agg.maxabs` pays `tools.flat_gather`'s guard chain (`less`/`greater_equal`/`logical_or`/`select` plus a `(P, 1)` `arange` constant) even though an `argmax` result is provably inside `[0, K)`: the guard-free path exists as `trusted=True` but `functions/` has not adopted it, because `flat_gather`'s caller there cannot bound `K` itself. `maxabs` is not an option of the default genome, so the default XOR path never pays it (3.19 vs 2.34 ms per level at P=1000).
+- The remaining `derive_schedule` cost is the `(P, N, K)` window build (two scatters, ~1 µs per 200 k-element scatter), the ~47 `(P, C)`/`(P, N)` selects/`add`s of the tail and ~580 dispatches of interpreter overhead; a further 2× would need the window representation itself to change, which the `Transformed` contract fixes.
 - The default genome's forward pass unrolls `max_depth = 16` level steps for every population, even a three-node network, so a per-level saving is multiplied by 16; unrolling on the real depth (or a level `while_loop`) is a genome-side change (`genome/` owns it).
 
 ## Notes for Agents
-- `test/unit/common/*` currently holds one `pytest.skip("not implemented: …, owner: common/…")` per test body: the acceptance suite is a prose specification, not runnable assertions, and it is owned outside this node. Verify changes here with an equivalence script against a numpy reference (see `test/support/oracle.py` for the schedule, `test/support/functions_ref.py` for ACT/AGG) kept out of the repo, or by running the test bodies once their owner fills them in.
+- `test/unit/common/*` is a real, runnable suite today (155 passed, `test/support/oracle.py` is the numpy schedule oracle and `test/support/functions_ref.py` the ACT/AGG oracle); `pytest -m parity` adds 53 passed. A performance change here still needs a field-by-field diff against the previous implementation (feed-forward, cyclic, in-degree > `K`, absent nodes, unmatched keys, both key spellings, and both `acyclic` settings) because the suites do not pin bit-exactness of every `Transformed` field.
 - `import tensorneat` works from an installed checkout (`uv pip install --python .venv/bin/python -e . --no-deps`) and pulls in no `jax`/`torch`/`brax`/`gymnax`/`mujoco`; the measured-cost snippet's synthetic `tensorneat` package is only a shortcut for timing `tensorneat.common` straight from `src/` without installing.
 - `test/support/oracle.py::schedule` is stale against the merged `Transformed`: it builds the node's pre-merge field set (`level=...`, no `node_exists`/`in_valid`), so a comparison script has to substitute a compatible output container for the oracle (the oracle's algorithm itself is unchanged and agrees field by field).
-- `evoxc` in a bare checkout: `uv venv .venv && uv pip install --python .venv/bin/python evoxc numpy sympy networkx matplotlib pytest && uv pip install --python .venv/bin/python -e . --no-deps`; `pytest` finds `src/` and `test/support` through `test/conftest.py`, so a run is `.venv/bin/python -m pytest test/unit/common` (all bodies there are `pytest.skip` spec stubs today: 148 skips, no errors).
+- `evoxc` in a bare checkout: `uv venv .venv && uv pip install --python .venv/bin/python evoxc numpy sympy networkx matplotlib pytest && uv pip install --python .venv/bin/python -e . --no-deps`; `pytest` finds `src/` and `test/support` through `test/conftest.py`, so a run is `.venv/bin/python -m pytest test/unit/common`.
+- Timing anything here: build once and time `evoxc.run`, one cell per fresh process (the numpy allocator makes a second executable in the same process skew later cells up to 25 %), and treat the ratio against the previous implementation as the result — absolute milliseconds move ~30 % between sessions on this box.
