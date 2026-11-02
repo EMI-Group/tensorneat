@@ -416,13 +416,20 @@ class SpeciesController(StatefulBaseClass):
             state (State): State carrying the *new* population payload, the
                 sorted/killed ``species`` from :meth:`update_species` and
                 ``generation``.
-            distance_fn (Callable): One-to-population compatibility distance with
-                the genome-owned signature
-                ``distance_fn(state, center: GenomeTensors, pop: GenomeTensors)
-                -> (P,)``, both payloads population-shaped.  Slicing the centre
-                out of the ``(S, ...)`` fields and broadcasting it to ``(P, ...)``
-                is this method's job, not the genome's;
-                ``genome.execute_distance`` plugs straight in.
+            distance_fn (Callable): Population-digest compatibility distance with
+                the signature ``distance_fn(state, centre: GenomeTensors,
+                pop: GenomeTensors) -> distances``, where ``pop`` must be the
+                payload the digest was prepared from.  A **batch-1** centre
+                returns one ``(pop_size,)`` row (the genome kernel broadcasts it
+                internally), a **batch-``species_size``** centre -- the whole
+                species table of a phase -- returns the ``(species_size,
+                pop_size)`` matrix measured in a single wide call, and a
+                **batch-``pop_size``** centre is measured row-wise.  Slicing the
+                centre out of the ``(S, ...)`` fields is this method's job, not
+                the genome's; ``NEAT.tell`` builds the callable from
+                ``genome.prepare_distance`` (see :class:`._distance.DistanceRows`),
+                and ``genome.execute_distance`` no longer plugs in directly
+                because it re-sorts the population for every centre.
             pop (Any, optional): The current population payload.  Defaults to the
                 payload read from ``state`` -- the ``POP_KEY`` entry, or the four
                 split ``SPLIT_POP_KEYS`` arrays; an explicit argument wins so a
@@ -496,16 +503,26 @@ class SpeciesController(StatefulBaseClass):
             genome (scan 1) or take a member (scan 2) never runs the
             compatibility kernel.  The skipped branch yields zeros, which the
             iteration's own write mask discards, so no reader ever consumes a
-            row that was not computed: the substitution is bit-identical.
+            row that was not computed: the substitution is bit-identical.  A
+            sparse table (1-3 live slots of 20 at pop 8/100) would waste most of
+            the rows of a wide call, so the lazy path is kept there.
         Note:
-            **Above ``_kernels.GATED_ROWS`` both scans call ``distance_fn``
-            unconditionally, exactly as before the gate existed.**  The lazy
-            ``cond`` only wins while the species table is sparse (1-3 live slots
-            at pop 8/100, 20 of 20 at pop >= 500); once every slot is live its
-            ``if`` regions cost more than the passes they skip (26 % of a whole
-            generation at pop 500).  ``_kernels.gated`` is a pure predicate on
-            static ints, so one path is traced and the other never reaches the
-            graph.
+            **Above ``_kernels.GATED_ROWS`` every row of a phase is measured
+            before that phase runs, in one wide call, and each scan iteration
+            reads its own row with a single ``gather``.**  Scan 1's centres are
+            the rows the table was handed (no earlier iteration can rewrite slot
+            ``i``'s centre, because every ``scatter`` writes index ``slot`` and
+            each slot is visited once), and scan 2's live-slot centres are the
+            post-scan-1 carry rows, known before scan 2 starts.  Only a
+            *creating* scan-2 slot keeps a per-iteration call, behind an
+            ``evoxc.cond`` whose predicate is ``create``: its centre is
+            ``pop[seed]`` with ``seed`` the first still-unassigned genome, which
+            genuinely depends on earlier iterations.  Once the species table is
+            full every slot is live and nothing is skippable, so bulk measurement
+            is strictly cheaper than the ``if`` regions a lazy row would carry
+            (see ``_kernels.GATED_ROWS``).  The gate is a pure static predicate,
+            so exactly one of the two paths reaches the graph, and both compute
+            the same ``(pop_size,)`` rows from the same kernel.
         """
         population = self._population(state, pop)
         values = _kernels.speciate(

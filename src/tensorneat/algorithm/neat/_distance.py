@@ -47,12 +47,14 @@ from tensorneat.common.errors import TensorNEATError
 #: the compatibility kernel's transient arrays scale with ``centres * pop_size``
 #: (the ``(rows, 2 * max_conns, key_width)`` masked gather of the long-key
 #: verification alone is hundreds of MB at ``20 * 1000`` rows) and the numpy
-#: reference interpreter keeps every intermediate of a run alive, so the whole
-#: generation's peak memory is the sum of them.  Four centres per call bounds
-#: that peak at a fifth of the single-call figure for a 20-slot table while
-#: adding one dispatch per group; the rows are unchanged because the kernel is
-#: row-independent.  The gate keeps the sparse regime on its lazy per-slot path,
-#: so this only ever groups the dense regime's rows.
+#: reference interpreter keeps every intermediate of a run alive, so a
+#: generation's footprint is the sum of them.  Grouping also keeps each group's
+#: ``(rows, 2 * max_conns)`` sort inside the cache: at pop 1000, 20 centres in one
+#: call cost 726 ms of ``speciate`` against 568 ms at 4 per call (500: 496 vs
+#: 300 ms), and 8 per call is already worse again (763 / 340 ms).  The rows are
+#: identical either way, because the compatibility kernel is row-independent.
+#: The gate keeps the sparse regime on its lazy per-slot path, so this only ever
+#: groups the dense regime's rows.
 CENTRES_PER_CALL = 4
 
 
