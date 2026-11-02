@@ -14,10 +14,13 @@ import shlex
 from pathlib import Path
 
 from harness.protocol import (
+    QUALITY_ABS_TOL,
     QUALITY_TOLERANCE_REL,
     STATUS_OK,
     THREAD_ENV_VARS,
     comparisons,
+    loadavg_summary,
+    median_curve,
 )
 from harness.report_format import (
     CURVE_HEADERS,
@@ -25,6 +28,7 @@ from harness.report_format import (
     by_case,
     case_order,
     cell,
+    companion_files,
     declared_length,
     first_error,
     fitness,
@@ -111,8 +115,39 @@ def _thread_env_text(env: dict, threads) -> str:
     )
 
 
+def _loadavg_text(doc: dict) -> str:
+    """Load average of the box, as measured by the document build and by the workers.
+
+    Two sources, kept apart on purpose: ``meta.env.loadavg`` is the moment the document was
+    assembled, while each worker's optional ``loadavg_start``/``loadavg_end`` bracket its own
+    timed run, so the reported range says how busy the box was *while measuring*.
+    """
+    recorded = (meta(doc).get("env") or {}).get("loadavg")
+    parts = ["n/a (not recorded)"]
+    if isinstance(recorded, (list, tuple)) and len(recorded) >= 3:
+        triple = " / ".join(num(value, 2) for value in recorded[:3])
+        parts = [f"{triple} (1/5/15 min, document build)"]
+    summary = loadavg_summary(doc.get("runs") or [])
+    if summary.get("n_runs"):
+        parts.append(
+            f"workers {num(summary.get('start_min'), 2)}–{num(summary.get('start_max'), 2)} "
+            f"at start, {num(summary.get('end_min'), 2)}–{num(summary.get('end_max'), 2)} at "
+            f"end (1-min, {plain(summary['n_runs'])} run(s))"
+        )
+    return "; ".join(parts)
+
+
+SHARED_BOX_CAVEAT = (
+    "**Shared box.** These numbers were measured on a machine that was not exclusively ours: "
+    "other jobs ran on it while the workers timed generations, so the per-repeat spread "
+    "(the headline's speed-up range and the per-repeat quality-curve rows) is the honest "
+    "uncertainty measure — a median alone would hide it."
+)
+"""One caveat sentence: load and repeat spread are the measured conditions, not noise to drop."""
+
+
 def _environment_section(doc: dict) -> str:
-    """Environment fingerprint table: host, versions, git provenance, thread settings."""
+    """Environment fingerprint table: host, versions, git provenance, thread settings, load."""
     env = meta(doc).get("env") or {}
     proto = protocol_meta(doc)
     versions = " / ".join(
@@ -125,12 +160,18 @@ def _environment_section(doc: dict) -> str:
         ["CPU model", text(env.get("cpu_model"))],
         ["CPU cores (`os.cpu_count`)", text(env.get("cpu_count"))],
         ["Memory", _memory_text(env)],
+        ["Load average (1/5/15 min)", _loadavg_text(doc)],
         ["numpy / jax / evoxc / tensorneat (installed metadata)", versions],
         ["Git commit", _git_text(env)],
         ["Thread pinning (`--threads`)", _threads_text(proto.get("threads"))],
         ["Thread env (set/unset)", _thread_env_text(env, proto.get("threads"))],
     ]
-    return "## Environment\n\n" + table(["Item", "Value"], rows)
+    return (
+        "## Environment\n\n"
+        + table(["Item", "Value"], rows)
+        + "\n\n"
+        + SHARED_BOX_CAVEAT
+    )
 
 
 # --- Protocol -----------------------------------------------------------------------------
@@ -158,7 +199,7 @@ def _threads_text(threads) -> str:
     )
 
 
-def _protocol_section(doc: dict) -> str:
+def _protocol_section(doc: dict, companions: dict | None = None) -> str:
     """Protocol table plus the metric definitions the template states."""
     doc_meta = meta(doc)
     proto = protocol_meta(doc)
@@ -188,18 +229,26 @@ def _protocol_section(doc: dict) -> str:
             "share a process",
         ],
     ]
-    paragraph = "\n".join(
-        [
-            "Metrics: `compile_time_s` (one-off build), `ms_per_generation` (median wall clock "
-            "per generation",
-            "after warmup, including host sync), `gens_per_second`, `peak_rss_mb`, and quality",
-            "(`final_best_fitness`, `generations_to_target`, best-fitness curve).",
-            "The new side's build generation is excluded from both the timing and the quality "
-            "curve, and compile/build seconds are never charged to a generation.",
-            "Definitions, fairness rules and verdict rules live in `benchmarks/CONTEXT.md`.",
-        ]
+    lines = [
+        "Metrics: `compile_time_s` (one-off build), `ms_per_generation` (median wall clock "
+        "per generation",
+        "after warmup, including host sync), `gens_per_second`, `peak_rss_mb`, and quality",
+        "(`final_best_fitness`, `generations_to_target`, best-fitness curve).",
+        "The new side's build generation is excluded from both the timing and the quality "
+        "curve, and compile/build seconds are never charged to a generation.",
+        "Definitions, fairness rules and verdict rules live in `benchmarks/CONTEXT.md`.",
+    ]
+    if (companions or {}).get("threads"):
+        lines.append(
+            "A thread-bound sensitivity run (`--threads 1`, XOR family, same CLI) is recorded "
+            "in `benchmarks/THREADS.md` next to this report."
+        )
+    return (
+        "## Protocol\n\n"
+        + table(["Parameter", "Value"], rows)
+        + "\n\n"
+        + "\n".join(lines)
     )
-    return "## Protocol\n\n" + table(["Parameter", "Value"], rows) + "\n\n" + paragraph
 
 
 # --- Case matrix --------------------------------------------------------------------------
@@ -381,7 +430,10 @@ def _comparison_section(doc: dict) -> str:
         )
     note = (
         "Timing PASS means new ms/generation <= old; quality PASS means the new final best "
-        f"stays within {QUALITY_TOLERANCE_REL:.0%} of the old final best."
+        "stays within the active tolerance "
+        f"`max({QUALITY_TOLERANCE_REL:.0%} × |old|, {QUALITY_ABS_TOL:g})` of the old final best "
+        "(the absolute floor keeps two runs that are both at the optimum from failing on "
+        "float noise)."
     )
     body = table(
         [
@@ -438,8 +490,8 @@ def _verdict_section(doc: dict) -> str:
         [
             "",
             f"Sub-verdicts: timing `{timing}`, quality `{quality}` — timing compares measured "
-            f"ms/generation, quality compares final best fitness at a {QUALITY_TOLERANCE_REL:.0%} "
-            "tolerance.",
+            "ms/generation, quality passes when `new >= old - "
+            f"max({QUALITY_TOLERANCE_REL:.0%} × |old|, {QUALITY_ABS_TOL:g})`.",
         ]
     )
     return "\n".join(lines)
@@ -448,9 +500,32 @@ def _verdict_section(doc: dict) -> str:
 # --- Quality curves -----------------------------------------------------------------------
 
 
+def _curve_row(label: str, backend: str, seed: str, curve, gens: str) -> list:
+    """One quality-curve row: the checkpoints every curve row shares."""
+    length = len(curve)
+    return [
+        label,
+        f"`{text(backend)}`",
+        seed,
+        fitness_at(curve, 0),
+        fitness_at(curve, 9),
+        fitness_at(curve, pct_index(length, 0.25)),
+        fitness_at(curve, pct_index(length, 0.50)),
+        fitness_at(curve, pct_index(length, 1.00)),
+        fitness_at(curve, length - 1),
+        gens,
+    ]
+
+
 def _curves_section(doc: dict) -> str:
-    """Best-fitness curve checkpoints from the first ok run of every case/impl/backend."""
-    picked: dict[tuple[str, str, str], dict] = {}
+    """Best-fitness checkpoints: one row per repeat (seed) plus one aggregated row per group.
+
+    One row per repeat is what makes the sampling visible: two seeds of the same case can land
+    on opposite sides of the fitness target, and a single "first ok run" row would hide that.
+    The aggregated row is the element-wise median of those repeats (``protocol.median_curve``),
+    with the median generations-to-target from the aggregated record.
+    """
+    grouped_runs: dict[tuple[str, str, str], list[dict]] = {}
     for run in doc.get("runs") or []:
         if text(run.get("status"), "ok") != STATUS_OK:
             continue
@@ -463,38 +538,73 @@ def _curves_section(doc: dict) -> str:
             text(run.get("impl"), ""),
             text(run.get("backend"), ""),
         )
-        picked.setdefault(key, run)
+        grouped_runs.setdefault(key, []).append(run)
 
     parts = ["## Quality curves", ""]
-    if not picked:
+    if not grouped_runs:
         parts.append("no fitness curves recorded")
         return "\n".join(parts)
 
-    for case in case_order(doc, [key[0] for key in picked]):
-        keys = sorted((key for key in picked if key[0] == case), key=lambda k: sort_key(k[1], k[2]))
+    aggregated_by_key: dict[tuple[str, str, str], dict] = {}
+    for record in doc.get("aggregated") or []:
+        if text(record.get("status"), "ok") != STATUS_OK:
+            continue
+        aggregated_by_key.setdefault(
+            (
+                text(record.get("case"), ""),
+                text(record.get("impl"), ""),
+                text(record.get("backend"), ""),
+            ),
+            record,
+        )
+
+    for case in case_order(doc, [key[0] for key in grouped_runs]):
+        keys = sorted(
+            (key for key in grouped_runs if key[0] == case),
+            key=lambda key: sort_key(key[1], key[2]),
+        )
         if not keys:
             continue
         parts.append(f"### {case}")
         parts.append("")
-        rows = []
+        rows: list[list] = []
         for key in keys:
-            run = picked[key]
-            quality = run.get("quality") or {}
-            curve = quality.get("best_fitness")
-            length = len(curve)
+            runs = sorted(
+                grouped_runs[key],
+                key=lambda run: (
+                    number(run.get("seed")) is None,
+                    number(run.get("seed")) or 0,
+                ),
+            )
+            curves = []
+            for run in runs:
+                curve = (run.get("quality") or {}).get("best_fitness")
+                curves.append(curve)
+                rows.append(
+                    _curve_row(
+                        impl_label(key[1]),
+                        key[2],
+                        plain(run.get("seed")),
+                        curve,
+                        gens_to_target(
+                            (run.get("quality") or {}).get("generations_to_target"),
+                            len(curve),
+                        ),
+                    )
+                )
+            aggregate = median_curve(curves)
+            if not aggregate:
+                continue
+            seeds = ", ".join(plain(run.get("seed")) for run in runs)
+            record = aggregated_by_key.get(key) or {}
             rows.append(
-                [
-                    impl_label(key[1]),
-                    f"`{text(key[2])}`",
-                    plain(run.get("seed")),
-                    fitness_at(curve, 0),
-                    fitness_at(curve, 9),
-                    fitness_at(curve, pct_index(length, 0.25)),
-                    fitness_at(curve, pct_index(length, 0.50)),
-                    fitness_at(curve, pct_index(length, 1.00)),
-                    fitness_at(curve, length - 1),
-                    gens_to_target(quality.get("generations_to_target"), length),
-                ]
+                _curve_row(
+                    impl_label(key[1]) + " — aggregate",
+                    key[2],
+                    seeds,
+                    aggregate,
+                    gens_to_target(record.get("generations_to_target"), len(aggregate)),
+                )
             )
         parts.append(table(CURVE_HEADERS, rows))
         parts.append("")
@@ -502,7 +612,9 @@ def _curves_section(doc: dict) -> str:
         "Percent columns are generation `round(fraction × N)` of the N recorded generations "
         "(warmup + timed — the budget `generations_to_target` is indexed against), and `>N` means "
         "the case's fitness target was not reached within those N recorded generations. "
-        "Each row is the first ok run recorded for that case/implementation/backend."
+        "Each repeat (seed) has its own row, and the `— aggregate` row is the element-wise "
+        "median of those repeats: a bimodal case (one seed at the target, one not) shows up "
+        "as two different `Final` values rather than one average."
     )
     return "\n".join(parts)
 
@@ -577,9 +689,20 @@ def _parity_count(doc: dict) -> int:
     return int(recorded) if recorded else PARITY_TEST_COUNT
 
 
-def _not_compared_section(doc: dict) -> str:
+def _not_compared_section(doc: dict, companions: dict | None = None) -> str:
     """The explicit non-comparisons, including the measured parity-test count."""
     count = _parity_count(doc)
+    accelerators = [
+        "- **No accelerator row exists.** The contract is CPU and the only measured backend is "
+        "the numpy reference interpreter; an `iree`/`xla`/`tvm` row would be informational and "
+        "is never part of the old-vs-new verdict."
+    ]
+    if (companions or {}).get("backends"):
+        accelerators.append(
+            " `benchmarks/BACKENDS.md` records the measured attempt: `iree` cannot lower a "
+            "single TensorNEAT case (it dies in `Pipeline.setup` before generation 0), so there "
+            "is no accelerator number to report."
+        )
     return "\n".join(
         [
             "## What is not compared",
@@ -589,9 +712,7 @@ def _not_compared_section(doc: dict) -> str:
             "the same trajectory or a bitwise-equal population. Numerical fidelity is "
             "`test/parity/`'s job: it compares kernels against `benchmarks/legacy_jax`, and "
             f"`pytest test/parity --collect-only -q` collects {count} tests on this box.",
-            "- **Accelerator numbers are informational.** The contract is CPU; `iree`/`xla`/"
-            "`tvm` rows are reported when their runtime is installed and are never part of the "
-            "old-vs-new verdict.",
+            "".join(accelerators),
             "- **CartPole has no old-side row.** The frozen library's RL problems need "
             "gym/brax/mujoco, so `cartpole_p100` is new-only and marked `n/a` for old.",
             "- **Import time, visualization and code generation are not timed.** Only "
@@ -651,7 +772,7 @@ def _variant(arguments: str) -> str:
     return "python benchmarks/run_benchmark.py " + arguments
 
 
-def _reproduce_section(doc: dict) -> str:
+def _reproduce_section(doc: dict, companions: dict | None = None) -> str:
     """Portable command line, the interpreter that produced the run, and its settings."""
     doc_meta = meta(doc)
     proto = protocol_meta(doc)
@@ -707,6 +828,11 @@ def _reproduce_section(doc: dict) -> str:
         "`benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (git-ignored); "
         "the report is regenerated in place from that JSON."
     )
+    if (companions or {}).get("threads"):
+        note += (
+            " A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is "
+            "recorded in `benchmarks/THREADS.md` next to this report."
+        )
     return (
         "## How to reproduce\n\n"
         + "\n".join(lines)
@@ -720,14 +846,20 @@ def _reproduce_section(doc: dict) -> str:
 
 
 def _banner(doc: dict) -> str:
-    """The blockquote that marks the file as generated."""
-    return "\n".join(
-        [
-            "> **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from",
-            f"> `{json_path(doc)}` at {timestamp(doc)}. It must not be hand-edited:",
-            "> rerun the CLI instead, or the numbers below stop matching the recorded evidence.",
-        ]
-    )
+    """The blockquote that marks the file as generated (and re-rendered, when it was)."""
+    lines = [
+        "> **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from",
+        f"> `{json_path(doc)}` at {timestamp(doc)}. It must not be hand-edited:",
+        "> rerun the CLI instead, or the numbers below stop matching the recorded evidence.",
+    ]
+    rendered = text(meta(doc).get("rendered_at"), "")
+    if rendered and rendered != timestamp(doc):
+        lines.insert(
+            2,
+            f"> Re-rendered from that same JSON at {rendered} with `--render-from-json` "
+            "(no worker was re-run).",
+        )
+    return "\n".join(lines)
 
 
 def _footer(doc: dict) -> str:
@@ -738,23 +870,27 @@ def _footer(doc: dict) -> str:
     )
 
 
-def render_report(doc: dict) -> str:
+def render_report(doc: dict, report_path=None) -> str:
     """Render the whole ``RESULTS.md`` body for one benchmark document.
 
     Args:
         doc: The JSON document written by ``run_benchmark.py`` (``meta``, ``runs``,
             ``aggregated``, ``verdict``); a partial document renders with ``n/a`` cells.
+        report_path: Where the report will be written. It decides which companion evidence
+            files are ``next to`` the report, so a pointer is only rendered when the file
+            really is there (a ``$TMPDIR`` render does not claim a checkout's files).
 
     Returns:
         Markdown text with a trailing newline.
     """
     document = doc or {}
+    companions = companion_files(document, report_path)
     blocks = [
         TITLE,
         _banner(document),
         headline_section(document),
         _environment_section(document),
-        _protocol_section(document),
+        _protocol_section(document, companions),
         _case_matrix_section(document),
         _results_section(document),
         _comparison_section(document),
@@ -762,8 +898,8 @@ def render_report(doc: dict) -> str:
         winlose_section(document),
         _curves_section(document),
         _reference_section(document),
-        _not_compared_section(document),
-        _reproduce_section(document),
+        _not_compared_section(document, companions),
+        _reproduce_section(document, companions),
         _footer(document),
     ]
     return spaced_headings("\n\n".join(block.rstrip() for block in blocks)) + "\n"
@@ -773,4 +909,4 @@ def write_report(doc: dict, path) -> None:
     """Write :func:`render_report` to ``path`` (parent dirs created, UTF-8, trailing newline)."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render_report(doc), encoding="utf-8")
+    target.write_text(render_report(doc, target), encoding="utf-8")

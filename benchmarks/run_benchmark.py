@@ -6,8 +6,8 @@ sequential — the JAX baseline and the evoxc rewrite never share an interpreter
 thread pools and allocators cannot disturb each other's timings. Every schema, aggregation
 and verdict decision comes from ``harness.protocol``; this file only orchestrates.
 
-``--list`` and ``--dry-run`` work on a bare interpreter (no numpy): the numpy-dependent
-modules are imported lazily, from inside the functions that need them.
+``--list``, ``--dry-run`` and ``--render-from-json`` work on a bare interpreter (no numpy):
+the numpy-dependent modules are imported lazily, from inside the functions that need them.
 """
 
 from __future__ import annotations
@@ -145,6 +145,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="print the planned worker commands and exit without running anything",
+    )
+    parser.add_argument(
+        "--render-from-json",
+        default=None,
+        metavar="PATH",
+        help=(
+            "re-render --out from an existing run-record JSON (recompute aggregated records "
+            "and the verdict, spawn no worker); the JSON is read, never rewritten"
+        ),
     )
     parser.add_argument(
         "--timeout",
@@ -481,6 +490,115 @@ def _write_json(document: dict, path) -> None:
         handle.write("\n")
 
 
+# --- Re-rendering from an existing run record ---------------------------------------------
+
+
+def _load_json_document(path) -> tuple[dict | None, str | None]:
+    """Read a run-record document; return ``(document, error)`` instead of raising."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        return None, f"cannot read {path}: {exc}"
+    except ValueError as exc:
+        return None, f"{path} is not valid JSON: {exc}"
+    if not isinstance(payload, dict):
+        return None, f"{path} does not contain a JSON object"
+    return payload, None
+
+
+def _records_from_document(doc: dict) -> list[dict]:
+    """Normalise the document's run records through the schema (unknown keys are dropped)."""
+    protocol = _protocol()
+    return [
+        protocol.RunResult.from_dict(record).to_dict()
+        for record in doc.get("runs") or []
+        if isinstance(record, dict)
+    ]
+
+
+def _render_meta(doc: dict, args: argparse.Namespace, records: list[dict]) -> dict:
+    """Meta for a re-render: the stored measurement conditions, refreshed paths, no re-probe.
+
+    The stored ``meta`` is what the measurement actually saw, so it is kept verbatim; only the
+    paths (this JSON, this ``--out``) and ``rendered_at`` are this invocation's. A stored
+    document that has no ``meta`` at all degrades to an environment probe of *this* host,
+    which the report then presents as an unmeasured fingerprint — never as measurement data.
+    """
+    protocol = _protocol()
+    stored = dict(doc.get("meta") or {})
+    cases = stored.get("cases") or list(
+        dict.fromkeys(record.get("case") for record in records if record.get("case"))
+    )
+    impls = stored.get("impls") or [
+        impl for impl in IMPL_ORDER if any(record.get("impl") == impl for record in records)
+    ]
+    backends = stored.get("backends") or sorted(
+        {
+            record.get("backend")
+            for record in records
+            if record.get("impl") == "new" and record.get("backend")
+        }
+    )
+    return {
+        "env": stored.get("env") or protocol.env_report(threads=None),
+        "cases": list(cases),
+        "impls": list(impls),
+        "backends": list(backends),
+        "protocol": stored.get("protocol") or {},
+        "command": stored.get("command"),
+        "case_matrix": stored.get("case_matrix") or [],
+        "json_path": str(args.render_from_json),
+        "out_path": str(args.out),
+        "rendered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def _render_from_json(args: argparse.Namespace) -> int:
+    """Render ``--out`` from an existing run record, recomputing aggregation and verdict.
+
+    No worker is spawned and the input JSON is only read: this is how the report text is
+    iterated without re-measuring. A wrong or missing schema, a missing ``runs`` list and an
+    unreadable file each fail loudly with exit code ``2`` instead of rendering a half report.
+    """
+    protocol = _protocol()
+    reporter = _reporter()
+    path = Path(args.render_from_json)
+    doc, error = _load_json_document(path)
+    if error:
+        return _fail(error)
+    schema = doc.get("schema")
+    if schema != protocol.SCHEMA:
+        return _fail(
+            f"{path} declares schema {schema!r}, expected {protocol.SCHEMA!r} — "
+            "render only from a run record written by this harness"
+        )
+    if not isinstance(doc.get("runs"), list):
+        return _fail(
+            f"{path} has no 'runs' list; there is nothing to aggregate or judge"
+        )
+
+    records = _records_from_document(doc)
+    aggregated = protocol.aggregate(records)
+    verdict = protocol.verdict(aggregated, records)
+    document = {
+        "schema": protocol.SCHEMA,
+        "generated_at": doc.get("generated_at")
+        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "meta": _render_meta(doc, args, records),
+        "runs": records,
+        "aggregated": aggregated,
+        "verdict": verdict,
+    }
+    out_path = Path(args.out)
+    reporter.write_report(document, out_path)
+    print(
+        f"re-rendered {out_path} from {path} "
+        f"({len(records)} run record(s), no worker spawned)"
+    )
+    _print_verdict(verdict)
+    return 0
+
+
 def _print_verdict(verdict: dict) -> None:
     """Print the final verdict line plus every reason behind it."""
     status = verdict.get("status", "INCOMPLETE")
@@ -539,6 +657,11 @@ def main(argv=None) -> int:
     if args.list_cases:
         _print_case_matrix()
         return 0
+
+    if args.render_from_json:
+        if args.dry_run:
+            return _fail("--render-from-json and --dry-run are mutually exclusive")
+        return _render_from_json(args)
 
     error = _validation_error(args)
     if error:

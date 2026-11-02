@@ -34,6 +34,17 @@ STATUS_SKIPPED = "skipped"
 STATUS_ERROR = "error"
 
 QUALITY_TOLERANCE_REL = 0.10
+"""Relative part of the quality tolerance: a new final best may trail ``old`` by 10 % of ``|old|``."""
+
+QUALITY_ABS_TOL = 1e-3
+"""Absolute floor of the quality tolerance, in fitness units.
+
+A relative-only tolerance degenerates at the optimum: for ``old = -7.9e-15`` it demands the
+new side beat ``-8.7e-16`` and two runs that are both at the optimum fail on float noise.
+The floor makes "both at the optimum within 1e-3" a PASS without turning a real gap into one:
+the tolerance is still ``max(10 % of |old|, 1e-3)``, so every case whose old fitness is
+meaningfully below the optimum keeps the relative rule.
+"""
 
 DEFAULT_GENERATIONS = 150
 DEFAULT_WARMUP = 3
@@ -72,6 +83,7 @@ __all__ = [
     "STATUS_SKIPPED",
     "STATUS_ERROR",
     "QUALITY_TOLERANCE_REL",
+    "QUALITY_ABS_TOL",
     "DEFAULT_GENERATIONS",
     "DEFAULT_WARMUP",
     "DEFAULT_REPEATS",
@@ -87,10 +99,17 @@ __all__ = [
     "short_error",
     "rss_mb",
     "env_report",
+    "loadavg_summary",
     "summarize_timing",
     "quality_curve",
+    "median_curve",
     "aggregate",
     "speedup",
+    "speedup_bounds",
+    "quality_tolerance",
+    "quality_threshold",
+    "quality_rule_text",
+    "quality_overlap",
     "comparisons",
     "verdict",
 ]
@@ -192,6 +211,18 @@ def short_error(text: str | None, limit: int = 200) -> str:
 def rss_mb() -> float:
     """Peak resident set size of this process in MiB (``ru_maxrss`` is KiB on Linux)."""
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+
+
+def _load_average() -> list[float] | None:
+    """1/5/15-minute load average of this host, or ``None`` where the OS does not report it.
+
+    Load is recorded as measured conditions, never as a verdict input: it is what makes a
+    spread between repeats readable (a shared box under other jobs moves the medians).
+    """
+    try:
+        return [round(value, 2) for value in os.getloadavg()]
+    except (AttributeError, OSError):
+        return None
 
 
 def _version(package: str) -> str | None:
@@ -301,9 +332,38 @@ def env_report(threads: int | None = None, root: Path = REPO_ROOT) -> dict:
         "tensorneat": _version("tensorneat"),
         "threads": threads,
         "thread_env": _thread_env(),
+        "loadavg": _load_average(),
     }
     report.update(git_report(root))
     return report
+
+
+def loadavg_summary(runs: list[dict]) -> dict:
+    """Min/max 1-minute load recorded by the workers at start and end, over the ok runs.
+
+    Returns ``{"n_runs", "start_min", "start_max", "end_min", "end_max"}``. Every bound is
+    ``None`` when no run recorded a load average (JSON from a harness that predates the
+    optional ``loadavg_start``/``loadavg_end`` keys, or a platform without ``getloadavg``),
+    so the report can say "not recorded" instead of inventing a condition.
+    """
+    start: list[float] = []
+    end: list[float] = []
+    for run in runs or []:
+        if run.get("status", STATUS_OK) != STATUS_OK:
+            continue
+        for key, bucket in (("loadavg_start", start), ("loadavg_end", end)):
+            values = run.get(key)
+            if isinstance(values, (list, tuple)) and values:
+                first = _finite(values[0])
+                if first is not None:
+                    bucket.append(first)
+    return {
+        "n_runs": len(start),
+        "start_min": min(start) if start else None,
+        "start_max": max(start) if start else None,
+        "end_min": min(end) if end else None,
+        "end_max": max(end) if end else None,
+    }
 
 
 # --- Per-run record ---------------------------------------------------------------------
@@ -335,6 +395,8 @@ class RunResult:
     rss_after_import_mb: float | None = None
     rss_after_compile_mb: float | None = None
     rss_final_mb: float | None = None
+    loadavg_start: list[float] | None = None
+    loadavg_end: list[float] | None = None
     quality: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -417,6 +479,26 @@ def quality_curve(fitnesses, target: float | None) -> dict:
         "final_best_fitness": best_fitness[-1] if best_fitness else None,
         "generations_to_target": generations_to_target,
     }
+
+
+def median_curve(curves: list[list[float]]) -> list[float]:
+    """Element-wise median of per-repeat fitness curves: the aggregated quality-curve row.
+
+    Only finite values enter each point's median (a ``-inf`` from an all-invalid generation
+    stays ``-inf`` only while every repeat agrees). Curves of different lengths are truncated
+    to the shortest — the reporter labels that row as covering the common range — and an
+    empty input returns an empty curve.
+    """
+    usable = [curve for curve in (curves or []) if isinstance(curve, list) and curve]
+    if not usable:
+        return []
+    length = min(len(curve) for curve in usable)
+    aggregated: list[float] = []
+    for index in range(length):
+        values = [_finite(curve[index]) for curve in usable]
+        finite = [value for value in values if value is not None]
+        aggregated.append(_median(finite) if finite else float("-inf"))
+    return aggregated
 
 
 # --- Repeat aggregation -----------------------------------------------------------------
@@ -570,6 +652,68 @@ def speedup(old_ms: float | None, new_ms: float | None) -> float | None:
     return old / new
 
 
+def speedup_bounds(old: dict, new: dict) -> dict:
+    """Best and worst old/new speed-up over the repeats of one case.
+
+    ``best`` is the fastest old repeat over the slowest new repeat (``old_min/new_max``),
+    ``worst`` the slowest old over the fastest new (``old_max/new_min``), both taken from the
+    per-repeat medians the aggregation already recorded. Both are ``None`` when a side has no
+    timing spread, so the report can print the range only when the repeats support it.
+    """
+    old_low = _finite((old or {}).get("ms_per_generation_min"))
+    old_high = _finite((old or {}).get("ms_per_generation_max"))
+    new_low = _finite((new or {}).get("ms_per_generation_min"))
+    new_high = _finite((new or {}).get("ms_per_generation_max"))
+    return {
+        "best": speedup(old_low, new_high),
+        "worst": speedup(old_high, new_low),
+    }
+
+
+def quality_tolerance(old_best) -> float | None:
+    """Active quality tolerance for one old final best: ``max(10 % of |old|, 1e-3)``."""
+    value = _finite(old_best)
+    if value is None:
+        return None
+    return max(QUALITY_TOLERANCE_REL * abs(value), QUALITY_ABS_TOL)
+
+
+def quality_threshold(old_best) -> float | None:
+    """Lowest new final best that still passes quality against this old final best."""
+    value = _finite(old_best)
+    tolerance = quality_tolerance(value)
+    return None if value is None or tolerance is None else value - tolerance
+
+
+def quality_rule_text() -> str:
+    """The active quality tolerance in one phrase, for the verdict and the report notes."""
+    return (
+        f"max({QUALITY_TOLERANCE_REL:.0%} × |old|, {QUALITY_ABS_TOL:g} absolute floor)"
+    )
+
+
+def quality_overlap(old: dict, new: dict) -> str | None:
+    """Where the new side's per-repeat final-best range sits against the old side's range.
+
+    A factual observation for the report, never a replacement for the PASS/FAIL verdict:
+    ``"new worse"`` when every new repeat is below the old range, ``"new better"`` when every
+    new repeat is above it, ``"inside"`` when the two per-repeat ranges intersect (every new
+    value inside the old range, or the ranges partially overlap). ``None`` when either side
+    recorded no final best.
+    """
+    old_min = _finite((old or {}).get("final_best_fitness_min"))
+    old_max = _finite((old or {}).get("final_best_fitness_max"))
+    new_min = _finite((new or {}).get("final_best_fitness_min"))
+    new_max = _finite((new or {}).get("final_best_fitness_max"))
+    if old_min is None or old_max is None or new_min is None or new_max is None:
+        return None
+    if new_max < old_min:
+        return "new worse"
+    if new_min > old_max:
+        return "new better"
+    return "inside"
+
+
 def _pair(old: dict, new: dict) -> dict:
     """Compare one aggregated old record with one aggregated new record."""
     both_ok = (
@@ -579,6 +723,8 @@ def _pair(old: dict, new: dict) -> dict:
     new_ms = _finite(new.get("ms_per_generation"))
     old_best = _finite(old.get("final_best_fitness"))
     new_best = _finite(new.get("final_best_fitness"))
+    tolerance = quality_tolerance(old_best)
+    threshold = quality_threshold(old_best)
 
     timing_pass = None
     if both_ok and old_ms is not None and new_ms is not None:
@@ -587,7 +733,7 @@ def _pair(old: dict, new: dict) -> dict:
     quality_absent = old_best is None or new_best is None
     quality_pass = None
     if both_ok and not quality_absent:
-        quality_pass = new_best >= old_best - QUALITY_TOLERANCE_REL * abs(old_best)
+        quality_pass = new_best >= threshold
 
     return {
         "case": new.get("case", ""),
@@ -595,10 +741,14 @@ def _pair(old: dict, new: dict) -> dict:
         "old_ms": old_ms,
         "new_ms": new_ms,
         "speedup": speedup(old_ms, new_ms),
+        "speedup_range": speedup_bounds(old, new),
         "delta_ms": (new_ms - old_ms) if old_ms is not None and new_ms is not None else None,
         "old_final_best": old_best,
         "new_final_best": new_best,
         "quality_delta": (new_best - old_best) if not quality_absent else None,
+        "quality_tolerance": tolerance,
+        "quality_threshold": threshold,
+        "quality_overlap": quality_overlap(old, new),
         "timing_pass": timing_pass,
         "quality_absent": quality_absent,
         "quality_pass": quality_pass,
@@ -634,9 +784,12 @@ def verdict(aggregated: list[dict], runs: list[dict] | None = None) -> dict:
 
     Any error/skipped run makes the overall status INCOMPLETE (each one is listed).
     Timing passes when every comparison is at least 1.00x, quality when the new final best
-    stays within ``QUALITY_TOLERANCE_REL`` of the old one. With no old-vs-new pair at all
-    the timing/quality entries are ``n/a`` and the overall status is INCOMPLETE with the
-    reason ``no old-vs-new comparison available`` (there is nothing to pass).
+    stays within the active tolerance ``max(QUALITY_TOLERANCE_REL × |old|, QUALITY_ABS_TOL)``
+    of the old one. The absolute floor is what keeps two runs that are both at the optimum
+    from failing on float noise; it never rescues a case whose old fitness is meaningfully
+    below the optimum, because there the relative term is the larger one. With no old-vs-new
+    pair at all the timing/quality entries are ``n/a`` and the overall status is INCOMPLETE
+    with the reason ``no old-vs-new comparison available`` (there is nothing to pass).
     """
     pairs = comparisons(aggregated)
     records = list(aggregated or []) if runs is None else list(runs)
@@ -692,11 +845,16 @@ def verdict(aggregated: list[dict], runs: list[dict] | None = None) -> dict:
         )
     for pair in quality_fail:
         old_best = pair["old_final_best"]
-        threshold = old_best - QUALITY_TOLERANCE_REL * abs(old_best)
+        tolerance = pair.get("quality_tolerance")
+        threshold = pair.get("quality_threshold")
+        if tolerance is None:
+            tolerance = quality_tolerance(old_best)
+        if threshold is None:
+            threshold = quality_threshold(old_best)
         reasons.append(
             f"quality: {pair['case']}/{pair['backend']} new final best "
             f"{pair['new_final_best']:.4f} < threshold {threshold:.4f} "
-            f"(old {old_best:.4f} - {QUALITY_TOLERANCE_REL:.0%} * |old|)"
+            f"(old {old_best:.4f} - tolerance {tolerance:.4f}, i.e. {quality_rule_text()})"
         )
     if timing != "PASS":
         for pair in timing_missing:
@@ -724,7 +882,7 @@ def verdict(aggregated: list[dict], runs: list[dict] | None = None) -> dict:
         reasons.append(f"timing: all {len(pairs)} comparison(s) at or above 1.00x")
         reasons.append(
             f"quality: all {len(judged)} comparison(s) within "
-            f"{QUALITY_TOLERANCE_REL:.0%} of the old final best"
+            f"{quality_rule_text()} of the old final best"
         )
     else:
         status = "INCOMPLETE"
