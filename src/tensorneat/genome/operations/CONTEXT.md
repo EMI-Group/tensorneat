@@ -29,7 +29,7 @@ Delete-node never names an input row (`0..num_inputs-1`) or an output row (`N-nu
 `alignment.find_homologous(keys1, keys2)` is the only aligner: hash → tagged `argsort` over the concatenation of both parents' hashes → adjacent `(parent 1, parent 2)` pair → full key-row confirmation. `O(M log M)`, never an `O(M^2)` scan, one batched kernel.
 
 ## Distance semantics
-`family = (non_homologous_count * compatibility_disjoint + homologous_attribute_distance * compatibility_weight) / max(cnt1, cnt2)`, summed over the node and connection families, and `0` when `max(cnt1, cnt2) == 0`.
+`DefaultDistance.gene_distance` = homologue table + `distance_from_rows`; the two-phase `BaseDistance.prepare`/`measure` build the same table through `digest.match_rows` (injective int64 composites, one sort, `right == left + 1`) and share the identical tail, so speciation runs `prepare` once and `measure` per centre at the same bits: 25.4 → 10.8 ms per call at pop 1000, 547 → 309 traced ops.
 Non-homologous slots are zeroed **before** the attribute `reduce_sum` (a `NaN * 0` product would poison the sum), the attribute term uses `BaseGene.distance` (`|delta|` for float columns, `!=` for int option columns), and the quotient is `select`-guarded so no pair can be `inf`/NaN.
 
 ## Constraints

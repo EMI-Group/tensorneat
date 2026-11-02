@@ -45,6 +45,7 @@ from .gene import BaseConn, BaseNode
 from .grad import build_grad
 from .host import BaseGenomeHost
 from .operations import BaseCrossover, BaseDistance, BaseMutation
+from .operations.distance import DistanceDigest
 from .window import (
     _column_index,
     _column_mask,
@@ -1152,6 +1153,59 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
             )
         self._check_same_shapes(first, second, "execute_distance")
         return self.distance(state, self, *first, *second)
+
+    def prepare_distance(self, state: State, *args: Any) -> "DistanceDigest":
+        """Digest a batch of genomes for repeated compatibility distance.
+
+        Run once per generation: the result is the static-length-per-genome data
+        (packed sorted key rows, attribute rows in the same order, gene counts)
+        that :meth:`measure_distance` needs, so measuring one centre against the
+        whole population costs no per-pair sort of the population.
+
+        Args:
+            state: Host configuration container.
+            *args: One payload (``GenomeTensors`` or the four-array spelling).
+
+        Returns:
+            ``DistanceDigest`` — a six-tensor pytree, batch-first over the input
+            population, cacheable for one generation.
+
+        Raises:
+            TensorNEATError: If more than one payload is passed.
+        """
+        payload, trailing = self._split_payload(*args)
+        if trailing:
+            raise TensorNEATError(
+                f"prepare_distance takes exactly one payload, got {len(trailing)} extra "
+                "argument(s)"
+            )
+        return self.distance.prepare(state, self, *payload)
+
+    def measure_distance(
+        self, state: State, *args: Any
+    ) -> evoxc.SymbolicTensor:
+        """Compatibility distance of one centre genome against a digested population.
+
+        Args:
+            state: Host configuration container.
+            *args: One centre payload (``GenomeTensors`` or four arrays; a batch of
+                ``1`` is broadcast to the digest's population axis) followed by the
+                ``DistanceDigest`` returned by :meth:`prepare_distance`.
+
+        Returns:
+            ``(P,) float32`` distances, bit-identical to :meth:`execute_distance`
+            on the same centre and population, and ``0`` for an empty pair.
+
+        Raises:
+            TensorNEATError: If the arguments are not one payload plus one digest.
+        """
+        centre, remaining = self._split_payload(*args)
+        if len(remaining) != 1:
+            raise TensorNEATError(
+                "measure_distance takes a centre payload followed by exactly one "
+                f"DistanceDigest, got {len(remaining)} trailing argument(s)"
+            )
+        return self.distance.measure(state, self, *centre, remaining[0])
 
     def _check_same_shapes(
         self, first: GenomeTensors, second: GenomeTensors, caller: str
