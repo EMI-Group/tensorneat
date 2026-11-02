@@ -6,6 +6,16 @@
 Alignment of homologous genes is one sorted comparison per gene family (``O(M log M)``),
 all counts are ``reduce_*`` over the gene axis, and the whole population of parent pairs is
 resolved in a single batched kernel.
+
+Both routes into this node — the pair-wise :meth:`DefaultDistance.gene_distance` and the
+digest-driven :meth:`BaseDistance.gene_measure` — end in
+:meth:`DefaultDistance.distance_from_alignment`, which is what makes them bit-identical
+rather than merely close: the aligned attribute gather, the attribute term and the scalar
+formula are literally the same code, run over the same rows in the same order.
+
+Every rank-0 constant here comes from the caller's
+:class:`~.consts.ConstantPool`, so the same weight or index costs one traced op per entry
+point instead of one per use site.
 """
 
 import math
@@ -18,28 +28,23 @@ from ....common import I_INF, ConfigError, State
 from ...utils import valid_count
 from ..alignment import find_homologous, key_rows
 from .base import BaseDistance
+from .consts import ConstantPool
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...base import BaseGenome
     from ...gene import BaseGene
 
 
-def _scalar(value, dtype) -> evoxc.SymbolicTensor:
-    """Build a rank-0 constant of ``dtype`` inside the active trace.
+def _pool(consts) -> ConstantPool:
+    """Return the caller's constant pool, or a private one for a standalone call.
 
     Args:
-        value: Static Python scalar baked into the trace.
-        dtype: ``evoxc`` dtype of the result.
+        consts (ConstantPool | None): Pool threaded in from a top-level kernel entry.
 
     Returns:
-        Rank-0 ``dtype`` tensor.
-
-    Notes:
-        Written out instead of a bare Python literal because an ``int32`` tensor plus a
-        Python ``int`` promotes to ``int64`` in ``evoxc``, which would widen every index
-        computation of :meth:`DefaultDistance.gene_distance`.
+        ConstantPool: ``consts`` unchanged, or a fresh empty pool.
     """
-    return enp.full((), value, dtype=dtype)
+    return consts if consts is not None else ConstantPool()
 
 
 def _weight(value: float, name: str) -> float:
@@ -159,6 +164,8 @@ class DefaultDistance(BaseDistance):
         attrs1: evoxc.SymbolicTensor,
         keys2: evoxc.SymbolicTensor,
         attrs2: evoxc.SymbolicTensor,
+        *,
+        consts=None,
     ) -> evoxc.SymbolicTensor:
         """Compatibility distance of one gene family between two batches of genomes.
 
@@ -179,6 +186,8 @@ class DefaultDistance(BaseDistance):
                 padded.
             attrs2 (evoxc.SymbolicTensor): ``(P, M, A) float32`` attributes, parent 2, NaN
                 padded.
+            consts (ConstantPool | None): Pool for the rank-0 constants of this trace;
+                ``None`` starts a private one.
 
         Returns:
             evoxc.SymbolicTensor: ``(P,) float32`` where each entry is
@@ -195,13 +204,21 @@ class DefaultDistance(BaseDistance):
         Notes:
             The homologue table is :func:`~..alignment.find_homologous`; the rest of the
             arithmetic — the aligned attribute gather, the attribute term and the scalar
-            formula — is :meth:`distance_from_rows`, shared with the digest-driven
+            formula — is :meth:`distance_from_alignment`, shared with the digest-driven
             :meth:`~..distance.base.BaseDistance.gene_measure`, so the pair-wise and the
             two-phase route are bit-identical by construction.
         """
+        pool = _pool(consts)
         rows = find_homologous(key_rows(keys1), key_rows(keys2))
         return self.distance_from_rows(
-            state, gene, attrs1, attrs2, rows, valid_count(keys1), valid_count(keys2)
+            state,
+            gene,
+            attrs1,
+            attrs2,
+            rows,
+            valid_count(keys1),
+            valid_count(keys2),
+            consts=pool,
         )
 
     def distance_from_rows(
@@ -213,8 +230,10 @@ class DefaultDistance(BaseDistance):
         rows: evoxc.SymbolicTensor,
         cnt1: evoxc.SymbolicTensor,
         cnt2: evoxc.SymbolicTensor,
+        *,
+        consts=None,
     ) -> evoxc.SymbolicTensor:
-        """Compatibility distance of one gene family from an aligned homologue table.
+        """Compatibility distance of one gene family from an ``I_INF``-padded row table.
 
         Args:
             state (State): Immutable host configuration container.
@@ -224,98 +243,152 @@ class DefaultDistance(BaseDistance):
             attrs2 (evoxc.SymbolicTensor): ``(P, M, A) float32`` attributes of parent 2, in
                 *row-number order*: ``rows`` indexes this block directly.
             rows (evoxc.SymbolicTensor): ``(P, M) int32`` row of ``attrs2`` homologous to each
-                gene of parent 1, ``I_INF`` where there is none.  The pair-wise path fills it
-                with parent-2 payload rows; the digest path fills it with parent-2 digest
-                positions — this function never interprets the number, it only gathers.
-            cnt1 (evoxc.SymbolicTensor): ``(P,) int32`` real genes of parent 1.
-            cnt2 (evoxc.SymbolicTensor): ``(P,) int32`` real genes of parent 2.
+                gene of parent 1, ``I_INF`` where there is none.
+            cnt1 (evoxc.SymbolicTensor): ``(P,)`` real genes of parent 1.
+            cnt2 (evoxc.SymbolicTensor): ``(P,)`` real genes of parent 2.
+            consts (ConstantPool | None): Pool for the rank-0 constants of this trace;
+                ``None`` starts a private one.
+
+        Returns:
+            evoxc.SymbolicTensor: ``(P,) float32`` distances of this gene family.
+
+        Notes:
+            The documented row-table spelling: it derives the homology mask and the homologue
+            count from ``rows`` and hands everything to :meth:`distance_from_alignment`.  The
+            two-phase route already holds both, so it skips this step.
+        """
+        pool = _pool(consts)
+        homologous = evoxc.not_equal(rows, pool.i32(I_INF))
+        matched = evoxc.reduce_sum(homologous, axes=1)
+        safe_rows = evoxc.select(homologous, rows, pool.i32(0))
+        return self.distance_from_alignment(
+            state,
+            gene,
+            attrs1,
+            attrs2,
+            safe_rows,
+            homologous,
+            cnt1,
+            matched,
+            cnt2,
+            consts=pool,
+        )
+
+    def distance_from_alignment(
+        self,
+        state: State,
+        gene: "BaseGene",
+        attrs1: evoxc.SymbolicTensor,
+        attrs2: evoxc.SymbolicTensor,
+        rows: evoxc.SymbolicTensor,
+        homologous: evoxc.SymbolicTensor,
+        cnt1: evoxc.SymbolicTensor,
+        matched: evoxc.SymbolicTensor,
+        cnt2: evoxc.SymbolicTensor,
+        *,
+        consts=None,
+    ) -> evoxc.SymbolicTensor:
+        """Compatibility distance of one gene family from a finished alignment.
+
+        Args:
+            state (State): Immutable host configuration container.
+            gene ("BaseGene"): Node or connection gene supplying ``distance``.
+            attrs1 (evoxc.SymbolicTensor): ``(P, M, A) float32`` attributes of parent 1, in
+                *its own* row order.
+            attrs2 (evoxc.SymbolicTensor): ``(P, M, A) float32`` attributes of parent 2, in
+                *row-number order*: ``rows`` indexes this block directly.
+            rows (evoxc.SymbolicTensor): ``(P, M) int32`` row of ``attrs2`` homologous to each
+                gene of parent 1, **redirected to row ``0``** where there is none.
+            homologous (evoxc.SymbolicTensor): ``(P, M) bool`` True on the real homologues.
+            cnt1 (evoxc.SymbolicTensor): ``(P,)`` real genes of parent 1.
+            matched (evoxc.SymbolicTensor): ``(P,)`` number of homologous genes ``h``.
+            cnt2 (evoxc.SymbolicTensor): ``(P,)`` real genes of parent 2.
+            consts (ConstantPool | None): Pool for the rank-0 constants of this trace;
+                ``None`` starts a private one.
 
         Returns:
             evoxc.SymbolicTensor: ``(P,) float32`` where each entry is
             ``(non_homologous_count * compatibility_disjoint
             + homologous_attribute_distance * compatibility_weight) / max(cnt1, cnt2)``,
-            guarded to ``0`` for pairs where both genomes are empty in this gene family.
+            ``0`` for a pair where both genomes are empty in this gene family.
 
         Notes:
             The count ``non_homologous = cnt1 + cnt2 - 2 * h`` charges a key missing from
             either parent once, so *disjoint* and *excess* genes share the term.  The aligned
-            attribute rows are fetched from the flattened ``(P, M * A)`` view with
             attribute rows are fetched with **one unmasked** ``(P, M, A)`` gather: ``rows`` is
-            redirected to row ``0`` where it is absent, so no ``I_INF`` index reaches the
-            backend, and the per-gene distances are zeroed on the non-homologous slots
+            already redirected to row ``0`` where it is absent, so no ``I_INF`` index reaches
+            the backend and the per-gene distances are zeroed on the non-homologous slots
             **before** the ``reduce_sum`` — a ``NaN * 0`` product would otherwise poison the
-            whole sum.  That masking is also what makes the ``NaN`` fill unnecessary: the
+            whole sum.  That masking is also what makes a ``NaN`` fill unnecessary: the
             gathered values at absent slots are never read.  The reduction runs over parent
             1's own row order in both routes, which is what keeps the float sum bit-identical.
+            The empty-pair guard rides on the denominator: both terms of the numerator are
+            exactly ``0.0`` there, while a non-empty pair's ``max(cnt1, cnt2)`` is at least
+            ``1`` (counts are integers), so raising the denominator to ``1.0`` yields
+            ``0.0 / 1.0 == 0.0`` instead of ``NaN`` — no second ``select`` over the result.
+            A gene family with no attribute column (``attr_width == 0``, a zero-weight
+            connection gene) has no attribute term at all: the gather is skipped and the
+            distance is the structural ``disjoint/excess`` count alone.  Skipping is required,
+            not an optimisation — a zero-width row stride is a ``0``-step ``arange``, which
+            raises on the reference backend.
         """
+        pool = _pool(consts)
         pop_size, count = int(attrs1.shape[0]), int(attrs1.shape[1])
         attr_width = int(attrs1.shape[-1])
 
-        homologous = evoxc.not_equal(rows, _scalar(I_INF, evoxc.int32))
-        # ``h`` is the number of aligned genes: the ``bool`` mask reduced to a count, one
-        # reduce over the gene axis (``evoxc`` returns ``int64`` whatever the input dtype).
-        homologous_count = evoxc.cast(
-            evoxc.reduce_sum(evoxc.cast(homologous, evoxc.int32), axes=1), evoxc.int32
-        )
         non_homologous = evoxc.subtract(
             evoxc.add(cnt1, cnt2),
-            evoxc.multiply(_scalar(2, evoxc.int32), homologous_count),
+            evoxc.multiply(pool.i64(2), matched),
         )
 
-        # Attribute row of parent 2 behind every gene of parent 1: the row offset is
-        # ``row * A`` and the ``(P, M, A)`` block adds the within-row column.  ``rows`` is
-        # redirected to row ``0`` before the multiply, so no ``I_INF`` index reaches the
-        # backend and the flat index needs no range check of its own; absent slots read a
-        # real row and are masked out of the sum below instead of being filled with ``NaN``.
-        safe_rows = evoxc.select(homologous, rows, _scalar(0, evoxc.int32))
-        row_offsets = enp.reshape(
-            evoxc.multiply(safe_rows, _scalar(attr_width, evoxc.int32)),
-            (pop_size, count, 1),
-        )
-        columns = enp.reshape(
-            enp.arange(0, attr_width, dtype=evoxc.int32), (1, 1, attr_width)
-        )
-        homologous_attrs = evoxc.reshape(
-            evoxc.gather(
-                evoxc.reshape(attrs2, (pop_size * count * attr_width,)),
-                evoxc.add(
-                    evoxc.add(row_offsets, columns),
-                    enp.reshape(
-                        enp.arange(
-                            0, pop_size * count * attr_width, count * attr_width,
-                            dtype=evoxc.int32,
-                        ),
-                        (pop_size, 1, 1),
-                    ),
+        attribute_distance = None
+        if attr_width:
+            # Attribute row of parent 2 behind every gene of parent 1: the row offset is
+            # ``row * A`` and the ``(P, M, A)`` block adds the within-row column.  ``rows`` is
+            # already redirected to row ``0`` where a gene has no homologue, so no ``I_INF``
+            # index reaches the backend and the flat index needs no range check of its own.
+            row_offsets = enp.reshape(
+                evoxc.multiply(rows, pool.i32(attr_width)), (pop_size, count, 1)
+            )
+            columns = enp.arange(0, attr_width, dtype=evoxc.int32)
+            # Row stride as a ``(P, 1, 1)`` block: ``batch_offsets`` returns ``(P, 1)``, which
+            # would broadcast against the last two axes of the ``(P, M, A)`` index block
+            # instead of the leading one.
+            rows_stride = enp.reshape(
+                enp.arange(
+                    0, pop_size * count * attr_width, count * attr_width, dtype=evoxc.int32
                 ),
-                axis=0,
-            ),
-            (pop_size, count, attr_width),
-        )
-        pair_distance = gene.distance(state, attrs1, homologous_attrs)
-        attribute_distance = evoxc.reduce_sum(
-            evoxc.select(homologous, pair_distance, 0.0), axes=1
-        )
+                (pop_size, 1, 1),
+            )
+            index = evoxc.add(evoxc.add(row_offsets, columns), rows_stride)
+            homologous_attrs = evoxc.reshape(
+                evoxc.gather(
+                    evoxc.reshape(attrs2, (pop_size * count * attr_width,)), index, axis=0
+                ),
+                (pop_size, count, attr_width),
+            )
+            pair_distance = gene.distance(state, attrs1, homologous_attrs)
+            attribute_distance = evoxc.reduce_sum(
+                evoxc.select(homologous, pair_distance, pool.f32(0.0)), axes=1
+            )
 
-        denominator = evoxc.maximum(
-            evoxc.cast(cnt1, evoxc.float32), evoxc.cast(cnt2, evoxc.float32)
+        # Counts are small integers, so ``float32(max(cnt1, cnt2))`` is exact and the
+        # maximum is cheaper on the integer dtypes than on two casts.
+        denominator = evoxc.cast(evoxc.maximum(cnt1, cnt2), evoxc.float32)
+        numerator = evoxc.multiply(
+            evoxc.cast(non_homologous, evoxc.float32),
+            pool.f32(self.compatibility_disjoint),
         )
-        numerator = evoxc.add(
-            evoxc.multiply(
-                evoxc.cast(non_homologous, evoxc.float32),
-                _scalar(self.compatibility_disjoint, evoxc.float32),
-            ),
-            evoxc.multiply(
-                attribute_distance, _scalar(self.compatibility_weight, evoxc.float32)
-            ),
+        if attribute_distance is not None:
+            numerator = evoxc.add(
+                numerator,
+                evoxc.multiply(
+                    attribute_distance, pool.f32(self.compatibility_weight)
+                ),
+            )
+        return evoxc.divide(
+            numerator, evoxc.maximum(denominator, pool.f32(1.0))
         )
-        # An empty pair is ``0`` by definition; dividing by the guard keeps the quotient
-        # finite instead of producing ``inf``/``NaN`` that only a later select discards.
-        non_empty = evoxc.greater(denominator, _scalar(0.0, evoxc.float32))
-        quotient = evoxc.divide(
-            numerator, evoxc.select(non_empty, denominator, _scalar(1.0, evoxc.float32))
-        )
-        return evoxc.select(non_empty, quotient, _scalar(0.0, evoxc.float32))
 
 
 __all__ = ["DefaultDistance"]

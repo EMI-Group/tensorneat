@@ -1,2 +1,6 @@
 # Generated run records: evidence output only, never authored by hand.
 *.json
+# The records the committed reports were rendered from stay in git so every table cell is traceable.
+!authoritative.json
+!threads1.json
+!iree.json

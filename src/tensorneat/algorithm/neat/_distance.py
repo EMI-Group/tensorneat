@@ -7,29 +7,53 @@ once per generation into a ``DistanceDigest``, and
 :meth:`~tensorneat.genome.base.BaseGenome.measure_distance` turns one centre
 genome into one ``(P,)`` distance row without re-sorting the population.
 
-This module wraps that digest in the callable :meth:`SpeciesController.speciate`
-consumes and adds the **batched** form: a centre payload of ``K`` rows (the whole
-species table of a phase) is measured against the population in a *single*
-``measure_distance`` call, and the ``(K, P)`` matrix is handed back to the scan,
-which then reads its slot's row with one ``gather``.
+Shape contract
+--------------
+Every call this module makes to ``genome.measure_distance`` carries a
+**population-shaped** centre payload: exactly ``pop_size`` rows, row ``p`` being
+the centre measured against population member ``p``, next to the digest of the
+same batch width.  ``measure_distance`` accepts no other width besides a
+broadcastable ``1``, so the population-shaped form is the one shape that works
+for both a single centre and a whole species table without a second digest
+tiling.
 
-``measure_distance`` requires the centre batch to be either ``1`` (broadcast
-internally) or the digest's batch, so the wide call tiles **both** sides to
-``K * P`` rows with the matching row order ``s * P + p``:
-
-* the digest, ``(P, ...)`` -> ``(K * P, ...)`` -- block ``s`` is the population;
-* the centres, ``(K, ...)`` -> ``(K * P, ...)`` -- rows ``s * P .. s * P + P-1``
-  are centre ``s``.
-
-Both tilings are a ``broadcast_to`` plus a ``reshape``, and the tiled digest is
-memoised per batch width, so a generation that measures both phases with the
-same number of centres tiles the population once and the graph reuses the same
-``evoxc`` values.
+:meth:`DistanceRows.__call__` is single-valued: it accepts a centre payload of
+batch ``pop_size`` (measured as it stands) or batch ``1`` (tiled to
+``pop_size`` rows and measured in one call) and rejects every other batch width.
+:meth:`DistanceRows.row` is the same measurement spelled explicitly for one
+centre, and :meth:`DistanceRows.matrix` is the explicit whole-table form: it
+concatenates one ``row`` call per centre row, so an ``(S, P)`` table is ``S``
+calls of ``pop_size`` rows rather than one ``S * P`` batch.  The rows are
+identical either way, because the compatibility kernel is row-independent, and a
+per-centre call keeps the transient footprint of the kernel at one population
+instead of ``S`` of them.  ``matrix`` is never selected by ``__call__``: a
+caller that wants a whole table asks for it by name.
 
 Nothing here re-implements distance arithmetic: every number comes from the
 genome's own kernel, so the rows are bit-identical to
 :meth:`~tensorneat.genome.base.BaseGenome.execute_distance` on the same centre and
 population.
+
+Measured cost
+-------------
+``speciate`` on the numpy reference backend, ``species_size=20``, medians of
+three runs of five after four warm generations, same box:
+
+* ``P = 100``: 30.7-32.1 ms with the old ``K = 4`` centre grouping, 31.6-33.3 ms
+  with one call per centre (parity, within the box's drift);
+* ``P = 500``: 235.0-237.5 ms before, 229.5-240.0 ms now (parity);
+* ``P = 1000``: 439.8-441.8 ms before, 387.3-391.4 ms now (about 12 % faster).
+
+The per-centre call shape itself is what the population-shaped contract costs:
+measured with the rows still pre-computed before each scan (``2 * species_size``
+distance trace sites and scan 2's per-iteration ``create`` ``cond``, 11 111 graph
+ops against 3 353), it was +18 % at ``P = 500``, because four-centre calls
+amortise the interpreter's per-op overhead over four populations.  Measuring the
+same rows inside the scan bodies instead -- one trace site per phase, 1 361 ops,
+no ``cond`` -- wins it back and then some: the wide batches were also
+materialising ``species_size * pop_size`` rows per digest leaf, which is the cost
+that dominated at ``P = 1000``.  The grouping and the pre-measurement were the
+expensive parts, not the per-centre call.
 """
 
 from __future__ import annotations
@@ -40,22 +64,6 @@ import evoxc
 import evoxc.numpy as enp
 
 from tensorneat.common.errors import TensorNEATError
-
-#: Maximum number of species centres measured by one ``measure_distance`` call.
-#:
-#: One call over the whole species table is the cheapest in dispatch terms, but
-#: the compatibility kernel's transient arrays scale with ``centres * pop_size``
-#: (the ``(rows, 2 * max_conns, key_width)`` masked gather of the long-key
-#: verification alone is hundreds of MB at ``20 * 1000`` rows) and the numpy
-#: reference interpreter keeps every intermediate of a run alive, so a
-#: generation's footprint is the sum of them.  Grouping also keeps each group's
-#: ``(rows, 2 * max_conns)`` sort inside the cache: at pop 1000, 20 centres in one
-#: call cost 726 ms of ``speciate`` against 568 ms at 4 per call (500: 496 vs
-#: 300 ms), and 8 per call is already worse again (763 / 340 ms).  The rows are
-#: identical either way, because the compatibility kernel is row-independent.
-#: The gate keeps the sparse regime on its lazy per-slot path, so this only ever
-#: groups the dense regime's rows.
-CENTRES_PER_CALL = 4
 
 
 def _rows(payload: Any, start: int, count: int) -> Any:
@@ -74,22 +82,6 @@ def _rows(payload: Any, start: int, count: int) -> Any:
     return type(payload)(*(field[slicer] for field in payload))
 
 
-def tile_leading(x: Any, blocks: int) -> Any:
-    """Stack ``blocks`` copies of a batch-first tensor along axis 0.
-
-    Args:
-        x (Any): Traced tensor of shape ``(P, *rest)``.
-        blocks (int): Static number of copies ``K``.
-
-    Returns:
-        Any: ``(K * P, *rest)`` with row ``s * P + p`` equal to ``x[p]``.
-    """
-    shape = tuple(int(size) for size in x.shape)
-    return evoxc.reshape(
-        enp.broadcast_to(x, (blocks,) + shape), (blocks * shape[0],) + shape[1:]
-    )
-
-
 def repeat_leading(x: Any, repeats: int) -> Any:
     """Repeat every row of a batch-first tensor ``repeats`` times along axis 0.
 
@@ -99,8 +91,8 @@ def repeat_leading(x: Any, repeats: int) -> Any:
 
     Returns:
         Any: ``(K * repeats, *rest)`` with rows ``k * repeats .. k * repeats +
-        repeats - 1`` all equal to ``x[k]`` -- the row order that matches
-        :func:`tile_leading`.
+        repeats - 1`` all equal to ``x[k]`` -- so a ``(1, ...)`` input becomes a
+        population-shaped payload whose every row is that one centre.
     """
     shape = tuple(int(size) for size in x.shape)
     spread = evoxc.reshape(x, (shape[0], 1) + shape[1:])
@@ -116,8 +108,7 @@ class DistanceRows:
     One instance is built per generation (in :meth:`NEAT.tell`) and handed to
     :meth:`SpeciesController.speciate` as its ``distance_fn``.  It is a plain
     traced helper -- created and called while the generation graph is being
-    traced -- so the digest tiling cache below lives on the host and each batch
-    width is tiled at most once per graph.
+    traced.
 
     Args:
         genome (Any): The genome owning ``measure_distance`` and the digest's
@@ -128,9 +119,8 @@ class DistanceRows:
             is checked against its static shape, so a payload from a different
             generation or population size is rejected instead of silently
             measuring against a stale digest.
-        pop_size (int): Static population size ``P`` (the digest's batch).
-        species_size (int): Static number of species slots ``S``; a centre
-            payload of exactly this batch width is measured as one wide call.
+        pop_size (int): Static population size ``P`` (the digest's batch and the
+            row count of every centre payload this class builds).
 
     Raises:
         TensorNEATError: If the digest's population axis is not ``pop_size``.
@@ -142,13 +132,11 @@ class DistanceRows:
         digest: Any,
         population: Any,
         pop_size: int,
-        species_size: int,
     ) -> None:
         self.genome = genome
         self.digest = digest
         self.population = population
         self.pop_size = int(pop_size)
-        self.species_size = int(species_size)
         digest_pop_size = int(digest.node_count.shape[0])
         if digest_pop_size != self.pop_size:
             raise TensorNEATError(
@@ -161,34 +149,39 @@ class DistanceRows:
                 "DistanceRows: the population payload has batch "
                 f"{int(population[0].shape[0])} but pop_size is {self.pop_size}"
             )
-        self._tiled: dict = {}
 
     def __call__(self, state: Any, centre: Any, pop: Any = None) -> Any:
         """Distance rows of ``centre`` against the digested population.
 
         Args:
             state (Any): Shared state (forwarded to the genome kernel).
-            centre (Any): Centre payload, batch ``1`` (one centre, broadcast by
-                the genome kernel), batch ``S`` (the whole species table of a
-                phase) or batch ``P`` (a population-shaped centre, measured
-                row-wise).
+            centre (Any): Centre payload of batch ``pop_size`` (a
+                population-shaped centre, measured row-wise as it stands) or
+                batch ``1`` (one centre, tiled to ``pop_size`` rows).
             pop (Any, optional): The population payload ``speciate`` measures
                 against; its static shape must match the digested population's.
 
         Returns:
-            Any: ``(P,)`` float32 for a batch-1 or batch-``P`` centre, ``(S, P)``
-            float32 for a batch-``S`` one.
+            Any: ``(P,)`` float32 distances.
 
         Raises:
             TensorNEATError: If ``pop`` does not have the digested population's
-                static shape, or if the genome kernel rejects the centre batch
-                (anything other than ``1``, ``S`` or ``P``).
+                static shape, or if the centre batch is neither ``1`` nor ``P``.
+
+        Note:
+            A whole ``(S, P)`` species table is not a ``__call__`` shape: ask
+            for it by name with :meth:`matrix`, so a table can never be mistaken
+            for a population-shaped centre.
         """
         if pop is not None:
             self._check_population(pop)
         batch = int(centre[0].shape[0])
-        if batch != 1 and batch == self.species_size:
-            return self.matrix(state, centre)
+        if batch != self.pop_size and batch != 1:
+            raise TensorNEATError(
+                "DistanceRows: a distance row takes a centre payload of batch 1 "
+                f"or pop_size ({self.pop_size}), got batch {batch}; call "
+                "matrix() directly for a whole species table"
+            )
         return self.row(state, centre)
 
     def _check_population(self, pop: Any) -> None:
@@ -227,17 +220,43 @@ class DistanceRows:
 
         Args:
             state (Any): Shared state.
-            centre (Any): Centre payload; a batch of ``1`` is broadcast to the
-                population by the genome kernel, a batch of ``P`` is measured
-                row-wise.
+            centre (Any): Centre payload; a batch of ``1`` is tiled to
+                ``pop_size`` identical rows, a batch of ``pop_size`` is already
+                population-shaped and measured as it stands.
 
         Returns:
             Any: ``(P,)`` float32 distances.
+
+        Raises:
+            TensorNEATError: If the centre batch is neither ``1`` nor ``P``.
         """
-        return self.genome.measure_distance(state, centre, self.digest)
+        batch = int(centre[0].shape[0])
+        if batch == self.pop_size:
+            prepared = centre
+        elif batch == 1:
+            prepared = self.population_shaped(centre)
+        else:
+            raise TensorNEATError(
+                f"DistanceRows: a distance row takes a centre payload of batch 1 "
+                f"or pop_size ({self.pop_size}), got batch {batch}"
+            )
+        return self.genome.measure_distance(state, prepared, self.digest)
+
+    def population_shaped(self, centre: Any) -> Any:
+        """Tile a centre payload to exactly ``pop_size`` identical rows.
+
+        Args:
+            centre (Any): Centre payload of ``K`` rows.
+
+        Returns:
+            Any: ``(pop_size, *rest)`` payload in which every row repeats the
+            centre row, which is the shape ``measure_distance`` pairs against the
+            digest.
+        """
+        return type(centre)(*(repeat_leading(field, self.pop_size) for field in centre))
 
     def matrix(self, state: Any, centres: Any) -> Any:
-        """``(S, P)`` distance matrix of a whole species table.
+        """``(S, P)`` distance matrix of a whole species table (explicit form).
 
         Args:
             state (Any): Shared state.
@@ -249,69 +268,22 @@ class DistanceRows:
             population.
 
         Note:
-            ``K == 1`` takes the narrow path: the genome kernel already
-            broadcasts a single centre, so tiling would only duplicate work.
-            Otherwise the centres are measured in groups of at most
-            ``CENTRES_PER_CALL`` rows.  One call over the whole table is the
-            fastest option, but its transient arrays grow with ``K * P`` -- an
-            ``(K * P, 2 * max_conns, key_width)`` masked gather alone is
-            hundreds of MB at ``K = 20``, ``P = 1000`` -- and the reference
-            interpreter keeps every intermediate alive for the whole run.
-            Grouping bounds that peak while costing one extra dispatch per
-            group; the rows are identical either way, because the compatibility
-            kernel is row-independent.
+            This is the explicit whole-table form, never reached through
+            :meth:`__call__`: a caller holding an ``(S, ...)`` centre table asks
+            for it by name, so a table cannot be mistaken for a population-shaped
+            centre when ``S == P``.
+            One ``row`` call per centre row, concatenated along axis ``0``: each
+            call carries a population-shaped centre, so the kernel always sees
+            the batch width the digest was prepared with.  Concatenating rows of
+            single calls keeps every transient at one population instead of
+            ``K`` of them; the static row loop is trace-time only and costs no
+            graph op.
         """
         count = int(centres[0].shape[0])
+        rows = [
+            evoxc.reshape(self.row(state, _rows(centres, slot, 1)), (1, self.pop_size))
+            for slot in range(count)
+        ]
         if count == 1:
-            return evoxc.reshape(self.row(state, centres), (1, self.pop_size))
-        block = min(count, CENTRES_PER_CALL)
-        if block == count:
-            return self._measure_block(state, centres, count)
-        return evoxc.concatenate(
-            [
-                self._measure_block(
-                    state,
-                    _rows(centres, start, min(block, count - start)),
-                    min(block, count - start),
-                )
-                for start in range(0, count, block)
-            ],
-            axis=0,
-        )
-
-    def _measure_block(self, state: Any, centres: Any, count: int) -> Any:
-        """Measure ``count`` centres against the population in one wide call.
-
-        Args:
-            state (Any): Shared state.
-            centres (Any): Centre payload of exactly ``count`` rows.
-            count (int): Static number of centres in ``centres``.
-
-        Returns:
-            Any: ``(count, P)`` float32 distances.
-        """
-        wide_centres = type(centres)(
-            *(repeat_leading(field, self.pop_size) for field in centres)
-        )
-        flat = self.genome.measure_distance(
-            state, wide_centres, self._tiled_digest(count)
-        )
-        return evoxc.reshape(flat, (count, self.pop_size))
-
-    def _tiled_digest(self, blocks: int) -> Any:
-        """Digest tiled to ``blocks`` population copies, memoised per width.
-
-        Args:
-            blocks (int): Static number of population blocks ``K``.
-
-        Returns:
-            Any: A ``DistanceDigest`` whose leaves are ``(K * P, ...)``; the
-            same traced values on every request with the same ``blocks``.
-        """
-        tiled = self._tiled.get(blocks)
-        if tiled is None:
-            tiled = type(self.digest)(
-                *(tile_leading(leaf, blocks) for leaf in self.digest)
-            )
-            self._tiled[blocks] = tiled
-        return tiled
+            return rows[0]
+        return evoxc.concatenate(rows, axis=0)

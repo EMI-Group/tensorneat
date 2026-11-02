@@ -6,8 +6,8 @@ sequential — the JAX baseline and the evoxc rewrite never share an interpreter
 thread pools and allocators cannot disturb each other's timings. Every schema, aggregation
 and verdict decision comes from ``harness.protocol``; this file only orchestrates.
 
-``--list`` and ``--dry-run`` work on a bare interpreter (no numpy): the numpy-dependent
-modules are imported lazily, from inside the functions that need them.
+``--list``, ``--dry-run`` and ``--render-from-json`` work on a bare interpreter (no numpy):
+the numpy-dependent modules are imported lazily, from inside the functions that need them.
 """
 
 from __future__ import annotations
@@ -147,10 +147,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the planned worker commands and exit without running anything",
     )
     parser.add_argument(
+        "--render-from-json",
+        default=None,
+        metavar="PATH",
+        help=(
+            "re-render --out from an existing run-record JSON (recompute aggregated records "
+            "and the verdict, spawn no worker); the JSON is read, never rewritten"
+        ),
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=protocol.DEFAULT_TIMEOUT,
         help="per-run wall clock limit in seconds",
+    )
+    parser.add_argument(
+        "--report-title",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "override the report H1 (stored as meta.report_title, so a re-render keeps it); "
+            "default: the standard benchmark title"
+        ),
+    )
+    parser.add_argument(
+        "--report-note",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "one-line italic note under the report banner (stored as meta.report_note) — what "
+            "this document is, e.g. a sensitivity run next to the authoritative RESULTS.md"
+        ),
     )
     return parser
 
@@ -326,7 +353,7 @@ def _error_record(run: dict, args: argparse.Namespace, case_by_name: dict, messa
         "status": protocol.STATUS_ERROR,
         "error": protocol.short_error(message) or protocol.NO_ERROR_TEXT,
         "case_config": case.as_dict() if case is not None else {},
-        "env": protocol.env_report(),
+        "env": protocol.env_report(threads=args.threads),
         "protocol": {
             "warmup_generations": args.warmup,
             "timed_generations": args.generations,
@@ -449,7 +476,7 @@ def _build_document(
         "schema": protocol.SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "meta": {
-            "env": protocol.env_report(),
+            "env": protocol.env_report(threads=args.threads),
             "cases": [case.name for case in selected],
             "impls": impls,
             "backends": list(backends),
@@ -461,10 +488,12 @@ def _build_document(
                 "threads": args.threads,
                 "timeout": args.timeout,
             },
-            "command": " ".join([sys.executable, *sys.argv]),
+            "command": shlex.join([sys.executable, *sys.argv]),
             "case_matrix": [case.as_dict() for case in selected],
             "json_path": str(json_path),
             "out_path": str(Path(args.out)),
+            "report_title": args.report_title,
+            "report_note": args.report_note,
         },
         "runs": run_records,
         "aggregated": aggregated,
@@ -479,6 +508,142 @@ def _write_json(document: dict, path) -> None:
     with target.open("w", encoding="utf-8") as handle:
         json.dump(document, handle, indent=2)
         handle.write("\n")
+
+
+# --- Re-rendering from an existing run record ---------------------------------------------
+
+
+def _load_json_document(path) -> tuple[dict | None, str | None]:
+    """Read a run-record document; return ``(document, error)`` instead of raising."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        return None, f"cannot read {path}: {exc}"
+    except ValueError as exc:
+        return None, f"{path} is not valid JSON: {exc}"
+    if not isinstance(payload, dict):
+        return None, f"{path} does not contain a JSON object"
+    return payload, None
+
+
+def _records_from_document(doc: dict) -> list[dict]:
+    """Normalise the document's run records through the schema (unknown keys are dropped)."""
+    protocol = _protocol()
+    return [
+        protocol.RunResult.from_dict(record).to_dict()
+        for record in doc.get("runs") or []
+        if isinstance(record, dict)
+    ]
+
+
+def _render_meta(doc: dict, args: argparse.Namespace, records: list[dict]) -> dict:
+    """Meta for a re-render: the stored measurement conditions, refreshed paths, no re-probe.
+
+    The stored ``meta`` is what the measurement actually saw, so it is kept verbatim; only the
+    paths (this JSON, this ``--out``) and ``rendered_at`` are this invocation's. A stored
+    document that has no ``meta`` at all degrades to an environment probe of *this* host,
+    which the report then presents as an unmeasured fingerprint — never as measurement data.
+
+    Two deliberate exceptions:
+
+    * ``--report-title``/``--report-note`` win over the stored ones (otherwise the document's
+      own values are reused, so ``THREADS.md`` never renders with the authoritative H1).
+    * the git *dirty* state is re-probed: it describes the code under test *now*, and the
+      harness's own report/JSON writes are outside the code scope
+      (``protocol.GIT_DIRTY_PATHS``), so a re-render cannot repeat a stale false alarm. The
+      ``git_commit`` stays the measurement's — it is the commit those numbers came from.
+    """
+    protocol = _protocol()
+    stored = dict(doc.get("meta") or {})
+    cases = stored.get("cases") or list(
+        dict.fromkeys(record.get("case") for record in records if record.get("case"))
+    )
+    impls = stored.get("impls") or [
+        impl for impl in IMPL_ORDER if any(record.get("impl") == impl for record in records)
+    ]
+    backends = stored.get("backends") or sorted(
+        {
+            record.get("backend")
+            for record in records
+            if record.get("impl") == "new" and record.get("backend")
+        }
+    )
+    env = dict(stored.get("env") or protocol.env_report(threads=None))
+    env.update(_fresh_dirty_state(protocol, env))
+    return {
+        "env": env,
+        "cases": list(cases),
+        "impls": list(impls),
+        "backends": list(backends),
+        "protocol": stored.get("protocol") or {},
+        "command": stored.get("command"),
+        "case_matrix": stored.get("case_matrix") or [],
+        "json_path": str(args.render_from_json),
+        "out_path": str(args.out),
+        "report_title": _override(args.report_title, stored.get("report_title")),
+        "report_note": _override(args.report_note, stored.get("report_note")),
+        "rendered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def _fresh_dirty_state(protocol, env: dict) -> dict:
+    """Re-probe the code-scope dirty state, keeping the recorded commit as the provenance."""
+    probe = protocol.git_report()
+    fresh = {key: probe.get(key) for key in ("git_dirty", "git_dirty_paths")}
+    if not env.get("git_commit"):
+        fresh["git_commit"] = probe.get("git_commit")
+    return fresh
+
+
+def _override(flag_value, stored_value):
+    """The CLI value when it was given, else the document's, else ``None``."""
+    return flag_value if flag_value is not None else stored_value
+
+
+def _render_from_json(args: argparse.Namespace) -> int:
+    """Render ``--out`` from an existing run record, recomputing aggregation and verdict.
+
+    No worker is spawned and the input JSON is only read: this is how the report text is
+    iterated without re-measuring. A wrong or missing schema, a missing ``runs`` list and an
+    unreadable file each fail loudly with exit code ``2`` instead of rendering a half report.
+    """
+    protocol = _protocol()
+    reporter = _reporter()
+    path = Path(args.render_from_json)
+    doc, error = _load_json_document(path)
+    if error:
+        return _fail(error)
+    schema = doc.get("schema")
+    if schema != protocol.SCHEMA:
+        return _fail(
+            f"{path} declares schema {schema!r}, expected {protocol.SCHEMA!r} — "
+            "render only from a run record written by this harness"
+        )
+    if not isinstance(doc.get("runs"), list):
+        return _fail(
+            f"{path} has no 'runs' list; there is nothing to aggregate or judge"
+        )
+
+    records = _records_from_document(doc)
+    aggregated = protocol.aggregate(records)
+    verdict = protocol.verdict(aggregated, records)
+    document = {
+        "schema": protocol.SCHEMA,
+        "generated_at": doc.get("generated_at")
+        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "meta": _render_meta(doc, args, records),
+        "runs": records,
+        "aggregated": aggregated,
+        "verdict": verdict,
+    }
+    out_path = Path(args.out)
+    reporter.write_report(document, out_path)
+    print(
+        f"re-rendered {out_path} from {path} "
+        f"({len(records)} run record(s), no worker spawned)"
+    )
+    _print_verdict(verdict)
+    return 0
 
 
 def _print_verdict(verdict: dict) -> None:
@@ -539,6 +704,11 @@ def main(argv=None) -> int:
     if args.list_cases:
         _print_case_matrix()
         return 0
+
+    if args.render_from_json:
+        if args.dry_run:
+            return _fail("--render-from-json and --dry-run are mutually exclusive")
+        return _render_from_json(args)
 
     error = _validation_error(args)
     if error:

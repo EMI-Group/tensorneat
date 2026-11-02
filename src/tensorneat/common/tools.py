@@ -164,7 +164,26 @@ def _scalar_constant(value, dtype):
 # --------------------------------------------------------------------------- #
 
 
-def _flat_index_block(x, idx, present, fallback):
+def _flat_shape(x):
+    """``(pop_size, row_len)`` of a flat-index target given as a tensor or a shape.
+
+    Args:
+        x: Batch-first tensor of shape ``(P, R)``, or a ``(P, R)`` pair of
+            Python ints when only the shape is known (an index block that is
+            built once and reused against a different tensor of the same
+            shape, e.g. a loop-invariant index inside ``while_loop``).
+
+    Returns:
+        tuple: ``(pop_size, row_len)`` as Python ints.
+    """
+    if isinstance(x, tuple):
+        pop_size, row_len = x
+    else:
+        pop_size, row_len = x.shape
+    return int(pop_size), int(row_len)
+
+
+def prepare_flat_index(x, idx, present=None, fallback=0, trusted=False):
     """Turn per-row column indices into flat 1-D indices into the flattened ``x``.
 
     ``idx`` holds one *column* per position; the flat index of position
@@ -174,36 +193,79 @@ def _flat_index_block(x, idx, present, fallback):
     must raise rather than clamp:
 
     * Positions with ``present == False`` are replaced by ``fallback`` *before*
-      the range test, so a masked ``I_INF`` never reaches the backend.
+      the index is formed, so a masked ``I_INF`` never reaches the backend.
     * Any remaining index outside ``[0, R)`` is redirected to ``P * R`` — one
       past the end of the flattened payload — so the backend raises
       ``evoxc.ShapeError`` instead of silently reading a neighbouring row
       (plain ``row * R + col`` arithmetic would land inside the array for
       ``R <= col < 2R``, and negative indices would wrap).
 
+    The result depends only on ``idx``, ``present`` and the static shape, so a
+    caller whose index block is **loop-invariant** (the relaxation in
+    :func:`~tensorneat.common.tensorization.node_levels`) builds it once
+    outside its ``while_loop`` and then only calls
+    :func:`flat_gather_prepared` / :func:`flat_scatter_prepared` inside.
+    :func:`flat_gather` and :func:`masked_flat_gather` are the one-shot
+    spellings of the same pair, so this function is the single owner of the
+    index arithmetic.
+
     Args:
-        x: Batch-first destination/source of static shape ``(P, R)``.
+        x: Batch-first destination/source of static shape ``(P, R)``, or the
+            ``(P, R)`` shape pair when only the shape is needed.
         idx: ``(P, *shape)`` integer column indices.
         present: ``(P, *shape)`` bool mask broadcastable to ``idx``, or ``None``
             for "every position is real".
         fallback (int): In-range replacement for masked-out positions (``0`` for
             a gather, the dump column for a scatter).
+        trusted (bool): ``False`` (default) keeps the out-of-range redirect.
+            ``True`` asserts that **every position selected by ``present``**
+            already holds an index in ``[0, R)``, so the test and its redirect
+            are dropped. Only for a caller that can prove the bound from the
+            construction of ``idx`` (a sanitized key index, a ``dst * K + col``
+            cell with ``col < K``, a permutation); it trades the "backend
+            raises" net for op count, so never pass it speculatively.
 
     Returns:
         ``(P, n)`` integer flat indices, ``n`` the product of ``idx.shape[1:]``.
     """
-    pop_size, row_len = x.shape
+    pop_size, row_len = _flat_shape(x)
     if present is None:
         safe = idx
     else:
         safe = evoxc.select(present, idx, _scalar_constant(fallback, idx.dtype))
-    escaped = evoxc.logical_or(
-        evoxc.less(safe, 0), evoxc.greater_equal(safe, row_len)
-    )
-    safe = evoxc.select(
-        escaped, _scalar_constant(pop_size * row_len, idx.dtype), safe
-    )
+    if not trusted:
+        escaped = evoxc.logical_or(
+            evoxc.less(safe, 0), evoxc.greater_equal(safe, row_len)
+        )
+        safe = evoxc.select(
+            escaped, _scalar_constant(pop_size * row_len, idx.dtype), safe
+        )
     return evoxc.reshape(safe, (pop_size, -1)) + batch_offsets(pop_size, row_len)
+
+
+def flat_gather_prepared(x, flat_idx, shape):
+    """Gather through an index block already built by :func:`prepare_flat_index`.
+
+    Args:
+        x: Batch-first source of shape ``(P, R)`` (any dtype), flattened
+            row-wise.
+        flat_idx: ``(P, n)`` ``int32`` flat indices from
+            :func:`prepare_flat_index` **for the same shape** ``(P, R)``.
+        shape (tuple): ``(P, *shape)`` result shape of the gather, i.e. the
+            index block reshaped back to its logical layout.
+
+    Returns:
+        ``(P, *shape)`` tensor with ``x``'s dtype.
+
+    Raises:
+        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged if a flat
+            index escapes the flattened payload.
+    """
+    pop_size, row_len = _flat_shape(x)
+    flat = evoxc.reshape(x, (pop_size * row_len,))
+    return evoxc.reshape(
+        evoxc.gather(flat, flat_idx, axis=0), tuple(int(d) for d in shape)
+    )
 
 
 def batch_offsets(pop_size, row_len):
@@ -246,7 +308,7 @@ def batch_offsets(pop_size, row_len):
     return enp.reshape(offsets, (pop_size, 1))
 
 
-def flat_gather(x, idx):
+def flat_gather(x, idx, trusted=False):
     """Batched gather implemented through flattened 1-D indices.
 
     Args:
@@ -256,6 +318,9 @@ def flat_gather(x, idx):
             equal to ``I_INF`` (or any other value outside ``[0, R)``) are a
             caller bug here — use :func:`masked_flat_gather` for batches that
             legitimately carry absent positions.
+        trusted (bool): ``False`` (default) redirects an escaping index so the
+            backend raises; ``True`` skips that test for a caller that can
+            prove every index is inside ``[0, R)``.
 
     Returns:
         ``(P, *shape)`` tensor with ``x``'s dtype, where
@@ -273,14 +338,15 @@ def flat_gather(x, idx):
         ``row * R + col`` alone would land **inside** the array for
         ``R <= col < 2R`` (silently reading the next row) and numpy wraps
         negative indices; the redirected value makes the backend raise.
+        :func:`prepare_flat_index` builds the index block and
+        :func:`flat_gather_prepared` performs the gather, so a caller with a
+        loop-invariant index block can hoist the former.
     """
-    flat_idx = _flat_index_block(x, idx, None, 0)
-    pop_size, row_len = x.shape
-    flat = evoxc.reshape(x, (pop_size * row_len,))
-    return evoxc.reshape(evoxc.gather(flat, flat_idx, axis=0), tuple(idx.shape))
+    flat_idx = prepare_flat_index(x, idx, trusted=trusted)
+    return flat_gather_prepared(x, flat_idx, idx.shape)
 
 
-def masked_flat_gather(x, idx, mask=None, fill=float("nan")):
+def masked_flat_gather(x, idx, mask=None, fill=float("nan"), trusted=False):
     """Batched gather where absent positions yield ``fill`` instead of a value.
 
     This is the workhorse of the forward pass: every per-connection gene
@@ -301,6 +367,10 @@ def masked_flat_gather(x, idx, mask=None, fill=float("nan")):
             ``idx == I_INF``. Defaults to ``NaN`` ("absent / not computed");
             pass the reduction's neutral element (``0``, ``-inf``, ``+inf``,
             ``1``) when the result feeds an unmasked aggregation.
+        trusted (bool): ``False`` (default) keeps the out-of-range redirect;
+            ``True`` is the ``prepare_flat_index`` opt-in for a caller that can
+            prove every *selected* index is inside ``[0, R)``. Aborting an
+            ``I_INF`` index is still done here.
 
     Returns:
         ``(P, *shape)`` tensor with ``x``'s dtype (``fill`` is cast to it).
@@ -321,20 +391,21 @@ def masked_flat_gather(x, idx, mask=None, fill=float("nan")):
     present = evoxc.not_equal(idx, _scalar_constant(I_INF, idx.dtype))
     if mask is not None:
         present = evoxc.logical_and(present, mask)
-    flat_idx = _flat_index_block(x, idx, present, 0)
-    pop_size, row_len = x.shape
-    flat = evoxc.reshape(x, (pop_size * row_len,))
-    values = evoxc.reshape(evoxc.gather(flat, flat_idx, axis=0), tuple(idx.shape))
+    flat_idx = prepare_flat_index(x, idx, present, 0, trusted=trusted)
+    values = flat_gather_prepared(x, flat_idx, idx.shape)
     return evoxc.select(present, values, _scalar_constant(fill, x.dtype))
 
 
-def flat_scatter(x, idx, updates):
+def flat_scatter(x, idx, updates, trusted=False):
     """Batched scatter implemented through flattened 1-D indices.
 
     Args:
         x: Batch-first destination of shape ``(P, R)`` (any dtype).
         idx: ``(P, *shape)`` ``int32`` indices, each in ``[0, R)``.
         updates: ``(P, *shape)`` values to write; dtype must equal ``x``'s.
+        trusted (bool): ``False`` (default) redirects an escaping index so the
+            backend raises; ``True`` skips that test for a caller that can
+            prove every index is inside ``[0, R)`` (e.g. a permutation).
 
     Returns:
         ``(P, R)`` tensor: ``x`` with ``out_flat[p * R + idx[p, ...]] =
@@ -349,9 +420,32 @@ def flat_scatter(x, idx, updates):
         resolve in flat traversal order — the last write wins. Callers that
         need accumulation must reduce first (see the ``K``-axis aggregation in
         ``functions``). Masked writes belong in :func:`masked_flat_scatter`.
+        :func:`prepare_flat_index` builds the index block and
+        :func:`flat_scatter_prepared` performs the scatter, so a caller that
+        writes two payloads to the same cells hoists the former.
     """
-    flat_idx = _flat_index_block(x, idx, None, 0)
-    pop_size, row_len = x.shape
+    flat_idx = prepare_flat_index(x, idx, trusted=trusted)
+    return flat_scatter_prepared(x, flat_idx, updates)
+
+
+def flat_scatter_prepared(x, flat_idx, updates):
+    """Scatter through an index block already built by :func:`prepare_flat_index`.
+
+    Args:
+        x: Batch-first destination of shape ``(P, R)`` (any dtype).
+        flat_idx: ``(P, n)`` ``int32`` flat indices from
+            :func:`prepare_flat_index` **for the same shape** ``(P, R)``.
+        updates: ``(P, *shape)`` values to write, ``n`` elements per row; dtype
+            must equal ``x``'s.
+
+    Returns:
+        ``(P, R)`` tensor with ``x``'s dtype.
+
+    Raises:
+        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged if a flat
+            index escapes the flattened payload.
+    """
+    pop_size, row_len = _flat_shape(x)
     out = evoxc.scatter(
         evoxc.reshape(x, (pop_size * row_len,)),
         evoxc.reshape(flat_idx, (-1,)),
@@ -361,7 +455,7 @@ def flat_scatter(x, idx, updates):
     return evoxc.reshape(out, (pop_size, row_len))
 
 
-def masked_flat_scatter(x, idx, updates, mask):
+def masked_flat_scatter(x, idx, updates, mask, trusted=False):
     """Batched scatter whose dropped writes land in a trailing dump slot.
 
     Routing masked writes to index ``0`` would corrupt a real element, and
@@ -379,6 +473,10 @@ def masked_flat_scatter(x, idx, updates, mask):
             Values written to the dump slot are discarded.
         mask: ``(P, *shape)`` ``bool`` broadcastable to ``idx``; ``False``
             redirects that write to the dump slot.
+        trusted (bool): ``False`` (default) keeps the out-of-range redirect;
+            ``True`` is the ``prepare_flat_index`` opt-in for a caller that can
+            prove every position with ``mask == True`` is inside ``[0, R)``
+            (the dump redirect for masked writes still happens here).
 
     Returns:
         ``(P, R + 1)`` tensor; callers slice the dump column off with
@@ -395,9 +493,9 @@ def masked_flat_scatter(x, idx, updates, mask):
         ``[0, key_span)`` — the caller's ``in_range`` mask, never an ``isnan``
         test, because canonical keys are ``int32``.
     """
-    pop_size, width = x.shape
+    pop_size, width = _flat_shape(x)
     dump_column = width - 1
-    flat_idx = _flat_index_block(x, idx, mask, dump_column)
+    flat_idx = prepare_flat_index(x, idx, mask, dump_column, trusted=trusted)
     out = evoxc.scatter(
         evoxc.reshape(x, (pop_size * width,)),
         evoxc.reshape(flat_idx, (-1,)),

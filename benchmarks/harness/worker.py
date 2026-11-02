@@ -216,6 +216,20 @@ def _summary_line(error: str) -> str:
     return lines[-1][:300] if lines else "(no traceback)"
 
 
+def _load_average() -> list[float] | None:
+    """1/5/15-minute load average of this worker's host, sampled at its start and its end.
+
+    ``protocol._load_average`` is the same probe, but this module must stay stdlib-only at
+    module scope and already has ``os`` imported, so the three-line duplication is deliberate.
+    The value is recorded as a measured condition (``loadavg_start``/``loadavg_end``), never
+    as a verdict input.
+    """
+    try:
+        return [round(value, 2) for value in os.getloadavg()]
+    except (AttributeError, OSError):
+        return None
+
+
 def _write_json(record: dict, out_path: Path) -> None:
     """Write exactly one JSON record to ``out_path``, creating parent directories.
 
@@ -228,7 +242,9 @@ def _write_json(record: dict, out_path: Path) -> None:
     os.replace(tmp_path, out_path)
 
 
-def _skipped_record(protocol, case, args, thread_env: dict[str, str]) -> dict:
+def _skipped_record(
+    protocol, case, args, thread_env: dict[str, str], loadavg_start=None
+) -> dict:
     """Build the ``status="skipped"`` record for a case that declares other implementations."""
     return protocol.RunResult(
         schema=protocol.SCHEMA,
@@ -243,7 +259,7 @@ def _skipped_record(protocol, case, args, thread_env: dict[str, str]) -> dict:
             f"{args.impl} is not applicable"
         ),
         case_config=case.as_dict(),
-        env=protocol.env_report(),
+        env=protocol.env_report(threads=args.threads),
         protocol=_protocol_block(
             warmup=args.warmup,
             timed=args.generations,
@@ -251,6 +267,8 @@ def _skipped_record(protocol, case, args, thread_env: dict[str, str]) -> dict:
             thread_env=thread_env,
             untimed=0,
         ),
+        loadavg_start=loadavg_start,
+        loadavg_end=_load_average(),
     ).to_dict()
 
 
@@ -261,6 +279,7 @@ def _error_record(
     thread_env: dict[str, str],
     untimed: int,
     error: str,
+    loadavg_start=None,
 ) -> dict:
     """Best-effort ``status="error"`` record: identity keys, the traceback and what we know.
 
@@ -277,7 +296,7 @@ def _error_record(
     env: dict = {}
     if protocol is not None:
         try:
-            env = protocol.env_report()
+            env = protocol.env_report(threads=args.threads)
         except Exception:  # noqa: BLE001 - a broken probe must not lose the traceback
             env = {}
     return {
@@ -298,6 +317,8 @@ def _error_record(
             thread_env=thread_env,
             untimed=untimed,
         ),
+        "loadavg_start": loadavg_start,
+        "loadavg_end": _load_average(),
     }
 
 
@@ -321,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
     case = None
     thread_env: dict[str, str] = {}
     untimed = 0
+    # Measured conditions, not verdict inputs: the load this worker started and ended under.
+    loadavg_start = _load_average()
 
     try:
         # sys.path and the thread env come first: numpy reads the thread variables and the
@@ -333,7 +356,9 @@ def main(argv: list[str] | None = None) -> int:
 
         case = cases.get_cases([args.case])[0]
         if args.impl not in case.impls:
-            _write_json(_skipped_record(protocol, case, args, thread_env), out_path)
+            _write_json(
+                _skipped_record(protocol, case, args, thread_env, loadavg_start), out_path
+            )
             return 0
 
         # Imported only here: the adapter module imports the implementation tree (jax /
@@ -359,8 +384,10 @@ def main(argv: list[str] | None = None) -> int:
 
             # The old side consumes no generation while compiling, the new side consumes one
             # (its build runs a real generation). Skipping that one from the warmup makes both
-            # sides time the same generation index; the warmup fitness values still enter the
-            # quality curve, so both sides' curves cover the same generations too.
+            # sides' *timed* samples cover the same absolute generation indices, but the skipped
+            # generation is not recorded: the new side's quality curve starts one generation
+            # later and is one entry shorter, so `final_best_fitness` is compared at each side's
+            # own last recorded generation.
             untimed = max(0, args.warmup - consumed)
             fitness_curve = []
             for _ in range(untimed):
@@ -388,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
             status=protocol.STATUS_OK,
             case_config=case.as_dict(),
-            env=protocol.env_report(),
+            env=protocol.env_report(threads=args.threads),
             protocol=_protocol_block(
                 warmup=args.warmup,
                 timed=args.generations,
@@ -407,13 +434,17 @@ def main(argv: list[str] | None = None) -> int:
             rss_after_import_mb=rss_after_import,
             rss_after_compile_mb=rss_after_compile,
             rss_final_mb=rss_final,
+            loadavg_start=loadavg_start,
+            loadavg_end=_load_average(),
             quality=protocol.quality_curve(fitness_curve, case.fitness_target),
         ).to_dict()
         _write_json(record, out_path)
         return 0
     except Exception:
         error = traceback.format_exc()
-        record = _error_record(args, case, protocol, thread_env, untimed, error)
+        record = _error_record(
+            args, case, protocol, thread_env, untimed, error, loadavg_start
+        )
         try:
             _write_json(record, out_path)
         except Exception:  # noqa: BLE001 - the operator must still see why the run died

@@ -11,17 +11,45 @@ from typing import TYPE_CHECKING
 import evoxc
 import evoxc.numpy as enp
 
-from ....common import I_INF, ConfigError, State, flat_gather, masked_flat_gather
-from ...utils import (
-    GenomeTensors,
-    add_conn,
-    first_free_row,
-)
-from .base import _broadcast_row, _gated, _int32
-from .default import DefaultMutation, _edge_keys
+from ....common import ConfigError, State
+from .arrays import first_row, i32, row_offsets, take_rows
+from .cycle import closes_cycle
+from .default import DefaultMutation
+from .plan import AddConnPlan
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...base import BaseGenome
+
+
+def _pick_cell(
+    table: evoxc.SymbolicTensor,
+    index: evoxc.SymbolicTensor,
+    pop_size: int,
+    width: int,
+) -> evoxc.SymbolicTensor:
+    """Gather one cell per individual out of a ``(P, width)`` table with a flat index.
+
+    The index block is built once by the caller (``row_offsets`` of the same width plus the
+    chosen column) and shared by every picked table, so a second and third pick pay only the
+    flatten, the gather and the reshape — never another index computation.
+
+    Args:
+        table (evoxc.SymbolicTensor): ``(P, width)`` source table.
+        index (evoxc.SymbolicTensor): ``(P,) int32`` flat index into the flattened table,
+            already in ``[0, pop_size * width)`` by construction.
+        pop_size (int): Population size ``P`` (static).
+        width (int): Row width of ``table`` (static).
+
+    Returns:
+        evoxc.SymbolicTensor: ``(P,)`` tensor of ``table``'s dtype holding the picked cells.
+
+    Raises:
+        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
+    """
+    return enp.reshape(
+        evoxc.gather(enp.reshape(table, (pop_size * width,)), index, axis=0),
+        (pop_size,),
+    )
 
 
 class RecurrentMutation(DefaultMutation):
@@ -90,59 +118,62 @@ class RecurrentMutation(DefaultMutation):
         self.p_recur = float(p_recur)
         self.max_conn_tries = int(max_conn_tries)
 
-    def _mutate_add_conn(
+    def plan_add_conn(
         self,
         state: State,
         genome: "BaseGenome",
         key: evoxc.SymbolicTensor,
+        context: object,
         node_keys: evoxc.SymbolicTensor,
-        node_attrs: evoxc.SymbolicTensor,
         conn_keys: evoxc.SymbolicTensor,
-        conn_attrs: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
         gate: evoxc.SymbolicTensor,
-    ) -> GenomeTensors:
-        """Add the first acceptable candidate edge per individual, with a cycle bias.
+    ) -> AddConnPlan:
+        """Resolve the first acceptable candidate edge per individual, with a cycle bias.
 
         Every candidate is resolved at once: one
         ``evoxc.random.randint(key, (P, max_conn_tries, 2), 0, N)`` draw supplies the
         endpoint *rows* of all attempts of all individuals (no per-attempt Python loop over
         individuals and no per-individual key split), the rows are turned into node keys with
-        one flat gather each, and one ``uniform(key, (P, max_conn_tries))`` draw decides
-        which attempts *must* close a cycle.
+        **one** flat gather of the interleaved ``(src, dst)`` pair, and one
+        ``uniform(key, (P, max_conn_tries))`` draw decides which attempts *must* close a
+        cycle.
 
         An attempt is accepted when both endpoints exist, the destination is not an input
-        row (inputs never take an incoming edge), the ``(in_key, out_key)`` pair does not
-        already exist, the destination's in-degree stays below ``genome.max_in_degree``, and
-        — when its ``p_recur`` decision fired — ``genome.check_cycles`` reports the edge as
-        cycle-closing.  The *first* accepted attempt wins, selected with
-        ``where(accept, attempt_index, I_INF)`` reduced to its minimum rather than a ``cond``
-        region, and the edge is written at ``first_free_row`` with
-        ``conn_gene.new_zero_attrs``.  No-op for an individual when its ``conn_add`` gate is
-        off, when no attempt is accepted, or when no connection row is free.
+        row, the ``(in_key, out_key)`` pair does not already exist, the destination's
+        in-degree stays below ``genome.max_in_degree``, and — when its ``p_recur`` decision
+        fired — the edge closes a cycle.  The *first* accepted attempt wins, selected with a
+        reduce over the attempt axis rather than a ``cond`` region.
+
+        The cycle predicate is the only loop region here, and it is consulted by exactly two
+        branches: the ``network_type == "feedforward"`` veto (always required) and the
+        ``p_recur`` requirement, which exists only for a recurrent genome with
+        ``p_recur > 0``.  Both are trace-time conditions (a Python string and a Python
+        float), so a **recurrent** genome with ``p_recur == 0`` — the degenerate
+        :class:`~.default.DefaultMutation` add-connection — skips the whole
+        :func:`~.cycle.closes_cycle` region instead of tracing a dead result.
+
+        Padding never enters the two connection-table slabs: a padded row is ``I_INF`` in
+        *every* key column, while an accepted candidate endpoint is finite by construction
+        (``exists``), so key equality alone excludes padded rows and the ``present_conn``
+        factor the :class:`~.default.DefaultMutation` plan needs is redundant here.  An
+        attempt whose endpoint *is* ``I_INF`` may match a padded row in the slabs, but every
+        decision that reads them is already gated by ``exists``.
 
         Args:
             state (State): Immutable host configuration container.
-            genome ("BaseGenome"): Genome providing ``max_in_degree``, ``network_type``,
-                ``conn_gene.new_zero_attrs`` and the cycle predicate ``check_cycles``.
-            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this helper.
+            genome ("BaseGenome"): Genome providing ``max_in_degree`` and ``network_type``.
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this operation's draws.
+            context (EditContext): Shared masks and flat index blocks of the stage.
             node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
-            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attrs (NaN padded).
-            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
-            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` conn attrs (NaN padded).
-            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated conn keys;
-                ``[:, 2]`` becomes the ``historical_marker`` of the new edge when declared.
-            gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected the
-                add-connection operation" mask from the shared gate draw.
+            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
+            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated connection keys;
+                ``[:, 2]`` becomes the ``historical_marker`` of the new edge.
+            gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected add-conn".
 
         Returns:
-            GenomeTensors: the four payload arrays; an individual without an accepted
-            candidate is unchanged.
-
-        Raises:
-            evoxc.ShapeError / evoxc.BackendError: Propagated unchanged from
-                ``genome.check_cycles`` when the cycle predicate is needed and the backend
-                refuses the traversal; never caught or re-wrapped here.
+            AddConnPlan: the winning candidate row and endpoints; ``ok`` is false when no
+            attempt was accepted or the connection table is full.
         """
         pop_size, node_count = node_keys.shape
         edge_count = conn_keys.shape[1]
@@ -151,152 +182,98 @@ class RecurrentMutation(DefaultMutation):
         rows = evoxc.random.randint(
             attempt_key, (pop_size, tries, 2), 0, node_count, dtype=evoxc.int32
         )
-        source_rows = rows[:, :, 0]
-        destination_rows = rows[:, :, 1]
-        # A node key of I_INF means "no node on that row", so an absent endpoint is a key.
-        in_keys = flat_gather(node_keys, source_rows)
-        out_keys = flat_gather(node_keys, destination_rows)
-        present_edges = enp.reshape(
-            evoxc.not_equal(conn_keys[:, :, 0], _int32(I_INF)),
-            (pop_size, 1, edge_count),
+        # One flat gather of the whole `(P, tries, 2)` endpoint block: the drawn rows are
+        # node rows in `[0, N)`, so they index the stage's already-flattened node keys
+        # without a range check, and both key columns come out of a single gather.
+        endpoints = take_rows(context.node_flat, context.node_offsets, rows)
+        in_keys = enp.reshape(
+            evoxc.slice(endpoints, (0, 0, 0), (pop_size, tries, 1)), (pop_size, tries)
         )
-        existing_in = enp.reshape(conn_keys[:, :, 0], (pop_size, 1, edge_count))
-        existing_out = enp.reshape(conn_keys[:, :, 1], (pop_size, 1, edge_count))
-        in_column = enp.reshape(in_keys, (pop_size, tries, 1))
+        out_keys = enp.reshape(
+            evoxc.slice(endpoints, (0, 0, 1), (pop_size, tries, 1)), (pop_size, tries)
+        )
+        # Duplicate and in-degree slabs, both against the same `(P, tries, E)` output-key
+        # comparison so the second `2 M`-element pass of the previous formulation is gone.
         out_column = enp.reshape(out_keys, (pop_size, tries, 1))
+        same_out = evoxc.equal(
+            enp.reshape(conn_keys[:, :, 1], (pop_size, 1, edge_count)), out_column
+        )
         duplicate = evoxc.reduce_max(
             evoxc.logical_and(
-                present_edges,
-                evoxc.logical_and(
-                    evoxc.equal(existing_in, in_column),
-                    evoxc.equal(existing_out, out_column),
+                same_out,
+                evoxc.equal(
+                    enp.reshape(conn_keys[:, :, 0], (pop_size, 1, edge_count)),
+                    enp.reshape(in_keys, (pop_size, tries, 1)),
                 ),
             ),
             axes=2,
         )
-        in_degree = evoxc.cast(
-            evoxc.reduce_sum(
-                evoxc.cast(
-                    evoxc.logical_and(
-                        present_edges, evoxc.equal(existing_out, out_column)
-                    ),
-                    evoxc.int32,
-                ),
-                axes=2,
-            ),
-            evoxc.int32,
+        in_degree = evoxc.cast(evoxc.reduce_sum(same_out, axes=2), evoxc.int32)
+        destination = enp.reshape(
+            evoxc.slice(rows, (0, 0, 1), (pop_size, tries, 1)), (pop_size, tries)
         )
         accepted = evoxc.logical_and(
             evoxc.logical_and(
-                evoxc.not_equal(in_keys, _int32(I_INF)),
-                evoxc.not_equal(out_keys, _int32(I_INF)),
+                evoxc.not_equal(in_keys, context.sentinel),
+                evoxc.not_equal(out_keys, context.sentinel),
             ),
             evoxc.logical_and(
                 # Input rows are the first `num_inputs` rows and never take an in-edge.
-                evoxc.greater_equal(destination_rows, _int32(genome.num_inputs)),
-                evoxc.logical_not(duplicate),
+                evoxc.greater_equal(destination, i32(genome.num_inputs)),
+                evoxc.logical_and(
+                    evoxc.logical_not(duplicate),
+                    evoxc.less(in_degree, context.in_degree_limit),
+                ),
             ),
         )
-        accepted = evoxc.logical_and(
-            accepted, evoxc.less(in_degree, _int32(genome.max_in_degree))
-        )
-        if genome.network_type == "feedforward":
-            # A feedforward genome must stay acyclic, which also makes the `p_recur`
-            # requirement unsatisfiable — no cycle-closing edge is ever accepted.
-            accepted = evoxc.logical_and(
-                accepted,
-                evoxc.logical_not(
-                    self._closes_cycle(genome, node_keys, conn_keys, in_keys, out_keys)
-                ),
-            )
-        elif self.p_recur > 0.0:
+        required = None
+        if genome.network_type == "recurrent" and self.p_recur > 0.0:
             required = evoxc.less(
                 evoxc.random.uniform(
                     recur_key, (pop_size, tries), 0.0, 1.0, dtype=evoxc.float32
                 ),
                 enp.full((), self.p_recur, dtype=evoxc.float32),
             )
-            accepted = evoxc.logical_and(
-                accepted,
+        # The first accepted attempt: `argmax` of a boolean row is exactly its first `True`
+        # (and `0` for an empty row, which `chosen` gates), so no `I_INF` sentinel and no
+        # index sanitisation are needed — the index is always in `[0, tries)`.
+        attempt = evoxc.cast(evoxc.argmax(accepted, axis=1), evoxc.int32)
+        chosen = evoxc.reduce_max(accepted, axes=1)
+        conn_row, has_room = first_row(context.free_conn)
+        allowed = evoxc.logical_and(evoxc.logical_and(gate, has_room), chosen)
+        # One index block, shared by every picked cell: `p * tries + attempt`.
+        pick = enp.reshape(
+            evoxc.add(enp.reshape(attempt, (pop_size, 1)), row_offsets(pop_size, tries)),
+            (pop_size,),
+        )
+        in_key = _pick_cell(in_keys, pick, pop_size, tries)
+        out_key = _pick_cell(out_keys, pick, pop_size, tries)
+        # One cycle query for the *chosen* edge instead of one per attempt: the reachability
+        # relaxation is the most expensive predicate here (a loop region), and a rejected
+        # attempt costs a later one nothing but a re-draw.
+        #
+        # A static gate decides whether the query is needed at all: only the feedforward veto
+        # below and the `p_recur` requirement consume `closes`, and `required` exists exactly
+        # when `network_type == "recurrent"` and `p_recur > 0`.  For a recurrent genome with
+        # `p_recur == 0` the add-connection degenerates to the plain draw, so the whole
+        # region (and its ~106 traced ops) is skipped rather than traced and discarded.
+        if genome.network_type == "feedforward" or self.p_recur > 0.0:
+            closes = closes_cycle(node_keys, conn_keys, in_key, out_key)
+        else:
+            closes = None
+        if genome.network_type == "feedforward":
+            # A feedforward genome must stay acyclic, which also makes the `p_recur`
+            # requirement unsatisfiable — no cycle-closing edge is ever accepted.
+            allowed = evoxc.logical_and(allowed, evoxc.logical_not(closes))
+        elif required is not None:
+            allowed = evoxc.logical_and(
+                allowed,
                 evoxc.logical_or(
-                    evoxc.logical_not(required),
-                    self._closes_cycle(genome, node_keys, conn_keys, in_keys, out_keys),
+                    evoxc.logical_not(_pick_cell(required, pick, pop_size, tries)),
+                    closes,
                 ),
             )
-        attempt = evoxc.reduce_min(
-            evoxc.select(
-                accepted,
-                enp.reshape(enp.arange(0, tries, dtype=evoxc.int32), (1, tries)),
-                _int32(I_INF),
-            ),
-            axes=1,
-        )
-        chosen = evoxc.not_equal(attempt, _int32(I_INF))
-        conn_row = first_free_row(conn_keys)
-        allowed = evoxc.logical_and(
-            gate,
-            evoxc.logical_and(chosen, evoxc.not_equal(conn_row, _int32(I_INF))),
-        )
-        added_keys, added_attrs = add_conn(
-            conn_keys,
-            conn_attrs,
-            conn_row,
-            _edge_keys(
-                masked_flat_gather(in_keys, attempt, mask=chosen, fill=I_INF),
-                masked_flat_gather(out_keys, attempt, mask=chosen, fill=I_INF),
-                new_conn_keys,
-                2,
-                genome,
-            ),
-            _broadcast_row(genome.conn_gene.new_zero_attrs(state), pop_size),
-        )
-        return GenomeTensors(
-            node_keys,
-            node_attrs,
-            _gated(allowed, added_keys, conn_keys),
-            _gated(allowed, added_attrs, conn_attrs),
-        )
-
-    @staticmethod
-    def _closes_cycle(
-        genome: "BaseGenome",
-        node_keys: evoxc.SymbolicTensor,
-        conn_keys: evoxc.SymbolicTensor,
-        in_keys: evoxc.SymbolicTensor,
-        out_keys: evoxc.SymbolicTensor,
-    ) -> evoxc.SymbolicTensor:
-        """Ask the genome's cycle predicate once per candidate column.
-
-        ``check_cycles`` takes one ``(P,)`` source/destination pair per individual, so the
-        ``(P, max_conn_tries)`` candidate tableau is walked column by column at *trace*
-        time (a static Python loop over at most ``max_conn_tries`` columns, never a loop
-        over individuals) and the answers are stacked back into ``(P, max_conn_tries)``.
-        Each column costs one reachability relaxation, so ``max_conn_tries`` bounds this
-        step's cost — it is skipped entirely when no requirement depends on it.
-
-        Args:
-            genome ("BaseGenome"): Genome owning the ``check_cycles`` predicate.
-            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
-            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` conn keys (``I_INF`` padded).
-            in_keys (evoxc.SymbolicTensor): ``(P, T) int32`` candidate source keys.
-            out_keys (evoxc.SymbolicTensor): ``(P, T) int32`` candidate destination keys.
-
-        Returns:
-            ``(P, T) bool``: True where adding that candidate edge would close a cycle.
-        """
-        pop_size, tries = in_keys.shape
-        return enp.stack(
-            [
-                genome.check_cycles(
-                    node_keys,
-                    conn_keys,
-                    evoxc.reshape(in_keys[:, column : column + 1], (pop_size,)),
-                    evoxc.reshape(out_keys[:, column : column + 1], (pop_size,)),
-                )
-                for column in range(tries)
-            ],
-            axis=-1,
-        )
+        return AddConnPlan(allowed, conn_row, in_key, out_key)
 
 
 __all__ = ["RecurrentMutation"]

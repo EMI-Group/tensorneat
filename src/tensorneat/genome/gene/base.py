@@ -8,6 +8,8 @@ operators (initialisation / mutation / crossover / distance) and the split-paylo
 assembly helpers: it must never import ``jax``/``torch``, never run eager NumPy on
 the compute path, and never implement node/connection semantics (those live in
 ``node/`` and ``conn/``).
+The operators themselves are one-line delegations to :mod:`.blocks`, which fuses the
+per-column draw/``select`` chains of a whole attribute block into one cascade.
 """
 
 from dataclasses import dataclass
@@ -18,7 +20,8 @@ import evoxc.numpy as enp
 
 from ...common import State, StatefulBaseClass
 from ...common.errors import ConfigError
-from ...common.tools import mutate_float, mutate_int, to_numpy
+from ...common.tools import to_numpy
+from .blocks import crossover_attrs, init_attrs, mutate_attrs, static_row
 
 #: Fold constants of the key-row hash; identical to
 #: :func:`tensorneat.common.tools.hash_rows` so an in-graph hash and the host-side
@@ -37,6 +40,18 @@ def column(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
     ``reshape`` drops it, because the reverse-mode rule of an axis-dropping integer
     index has no usable cotangent shape -- a sliced-then-reshaped read is
     differentiable, which is what ``Genome.grad`` needs for every gene attribute.
+
+    Two ops is the floor this ``evoxc`` offers, and it is a cheap floor -- measured on
+    the reference interpreter, not assumed. ``x[..., i]`` (an ``int`` index) lowers to
+    a single ``gather`` with a rank-0 index constant, i.e. still two ops (``constant``
+    + ``gather``), and its VJP (``scatter`` of the cotangent through a rank-0 index)
+    raises ``evoxc.ShapeError`` in the numpy backend, so it is not differentiable at
+    all; a rank-1 index of length one needs the same trailing ``reshape``. What the
+    read costs at run time is the interpreter's per-op overhead: ``slice`` and
+    ``reshape`` are both *views*, ~0.09 ms marginal per read against a ``(2000, 50, 4)``
+    block (whole ``distance`` kernel with eight reads: 0.87 ms), so the read is never
+    what makes a gene kernel slow -- reading a whole attribute block instead multiplies
+    the elementwise traffic and measured 1.9-3.3x slower per call.
 
     Args:
         tensor: Any traced tensor whose last axis is the gene column axis.
@@ -312,6 +327,23 @@ class BaseGene(StatefulBaseClass):
     # column addressing
     # ------------------------------------------------------------------ #
 
+    def has_attr(self, name: str) -> bool:
+        """Whether the table declares an attribute column named ``name``.
+
+        A gene family may declare no attribute column at all (``attr_specs = ()``,
+        e.g. a CPPN connection gene whose weight lives elsewhere), in which case
+        every ``*_attrs`` array is ``(*shape, 0)``. Callers that can proceed with a
+        neutral column value ask this first and fall back instead of failing on
+        :meth:`attr_index`.
+
+        Args:
+            name: Attribute-column name to look up.
+
+        Returns:
+            ``True`` iff a spec in ``attr_specs`` carries that name.
+        """
+        return any(spec.name == name for spec in self.attr_specs)
+
     def attr_index(self, name: str) -> int:
         """Return the attribute-column index of ``name``.
 
@@ -400,6 +432,12 @@ class BaseGene(StatefulBaseClass):
         """
         shape = tuple(shape)
         if self.attr_width == 0:  # a family without evolvable attributes
+            if attrs is not None and tuple(attrs.shape) not in ((*shape, 0), shape):
+                raise ConfigError(
+                    f"{name}: {type(self).__name__} declares no attribute column, so "
+                    f"its attribute rows must be empty {(*shape, 0)} (or the per-row "
+                    f"spelling {shape}), got {tuple(attrs.shape)}"
+                )
             return enp.zeros((*shape, 0), dtype=evoxc.float32)
         if attrs is None:
             return enp.zeros((*shape, self.attr_width), dtype=evoxc.float32)
@@ -487,9 +525,11 @@ class BaseGene(StatefulBaseClass):
     ) -> evoxc.SymbolicTensor:
         """Draw initial attribute rows for a batch of newly created genes.
 
-        One batched draw per spec (float: clipped Gaussian, int: uniform option
-        index); the rank-0 ``key`` is never split per row, so each individual gets an
-        independent stream from the single batched draw.
+        One batched draw per spec (float: clipped Gaussian -- an exact constant when
+        ``init_std`` is ``0``; int: uniform option index), joined and clipped once as
+        a whole block by :func:`.blocks.init_attrs`; the rank-0 ``key`` is never
+        split per row, so each individual gets an independent stream from the single
+        batched draw.
 
         Args:
             state: Host configuration container.
@@ -499,29 +539,7 @@ class BaseGene(StatefulBaseClass):
         Returns:
             ``(*shape, attr_width)`` float32 attribute rows.
         """
-        shape = tuple(int(size) for size in shape)
-        if not self.attr_specs:
-            return enp.zeros((*shape, 0), dtype=evoxc.float32)
-        # A rank-0 random draw is rejected by the numpy reference backend (it builds
-        # its output tensor from a NumPy scalar), so a single-gene batch is drawn as
-        # shape ``(1,)`` and reshaped back to ``()``.
-        draw_shape = shape or (1,)
-        draw_keys = evoxc.random.split_n(key, len(self.attr_specs))
-        columns = []
-        for spec, draw_key in zip(self.attr_specs, draw_keys):
-            if spec.kind == "float":
-                values = evoxc.random.normal(
-                    draw_key, draw_shape, spec.init_mean, spec.init_std, dtype=evoxc.float32
-                )
-                values = self._clip(spec, values)
-            else:
-                count = len(spec.options)
-                values = evoxc.cast(
-                    evoxc.random.randint(draw_key, draw_shape, 0, count, dtype=evoxc.int32),
-                    evoxc.float32,
-                )
-            columns.append(evoxc.reshape(values, shape) if not shape else values)
-        return evoxc.stack(columns, axis=-1)
+        return init_attrs(key, shape, self.attr_specs)
 
     def new_identity_attrs(self, state: State) -> evoxc.SymbolicTensor:
         """Attribute row whose gene is an identity transform (host ``add_node`` split).
@@ -579,32 +597,31 @@ class BaseGene(StatefulBaseClass):
     def _attr_row(self, values: Sequence[float]) -> evoxc.SymbolicTensor:
         """Build one ``(attr_width,)`` float32 attribute row from static values.
 
+        The row is the neutral/identity row of a *single* gene, so a family with no
+        attribute column (``attr_width == 0``) has exactly one legal row: the empty
+        one. A family that hands in a different number of values than its table
+        declares would otherwise build a row of the wrong width that only fails much
+        later, inside ``evoxc``, so that mismatch is reported here.
+
         Args:
             values: One Python float per attribute column, in ``attr_specs`` order.
 
         Returns:
             ``(attr_width,)`` float32 row; an empty row when the family has no
             evolvable attributes.
+
+        Raises:
+            tensorneat.common.errors.ConfigError: If the number of values does not
+                match the declared attribute width.
         """
-        if not values:
-            return enp.zeros((0,), dtype=evoxc.float32)
-        scalars = [enp.full((), value, dtype=evoxc.float32) for value in values]
-        return evoxc.stack(scalars, axis=-1)
-
-    def _clip(self, spec: GeneAttr, values: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
-        """Clip a traced float column into the inclusive bounds of ``spec``.
-
-        Args:
-            spec: The float spec supplying the bounds.
-            values: Traced values of that column.
-
-        Returns:
-            ``values`` clipped into ``[lower_bound, upper_bound]``; unchanged when the
-            spec is unbounded.
-        """
-        if spec.lower_bound is None and spec.upper_bound is None:
-            return values
-        return enp.clip(values, spec.lower_bound, spec.upper_bound)
+        if self.attr_width == 0:
+            return static_row(())
+        if len(values) != self.attr_width:
+            raise ConfigError(
+                f"{type(self).__name__} declares {self.attr_width} attribute "
+                f"column(s) but its identity/zero row carries {len(values)} value(s)"
+            )
+        return static_row(values)
 
     @staticmethod
     def _clip_scalar(spec: GeneAttr, value: float) -> float:
@@ -638,6 +655,11 @@ class BaseGene(StatefulBaseClass):
         floats are clipped into their bounds. Selection is a ``select`` chain over the
         batched attrs -- no branching on traced values. A ``NaN`` column (absent gene
         row) stays ``NaN``: mutation never revives padding.
+        :func:`.blocks.mutate_attrs` draws one column per participating spec and then
+        applies one gate/``select``/``clip`` cascade over the whole ``(*shape,
+        attr_width)`` block, so the traced cost of a pass does not grow with the
+        number of attribute columns; a spec that cannot change (zero rates, a single
+        option, ``init_std == 0``) contributes no draw at all.
 
         Args:
             state: Host configuration container.
@@ -647,34 +669,7 @@ class BaseGene(StatefulBaseClass):
         Returns:
             ``(*shape, attr_width)`` float32 mutated rows.
         """
-        if not self.attr_specs:
-            return attrs
-        draw_keys = evoxc.random.split_n(key, len(self.attr_specs))
-        columns = []
-        for index, (spec, draw_key) in enumerate(zip(self.attr_specs, draw_keys)):
-            current = column(attrs, index)
-            # A rank-0 row is drawn as shape ``(1,)``: the numpy reference backend
-            # rejects a 0-d random output (see ``new_random_attrs``).
-            batch_shape = tuple(current.shape)
-            batched = evoxc.reshape(current, (1,)) if not batch_shape else current
-            if spec.kind == "float":
-                mutated = mutate_float(
-                    draw_key,
-                    batched,
-                    spec.init_mean,
-                    spec.init_std,
-                    spec.mutate_power,
-                    spec.mutate_rate,
-                    spec.replace_rate,
-                )
-                mutated = self._clip(spec, mutated)
-            else:
-                options = enp.arange(len(spec.options), dtype=evoxc.int32)
-                mutated = mutate_int(draw_key, batched, options, spec.replace_rate)
-            if not batch_shape:
-                mutated = evoxc.reshape(mutated, ())
-            columns.append(evoxc.select(evoxc.isnan(current), current, mutated))
-        return evoxc.stack(columns, axis=-1)
+        return mutate_attrs(key, attrs, self.attr_specs)
 
     def crossover(
         self,
@@ -685,9 +680,12 @@ class BaseGene(StatefulBaseClass):
     ) -> evoxc.SymbolicTensor:
         """Crossover the attributes of two homologous genes.
 
-        Default behaviour is a per-attribute 50/50 pick (one normal draw per column
-        entry, ``> 0`` selects the first parent); the origin families override it with
+        Default behaviour is a per-attribute 50/50 pick (one ``U[0, 1)`` block draw,
+        ``< 0.5`` selects the first parent); the origin families override it with
         a whole-gene pick (one draw selects the whole attribute vector).
+        :func:`.blocks.crossover_attrs` owns the uniform-draw formulation, which is
+        the same Bernoulli(0.5) per-entry law at half the random work of a Gaussian
+        comparison.
 
         Args:
             state: Host configuration container.
@@ -700,13 +698,7 @@ class BaseGene(StatefulBaseClass):
         """
         if not self.attr_specs:
             return attrs1
-        shape = tuple(attrs1.shape)
-        draw = evoxc.random.normal(
-            key, shape or (1,), 0.0, 1.0, dtype=evoxc.float32
-        )
-        if not shape:  # the numpy backend rejects a 0-d random output
-            draw = evoxc.reshape(draw, ())
-        return evoxc.select(evoxc.greater(draw, 0.0), attrs1, attrs2)
+        return crossover_attrs(key, attrs1, attrs2)
 
     def distance(
         self, state: State, attrs1: evoxc.SymbolicTensor, attrs2: evoxc.SymbolicTensor
@@ -716,14 +708,29 @@ class BaseGene(StatefulBaseClass):
         Sums over the attribute axis: ``|delta|`` for float specs and ``!=`` for int
         specs, so a changed option index contributes exactly 1.
 
+        The column-by-column form is deliberate: it costs ``2 * attr_width`` :func:`column`
+        reads plus one arithmetic op per column, which reads as the gene-side block with
+        the most traced ops in a generation, but every one of those reads is a ``slice``
+        plus a ``reshape`` *view* and the arithmetic runs on ``(*shape,)`` columns. Fusing
+        the columns into one attribute-block pass (subtract/``not_equal`` over the whole
+        ``(*shape, attr_width)`` block, one ``select`` and one last-axis ``reduce_sum``)
+        removes ~240 of the ~250 reads per generation at ``pop_size=500`` and was 3.3x
+        *slower* (2.83 vs 0.87 ms per call at ``(2000, 50, 4)``) -- elementwise work moves
+        from 0.4 MB columns to 1.6 MB blocks and an innermost-axis reduction is the most
+        expensive op class here. Traced-op count is not the cost driver for this kernel.
+
         Args:
             state: Host configuration container.
             attrs1: Attribute rows of the first gene, ``(*shape, attr_width)``.
             attrs2: Attribute rows of the second, key-aligned gene, same shape.
 
         Returns:
-            ``(*shape,)`` float32 distances, one per aligned pair.
+            ``(*shape,)`` float32 distances, one per aligned pair; a gene with no
+            attribute column has no attribute distance at all, so every pair is
+            ``0`` there (its compatibility distance is structural only).
         """
+        if not self.attr_specs:  # no column to compare: the attribute distance is 0
+            return enp.zeros(tuple(attrs1.shape[:-1]), dtype=evoxc.float32)
         total = None
         for index, spec in enumerate(self.attr_specs):
             first, second = column(attrs1, index), column(attrs2, index)

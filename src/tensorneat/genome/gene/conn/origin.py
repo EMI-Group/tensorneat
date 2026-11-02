@@ -18,8 +18,18 @@ class OriginConn(DefaultConn):
     Key columns are ``(input_index, output_index, historical_marker)``; the single
     float32 attribute column is the inherited ``weight``. The historical marker is
     the NEAT-paper gene-alignment id: connections created by the same historical
-    split share a marker and are homologous during crossover/distance even when
-    their endpoints were re-routed.
+    split are meant to share a marker and stay homologous during crossover/distance
+    even when their endpoints were re-routed.
+
+    The gene only *reads* that column: marker identity **across genomes** is the
+    allocator's responsibility, because a marker drawn independently in each
+    individual makes the same structural innovation non-homologous between genomes.
+    ``algorithm/neat/neat.py::_new_gene_keys`` currently derives new markers from each
+    individual's own maximum marker, so on an evolved population full-tuple homology
+    measures 7.5-14.6 percentage points below ``(input_index, output_index)`` homology
+    (generation 100, seeds 42-44); a caller that wants exact marker homology must pass
+    shared markers through :meth:`~.base.BaseConn.from_attrs` or allocate them from a
+    population-wide innovation id.
 
     Differences from :class:`.default.DefaultConn`: key column 2 carries the marker,
     :meth:`crossover` picks a whole gene with one draw, and :meth:`get_historical_marker`
@@ -50,8 +60,12 @@ class OriginConn(DefaultConn):
 
         Returns:
             Child attribute rows, ``(*shape, attr_width)`` float32, each row copied
-            verbatim from one parent.
+            verbatim from one parent; a family with no attribute column
+            (``attr_width == 0``) has nothing to recombine, so the first parent's empty
+            rows are returned without tracing a draw.
         """
+        if not self.attr_specs:
+            return attrs1
         batch_shape = tuple(attrs1.shape[:-1])
         draw = evoxc.random.normal(
             key, (*batch_shape, 1), 0.0, 1.0, dtype=evoxc.float32

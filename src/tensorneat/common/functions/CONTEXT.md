@@ -83,25 +83,28 @@ One dispatch call, `(P, N, K) = (100, 50, 8)`:
 
 | graph | 1-option list | canonical list |
 |---|---|---|
-| `apply_activation` | 10 | 74 (12 options, identity skipped) |
-| `apply_aggregation` | 8 | 62 (6 options) |
-| one level: `apply_activation(apply_aggregation(...))` | 17 | 135 |
+| `apply_activation` | 5 (`tanh`; 10 when the kernel itself needs more ops) | 74 (12 options, identity skipped) |
+| `apply_aggregation` | 7 (`sum`; 12 for `max`) | 57 (6 options) |
+| one level: `apply_activation(apply_aggregation(...))` | 11 | 130 |
 | whole `DefaultGenome.forward` (`max_nodes=50`, `max_conns=100`, `max_depth = 16` unrolled steps) | 621 | 2509 |
 
-What keeps the count there: the id `cast` is skipped (the gene's `prepare` already casts), an `is_identity` option emits no `equal`/`select` pair, the neutral-padded window is built once per distinct neutral through `_Window` (`sum`/`mean`/`maxabs` share `select(mask, z, 0.0)`), `mean` and the `has_valid` guard share one live-edge count, the guard itself is skipped when every option is `zero_on_empty`, and no separate zeroed accumulator is emitted (the first `select` carries the `else` value).
-Per level this node owns ~26 % of the `DefaultGenome` forward-pass op count (17 of the ~38 ops one level costs); the rest is the genome's gather/combine work.
+What keeps the count there: the id `cast` is skipped (the gene's `prepare` already casts), an `is_identity` option emits no `equal`/`select` pair, the neutral-padded window is built once per distinct neutral through `_Window` (`sum`/`mean`/`maxabs` share `select(mask, z, 0.0)`), `sum` and `mean` share one `reduce_sum` of that window (`_Window.total()`), `mean` and the `has_valid` guard share one live-edge count, one 0-d `float32` `constant` is emitted per distinct literal (`_Window.scalar()`), the guard itself is skipped when every option is `zero_on_empty`, and no separate zeroed accumulator is emitted (the first `select` carries the `else` value).
+Per level this node owns ~29 % of the `DefaultGenome` forward-pass op count (11 of the ~38 ops a one-option level costs); the rest is the genome's gather/combine work.
+The dispatch is at its op floor: three ops per non-identity option (`constant` index, `equal`, `select`) is the minimum for an id that is gene data, and a one-option list cannot drop the `select` because an out-of-range id must still fall back to identity / `0.0`.
 
 ## Measured cost (median of 15 `evoxc.run` calls, build cached, single-threaded)
-One level kernel (`apply_activation ∘ apply_aggregation`) over `(P, 50, 8)` messages, `agg_ids`/`act_ids` int32, one option each: 0.35 ms / 1.41 ms / 2.68 ms for P = 100 / 500 / 1000; with both canonical option lists 2.6 ms / 10.2 ms / 21.8 ms.
+One level kernel (`apply_activation ∘ apply_aggregation`) over `(P, 50, 8)` messages, `agg_ids`/`act_ids` int32, one option each: 0.32 ms / 1.29 ms / 2.42 ms for P = 100 / 500 / 1000; with both canonical option lists 3.10 ms / 12.9 ms / 23.7 ms (25.1 ms at P = 1000 before the shared-reduce pass, i.e. one `(P, N, K)` reduce saved).
+`sum` + `mean` in one option list: 0.45 / 1.89 / 3.62 ms (from 0.54 / 2.37 / 4.43), the whole difference being the shared `total()`.
+The shared literals earn op count, not wall time: 12 duplicate `constant` ops inside a 60-op select graph cost 0.059 ms in total.
 Build (cached per shape by the Pipeline, not per generation): 5–6 ms for the one-option level graph, ~45 ms for the canonical one.
-End-to-end `Pipeline.step` (XOR, `max_nodes=50`, `max_conns=100`, `species_size=20`, pop 100/500/1000, build excluded): ≈290 ms / ≈840 ms / ≈2.1 s per generation, with individual generations scattering ±30 % on a shared machine, so the dispatch share of a generation (~1 % at P=100, ~5 % at P=500) only shows up as a few percent of wall time.
-The forward pass is worth ≈3–5 % of a generation at P=500–1000; the rest is schedule derivation, mutation/crossover, speciation and selection.
+End-to-end `Pipeline.step` (XOR, `DefaultGenome`, `NEAT`, `max_nodes=50`, `max_conns=100`, `species_size=20`, pop 1000, build excluded): ≈713 ms per generation, with individual generations scattering ±30 % on a shared machine; the whole level loop is ≈3–5 % of that at P=500–1000 (a level is 11 of the forward pass's ops but the forward pass is not the generation).
+The rest of a generation is schedule derivation, mutation/crossover, speciation and selection — not this node.
 
 Remaining hot spots inside this node, in order:
-1. `select(mask, z, 0.0)` (1.37 ms) plus `reduce_sum` (0.87 ms) at P = 1000 — the mandatory neutral-padded window of a single aggregation level; together they are 88 % of that level's run time. Dropping the padding would require the *genome* to guarantee that dead slots are exactly `0.0` (it currently only NaN-sanitizes them), i.e. a genome-side contract change plus a `zero_on_empty`-style opt-in, not a change here.
-2. The `equal`/`select` cascade of a multi-option list (2 ops per option over `(P, N)`): unavoidable while the id is gene data rather than a shape.
+1. `select(mask, z, 0.0)` (≈1.37 ms) plus `reduce_sum` (≈0.87 ms) at P = 1000 — the mandatory neutral-padded window of a single aggregation level, ≈90 % of its 2.42 ms run time. Dropping the padding would require the *genome* to guarantee that dead slots are exactly `0.0` (it currently only NaN-sanitizes them), i.e. a genome-side contract change plus a `zero_on_empty`-style opt-in, not a change here.
+2. The `equal`/`select` cascade of a multi-option list (3 ops per option over `(P, N)`): unavoidable while the id is gene data rather than a shape.
 3. `maxabs` costs 0.85 ms more per level than `sum` at P = 1000 (argmax + 7 `reshape`s + `flat_gather`); `flat_gather` additionally emits a `(P, 1)` int32 offsets constant plus ~4 index-range guards per call even though an `argmax` result is provably in range (see `common/tools.py`, not this node).
-4. `constant` ops are *not* shared between literals: every `0.0` / `1.0` / `index` literal becomes its own `constant` op (2 of the 17 one-option ops are the dispatchers' `else`-value and `equal` literals), and a constant op costs build time and a per-run materialisation, not just its op count.
+4. `constant` ops are distinct per literal and per dispatch: evoxc has no graph-level constant cache, so each call re-materialises its own literals (the shared-scalar pass only removes the duplicates *within* one call); 3 of the 11 one-option ops are such constants.
 
 ## Shapes, dtypes, sentinels
 All kernels take and return `float32`; ids arrive as integral-valued `float32` gene columns (cast to `int32`) or as an already-`int32` id column (used as is); an already-`int32` column reaches the dispatcher from `gene/node/base.prepare`, which casts once per forward pass.

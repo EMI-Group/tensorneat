@@ -174,10 +174,13 @@ class DefaultConn(BaseConn):
 
         Returns:
             ``(P, N, K)`` float32 messages, ``source * weight`` per slot; ``NaN`` on the
-            slots the node gene's ``valid_mask`` discards.
+            slots the node gene's ``valid_mask`` discards. A family that declares no
+            ``weight`` column has the identity weight ``1``, so its message is the source
+            value itself (an unweighted edge).
         """
         prepared = attrs if isinstance(attrs, ConnOperands) else self.prepare(attrs)
-        return evoxc.multiply(source_values, prepared.columns[self.attr_index("weight")])
+        weight = self.column_of(prepared, "weight", 1.0)
+        return evoxc.multiply(source_values, weight)
 
     def sympy_func(
         self, state: State, conn_dict: dict, inputs: sp.Expr
@@ -194,7 +197,12 @@ class DefaultConn(BaseConn):
             inputs: sympy expression of the source node value.
 
         Returns:
-            ``(inputs * weight, {weight_symbol: conn_dict["weight"]})``.
+            ``(inputs * weight, {weight_symbol: conn_dict["weight"]})``; a family that
+            declares no ``weight`` column has the identity weight ``1`` (as in
+            :meth:`forward`), so the expression is the source value itself and the
+            substitution map is empty.
         """
+        if "weight" not in conn_dict:  # no attribute column: an unweighted edge
+            return inputs, {}
         weight = sp.symbols(f"c_{conn_dict['in']}_{conn_dict['out']}_w")
         return inputs * weight, {weight: conn_dict["weight"]}

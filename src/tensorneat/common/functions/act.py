@@ -339,12 +339,18 @@ def apply_activation(z, act_ids, act_fns: Sequence[Callable] = ACT_FUNCS):
 
     Notes
     -----
-    Cost: one evaluation of *every* option plus one ``equal``/``select`` pair per
-    option over the ``(...,)`` shape (2 + 2 ops for a one-option list, 12 + 12 for
-    the canonical list), independent of the in-degree bound ``K`` and therefore
-    subdominant to the ``(P, N, K)`` gathers of the forward pass. There is no
-    static way to compute only the options the population happens to use: the id
-    is gene data, not a shape.
+    Cost: one evaluation of *every* option plus one ``equal``/``select`` pair and
+    one index ``constant`` per option over the ``(...,)`` shape -- three traced
+    ops per non-identity option, independent of the in-degree bound ``K`` and
+    therefore subdominant to the ``(P, N, K)`` gathers of the forward pass.
+    Measured graph ops at ``(P, N) = (100, 50)`` int32 ids: 5 for a one-option
+    :func:`tanh` list (``constant``/``equal``/``tanh``/``select``/``return``),
+    10 for one-option :func:`sigmoid` (whose kernel carries four constants of
+    its own), 1 for an identity-only list (it returns ``z`` with no ``select`` at
+    all) and 74 for the canonical list -- 33 dispatch ops for its 11
+    non-identity options plus 41 kernel ops. There is no static way to compute
+    only the options the population happens to use: the id is gene data, not a
+    shape, so the cascade is at its per-option op floor.
 
     Two traced ops are *not* emitted: the ``cast`` of an id column that is
     already ``int32`` (the gene's ``prepare`` casts once per forward pass, and the

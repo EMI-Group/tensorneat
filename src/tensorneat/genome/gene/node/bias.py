@@ -13,6 +13,8 @@ import evoxc
 import sympy as sp
 
 from ....common import ACT, AGG, State
+from ....common.errors import ConfigError
+from ....common.functions.act import ACT_IDENTITY
 from ..base import GeneAttr
 from .default import DefaultNode
 
@@ -153,22 +155,38 @@ class BiasNode(DefaultNode):
     def new_identity_attrs(self, state: State) -> evoxc.SymbolicTensor:
         """Identity attribute row: ``bias=0``, default aggregation, default activation.
 
+        The row is built by walking ``attr_specs``, so a family that drops a column (or
+        all of them) yields a row of the declared width instead of a fixed three-value
+        tuple.
+
         Args:
             state: Host configuration container.
 
         Returns:
-            ``(3,)`` float32 row ``(bias, aggregation_default, activation_default)``,
-            with the bias clipped into its bounds; the activation stays on a real
-            option index -- ``-1`` is not used here, because a split node must keep the
-            activation it had before the split.
+            ``(attr_width,)`` float32 row ``(bias, aggregation_default,
+            activation_default)``, with the bias clipped into its bounds -- the empty
+            row when the family declares no attribute column; the activation stays on a
+            real option index -- ``-1`` is not used here, because a split node must
+            keep the activation it had before the split.
+
+        Raises:
+            tensorneat.common.errors.ConfigError: If the table declares a column this
+                family has no identity value for.
         """
-        return self._attr_row(
-            (
-                self._clip_scalar(self.attr_specs[self.attr_index("bias")], 0.0),
-                float(self.aggregation_default),
-                float(self.activation_default),
-            )
-        )
+        values = []
+        for spec in self.attr_specs:
+            if spec.name == "bias":
+                values.append(self._clip_scalar(spec, 0.0))
+            elif spec.name == "aggregation":
+                values.append(float(self.aggregation_default))
+            elif spec.name == "activation":
+                values.append(float(self.activation_default))
+            else:
+                raise ConfigError(
+                    f"{type(self).__name__} declares the attribute {spec.name!r} but "
+                    "defines no identity value for it"
+                )
+        return self._attr_row(values)
 
     def combine(
         self,
@@ -187,9 +205,10 @@ class BiasNode(DefaultNode):
                 :meth:`~.base.BaseNode.aggregate`.
 
         Returns:
-            ``(P, N)`` float32 pre-activation values.
+            ``(P, N)`` float32 pre-activation values; a family that declares no ``bias``
+            column adds the neutral ``0``, so its node value is the aggregated signal.
         """
-        return evoxc.add(self.column_of(attrs, "bias"), aggregated)
+        return evoxc.add(self.column_of(attrs, "bias", 0.0), aggregated)
 
     # ------------------------------------------------------------------ #
     # host-only presentation
@@ -237,7 +256,9 @@ class BiasNode(DefaultNode):
         Returns:
             ``{"idx": int, "bias": float, "agg": str, "act": str}`` -- no ``res`` key,
             unlike :meth:`.default.DefaultNode.to_dict`; ``act`` resolves ``-1`` to
-            ``"identity"``.
+            ``"identity"``. A family that declares no attribute column renders the
+            neutral row its forward pass computes (``bias=0``, the first aggregation
+            option, identity activation).
 
         Raises:
             tensorneat.common.errors.ConfigError: If an option column holds an id that
@@ -247,12 +268,12 @@ class BiasNode(DefaultNode):
         keys, attrs = self._host_row(key_row, attr_row)
         return {
             "idx": keys[self.key_index("index")],
-            "bias": attrs[self.attr_index("bias")],
+            "bias": self._host_column(attrs, "bias", 0.0),
             "agg": self._aggregation_name(
-                int(round(attrs[self.attr_index("aggregation")]))
+                int(round(self._host_column(attrs, "aggregation", 0.0)))
             ),
             "act": self._activation_name(
-                int(round(attrs[self.attr_index("activation")]))
+                int(round(self._host_column(attrs, "activation", float(ACT_IDENTITY))))
             ),
         }
 

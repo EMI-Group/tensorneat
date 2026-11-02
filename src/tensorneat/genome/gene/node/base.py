@@ -192,11 +192,10 @@ class BaseNode(BaseGene):
 
         Returns:
             ``(P, N)`` float32 node values: ``combine(attrs, aggregate(...))`` with the
-            activation applied only where ``is_output_node`` is False.
-
-        Raises:
-            tensorneat.common.errors.ConfigError: If the attr table declares no
-                ``activation`` or ``aggregation`` column (families always declare both).
+            activation applied only where ``is_output_node`` is False. A family with no
+            attribute column (``attr_width == 0``) has no option index to dispatch on, so
+            it aggregates with its first configured option and applies no activation --
+            the neutral node value (see :meth:`prepare`).
         """
         if not isinstance(attrs, NodeOperands):
             attrs = self.prepare(attrs, is_output_node)
@@ -237,8 +236,17 @@ class BaseNode(BaseGene):
 
         Raises:
             tensorneat.common.errors.ConfigError: If the attribute width of ``attrs`` does
-                not match the declared table, or the table declares no ``aggregation`` /
-                ``activation`` column (families always declare both).
+                not match the declared table.
+
+        Note:
+            A gene that declares no attribute column (``attr_width == 0``, so ``attrs`` is
+            ``(P, N, 0)``) cannot carry an option index either. The dispatch then falls
+            back to the neutral configuration: the **first** configured aggregation option
+            (``AGG.sum`` in the shipped families, the neutral reduction of a message
+            window) and :data:`~tensorneat.common.functions.act.ACT_IDENTITY` for the
+            activation, because "no activation column" must not silently apply an
+            arbitrary option. Both are static ids, so the cascade still costs one
+            ``select`` per option and no branch on traced values.
         """
         width = int(attrs.shape[-1])
         if width != self.attr_width:
@@ -247,12 +255,16 @@ class BaseNode(BaseGene):
                 f"payload carries {width}"
             )
         columns = tuple(column(attrs, index) for index in range(width))
-        aggregation_ids = evoxc.cast(columns[self.attr_index("aggregation")], evoxc.int32)
-        activation_ids = evoxc.select(
-            is_output_node,
-            enp.full((), ACT_IDENTITY, dtype=evoxc.int32),
-            evoxc.cast(columns[self.attr_index("activation")], evoxc.int32),
+        aggregation_ids = self._option_ids(columns, "aggregation", is_output_node, 0)
+        activation_ids = self._option_ids(
+            columns, "activation", is_output_node, ACT_IDENTITY
         )
+        if self.has_attr("activation"):
+            activation_ids = evoxc.select(
+                is_output_node,
+                enp.full((), ACT_IDENTITY, dtype=evoxc.int32),
+                activation_ids,
+            )
         return NodeOperands(
             columns,
             aggregation_ids,
@@ -262,8 +274,33 @@ class BaseNode(BaseGene):
             enp.zeros((), dtype=evoxc.float32),
         )
 
+    def _option_ids(
+        self,
+        columns: Sequence[evoxc.SymbolicTensor],
+        name: str,
+        shape_source: evoxc.SymbolicTensor,
+        default: int,
+    ) -> evoxc.SymbolicTensor:
+        """Read one option-index column, or a constant id when the table declares none.
+
+        Args:
+            columns: The ``(P, N)`` attribute columns of :meth:`prepare`, in table order.
+            name: Option-column name (``aggregation`` / ``activation``).
+            shape_source: ``(P, N)`` tensor whose shape the fallback constant takes (the
+                output-row mask of the pass).
+            default: Id written into that constant when the column is absent.
+
+        Returns:
+            ``(P, N)`` int32 option ids.
+        """
+        if not self.has_attr(name):
+            return enp.full(
+                tuple(shape_source.shape), int(default), dtype=evoxc.int32
+            )
+        return evoxc.cast(columns[self.attr_index(name)], evoxc.int32)
+
     def column_of(
-        self, attrs: Any, name: str
+        self, attrs: Any, name: str, default: float | None = None
     ) -> evoxc.SymbolicTensor:
         """Read one named attribute column of a raw batch or of a prepared bundle.
 
@@ -271,10 +308,25 @@ class BaseNode(BaseGene):
             attrs: ``(P, N, NA)`` float32 attribute rows, or the :class:`NodeOperands`
                 bundle of :meth:`prepare`.
             name: Spec name of the column, resolved through ``attr_specs``.
+            default: Value of the whole column when the table declares no such
+                attribute (a family with ``attr_width == 0``). A Python float is a
+                scalar operand of every evoxc op, so it broadcasts over ``(P, N)`` at
+                no traced cost; ``None`` keeps the strict behaviour and raises.
 
         Returns:
-            ``(P, N)`` float32 column values.
+            ``(P, N)`` float32 column values, or the ``default`` scalar when the
+            column is absent.
+
+        Raises:
+            tensorneat.common.errors.ConfigError: If the table declares no such column
+                and no ``default`` was given.
         """
+        if not self.has_attr(name):
+            if default is None:
+                raise ConfigError(
+                    f"{type(self).__name__} declares no attribute {name!r}"
+                )
+            return float(default)
         if isinstance(attrs, NodeOperands):
             return attrs.columns[self.attr_index(name)]
         return self.attr_column(attrs, name)
@@ -315,17 +367,20 @@ class BaseNode(BaseGene):
         Returns:
             ``(P, N)`` float32 aggregated values, one per node row.
 
-        Raises:
-            tensorneat.common.errors.ConfigError: If the attr table declares no
-                ``aggregation`` column (families always declare one).
+        Note:
+            A family with no ``aggregation`` column (``attr_width == 0``) aggregates with
+            its first configured option, exactly as :meth:`prepare` resolves the dispatch.
         """
         if isinstance(attrs, NodeOperands):
             masks, zero = attrs.aggregation_masks, attrs.zero
         else:
-            masks = option_masks(
-                evoxc.cast(self.attr_column(attrs, "aggregation"), evoxc.int32),
-                len(self.aggregation_options),
-            )
+            if self.has_attr("aggregation"):
+                ids = evoxc.cast(self.attr_column(attrs, "aggregation"), evoxc.int32)
+            else:
+                ids = enp.full(
+                    tuple(messages.shape[:-1]), 0, dtype=evoxc.int32
+                )
+            masks = option_masks(ids, len(self.aggregation_options))
             zero = enp.zeros((), dtype=evoxc.float32)
         aggregated = select_cascade(
             masks,
@@ -458,6 +513,27 @@ class BaseNode(BaseGene):
     # ------------------------------------------------------------------ #
     # host-only presentation
     # ------------------------------------------------------------------ #
+
+    def _host_column(
+        self, attrs: Sequence[float], name: str, default: float
+    ) -> float:
+        """Read one attribute column of a *host* attribute row, or ``default``.
+
+        The host-side mirror of :meth:`column_of`: ``to_dict``/``repr`` of a family
+        with no attribute column (``attr_width == 0``) must still render the neutral
+        row its forward pass computes, not fail on the missing column.
+
+        Args:
+            attrs: Attribute values of one gene, in ``attr_specs`` order (host floats).
+            name: Attribute-column name.
+            default: Value to render when the table declares no such column.
+
+        Returns:
+            The column's value, or ``default`` when the column is absent.
+        """
+        if not self.has_attr(name):
+            return float(default)
+        return float(attrs[self.attr_index(name)])
 
     def repr(
         self,

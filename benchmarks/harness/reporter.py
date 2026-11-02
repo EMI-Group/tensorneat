@@ -1,330 +1,204 @@
-"""Presentation only: render ``benchmarks/RESULTS.md`` from one benchmark document.
+"""Presentation only: render the committed reports (``RESULTS.md``, ``THREADS.md``, ``iree.md``) from one document.
 
 :func:`render_report` turns the JSON document written by ``../run_benchmark.py`` into
 markdown; :func:`write_report` writes it to a path. There is no measurement maths and no
 verdict rule here — ``protocol.py`` owns both, this module only formats what it produced.
-Imports are stdlib plus ``harness.protocol`` (constants and the old-vs-new pairing); it
-never touches numpy, jax, evoxc or tensorneat.
+Null-safe cells and document accessors live in :mod:`harness.report_format`; the
+data-derived headline and win/lose tables live in :mod:`harness.report_sections`.
+Imports are stdlib plus those modules; it never touches numpy, jax, evoxc or tensorneat.
 """
 
 from __future__ import annotations
 
-import math
-import shlex
 from pathlib import Path
 
 from harness.protocol import (
-    NO_ERROR_TEXT,
+    GIT_DIRTY_PATH_LIMIT,
+    QUALITY_ABS_TOL,
     QUALITY_TOLERANCE_REL,
     STATUS_OK,
+    THREAD_ENV_VARS,
     comparisons,
-    short_error,
+    loadavg_summary,
+    median_curve,
+)
+from harness.report_format import (
+    COMPANION_FILES,
+    CURVE_HEADERS,
+    IMPL_LABELS,
+    by_case,
+    case_order,
+    cell,
+    companion_files,
+    declared_length,
+    first_error,
+    fitness,
+    fitness_at,
+    gens_to_target,
+    impl_label,
+    json_path,
+    meta,
+    mib,
+    ms,
+    num,
+    number,
+    out_path,
+    pct_index,
+    plain,
+    protocol_meta,
+    recorded_lengths,
+    run_flag,
+    seconds,
+    sort_key,
+    spaced_headings,
+    table,
+    text,
+    timestamp,
+    verdict_cell,
+)
+from harness.report_sections import (
+    headline_section,
+    reproduce_section,
+    winlose_section,
 )
 
 __all__ = ["render_report", "write_report", "IMPL_LABELS"]
 
 TITLE = "# TensorNEAT benchmark — evoxc rewrite vs frozen JAX baseline"
+"""Default H1; ``--report-title`` (stored as ``meta.report_title``) overrides it."""
 
-IMPL_LABELS = {"old": "tensorneat-legacy (JAX)", "new": "tensorneat (evoxc)"}
-"""Row labels: the implementation that was measured, not just its short id."""
+DEFAULT_REPORT_NOTE = ""
+"""Default note under the banner: none, so an unflagged render is byte-for-byte the old one."""
 
-IMPL_ORDER = {"old": 0, "new": 1}
-"""Report row order inside one case (baseline first, candidate second)."""
-
-CURVE_HEADERS = [
-    "Implementation",
-    "Backend",
-    "Seed",
-    "Best @1",
-    "Best @10",
-    "Best @25%",
-    "Best @50%",
-    "Best @100%",
-    "Final",
-    "Gens to target",
-]
+PARITY_TEST_COUNT = 53
+"""Collected parity tests on this box, measured 2026-11-02 with
+``pytest test/parity --collect-only -q`` (18 convert + 5 distance + 13 fitness + 12 forward
++ 5 grad). The report reads ``meta.parity_tests`` first so a future CLI can override it."""
 
 
-# --- Null-safe cell formatters ------------------------------------------------------------
+# --- Environment --------------------------------------------------------------------------
 
 
-def _cell(value, fallback: str = "n/a") -> str:
-    """One markdown table cell: never ``None``, never a raw newline or pipe."""
-    if value is None:
-        return fallback
-    text = str(value).replace("\r", " ").replace("\n", " ").replace("|", "\\|").strip()
-    return text or fallback
+def _memory_text(env: dict) -> str:
+    """Total physical memory in MiB, or ``n/a`` when the probe could not read it."""
+    value = number(env.get("memory_mb"))
+    return f"{value:.0f} MiB" if value is not None else "n/a"
 
 
-def _table(headers, rows) -> str:
-    """A pipe table; every cell goes through :func:`_cell`."""
-    lines = [
-        "| " + " | ".join(_cell(header) for header in headers) + " |",
-        "|" + "|".join("---" for _ in headers) + "|",
-    ]
-    for row in rows:
-        lines.append("| " + " | ".join(_cell(cell) for cell in row) + " |")
-    return "\n".join(lines)
+def _git_state(env: dict) -> str:
+    """The dirty state of the *code under test*, naming the offending paths when there are some.
 
-
-HEADINGS = ("## ", "### ")
-"""The heading levels this report emits; :func:`_spaced_headings` keeps their spacing uniform."""
-
-
-def _spaced_headings(markdown: str) -> str:
-    """Put exactly one blank line before and after every ``##``/``###`` heading.
-
-    Markdown renders a heading followed directly by a table, but the section blocks are
-    assembled by hand, so this single normaliser guarantees the blank lines instead of
-    every section having to remember them.
+    A clean tree says so explicitly: the harness rewrites its own report and JSON while it
+    samples this fingerprint, so "clean" must not be mistaken for "unchecked" — generated
+    evidence is outside ``protocol.GIT_DIRTY_PATHS`` and never counts.
     """
-    lines = markdown.split("\n")
-    spaced: list[str] = []
-    for index, line in enumerate(lines):
-        if not line.startswith(HEADINGS):
-            spaced.append(line)
-            continue
-        if spaced and spaced[-1].strip():
-            spaced.append("")
-        spaced.append(line)
-        following = lines[index + 1] if index + 1 < len(lines) else ""
-        if following.strip():
-            spaced.append("")
-    return "\n".join(spaced)
+    dirty = env.get("git_dirty")
+    if not isinstance(dirty, bool):
+        return "dirty state n/a"
+    if not dirty:
+        return "clean — generated report artifacts are not counted"
+    paths = [text(path) for path in (env.get("git_dirty_paths") or []) if text(path)]
+    if not paths:
+        return "dirty working tree"  # JSON written before the paths were recorded
+    shown = ", ".join(paths[:GIT_DIRTY_PATH_LIMIT])
+    more = len(paths) - GIT_DIRTY_PATH_LIMIT
+    return f"dirty: {shown}" + (f" +{more} more" if more > 0 else "")
 
 
-def _number(value) -> float | None:
-    """Coerce to a float, or ``None`` for missing / non-numeric input (NaN included)."""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return None if math.isnan(number) else number
-
-
-def _num(value, digits: int = 2, unit: str = "", signed: bool = False) -> str:
-    """Fixed-point number, ``+``/``-`` sign when asked, ``-inf``/``inf`` preserved."""
-    number = _number(value)
-    if number is None:
-        return "n/a"
-    if math.isinf(number):
-        return "-inf" if number < 0 else "inf"
-    return f"{number:+.{digits}f}{unit}" if signed else f"{number:.{digits}f}{unit}"
-
-
-def _ms(value) -> str:
-    """Wall clock per generation, milliseconds with 2 decimals."""
-    return _num(value, 2)
-
-
-def _seconds(value) -> str:
-    """One-off compile/build time, seconds with 3 decimals."""
-    return _num(value, 3)
-
-
-def _mib(value) -> str:
-    """Peak RSS, MiB with 1 decimal."""
-    return _num(value, 1)
-
-
-def _fitness(value) -> str:
-    """Fitness with 4 decimals; ``-inf`` means every individual was invalid."""
-    return _num(value, 4)
-
-
-def _plain(value) -> str:
-    """Compact human number (``100``, ``-0.05``, ``180``) for configuration cells."""
-    if value is None or isinstance(value, bool):
-        return "n/a"
-    if isinstance(value, int):
-        return str(value)
-    number = _number(value)
-    if number is None:
-        return "n/a"
-    if math.isinf(number):
-        return "-inf" if number < 0 else "inf"
-    return str(int(number)) if number.is_integer() else f"{number:g}"
-
-
-def _run_flag(declared, ran, case: str, impl: str) -> str:
-    """``yes`` when the implementation ran, ``not run`` when it could but was not asked,
-    ``n/a`` when the case cannot run that implementation at all."""
-    if impl not in declared:
-        return "n/a"
-    return "yes" if (case, impl) in ran else "not run"
-
-
-def _verdict_cell(value) -> str:
-    """``True`` -> ``PASS``, ``False`` -> ``FAIL``, ``None`` -> ``n/a``."""
-    if value is None:
-        return "n/a"
-    return "PASS" if value else "FAIL"
-
-
-def _text(value, fallback: str = "n/a") -> str:
-    """Non-empty string or the fallback."""
-    if value is None:
-        return fallback
-    text = str(value).strip()
-    return text if text else fallback
-
-
-def _first_error(record: dict) -> str:
-    """The record's error, summarised by :func:`harness.protocol.short_error` (never empty)."""
-    errors = record.get("errors")
-    candidates = []
-    if isinstance(errors, (list, tuple)):
-        candidates.extend(errors)
-    if record.get("error") is not None:
-        candidates.append(record["error"])
-    for candidate in candidates:
-        text = short_error(candidate)
-        if text:
-            return text
-    return NO_ERROR_TEXT
-
-
-def _impl_label(impl) -> str:
-    """``old``/``new`` plus its human label, e.g. ```old` tensorneat-legacy (JAX)``."""
-    key = _text(impl, "unknown")
-    label = IMPL_LABELS.get(key)
-    return f"`{key}` {label}" if label else f"`{key}`"
-
-
-def _sort_key(impl, backend) -> tuple[int, str]:
-    """Old before new, then backend name — a stable order for every table."""
-    return (IMPL_ORDER.get(_text(impl, ""), len(IMPL_ORDER)), _text(backend, ""))
-
-
-# --- Document accessors -------------------------------------------------------------------
-
-
-def _meta(doc: dict) -> dict:
-    """``doc["meta"]`` or an empty dict."""
-    return doc.get("meta") or {}
-
-
-def _protocol_meta(doc: dict) -> dict:
-    """``doc["meta"]["protocol"]`` or an empty dict."""
-    return _meta(doc).get("protocol") or {}
-
-
-def _repo_root(path: Path) -> Path | None:
-    """The checkout root above ``path``: the directory that holds ``benchmarks/``.
-
-    The marker files are the strongest signal, but a path recorded on the machine that ran
-    the benchmark already names the root structurally (``<root>/benchmarks/results/x.json``),
-    so a ``benchmarks`` path component identifies it even when the tree is not readable.
-    Returns ``None`` for a path outside any checkout — which is what makes
-    :func:`_display_path` fall back to the basename.
-    """
-    for parent in path.parents:
-        if (parent / "benchmarks").is_dir() and (parent / "pyproject.toml").is_file():
-            return parent
-        if parent.name == "benchmarks":
-            return parent.parent
-    return None
-
-
-def _repo_relative(value) -> str | None:
-    """``value`` relative to the checkout root when it is an absolute path inside it.
-
-    Relative paths are returned normalised, a path outside the checkout as ``None``.
-    """
-    path = Path(str(value))
-    if not path.is_absolute():
-        return path.as_posix()
-    root = _repo_root(path)
-    if root is None:
-        return None
-    return path.relative_to(root).as_posix()
-
-
-def _display_path(value, fallback: str) -> str:
-    """A path as it belongs in the committed report: repo-relative, else just the basename.
-
-    A worktree path such as ``/root/.../benchmarks/results/latest.json`` must never leak
-    into ``RESULTS.md``: whoever reads it needs a path relative to the repo they cloned.
-    """
-    text = _text(value, fallback)
-    relative = _repo_relative(text)
-    return relative if relative is not None else Path(text).name
-
-
-def _json_path(doc: dict) -> str:
-    """Path of the JSON the report was rendered from."""
-    return _display_path(_meta(doc).get("json_path"), "benchmarks/results/latest.json")
-
-
-def _out_path(doc: dict) -> str:
-    """Path of the report itself, rendered with the same relativisation."""
-    return _display_path(_meta(doc).get("out_path"), "benchmarks/RESULTS.md")
-
-
-def _timestamp(doc: dict) -> str:
-    """Generation timestamp recorded in the document."""
-    return _text(doc.get("generated_at"), "unknown")
-
-
-def _case_order(doc: dict, extra_cases=()) -> list[str]:
-    """Cases in the declared matrix order, then any case only seen in the runs."""
-    order: list[str] = []
-    for entry in _meta(doc).get("case_matrix") or []:
-        name = entry.get("name")
-        if name and name not in order:
-            order.append(name)
-    for name in extra_cases:
-        if name and name not in order:
-            order.append(name)
-    return order
-
-
-def _by_case(records) -> dict[str, list[dict]]:
-    """Group records by case, preserving first-seen case order."""
-    grouped: dict[str, list[dict]] = {}
-    for record in records or []:
-        grouped.setdefault(_text(record.get("case"), ""), []).append(record)
-    return grouped
-
-
-# --- Sections -----------------------------------------------------------------------------
-
-
-def _banner(doc: dict) -> str:
-    """The blockquote that marks the file as generated."""
-    return "\n".join(
-        [
-            "> **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from",
-            f"> `{_json_path(doc)}` at {_timestamp(doc)}. It must not be hand-edited:",
-            "> rerun the CLI instead, or the numbers below stop matching the recorded evidence.",
-        ]
+def _git_text(env: dict) -> str:
+    """Commit SHA and dirty state, with the reminder that both sides come from this tree."""
+    commit = text(env.get("git_commit"), "")
+    if not commit:
+        return "n/a (git unavailable)"
+    return (
+        f"`{commit[:12]}` ({_git_state(env)}) — `benchmarks/legacy_jax` and `src/` both come "
+        "from this checkout"
     )
 
 
-def _platform_cpu(env: dict) -> str:
-    """Platform, machine and core count as one cell."""
-    bits = [bit for bit in (_text(env.get("platform"), ""), _text(env.get("machine"), "")) if bit]
-    cores = env.get("cpu_count")
-    if isinstance(cores, int) and cores > 0:
-        bits.append(f"{cores} cores")
-    return " · ".join(bits) if bits else "n/a"
+def _thread_env_text(env: dict, threads) -> str:
+    """Which thread variables are set (and to what) in the process that wrote the record."""
+    recorded = env.get("thread_env")
+    if not isinstance(recorded, dict) or not recorded:
+        return "n/a (not recorded)"
+    parts = []
+    for name in THREAD_ENV_VARS:
+        value = text(recorded.get(name), "")
+        parts.append(f"{name} " + (f"set (`{value}`)" if value else "unset"))
+    joined = " · ".join(parts)
+    if isinstance(threads, int) and not isinstance(threads, bool) and threads > 0:
+        return (
+            joined
+            + " (CLI process, inherited by every worker before the export) — every worker "
+            f"exports the four `*_NUM_THREADS` variables as {threads} and sets `XLA_FLAGS` on "
+            "the old side before numpy/jax import"
+        )
+    return (
+        joined
+        + " (CLI process, inherited unchanged by every worker — `--threads 0` exports nothing)"
+    )
+
+
+def _loadavg_text(doc: dict) -> str:
+    """Load average of the box, as measured by the document build and by the workers.
+
+    Two sources, kept apart on purpose: ``meta.env.loadavg`` is the moment the document was
+    assembled, while each worker's optional ``loadavg_start``/``loadavg_end`` bracket its own
+    timed run, so the reported range says how busy the box was *while measuring*.
+    """
+    recorded = (meta(doc).get("env") or {}).get("loadavg")
+    parts = ["n/a (not recorded)"]
+    if isinstance(recorded, (list, tuple)) and len(recorded) >= 3:
+        triple = " / ".join(num(value, 2) for value in recorded[:3])
+        parts = [f"{triple} (1/5/15 min, document build)"]
+    summary = loadavg_summary(doc.get("runs") or [])
+    if summary.get("n_runs"):
+        parts.append(
+            f"workers {num(summary.get('start_min'), 2)}–{num(summary.get('start_max'), 2)} "
+            f"at start, {num(summary.get('end_min'), 2)}–{num(summary.get('end_max'), 2)} at "
+            f"end (1-min, {plain(summary['n_runs'])} run(s))"
+        )
+    return "; ".join(parts)
+
+
+SHARED_BOX_CAVEAT = (
+    "**Shared box.** These numbers were measured on a machine that was not exclusively ours: "
+    "other jobs ran on it while the workers timed generations, so the per-repeat spread "
+    "(the headline's speed-up range and the per-repeat quality-curve rows) is the honest "
+    "uncertainty measure — a median alone would hide it."
+)
+"""One caveat sentence: load and repeat spread are the measured conditions, not noise to drop."""
 
 
 def _environment_section(doc: dict) -> str:
-    """Environment fingerprint table."""
-    env = _meta(doc).get("env") or {}
+    """Environment fingerprint table: host, versions, git provenance, thread settings, load."""
+    env = meta(doc).get("env") or {}
+    proto = protocol_meta(doc)
     versions = " / ".join(
-        f"{name} {_text(env.get(name))}" for name in ("numpy", "jax", "evoxc", "tensorneat")
+        f"{name} {text(env.get(name))}" for name in ("numpy", "jax", "evoxc", "tensorneat")
     )
     rows = [
-        ["Date (UTC)", _timestamp(doc)],
-        ["Python", _text(env.get("python"))],
-        ["Platform / CPU", _platform_cpu(env)],
-        ["numpy / jax / evoxc / tensorneat", versions],
+        ["Date (UTC)", timestamp(doc)],
+        ["Python", text(env.get("python"))],
+        ["Platform", text(env.get("platform"))],
+        ["CPU model", text(env.get("cpu_model"))],
+        ["CPU cores (`os.cpu_count`)", text(env.get("cpu_count"))],
+        ["Memory", _memory_text(env)],
+        ["Load average (1/5/15 min)", _loadavg_text(doc)],
+        ["numpy / jax / evoxc / tensorneat (installed metadata)", versions],
+        ["Git commit", _git_text(env)],
+        ["Thread pinning (`--threads`)", _threads_text(proto.get("threads"))],
+        ["Thread env (set/unset)", _thread_env_text(env, proto.get("threads"))],
     ]
-    return "## Environment\n\n" + _table(["Item", "Value"], rows)
+    return (
+        "## Environment\n\n"
+        + table(["Item", "Value"], rows)
+        + "\n\n"
+        + SHARED_BOX_CAVEAT
+    )
+
+
+# --- Protocol -----------------------------------------------------------------------------
 
 
 def _repeats_text(repeats, seed) -> str:
@@ -342,77 +216,132 @@ def _threads_text(threads) -> str:
     if not isinstance(threads, int) or isinstance(threads, bool):
         return "n/a"
     if threads == 0:
-        return "`--threads 0` — runtime defaults (as users run it)"
+        return "`--threads 0` — runtime defaults (as users run it), nothing exported"
     return (
         f"`--threads {threads}` — exported to OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS and, on the "
         "old side, to `XLA_FLAGS` intra-op parallelism"
     )
 
 
-def _protocol_section(doc: dict) -> str:
+def _quality_lengths(doc: dict) -> tuple[int | None, int | None]:
+    """Recorded quality-curve lengths of the old and the new side (first seen), else ``None``."""
+    lengths = recorded_lengths(doc)
+    old = next((n for (_, impl, _), n in lengths.items() if impl == "old"), None)
+    new = next((n for (_, impl, _), n in lengths.items() if impl == "new"), None)
+    return old, new
+
+
+def _generation_index_text(doc: dict) -> str:
+    """How the new side's consumed build generation shifts its quality curve by one.
+
+    The timed samples cover the same generation indices on both sides, but the build
+    generation is consumed from the new side's quality curve, so that curve starts one
+    generation later and holds one fewer generation — which is what an unreached target's
+    ``>N`` bound shows. The counts are read from the records, never hard-coded.
+    """
+    old_length, new_length = _quality_lengths(doc)
+    sentence = (
+        "The build generation is also consumed from the new side's quality curve, so that "
+        "curve starts one generation later than the old side's"
+    )
+    if old_length and new_length and new_length != old_length:
+        sentence += (
+            f" and records {new_length} generations against the old side's {old_length} — "
+            f"which is why an unreached target reads `>{new_length}` for new and "
+            f"`>{old_length}` for old"
+        )
+    return sentence + ". Compile/build seconds are never charged to a generation."
+
+
+def _protocol_section(doc: dict, companions: dict | None = None) -> str:
     """Protocol table plus the metric definitions the template states."""
-    meta = _meta(doc)
-    proto = _protocol_meta(doc)
-    backends = ", ".join(f"`{_text(name)}`" for name in (meta.get("backends") or []))
+    doc_meta = meta(doc)
+    proto = protocol_meta(doc)
+    backends = ", ".join(f"`{text(name)}`" for name in (doc_meta.get("backends") or []))
     rows = [
         ["Backend(s) of the new implementation", backends or "n/a"],
-        ["Warmup generations (untimed)", _plain(proto.get("warmup"))],
-        ["Timed generations", _plain(proto.get("generations"))],
+        ["Warmup generations (untimed)", plain(proto.get("warmup"))],
+        ["Timed generations", plain(proto.get("generations"))],
         ["Repeats (seed + r)", _repeats_text(proto.get("repeats"), proto.get("seed"))],
         ["Thread pinning", _threads_text(proto.get("threads"))],
+        [
+            "New-side build",
+            "inside the first `Pipeline.step` call (the evoxc build); the generation it "
+            "consumes is recorded as `generations_consumed_before_timing`, excluded from the "
+            "timed samples and subtracted from the untimed warmup, so both sides' timing "
+            "samples cover the same generation indices",
+        ],
+        [
+            "Compile time",
+            "reported separately as `compile_time_s` (old: "
+            "`jax.jit(pipeline.step).lower(state).compile()`; new: the first "
+            "`Pipeline.step` build) and never charged to a generation",
+        ],
         [
             "Scheduling",
             "one worker process per run, strictly sequential — the two implementations never "
             "share a process",
         ],
     ]
-    paragraph = "\n".join(
-        [
-            "Metrics: `compile_time_s` (one-off build), `ms_per_generation` (median wall clock "
-            "per generation",
-            "after warmup, including host sync), `gens_per_second`, `peak_rss_mb`, and quality",
-            "(`final_best_fitness`, `generations_to_target`, best-fitness curve).",
-            "Definitions, fairness rules and verdict rules live in `benchmarks/CONTEXT.md`.",
-        ]
+    lines = [
+        "Metrics: `compile_time_s` (one-off build), `ms_per_generation` (median wall clock "
+        "per generation",
+        "after warmup, including host sync), `gens_per_second`, `rss_final_mb`, and quality",
+        "(`final_best_fitness`, `generations_to_target`, best-fitness curve).",
+        _generation_index_text(doc),
+        "Definitions, fairness rules and verdict rules live in `benchmarks/CONTEXT.md`.",
+    ]
+    if (companions or {}).get("threads"):
+        lines.append(
+            "A thread-bound sensitivity run (`--threads 1`, XOR family, same CLI) is recorded "
+            "in `benchmarks/THREADS.md` next to this report."
+        )
+    return (
+        "## Protocol\n\n"
+        + table(["Parameter", "Value"], rows)
+        + "\n\n"
+        + "\n".join(lines)
     )
-    return "## Protocol\n\n" + _table(["Parameter", "Value"], rows) + "\n\n" + paragraph
+
+
+# --- Case matrix --------------------------------------------------------------------------
 
 
 def _timed_generations(doc: dict, entry: dict) -> str:
     """Timed generation budget of this run, falling back to the case's declared limit."""
-    generations = _protocol_meta(doc).get("generations")
+    generations = protocol_meta(doc).get("generations")
     if isinstance(generations, int) and not isinstance(generations, bool):
-        return _plain(generations)
-    return _plain(entry.get("generation_limit"))
+        return plain(generations)
+    return plain(entry.get("generation_limit"))
 
 
 def _case_matrix_section(doc: dict) -> str:
     """The case matrix as one table: workload, budget and which implementations ran."""
-    matrix = _meta(doc).get("case_matrix") or []
+    matrix = meta(doc).get("case_matrix") or []
     if not matrix:
         return "## Case matrix\n\nno cases recorded"
     ran = {
-        (_text(run.get("case"), ""), _text(run.get("impl"), ""))
+        (text(run.get("case"), ""), text(run.get("impl"), ""))
         for run in doc.get("runs") or []
     }
     rows = []
     for entry in matrix:
-        name = _text(entry.get("name"))
+        name = text(entry.get("name"))
         impls = [str(impl) for impl in (entry.get("impls") or [])]
         rows.append(
             [
                 name,
-                _text(entry.get("family")),
-                _text(entry.get("problem")),
-                _plain(entry.get("pop_size")),
+                text(entry.get("family")),
+                text(entry.get("problem")),
+                plain(entry.get("pop_size")),
                 _timed_generations(doc, entry),
-                _plain(entry.get("fitness_target")),
-                _run_flag(impls, ran, name, "old"),
-                _run_flag(impls, ran, name, "new"),
-                _cell(entry.get("notes"), "—"),
+                plain(entry.get("fitness_target")),
+                run_flag(impls, ran, name, "old"),
+                run_flag(impls, ran, name, "new"),
+                cell(entry.get("notes"), "—"),
             ]
         )
-    body = _table(
+    body = table(
         [
             "Case",
             "Family",
@@ -429,37 +358,7 @@ def _case_matrix_section(doc: dict) -> str:
     return "## Case matrix\n\n" + body
 
 
-def _curve_length(curve) -> int | None:
-    """Number of recorded generations in one best-fitness curve (``None`` when absent)."""
-    return len(curve) if isinstance(curve, list) and curve else None
-
-
-def _recorded_lengths(doc: dict) -> dict[tuple[str, str, str], int]:
-    """Length of the first recorded best-fitness curve per ``(case, impl, backend)``."""
-    lengths: dict[tuple[str, str, str], int] = {}
-    for run in doc.get("runs") or []:
-        quality = run.get("quality") or {}
-        length = _curve_length(quality.get("best_fitness"))
-        if length is None:
-            continue
-        key = (
-            _text(run.get("case"), ""),
-            _text(run.get("impl"), ""),
-            _text(run.get("backend"), ""),
-        )
-        lengths.setdefault(key, length)
-    return lengths
-
-
-def _declared_length(doc: dict) -> int | None:
-    """``warmup + timed`` generations from the protocol, for records without a curve."""
-    proto = _protocol_meta(doc)
-    timed, warmup = proto.get("generations"), proto.get("warmup")
-    if not isinstance(timed, int) or isinstance(timed, bool):
-        return None
-    if isinstance(warmup, int) and not isinstance(warmup, bool):
-        return timed + warmup
-    return timed
+# --- Per-case results ---------------------------------------------------------------------
 
 
 def _result_row(record: dict, recorded_generations) -> list:
@@ -471,42 +370,42 @@ def _result_row(record: dict, recorded_generations) -> list:
     """
     targets = record.get("generations_to_target")
     return [
-        _impl_label(record.get("impl")),
-        f"`{_text(record.get('backend'))}`",
-        _seconds(record.get("compile_time_s")),
-        _ms(record.get("ms_per_generation")),
-        _num(record.get("gens_per_second"), 2),
-        _mib(record.get("rss_final_mb")),
-        _fitness(record.get("final_best_fitness")),
-        _gens_to_target(targets, recorded_generations),
-        _plain(record.get("n_repeats")),
+        impl_label(record.get("impl")),
+        f"`{text(record.get('backend'))}`",
+        seconds(record.get("compile_time_s")),
+        ms(record.get("ms_per_generation")),
+        num(record.get("gens_per_second"), 2),
+        mib(record.get("rss_final_mb")),
+        fitness(record.get("final_best_fitness")),
+        gens_to_target(targets, recorded_generations),
+        plain(record.get("n_repeats")),
     ]
 
 
 def _empty_row(record: dict) -> list:
     """A not-ok aggregated record: identity, status and ``n/a`` metrics (never dropped)."""
-    status = _text(record.get("status"), "error")
+    status = text(record.get("status"), "error")
     return [
-        f"{_impl_label(record.get('impl'))} — {status}",
-        f"`{_text(record.get('backend'))}`",
+        f"{impl_label(record.get('impl'))} — {status}",
+        f"`{text(record.get('backend'))}`",
         "n/a",
         "n/a",
         "n/a",
         "n/a",
         "n/a",
         "n/a",
-        _plain(record.get("n_repeats")),
+        plain(record.get("n_repeats")),
     ]
 
 
 def _results_section(doc: dict) -> str:
     """Per-case table of every aggregated ``(impl, backend)`` record."""
     aggregated = doc.get("aggregated") or []
-    grouped = _by_case(aggregated)
-    lengths = _recorded_lengths(doc)
-    fallback_length = _declared_length(doc)
+    grouped = by_case(aggregated)
+    lengths = recorded_lengths(doc)
+    fallback_length = declared_length(doc)
     parts = ["## Results per case", ""]
-    for case in _case_order(doc, list(grouped)):
+    for case in case_order(doc, list(grouped)):
         records = grouped.get(case)
         parts.append(f"### {case}")
         parts.append("")
@@ -515,24 +414,24 @@ def _results_section(doc: dict) -> str:
             continue
         rows, notes = [], []
         for record in sorted(
-            records, key=lambda item: _sort_key(item.get("impl"), item.get("backend"))
+            records, key=lambda item: sort_key(item.get("impl"), item.get("backend"))
         ):
-            status = _text(record.get("status"), "ok")
+            status = text(record.get("status"), "ok")
             if status == STATUS_OK:
                 key = (
-                    _text(record.get("case"), ""),
-                    _text(record.get("impl"), ""),
-                    _text(record.get("backend"), ""),
+                    text(record.get("case"), ""),
+                    text(record.get("impl"), ""),
+                    text(record.get("backend"), ""),
                 )
                 rows.append(_result_row(record, lengths.get(key) or fallback_length))
             else:
                 rows.append(_empty_row(record))
                 notes.append(
-                    f"- `{_text(record.get('impl'))}` / `{_text(record.get('backend'))}`: "
-                    f"**{status}** — {_cell(_first_error(record))}"
+                    f"- `{text(record.get('impl'))}` / `{text(record.get('backend'))}`: "
+                    f"**{status}** — {cell(first_error(record))}"
                 )
         parts.append(
-            _table(
+            table(
                 [
                     "Implementation",
                     "Backend",
@@ -554,6 +453,9 @@ def _results_section(doc: dict) -> str:
     return "\n".join(parts).rstrip()
 
 
+# --- Old vs new ---------------------------------------------------------------------------
+
+
 def _comparison_section(doc: dict) -> str:
     """Old-vs-new table with the two sub-verdicts per comparison."""
     verdict = doc.get("verdict") or {}
@@ -566,24 +468,27 @@ def _comparison_section(doc: dict) -> str:
     for pair in pairs:
         rows.append(
             [
-                _text(pair.get("case")),
-                f"`{_text(pair.get('backend'))}`",
-                _ms(pair.get("old_ms")),
-                _ms(pair.get("new_ms")),
-                _num(pair.get("speedup"), 2, "x"),
-                _num(pair.get("delta_ms"), 2, signed=True),
-                _fitness(pair.get("old_final_best")),
-                _fitness(pair.get("new_final_best")),
-                _num(pair.get("quality_delta"), 4, signed=True),
-                _verdict_cell(pair.get("timing_pass")),
-                _verdict_cell(pair.get("quality_pass")),
+                text(pair.get("case")),
+                f"`{text(pair.get('backend'))}`",
+                ms(pair.get("old_ms")),
+                ms(pair.get("new_ms")),
+                num(pair.get("speedup"), 2, "x"),
+                num(pair.get("delta_ms"), 2, signed=True),
+                fitness(pair.get("old_final_best")),
+                fitness(pair.get("new_final_best")),
+                num(pair.get("quality_delta"), 4, signed=True),
+                verdict_cell(pair.get("timing_pass")),
+                verdict_cell(pair.get("quality_pass")),
             ]
         )
     note = (
         "Timing PASS means new ms/generation <= old; quality PASS means the new final best "
-        f"stays within {QUALITY_TOLERANCE_REL:.0%} of the old final best."
+        "stays within the active tolerance "
+        f"`max({QUALITY_TOLERANCE_REL:.0%} × |old|, {QUALITY_ABS_TOL:g})` of the old final best "
+        "(the absolute floor keeps two runs that are both at the optimum from failing on "
+        "float noise)."
     )
-    table = _table(
+    body = table(
         [
             "Case",
             "Backend",
@@ -599,7 +504,10 @@ def _comparison_section(doc: dict) -> str:
         ],
         rows,
     )
-    return "## Old vs new\n\n" + table + "\n\n" + note
+    return "## Old vs new\n\n" + body + "\n\n" + note
+
+
+# --- Verdict ------------------------------------------------------------------------------
 
 
 NO_VERDICT_PREFIXES = ("timing: no verdict for ", "quality: no verdict for ")
@@ -622,104 +530,149 @@ def _verdict_reasons(verdict: dict) -> list[str]:
 def _verdict_section(doc: dict) -> str:
     """Overall verdict, its reasons and the two sub-verdicts."""
     verdict = doc.get("verdict") or {}
-    status = _text(verdict.get("status"), "INCOMPLETE")
+    status = text(verdict.get("status"), "INCOMPLETE")
     reasons = _verdict_reasons(verdict)
     lines = ["## Verdict", "", f"**{status}**", ""]
     if reasons:
-        lines.extend(f"- {_cell(reason)}" for reason in reasons)
+        lines.extend(f"- {cell(reason)}" for reason in reasons)
     else:
         lines.append("- no reason recorded")
-    timing = _text(verdict.get("timing"), "n/a")
-    quality = _text(verdict.get("quality"), "n/a")
+    timing = text(verdict.get("timing"), "n/a")
+    quality = text(verdict.get("quality"), "n/a")
     lines.extend(
         [
             "",
             f"Sub-verdicts: timing `{timing}`, quality `{quality}` — timing compares measured "
-            f"ms/generation, quality compares final best fitness at a {QUALITY_TOLERANCE_REL:.0%} "
-            "tolerance.",
+            "ms/generation, quality passes when `new >= old - "
+            f"max({QUALITY_TOLERANCE_REL:.0%} × |old|, {QUALITY_ABS_TOL:g})`.",
         ]
     )
     return "\n".join(lines)
 
 
-def _pct_index(length: int, fraction: float) -> int:
-    """Index of generation ``round(fraction * length)`` (1-based generation, clamped)."""
-    return max(0, min(length - 1, int(round(fraction * length)) - 1))
+# --- Quality curves -----------------------------------------------------------------------
 
 
-def _fitness_at(curve, index: int) -> str:
-    """Fitness at ``index`` of ``curve`` (negative counts from the end, clamped)."""
-    if not isinstance(curve, list) or not curve:
-        return "n/a"
-    position = index + len(curve) if index < 0 else index
-    return _fitness(curve[max(0, min(len(curve) - 1, position))])
-
-
-def _gens_to_target(value, length) -> str:
-    """Reached generation, or ``>N`` when the target was not reached within the N recorded ones."""
-    number = _number(value)
-    if number is not None and not math.isinf(number):
-        return str(int(number))
-    return f">{length}" if isinstance(length, int) and length > 0 else "n/a"
+def _curve_row(label: str, backend: str, seed: str, curve, gens: str) -> list:
+    """One quality-curve row: the checkpoints every curve row shares."""
+    length = len(curve)
+    return [
+        label,
+        f"`{text(backend)}`",
+        seed,
+        fitness_at(curve, 0),
+        fitness_at(curve, 9),
+        fitness_at(curve, pct_index(length, 0.25)),
+        fitness_at(curve, pct_index(length, 0.50)),
+        fitness_at(curve, pct_index(length, 1.00)),
+        fitness_at(curve, length - 1),
+        gens,
+    ]
 
 
 def _curves_section(doc: dict) -> str:
-    """Best-fitness curve checkpoints from the first ok run of every case/impl/backend."""
-    picked: dict[tuple[str, str, str], dict] = {}
+    """Best-fitness checkpoints: one row per repeat (seed) plus one aggregated row per group.
+
+    One row per repeat is what makes the sampling visible: two seeds of the same case can land
+    on opposite sides of the fitness target, and a single "first ok run" row would hide that.
+    The aggregated row is the element-wise median of those repeats (``protocol.median_curve``),
+    with the median generations-to-target from the aggregated record.
+    """
+    grouped_runs: dict[tuple[str, str, str], list[dict]] = {}
     for run in doc.get("runs") or []:
-        if _text(run.get("status"), "ok") != STATUS_OK:
+        if text(run.get("status"), "ok") != STATUS_OK:
             continue
         quality = run.get("quality") or {}
         curve = quality.get("best_fitness")
         if not isinstance(curve, list) or not curve:
             continue
         key = (
-            _text(run.get("case"), ""),
-            _text(run.get("impl"), ""),
-            _text(run.get("backend"), ""),
+            text(run.get("case"), ""),
+            text(run.get("impl"), ""),
+            text(run.get("backend"), ""),
         )
-        picked.setdefault(key, run)
+        grouped_runs.setdefault(key, []).append(run)
 
     parts = ["## Quality curves", ""]
-    if not picked:
+    if not grouped_runs:
         parts.append("no fitness curves recorded")
         return "\n".join(parts)
 
-    for case in _case_order(doc, [key[0] for key in picked]):
-        keys = sorted((key for key in picked if key[0] == case), key=lambda k: _sort_key(k[1], k[2]))
+    aggregated_by_key: dict[tuple[str, str, str], dict] = {}
+    for record in doc.get("aggregated") or []:
+        if text(record.get("status"), "ok") != STATUS_OK:
+            continue
+        aggregated_by_key.setdefault(
+            (
+                text(record.get("case"), ""),
+                text(record.get("impl"), ""),
+                text(record.get("backend"), ""),
+            ),
+            record,
+        )
+
+    for case in case_order(doc, [key[0] for key in grouped_runs]):
+        keys = sorted(
+            (key for key in grouped_runs if key[0] == case),
+            key=lambda key: sort_key(key[1], key[2]),
+        )
         if not keys:
             continue
         parts.append(f"### {case}")
         parts.append("")
-        rows = []
+        rows: list[list] = []
         for key in keys:
-            run = picked[key]
-            quality = run.get("quality") or {}
-            curve = quality.get("best_fitness")
-            length = len(curve)
-            rows.append(
-                [
-                    _impl_label(key[1]),
-                    f"`{_text(key[2])}`",
-                    _plain(run.get("seed")),
-                    _fitness_at(curve, 0),
-                    _fitness_at(curve, 9),
-                    _fitness_at(curve, _pct_index(length, 0.25)),
-                    _fitness_at(curve, _pct_index(length, 0.50)),
-                    _fitness_at(curve, _pct_index(length, 1.00)),
-                    _fitness_at(curve, length - 1),
-                    _gens_to_target(quality.get("generations_to_target"), length),
-                ]
+            runs = sorted(
+                grouped_runs[key],
+                key=lambda run: (
+                    number(run.get("seed")) is None,
+                    number(run.get("seed")) or 0,
+                ),
             )
-        parts.append(_table(CURVE_HEADERS, rows))
+            curves = []
+            for run in runs:
+                curve = (run.get("quality") or {}).get("best_fitness")
+                curves.append(curve)
+                rows.append(
+                    _curve_row(
+                        impl_label(key[1]),
+                        key[2],
+                        plain(run.get("seed")),
+                        curve,
+                        gens_to_target(
+                            (run.get("quality") or {}).get("generations_to_target"),
+                            len(curve),
+                        ),
+                    )
+                )
+            aggregate = median_curve(curves)
+            if not aggregate:
+                continue
+            seeds = ", ".join(plain(run.get("seed")) for run in runs)
+            record = aggregated_by_key.get(key) or {}
+            rows.append(
+                _curve_row(
+                    impl_label(key[1]) + " — aggregate",
+                    key[2],
+                    seeds,
+                    aggregate,
+                    gens_to_target(record.get("generations_to_target"), len(aggregate)),
+                )
+            )
+        parts.append(table(CURVE_HEADERS, rows))
         parts.append("")
     parts.append(
         "Percent columns are generation `round(fraction × N)` of the N recorded generations "
         "(warmup + timed — the budget `generations_to_target` is indexed against), and `>N` means "
         "the case's fitness target was not reached within those N recorded generations. "
-        "Each row is the first ok run recorded for that case/implementation/backend."
+        "Each repeat (seed) has its own row, and the `— aggregate` row is the element-wise "
+        "median of those repeats: a bimodal case (one seed at the target, one not) shows up "
+        "as two different `Final` values rather than one average."
     )
     return "\n".join(parts)
+
+
+# --- Declared baseline --------------------------------------------------------------------
 
 
 def _reference_section(doc: dict) -> str:
@@ -727,14 +680,14 @@ def _reference_section(doc: dict) -> str:
     measured: dict[str, object] = {}
     for record in doc.get("aggregated") or []:
         if record.get("impl") == "old":
-            measured.setdefault(_text(record.get("case"), ""), record.get("ms_per_generation"))
+            measured.setdefault(text(record.get("case"), ""), record.get("ms_per_generation"))
 
     rows = []
-    for entry in _meta(doc).get("case_matrix") or []:
+    for entry in meta(doc).get("case_matrix") or []:
         declared_map = entry.get("reference_ms_per_generation") or {}
         if not declared_map:
             continue
-        name = _text(entry.get("name"))
+        name = text(entry.get("name"))
         pop = entry.get("pop_size")
         declared = declared_map.get(str(pop))
         if declared is None and len(declared_map) == 1:
@@ -742,8 +695,8 @@ def _reference_section(doc: dict) -> str:
         elif declared is None:
             continue
         old_ms = measured.get(name)
-        old_number = _number(old_ms)
-        declared_number = _number(declared)
+        old_number = number(old_ms)
+        declared_number = number(declared)
         ratio = (
             old_number / declared_number
             if old_number is not None and declared_number not in (None, 0)
@@ -752,10 +705,10 @@ def _reference_section(doc: dict) -> str:
         rows.append(
             [
                 name,
-                _plain(pop),
-                _ms(declared_number),
-                _ms(old_number),
-                _num(ratio, 2, "x"),
+                plain(pop),
+                ms(declared_number),
+                ms(old_number),
+                num(ratio, 2, "x"),
             ]
         )
 
@@ -773,137 +726,167 @@ def _reference_section(doc: dict) -> str:
             "no case declares a reference baseline\n\n"
             + explanation
         )
-    table = _table(
+    body = table(
         ["Case", "Pop", "Declared legacy ms/gen", "Measured old ms/gen", "Ratio (measured/declared)"],
         rows,
     )
-    return "## Reference numbers (declared baseline)\n\n" + table + "\n\n" + explanation
+    return "## Reference numbers (declared baseline)\n\n" + body + "\n\n" + explanation
 
 
-def _not_compared_section() -> str:
-    """The three explicit non-comparisons."""
+# --- What is not compared -----------------------------------------------------------------
+
+
+def _parity_count(doc: dict) -> int:
+    """Parity tests collected on this box (``meta.parity_tests`` overrides the constant)."""
+    recorded = number(meta(doc).get("parity_tests"))
+    return int(recorded) if recorded else PARITY_TEST_COUNT
+
+
+def _not_compared_section(doc: dict, companions: dict | None = None) -> str:
+    """The explicit non-comparisons, including the measured parity-test count."""
+    count = _parity_count(doc)
+    accelerators = [
+        "- **No accelerator row exists.** The contract is CPU and the only measured backend is "
+        "the numpy reference interpreter; an `iree`/`xla`/`tvm` row would be informational and "
+        "is never part of the old-vs-new verdict."
+    ]
+    if (companions or {}).get("backends"):
+        accelerators.append(
+            " `benchmarks/BACKENDS.md` records the measured attempt: `iree` cannot lower a "
+            "single TensorNEAT case (it dies in `Pipeline.setup` before generation 0), so there "
+            "is no accelerator number to report."
+        )
     return "\n".join(
         [
             "## What is not compared",
             "",
-            "- Different PRNGs (JAX `PRNGKey` vs evoxc splitmix64) mean a shared seed identifies "
-            "the same *workload*, not the same search trajectory; numerical fidelity is covered "
-            "by `test/parity/`.",
-            "- Accelerator numbers are informational.",
-            "- CartPole is new-only (the legacy library has no equivalent problem).",
+            "- **Same workload, not the same search.** The sides use different PRNGs (JAX "
+            "`PRNGKey` vs evoxc splitmix64), so one seed identifies the same *workload*, not "
+            "the same trajectory or a bitwise-equal population. Numerical fidelity is "
+            "`test/parity/`'s job: it compares kernels against `benchmarks/legacy_jax`, and "
+            f"`pytest test/parity --collect-only -q` collects {count} tests on this box.",
+            "".join(accelerators),
+            "- **CartPole has no old-side row.** The frozen library's RL problems need "
+            "gym/brax/mujoco, so `cartpole_p100` is new-only and marked `n/a` for old.",
+            "- **Import time, visualization and code generation are not timed.** Only "
+            "`rss_after_import_mb` is recorded for the import phase; `Pipeline.show`, network "
+            "drawing and sympy codegen sit outside every timed region.",
+            "- **No trajectory equality is expected.** The two sides evolve different "
+            "populations from the same workload seed; parity of kernels (not of search) is "
+            "what `test/parity/` verifies.",
         ]
     )
 
 
-def _command_tokens(command) -> list[str]:
-    """``meta["command"]`` split back into argv tokens (empty for a missing command)."""
-    text = str(command or "").strip()
-    if not text:
-        return []
-    try:
-        return shlex.split(text)
-    except ValueError:
-        return text.split()
+# --- Companion evidence ---------------------------------------------------------------
 
 
-def _reproduce_command(doc: dict) -> tuple[str, str]:
-    """``(portable command, interpreter used)`` for the reproduce block.
+def _companions(doc: dict, report_path=None) -> dict[str, bool]:
+    """Companion evidence files that sit next to this report and are *not* this report.
 
-    The recorded command starts with the absolute interpreter path of the machine that
-    produced the run, which must not become the documented way to reproduce it: the
-    first command is the portable ``python benchmarks/run_benchmark.py <flags...>`` and
-    the interpreter that actually ran is stated on its own line.
+    A companion document must never point at itself: rendering ``THREADS.md`` drops the
+    ``THREADS.md`` pointer while the other companions (``BACKENDS.md``) keep theirs.
     """
-    tokens = _command_tokens(_meta(doc).get("command"))
-    if not tokens:
-        return "python benchmarks/run_benchmark.py", "n/a"
-    interpreter = _repo_relative(tokens[0]) or tokens[0]
-    arguments = [_repo_relative(token) or token for token in tokens[1:]]
-    if not arguments:
-        arguments = ["benchmarks/run_benchmark.py"]
-    return shlex.join(["python", *arguments]), interpreter
-
-
-def _reproduce_section(doc: dict) -> str:
-    """Portable command line, the interpreter that produced the run, and its settings."""
-    meta = _meta(doc)
-    proto = _protocol_meta(doc)
-    command, interpreter = _reproduce_command(doc)
-    cases = ", ".join(_text(name) for name in (meta.get("cases") or []))
-    backends = ", ".join(_text(name) for name in (meta.get("backends") or []))
-    threads = proto.get("threads")
-    thread_text = "runtime defaults (`--threads 0`)" if threads == 0 else f"`--threads {_plain(threads)}`"
-    repeats, seed = proto.get("repeats"), proto.get("seed")
-    seed_text = ""
-    if isinstance(repeats, int) and isinstance(seed, int) and repeats >= 1:
-        seed_text = " (seeds " + ", ".join(str(seed + offset) for offset in range(repeats)) + ")"
-    block = "\n".join(
-        [
-            "```bash",
-            command,
-            "python benchmarks/run_benchmark.py --list   # print the case matrix",
-            "python benchmarks/run_benchmark.py --dry-run  # print the planned worker commands",
-            "```",
-        ]
-    )
-    note = (
-        f"Cases: {cases or 'all declared cases'}. Timed generations: "
-        f"{_plain(proto.get('generations'))}, warmup generations (untimed): "
-        f"{_plain(proto.get('warmup'))}, repeats: {_plain(proto.get('repeats'))}{seed_text}, "
-        f"threads: {thread_text}. Backend(s) of the new side: {backends or 'n/a'}; the old side "
-        "always ran on JAX, once per case."
-    )
-    return (
-        "## How to reproduce\n\n"
-        + block
-        + "\n\n"
-        + f"Interpreter used: {interpreter}\n\n"
-        + note
-    )
-
-
-def _footer(doc: dict) -> str:
-    """Closing line: provenance and the do-not-edit reminder."""
-    return (
-        f"Generated from `{_json_path(doc)}` into `{_out_path(doc)}` at "
-        f"{_timestamp(doc)} — do not hand-edit."
-    )
+    present = companion_files(doc, report_path)
+    own_name = Path(report_path).name if report_path else Path(out_path(doc)).name
+    return {key: found and COMPANION_FILES[key] != own_name for key, found in present.items()}
 
 
 # --- Entry points -------------------------------------------------------------------------
 
 
-def render_report(doc: dict) -> str:
+def _banner(doc: dict) -> str:
+    """The blockquote that marks the file as generated (and re-rendered, when it was)."""
+    lines = [
+        "> **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from",
+        f"> `{json_path(doc)}` at {timestamp(doc)}. It must not be hand-edited:",
+        "> rerun the CLI instead, or the numbers below stop matching the recorded evidence.",
+    ]
+    rendered = text(meta(doc).get("rendered_at"), "")
+    if rendered and rendered != timestamp(doc):
+        lines.insert(
+            2,
+            f"> Re-rendered from that same JSON at {rendered} with `--render-from-json` "
+            "(no worker was re-run; the dirty state is re-probed on this tree).",
+        )
+    return "\n".join(lines)
+
+
+def _title(doc: dict) -> str:
+    """The H1: ``meta.report_title`` when the run declared one, else :data:`TITLE`.
+
+    A bare title ('Thread sensitivity') gets the ``#`` marker; one that already carries its
+    own hashes is kept verbatim, so both spellings render a single H1.
+    """
+    custom = text(meta(doc).get("report_title"), "").strip()
+    if not custom:
+        return TITLE
+    return custom if custom.startswith("#") else f"# {custom}"
+
+
+def _report_note(doc: dict) -> str:
+    """``meta.report_note`` as one italic line under the banner (``""`` when none was given).
+
+    Companion documents (``THREADS.md``) must not be confused with the authoritative report,
+    so the note is rendered from the document rather than hard-coded here; a multi-line
+    value is collapsed to the one line the report promises.
+    """
+    note = " ".join(text(meta(doc).get("report_note"), "").split())
+    return f"*{note}*" if note else DEFAULT_REPORT_NOTE
+
+
+def _footer(doc: dict) -> str:
+    """Closing line: provenance and the do-not-edit reminder."""
+    return (
+        f"Generated from `{json_path(doc)}` into `{out_path(doc)}` at "
+        f"{timestamp(doc)} — do not hand-edit."
+    )
+
+
+def render_report(doc: dict, report_path=None) -> str:
     """Render the whole ``RESULTS.md`` body for one benchmark document.
 
     Args:
         doc: The JSON document written by ``run_benchmark.py`` (``meta``, ``runs``,
             ``aggregated``, ``verdict``); a partial document renders with ``n/a`` cells.
+        report_path: Where the report will be written. It decides which companion evidence
+            files are ``next to`` the report, so a pointer is only rendered when the file
+            really is there (a ``$TMPDIR`` render does not claim a checkout's files).
 
     Returns:
-        Markdown text with a trailing newline.
+        Markdown text with a trailing newline. Without ``meta.report_title`` /
+        ``meta.report_note`` the output is exactly the default ``RESULTS.md``.
     """
     document = doc or {}
+    companions = _companions(document, report_path)
     blocks = [
-        TITLE,
+        _title(document),
         _banner(document),
+        _report_note(document),
+        headline_section(document),
         _environment_section(document),
-        _protocol_section(document),
+        _protocol_section(document, companions),
         _case_matrix_section(document),
         _results_section(document),
         _comparison_section(document),
         _verdict_section(document),
+        winlose_section(document),
         _curves_section(document),
         _reference_section(document),
-        _not_compared_section(),
-        _reproduce_section(document),
+        _not_compared_section(document, companions),
+        reproduce_section(document, companions),
         _footer(document),
     ]
-    return _spaced_headings("\n\n".join(block.rstrip() for block in blocks)) + "\n"
+    return (
+        spaced_headings(
+            "\n\n".join(block.rstrip() for block in blocks if block.rstrip())
+        )
+        + "\n"
+    )
 
 
 def write_report(doc: dict, path) -> None:
     """Write :func:`render_report` to ``path`` (parent dirs created, UTF-8, trailing newline)."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render_report(doc), encoding="utf-8")
+    target.write_text(render_report(doc, target), encoding="utf-8")
