@@ -73,6 +73,8 @@ Per-call traced ops (before → after this node's op diet; the pair-wise column 
 | `tail_node` / `tail_conn` | 70 / 49 | **61 / 40** |
 
 The stable-sort change added and removed nothing: `measure` is 151 and `prepare` 64 ops before and after it, and the whole-generation trace is 3785 ops either way.
+A zero-attribute family (`conn_gene.attr_specs = ()`) costs *fewer* ops, because its attribute term is statically dead: `prepare` **53**, `measure` **131**, `execute_distance` **198** (vs 64 / 151 / 221), 0.51 / 1.61 / 2.70 ms at pop 100.
+The zero-width guards add **zero** traced ops on the width ≥ 1 path — they are static Python branches around the same op sequence, so `prepare`/`measure`/`execute_distance` are 64 / 151 / 221 ops and 0.61 / 1.85 / 2.92 ms (pop 100), 3.54 / 10.03 / 17.25 ms (pop 1000) before and after.
 
 Whole-generation attribution (one trace of `pipeline._generation_kernel`, ops by `op.location.file`): **4860 → 3838** traced ops at pop 500/1000 (2852 → 2478 at pop 100).
 The distance files are **2236 → 1422** at pop 500/1000 (776 → 526 at pop 100) — `digest.py` 687, `default.py` 552, `consts.py` 163, `base.py` 20.
