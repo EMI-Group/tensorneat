@@ -196,20 +196,26 @@ class FuncFit(BaseProblem):
         loss.
 
         The schedule's leaves are threaded into a small one-off graph as data
-        arguments and the schedule container is rebuilt inside the trace, so a
-        schedule backed by numpy arrays and one backed by ``evoxc.Tensor``
-        leaves are both accepted.
+        arguments and the schedule container is rebuilt inside the trace with
+        evoxc's pytree machinery -- ``tree_unflatten(tree_structure(...),
+        leaves)`` -- never with a positional constructor call. That matters
+        because the container is opaque to a problem: a flat ``Transformed``
+        namedtuple and HyperNEAT's nested ``SubstrateSchedule`` (whose first
+        field is itself a schedule) must both round-trip, and only the
+        structure does not care how many leaves a container has.
 
         Args:
             state: Host container with configuration.
             key: One evoxc key; unused, the problem is deterministic.
             act_fn: Callable mapping a batch to a batch of predictions.
-            transformed: A schedule holding a single individual.
+            transformed: A batch-first schedule, normally holding a single
+                individual; the report prints one block per individual, so any
+                static ``P`` is accepted.
 
         Returns:
             ``None``; the report goes to stdout.
         """
-        schedule_type = type(transformed)
+        structure = evoxc.tree_structure(transformed)
         leaves = tuple(evoxc.tree_leaves(transformed))
 
         def kernel(*arrays: Any) -> tuple[Any, Any]:
@@ -221,7 +227,7 @@ class FuncFit(BaseProblem):
             Returns:
                 ``(pred (P, S, O), loss (P,))`` graph values.
             """
-            schedule = schedule_type(*arrays)
+            schedule = evoxc.tree_unflatten(list(arrays), structure)
             pop_size = static_batch_size(schedule)
             return self._predict_and_loss(act_fn, pop_size)
 
