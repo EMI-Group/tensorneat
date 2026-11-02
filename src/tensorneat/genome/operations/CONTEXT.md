@@ -56,6 +56,7 @@ Non-homologous slots are zeroed **before** the attribute `reduce_sum` (a `NaN * 
 ## Test Strategy
 `test/unit/genome/test_mutation.py`, `test_crossover.py`, `test_distance.py` are the acceptance specs (their bodies are still `pytest.skip` placeholders, so they document the invariants rather than assert them).
 Until those bodies land, the verified evidence is scratch-kernel runs through `test/support/runner.run_defn` with hand-built payloads and a duck-typed stand-in genome: shapes/dtypes, `I_INF`⇔NaN padding pairing, key uniqueness, caps over repeated generations, add-node split output preservation, duplicate/cycle/in-degree refusal, crossover key alignment against a host `{key tuple: row}` oracle, and distance identity/symmetry/monotonicity/batching/determinism.
+The shared `find_homologous` is checked against that host oracle at key widths 1/2/3, including shuffled parent-2 rows and a case whose packed prefixes match while the third column differs (so `_confirm_rows` must reject); `execute_crossover` and `execute_distance` are additionally compared bit-for-bit against a frozen fixed-input oracle at `commit b18716e` on an evolved seed-42 population and on an `OriginConn` population.
 Trace a bound method through a closure (`lambda *a: obj.method(state, *a)`) and build rank-0 RNG keys *inside* the trace (`evoxc.random.key(seed)`), because the runner cannot carry an `evoxc` key as data.
 
 ## Known Issues
