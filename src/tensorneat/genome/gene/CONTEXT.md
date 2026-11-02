@@ -14,7 +14,7 @@ Nothing here imports `jax`/`torch`, and no hook on the compute path runs eager N
 - `new_random_attrs(state, key, shape) -> (*shape, attr_width)` — one batched `evoxc.random` draw per spec, clipped into the spec bounds; `shape=()` is supported (draws `(1,)` then reshapes).
 - `new_identity_attrs(state)` — floats at their init mean, ints at their first option; `new_zero_attrs(state)` — zeros, ints at their first option. Both return `(attr_width,)` and are rebuilt inside the graph (`enp` constants, never eager `np`).
 - `mutate(state, key, attrs)` — batched over leading axes: floats `mutate_float` noise `mutate_rate` of the time and `replace_rate` re-init from the spec distribution, ints re-drawn uniformly over the option list with `replace_rate`.
-- `crossover(state, key, attrs1, attrs2)` — one rank-0 normal draw broadcast over the attribute columns, per-column 50/50 pick.
+- `crossover(state, key, attrs1, attrs2)` — one `U[0, 1)` block draw and a per-entry 50/50 pick (`< 0.5` selects the first parent); `node/origin.py` / `conn/origin.py` override it with one draw per gene row, so a child gene copies one parent's whole attribute vector.
 - `distance(state, attrs1, attrs2)` — sum over the attribute axis of `|Δ|` for floats and `!=` (as 0/1) for ints, with NaN padding treated as "absent" (a NaN row contributes 0).
 - `hash(keys)` — `hash_int32` over the int32 key columns (xor-mix: `h = h ^ (k + HASH_GOLDEN + (h << 6) + (h >> 2))`), bit-identical to `common.tools.hash_rows`.
 - `from_attrs(state, keys, attrs=None)` — split-payload assembly from pre-built columns; validation of a wrong column count / width raises `ConfigError`.
