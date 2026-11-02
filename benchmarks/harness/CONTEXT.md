@@ -39,7 +39,7 @@ class Adapter:
     def prepare(self, pipeline, state)                             # -> (state, compile_seconds, generations_consumed, step_fn)
     # step_fn(state) -> (state, fitness float64 ndarray of shape (P,))
 ```
-`prepare` is where the two compile models meet: the old side compiles in `prepare` and does not advance the state (0 generations consumed); the new side performs its build by running one real generation and reports 1 consumed generation, which the worker subtracts from the warmup so both sides time the same generation index.
+`prepare` is where the two compile models meet: the old side compiles in `prepare` and does not advance the state (0 generations consumed); the new side performs its build by running one real generation and reports 1 consumed generation, which the worker subtracts from the warmup so both sides' timing samples cover the same generation indices (the new side's quality curve starts one generation later and is one entry shorter).
 `step_fn` must return fitness already materialised on the host, so the sync cost sits inside the timed region.
 ## Fitness Extraction Contract (pipeline <-> harness)
 The worker reads fitness from the **last** element of the step result: `(state, pop, fitness)` and `(state, fitness)` are both accepted, anything else fails loudly with the observed type/shape.
