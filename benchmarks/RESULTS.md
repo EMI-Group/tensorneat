@@ -2,6 +2,7 @@
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
 > `benchmarks/results/authoritative.json` at 2026-11-02T07:29:02+00:00. It must not be hand-edited:
+> Re-rendered from that same JSON at 2026-11-02T07:34:09+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 ## Headline: old vs new
@@ -351,6 +352,6 @@ python benchmarks/run_benchmark.py --dry-run
 
 Interpreter used: /tmp/tn-venv/bin/python
 
-Cases: xor_p100, xor_p500, xor_p1000, xor3d_p100, xor3d_p500, xor3d_p1000, custom_pagie_p500, cartpole_p100. Timed generations: 150, warmup generations (untimed): 3, repeats: 3 (seeds 42, 43, 44), threads: runtime defaults (`--threads 0`). Backend(s) of the new side: numpy; the old side always runs on JAX, once per case. `--out` defaults to `benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (git-ignored); the report is regenerated in place from that JSON. A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
+Cases: xor_p100, xor_p500, xor_p1000, xor3d_p100, xor3d_p500, xor3d_p1000, custom_pagie_p500, cartpole_p100. Timed generations: 150, warmup generations (untimed): 3, repeats: 3 (seeds 42, 43, 44), threads: runtime defaults (`--threads 0`). Backend(s) of the new side: numpy; the old side always runs on JAX, once per case. `--out` defaults to `benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (scratch, git-ignored); the record this report was rendered from (`authoritative.json`) is committed at `benchmarks/results/authoritative.json` beside that default, so every table cell is traceable. A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
 
 Generated from `benchmarks/results/authoritative.json` into `benchmarks/RESULTS.md` at 2026-11-02T07:29:02+00:00 — do not hand-edit.

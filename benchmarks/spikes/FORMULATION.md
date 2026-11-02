@@ -13,13 +13,14 @@ Those are whole-generation numbers (transform + forward + `tell`); reproducing a
 
 ## Where this sits in the measured end-to-end run
 
-`../RESULTS.md` (rendered 2026-11-02T05:00:13Z on this box, `--threads 0`, new side on the `numpy` backend, 150 timed generations, 2 repeats) measures XOR at **36.19 / 165.54 / 301.21 ms per generation on the old JAX side** and **58.26 / 360.44 / 676.49 ms per generation on the new evoxc side**, at pop 100 / 500 / 1000.
-That is the whole generation (transform + forward + `tell` + the species controller + the problem's `evaluate`), and the old-side pop-1000 row is 1.9× the declared 157 ms, so the measured row, not the declared contract, is what the harness verdict uses.
-Of the rows below only the legacy transform+forward at pop 1000 (27.84 ms) maps onto that generation, and it is ≈ 9 % of the measured 301.21 ms; the legacy forward alone (8.95 ms) is ≈ 3 %.
-The remaining ≈ 274 ms of an old-side generation is work this spike never times (`tell`, the species controller and its `analysis`, the problem's `evaluate` loop, the per-generation host sync), so these numbers explain the transform+forward part of the old side and no more.
-They say even less about the new side's 676.49 ms/generation: the 0.69–15.90 ms prototype rows time a level loop over prebuilt tables, with no evoxc build/run, no transform of an evolving population and no host orchestration.
+`../RESULTS.md` (measured 2026-11-02T07:29:02Z on this box, `--threads 0`, new side on the `numpy` backend, 150 timed generations, 3 repeats) measures XOR at **31.35 / 157.01 / 246.76 ms per generation on the old JAX side** and **58.02 / 357.25 / 671.73 ms per generation on the new evoxc side**, at pop 100 / 500 / 1000.
+The same CLI with `--threads 1` (record in `../THREADS.md`, 2 repeats) gives **35.79 / 127.71 / 252.06 ms on the old side** and **53.92 / 360.12 / 665.46 ms on the new side** at the same populations, so thread binding does not close the gap.
+That is the whole generation (transform + forward + `tell` + the species controller + the problem's `evaluate`), and the old-side pop-1000 row is 1.6× the declared 157 ms, so the measured row, not the declared contract, is what the harness verdict uses.
+Of the rows below only the legacy transform+forward at pop 1000 (27.84 ms) maps onto that generation, and it is ≈ 11 % of the measured 246.76 ms; the legacy forward alone (8.95 ms) is ≈ 4 %.
+The remaining ≈ 219 ms of an old-side generation is work this spike never times (`tell`, the species controller and its `analysis`, the problem's `evaluate` loop, the per-generation host sync), so these numbers explain the transform+forward part of the old side and no more.
+They say even less about the new side's 671.73 ms/generation: the 0.69–15.90 ms prototype rows time a level loop over prebuilt tables, with no evoxc build/run, no transform of an evolving population and no host orchestration.
 The spike also fixes P = 1000 in every row it records, so the pop 100 and pop 500 end-to-end rows have no counterpart here at all.
-Nothing below is a prediction of, or an argument about, that end-to-end timing verdict: the verdict is the harness's, and what this record supports is work per forward and how it scales with depth and real edges.
+Nothing below is a prediction of, or an argument about, that end-to-end timing verdict: the micro-kernel rows cannot adjudicate the end-to-end gap, because they measure formulations rather than the compiled pipeline; the verdict is the harness's, and what this record supports is work per forward and how it scales with depth and real edges.
 
 ## Conditions shared by every measured number
 

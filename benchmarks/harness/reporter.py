@@ -1,4 +1,4 @@
-"""Presentation only: render ``benchmarks/RESULTS.md`` from one benchmark document.
+"""Presentation only: render the committed reports (``RESULTS.md``, ``THREADS.md``, ``iree.md``) from one document.
 
 :func:`render_report` turns the JSON document written by ``../run_benchmark.py`` into
 markdown; :func:`write_report` writes it to a path. There is no measurement maths and no
@@ -793,6 +793,42 @@ def _variant(arguments: str) -> str:
     return "python benchmarks/run_benchmark.py " + arguments
 
 
+COMMITTED_RECORD_DIR = "benchmarks/results/"  # git-ignored except the names its .gitignore re-includes
+
+
+def _committed_record_names() -> frozenset[str]:
+    """Basenames ``results/.gitignore`` re-includes; an unreadable manifest means none."""
+    manifest = Path(__file__).resolve().parents[1] / "results" / ".gitignore"
+    try:
+        lines = manifest.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return frozenset()
+    names = (line.strip()[1:] for line in lines if line.strip().startswith("!"))
+    return frozenset(name for name in names if name)
+
+
+def _record_sentence(doc: dict) -> str:
+    """Where this report's numbers came from, and whether that record is committed evidence.
+
+    ``--json`` defaults to the scratch ``benchmarks/results/latest.json``; the committed
+    reports are rendered from a record that ``results/.gitignore`` re-includes, so every
+    table cell is traceable.
+    """
+    path = json_path(doc)
+    name = Path(path).name
+    names = _committed_record_names()
+    committed = path.startswith(COMMITTED_RECORD_DIR) and name != "latest.json" and name in names
+    if committed:
+        return (
+            f"the record this report was rendered from (`{name}`) is committed at `{path}` "
+            "beside that default, so every table cell is traceable"
+        )
+    return (
+        f"this report was rendered from `{path}`, a scratch record that is not committed: "
+        "copy it next to the report before sharing it"
+    )
+
+
 def _reproduce_section(doc: dict, companions: dict | None = None) -> str:
     """Portable command line, the interpreter that produced the run, and its settings."""
     doc_meta = meta(doc)
@@ -846,8 +882,8 @@ def _reproduce_section(doc: dict, companions: dict | None = None) -> str:
         f"{plain(proto.get('warmup'))}, repeats: {plain(proto.get('repeats'))}{seed_text}, "
         f"threads: {thread_text}. Backend(s) of the new side: {backends and ', '.join(backends) or 'n/a'}; "
         "the old side always runs on JAX, once per case. `--out` defaults to "
-        "`benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (git-ignored); "
-        "the report is regenerated in place from that JSON."
+        "`benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` "
+        f"(scratch, git-ignored); {_record_sentence(doc)}."
     )
     if (companions or {}).get("threads"):
         note += (

@@ -2,6 +2,7 @@
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
 > `benchmarks/results/iree.json` at 2026-11-02T07:29:26+00:00. It must not be hand-edited:
+> Re-rendered from that same JSON at 2026-11-02T07:34:09+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *Every case errors in `Pipeline.setup` before generation 0; see `BACKENDS.md` for the failure signature and the minimal reproducer. The measured CPU contract is `RESULTS.md` (numpy reference backend).*
@@ -218,6 +219,6 @@ python benchmarks/run_benchmark.py --dry-run
 
 Interpreter used: /tmp/genesis/task_d7be275380ce6fc0/iree-venv/bin/python
 
-Cases: xor_p100, xor_p500, xor_p1000, xor3d_p100, xor3d_p500, xor3d_p1000, custom_pagie_p500, cartpole_p100. Timed generations: 2, warmup generations (untimed): 1, repeats: 1 (seeds 42), threads: runtime defaults (`--threads 0`). Backend(s) of the new side: iree; the old side always runs on JAX, once per case. `--out` defaults to `benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (git-ignored); the report is regenerated in place from that JSON. A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
+Cases: xor_p100, xor_p500, xor_p1000, xor3d_p100, xor3d_p500, xor3d_p1000, custom_pagie_p500, cartpole_p100. Timed generations: 2, warmup generations (untimed): 1, repeats: 1 (seeds 42), threads: runtime defaults (`--threads 0`). Backend(s) of the new side: iree; the old side always runs on JAX, once per case. `--out` defaults to `benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (scratch, git-ignored); the record this report was rendered from (`iree.json`) is committed at `benchmarks/results/iree.json` beside that default, so every table cell is traceable. A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
 
 Generated from `benchmarks/results/iree.json` into `benchmarks/iree.md` at 2026-11-02T07:29:26+00:00 — do not hand-edit.
