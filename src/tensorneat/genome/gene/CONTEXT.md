@@ -63,6 +63,9 @@ Across pop 100/500 × `survival_threshold` 0.01/0.1/0.3 × 4 family combinations
 A flat XOR MSE of exactly 0.25 (every output ≈ 0.5) is reproducible for *all* families at `max_nodes=16` or with `XOR3d` at `pop_size=100`; the best genome's read-out sits at pre-activation ≈0 because its only live path ignores one input, so it is a capacity/selection wall, not an origin-gene defect.
 At `max_nodes=16`, pop 100, seed 42 that plateau resolves before generation 150 for both families (default 0.2498 at generation 40 → 3.8e-5 at 150, the Origin pair 0.25 → 0), so it never persists for one family while the other learns.
 
+All three defects behind the "Origin genes learn nothing" report are outside this node: `algorithm/neat/_kernels.py::pair_parents` (survivor floor of 1 kills crossover at `survival_threshold=0.01`), `algorithm/neat/neat.py::_new_gene_keys` (node keys grow past `key_span`, so an added node and its two split edges are silently unbound — measured 17-30 % of live connection rows at generation 30+; fixing visibility alone gave no reproducible learning gain), and the per-individual marker allocator (homology, matters only once crossover is active: 3/3 seeds reach MSE < 0.01 with a population-wide marker id versus 2/3 without).
+The families themselves need no behavioural change; their `crossover` is whole-gene, their `mutate`/`distance`/`forward` are the inherited and unit-tested ones.
+
 ## Test Strategy
 Covered by `test/unit/genome/` (payload layout, forward vs `test/support/oracle.py`, mutate/crossover/distance invariants) and `test/parity/genome/` (kernel parity against `benchmarks/legacy_jax`).
 `PYTHONPATH=src python -m pytest test/unit/genome test/parity test/release_gate_no_jax.py -q` reports 152 passed in ~31 s (95 unit/genome, 53 parity, 4 release gate), and `import tensorneat` loads none of `jax`/`torch`/`brax`/`gymnax`/`mujoco`.
