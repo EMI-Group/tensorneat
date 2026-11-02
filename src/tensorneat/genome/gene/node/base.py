@@ -19,7 +19,7 @@ from ....common.errors import ConfigError
 from ....common.functions import FunctionManager
 from ....common.functions.act import ACT_IDENTITY
 from ..base import BaseGene, column, option_masks, select_cascade
-from ...window import any_slot
+from ...window import any_slot, fill
 
 
 class NodeOperands(NamedTuple):
@@ -294,9 +294,9 @@ class BaseNode(BaseGene):
             ``(P, N)`` int32 option ids.
         """
         if not self.has_attr(name):
-            return enp.full(
-                tuple(shape_source.shape), int(default), dtype=evoxc.int32
-            )
+            # A family without this column still needs one id per row: a single element
+            # broadcast over ``(P, N)`` instead of a population-scaled ``enp.full``.
+            return fill(tuple(shape_source.shape), int(default), dtype=evoxc.int32)
         return evoxc.cast(columns[self.attr_index(name)], evoxc.int32)
 
     def column_of(
@@ -377,7 +377,7 @@ class BaseNode(BaseGene):
             if self.has_attr("aggregation"):
                 ids = evoxc.cast(self.attr_column(attrs, "aggregation"), evoxc.int32)
             else:
-                ids = enp.full(
+                ids = fill(
                     tuple(messages.shape[:-1]), 0, dtype=evoxc.int32
                 )
             masks = option_masks(ids, len(self.aggregation_options))

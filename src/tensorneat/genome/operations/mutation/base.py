@@ -23,6 +23,7 @@ import evoxc.numpy as enp
 
 from ....common import I_INF, ConfigError, State, StatefulBaseClass
 from ...utils import GenomeTensors
+from ...window import fill
 from .arrays import (
     column_base,
     first_row,
@@ -572,8 +573,11 @@ class BaseMutation(StatefulBaseClass):
         Returns:
             tuple: ``(add_node, delete_node, add_conn, delete_conn)`` plans.
         """
-        ghost = enp.full((pop_size,), I_INF, dtype=evoxc.int32)
-        never = enp.full((pop_size,), False, dtype=evoxc.bool_)
+        # One element each, broadcast by the plans' ``select``s: a population-wide
+        # ``enp.full`` here is a graph constant proportional to ``P`` (see
+        # ``..window.fill``) for a value that has no per-individual content.
+        ghost = fill((pop_size,), I_INF, dtype=evoxc.int32)
+        never = fill((pop_size,), False, dtype=evoxc.bool_)
         add_node = (
             self.plan_add_node(
                 state,
@@ -595,7 +599,7 @@ class BaseMutation(StatefulBaseClass):
                 ghost,
                 ghost,
                 ghost,
-                enp.zeros((pop_size, 1, attr_width), dtype=evoxc.float32),
+                fill((pop_size, 1, attr_width), 0.0, dtype=evoxc.float32),
             )
         )
         delete_node = (
@@ -604,7 +608,9 @@ class BaseMutation(StatefulBaseClass):
             )
             if self.node_delete > 0.0
             else DeleteNodePlan(
-                never, ghost, enp.zeros(context.present_conn.shape, dtype=evoxc.bool_)
+                never,
+                ghost,
+                fill(tuple(context.present_conn.shape), False, dtype=evoxc.bool_),
             )
         )
         add_conn = (
@@ -669,8 +675,8 @@ class BaseMutation(StatefulBaseClass):
                 genome.node_gene.new_identity_attrs(state), pop_size
             )
         else:
-            node_identity = enp.zeros(
-                (pop_size, node_attr_width), dtype=evoxc.float32
+            node_identity = fill(
+                (pop_size, node_attr_width), 0.0, dtype=evoxc.float32
             )
         node_rows = evoxc.select(
             add_node.ok,
@@ -713,13 +719,17 @@ class BaseMutation(StatefulBaseClass):
                 genome.conn_gene.new_identity_attrs(state), pop_size
             )
         else:
-            conn_identity = enp.zeros((pop_size, conn_attr_width), dtype=evoxc.float32)
+            conn_identity = fill(
+                (pop_size, conn_attr_width), 0.0, dtype=evoxc.float32
+            )
         if self.conn_add > 0.0:
             conn_zero = _broadcast_row(
                 genome.conn_gene.new_zero_attrs(state), pop_size
             )
         else:
-            conn_zero = enp.zeros((pop_size, conn_attr_width), dtype=evoxc.float32)
+            conn_zero = fill(
+                (pop_size, conn_attr_width), 0.0, dtype=evoxc.float32
+            )
         conn_attr_slot_1 = evoxc.select(
             add_node_column,
             enp.reshape(conn_identity, (pop_size, 1, conn_attr_width)),

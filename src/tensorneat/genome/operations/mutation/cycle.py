@@ -33,6 +33,7 @@ import evoxc
 import evoxc.numpy as enp
 
 from ....common import I_INF
+from ...window import fill
 
 
 def _static_constant(values: np.ndarray) -> evoxc.SymbolicTensor:
@@ -124,10 +125,15 @@ def _row_of(
     # the rank of the first one; a trailing sentinel column keeps that index in range when no
     # node follows (its key is I_INF + 1, so it never passes the hit test).
     rank = evoxc.subtract(_static_constant(np.asarray(node_count)), remaining)
+    # One sentinel *element*, broadcast down the column: the value is static data with no
+    # per-individual content, so a materialised ``(P, 1)`` int64 column would only be a
+    # graph constant proportional to ``P``.
     sorted_nodes = enp.concatenate(
         [
             evoxc.sort(node_enc, axis=1),
-            _static_wide(np.full((pop_size, 1), (I_INF + 1) << bits, dtype=np.int64)),
+            enp.broadcast_to(
+                _static_wide(np.asarray((I_INF + 1) << bits)), (pop_size, 1)
+            ),
         ],
         axis=1,
     )
@@ -146,7 +152,9 @@ def _row_of(
     width = query_count + 1
     store = _static_constant(np.arange(0, pop_size * width, width).reshape(pop_size, 1))
     written = evoxc.scatter(
-        enp.reshape(enp.zeros((pop_size, width), dtype=evoxc.int32), (pop_size * width,)),
+        enp.reshape(
+            fill((pop_size, width), 0, dtype=evoxc.int32), (pop_size * width,)
+        ),
         enp.reshape(evoxc.add(evoxc.minimum(low, c_query), store), (pop_size * total,)),
         enp.reshape(answer, (pop_size * total,)),
         axis=0,
@@ -228,11 +236,16 @@ def closes_cycle(
     edge_positions = pop_size * edge_count
     src_flat = enp.reshape(evoxc.add(edge_src, offsets), (edge_positions,))
     dst_flat = enp.reshape(evoxc.add(edge_dst, offsets), (edge_positions,))
-    dump_flat = _static_constant(
-        np.repeat(
-            np.arange(0, pop_size * width, width, dtype=np.int32) + node_count,
-            edge_count,
-        )
+    # The dump column's flat index is the per-individual row offset plus ``node_count``,
+    # identical for every edge of that individual: ``(P, 1)`` static data broadcast across
+    # the edge axis instead of a materialised ``(P * E,)`` constant (``P * E`` entries --
+    # 40 k, 200 k and 400 k at pop 100/500/1000).
+    dump_flat = enp.reshape(
+        enp.broadcast_to(
+            evoxc.add(offsets, _static_constant(np.asarray(node_count))),
+            (pop_size, edge_count),
+        ),
+        (edge_positions,),
     )
     valid_flat = enp.reshape(edge_valid, (edge_positions,))
     # Seed the frontier at the destination: a one-hot row, then a zero dump column.
@@ -245,7 +258,7 @@ def closes_cycle(
     )
     frontier = enp.reshape(
         enp.concatenate(
-            [seeded, enp.zeros((pop_size, 1), dtype=evoxc.bool_)], axis=1
+            [seeded, fill((pop_size, 1), False, dtype=evoxc.bool_)], axis=1
         ),
         (pop_size * width,),
     )

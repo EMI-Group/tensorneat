@@ -71,6 +71,8 @@ import evoxc.numpy as enp
 import numpy as np
 
 from ...common.errors import ConfigError
+from ..window import fill
+from ..window import fill
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
     from .base import GeneAttr
@@ -109,6 +111,12 @@ def static_row(values: Sequence[float]) -> evoxc.SymbolicTensor:
 def column_constant(value: float, column_shape: tuple[int, ...]) -> evoxc.SymbolicTensor:
     """Broadcast one scalar to a full attribute column.
 
+    One element plus ``broadcast_to`` (``..window.fill``) rather than a materialised
+    ``enp.full``: every consumer of a column here (``concatenate`` in :func:`_assemble`,
+    ``clip``, ``select``) materialises the block it needs anyway, so a materialised
+    column would only bake ``prod(column_shape)`` bytes into the graph — ``(P, 50, 1)``
+    float32 is 200 KB at ``P=1000``, per column, per graph.
+
     Args:
         value: The constant every entry of the column takes.
         column_shape: ``(*batch_shape, 1)`` shape of one attribute column.
@@ -116,7 +124,7 @@ def column_constant(value: float, column_shape: tuple[int, ...]) -> evoxc.Symbol
     Returns:
         ``column_shape`` float32 tensor holding ``value``.
     """
-    return enp.full(column_shape, float(value), dtype=evoxc.float32)
+    return fill(tuple(column_shape), float(value), dtype=evoxc.float32)
 
 
 def _parameter_table(
@@ -138,7 +146,7 @@ def _parameter_table(
         ``block_shape`` float32 tensor holding ``values`` along the attribute axis.
     """
     row = np.asarray(values, dtype=np.float32).reshape((1,) * (len(block_shape) - 1) + (len(values),))
-    return evoxc.constant(evoxc.from_numpy(np.broadcast_to(row, block_shape).copy()))
+    return enp.broadcast_to(evoxc.constant(evoxc.from_numpy(row)), tuple(block_shape))
 
 
 def _assemble(

@@ -26,6 +26,7 @@ from .operations import (
     DefaultDistance,
     DefaultMutation,
 )
+from .window import fill
 
 
 class RecurrentGenome(BaseGenome):
@@ -175,7 +176,9 @@ class RecurrentGenome(BaseGenome):
             ``(P, num_outputs) float32`` outputs after ``output_transform``.
         """
         pop_size, max_nodes = (int(size) for size in transformed.node_exists.shape)
-        values = enp.full((pop_size, max_nodes), float("nan"), dtype=evoxc.float32)
+        # One NaN element broadcast to ``(P, N)`` (see ``..window.fill``): the materialised
+        # block would be the kernel's only population-scaled graph constant.
+        values = fill((pop_size, max_nodes), float("nan"), dtype=evoxc.float32)
         # Absent rows read as ``0`` instead of ``NaN`` before the tick loop, so the option
         # index columns the node gene casts to ``int32`` are never NaN (see
         # ``BaseGenome._padding_safe_attrs``).

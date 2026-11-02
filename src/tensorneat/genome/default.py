@@ -37,7 +37,7 @@ from .operations import (
     DefaultMutation,
 )
 from .utils import GenomeTensors
-from .window import _iinf
+from .window import _iinf, fill
 
 
 class DefaultGenome(BaseGenome):
@@ -189,16 +189,16 @@ class DefaultGenome(BaseGenome):
         """
         pop_size, max_nodes = (int(size) for size in transformed.node_level.shape)
         seed = inputs if self.input_transform is None else self.input_transform(inputs)
-        values = evoxc.concatenate(
-            [
-                seed,
-                enp.full(
-                    (pop_size, max_nodes - self.num_inputs),
-                    float("nan"),
-                    dtype=evoxc.float32,
-                ),
-            ],
-            axis=1,
+        pad = max_nodes - self.num_inputs
+        # One NaN constant element broadcast to the node block (see ``..window.fill``): a
+        # materialised ``(P, max_nodes - num_inputs)`` NaN block is the largest graph
+        # constant of this kernel at every population.
+        values = (
+            evoxc.concatenate(
+                [seed, fill((pop_size, pad), float("nan"), dtype=evoxc.float32)], axis=1
+            )
+            if pad
+            else seed
         )
         # Absent rows read as ``0`` instead of ``NaN`` before the level loop: their option
         # index columns are cast to ``int32`` by the node gene, and a ``NaN``-to-int cast is a

@@ -54,6 +54,7 @@ from .window import (
     _iinf,
     _slot_index,
     any_slot,
+    fill,
 )
 from .utils import GenomeTensors, check_cycles as _check_cycles
 
@@ -572,10 +573,13 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         tail_attrs = drawn_nodes[(slice(None), slice(head_count, node_count))]
         pad_rows = self.max_nodes - node_count
         if pad_rows:
+            # A single NaN element broadcast over the padding rows: a materialised
+            # ``(P, pad_rows, NA)`` block is a graph constant proportional to ``P`` (see
+            # ``.window.fill``) for a value every one of those rows shares.
             node_attrs = evoxc.concatenate(
                 [
                     head_attrs,
-                    enp.full(
+                    fill(
                         (pop_size, pad_rows, node_attr_width),
                         float("nan"),
                         dtype=evoxc.float32,
@@ -609,7 +613,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
             conn_attrs = evoxc.concatenate(
                 [
                     drawn_conns,
-                    enp.full(
+                    fill(
                         (pop_size, self.max_conns - conn_count, conn_attr_width),
                         float("nan"),
                         dtype=evoxc.float32,
@@ -627,7 +631,17 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
 
         The only place the schedule is derived: it delegates to
         ``..common.tensorization.derive_schedule`` with the input/output keys as ``int32``
-        in-graph constants and the five statics of this genome.  The composition goes through
+        in-graph constants and the six statics of this genome.  The last static is
+        ``acyclic``, derived from :attr:`network_type` (never a constructor argument): the
+        feedforward genome cannot hold a cycle because ``execute_mutation`` refuses every
+        cycle-closing edge, so ``derive_schedule`` may drop the live-cycle detection (the
+        level-only relaxation's exactness test plus the cycle-detecting fallback inside
+        ``evoxc.cond``).  A recurrent genome keeps ``acyclic=False`` and therefore keeps the
+        ``I_INF`` level of every node on or downstream of a cycle.  The consequence for a
+        feedforward genome handed a *cyclic* payload (which its own operators cannot build)
+        is a saturated level instead of ``I_INF``: such a node is then evaluated once per
+        loop trip with whatever sources are live, instead of staying ``NaN``.  The
+        composition goes through
         ``derive_schedule.fn`` — the ``@evoxc.defn`` object itself refuses to be called
         (``Defn`` is a graph definition, not a callable), so a graph that needs the schedule
         inline calls the plain function, which evoxc documents as the supported way to
@@ -665,6 +679,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
             self.max_conns,
             self.max_in_degree,
             self.key_span,
+            self.network_type == "feedforward",
         )
 
     @staticmethod
@@ -1274,7 +1289,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         """
         pop_size = int(node_keys.shape[0])
         if self.network_type != "feedforward":
-            return enp.zeros((pop_size,), dtype=evoxc.bool_)
+            return fill((pop_size,), False, dtype=evoxc.bool_)
         return _check_cycles(node_keys, conn_keys, src_keys, dst_keys)
 
     # ------------------------------------------------------------- helper surface
@@ -1319,7 +1334,7 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         """
         exists = self.node_exists(node_keys)
         safe = evoxc.select(
-            exists, node_keys, enp.zeros(tuple(node_keys.shape), dtype=node_keys.dtype)
+            exists, node_keys, fill(tuple(node_keys.shape), 0, dtype=node_keys.dtype)
         )
         return evoxc.cast(enp.max(safe, axis=-1), evoxc.int32)
 
@@ -1339,10 +1354,10 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
         """
         pop_size = int(conn_keys.shape[0])
         if not self.conn_gene.uses_historical_marker:
-            return enp.zeros((pop_size,), dtype=evoxc.int32)
+            return fill((pop_size,), 0, dtype=evoxc.int32)
         markers = self.conn_gene.key_column(conn_keys, "historical_marker")
         exists = self.conn_exists(conn_keys)
         safe = evoxc.select(
-            exists, markers, enp.zeros(tuple(markers.shape), dtype=markers.dtype)
+            exists, markers, fill(tuple(markers.shape), 0, dtype=markers.dtype)
         )
         return evoxc.cast(enp.max(safe, axis=-1), evoxc.int32)

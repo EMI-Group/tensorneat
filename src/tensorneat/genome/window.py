@@ -17,6 +17,11 @@ to emit the fewest ops that stay bit-identical:
   ``arange``/``multiply``/``reshape`` chain.
 * The padding sentinel is a *rank-0* ``I_INF`` (``_iinf``), never a full-size array: a
   ``(P, N, K, CA)`` constant is 3.2 MB at ``P=1000`` and ``evoxc`` warns about embedding it.
+* A population-wide fill is one element plus ``broadcast_to`` (:func:`fill`), never
+  ``enp.full((P, ...))``: an ``enp.full`` whose shape carries the population axis bakes
+  ~4 bytes per individual per graph constant, which the build and every dispatch pay for.
+  A fill that is already tiny (rank-0 scalar, ``(1, W)`` row, ``(N,)`` table) keeps its
+  direct ``enp.full``, because the broadcast would be an extra traced op for no bytes.
 * ``select`` and ``logical_and`` broadcast, so the attribute-column mask is widened with a
   trailing-``1`` axis (``_column_mask``) instead of a ``broadcast_to`` op.
 * The one *reduction* of the pass lives here too, as :func:`any_slot`: a reduction over the
@@ -34,6 +39,38 @@ import evoxc.numpy as enp
 import numpy as np
 
 from ..common import I_INF, TensorNEATError
+
+
+def fill(
+    shape: tuple[int, ...],
+    value: Any,
+    dtype: Any = evoxc.float32,
+) -> evoxc.SymbolicTensor:
+    """A tensor of ``shape`` whose every entry is ``value``, from a one-element constant.
+
+    ``enp.full(shape, value)`` embeds ``prod(shape)`` values as a graph constant, and an
+    axis of that shape is usually the population: ``(P, max_nodes, NA)`` float32 is 3.2 MB
+    at ``P=1000``, twice the largest payload array. ``evoxc`` warns about such payloads,
+    the build pays for them, and the numpy backend copies them on every dispatch. A
+    one-element constant plus one ``broadcast_to`` produces exactly the same values for
+    four bytes, so every population-wide fill in this node is spelled this way.
+
+    The broadcast is an ordinary traced op (about as expensive as any other on the
+    reference interpreter), which is why a fill that is *already* tiny — a rank-0 scalar, a
+    ``(1, W)`` static row, a ``(N,)`` column table — keeps its direct ``enp.full``.
+
+    Args:
+        shape: Result shape; the population axis may appear in any position.
+        value: Python scalar, or an ``evoxc`` dtype-compatible number.
+        dtype: Result dtype.
+
+    Returns:
+        ``shape`` tensor holding ``value``; a rank-0 ``shape`` is the bare constant.
+    """
+    shape = tuple(int(size) for size in shape)
+    if not shape:
+        return enp.full((), value, dtype=dtype)
+    return enp.broadcast_to(enp.full((1,) * len(shape), value, dtype=dtype), shape)
 
 
 def _i32(value: int) -> evoxc.SymbolicTensor:
