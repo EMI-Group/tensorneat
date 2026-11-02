@@ -25,7 +25,9 @@ The report opens with the headline old-vs-new table (one row per case/backend: m
 Paths in the report are repo-relative (`_display_path`): `meta.json_path`/`meta.out_path` and the interpreter recorded in `meta.command` drop the worktree prefix when they sit inside the checkout and fall back to the basename otherwise, so a committed `RESULTS.md` never names the machine that produced it.
 The `## How to reproduce` block therefore starts with the portable `python benchmarks/run_benchmark.py <flags...>` and states the interpreter that actually ran on its own line.
 The case matrix is one table (family, problem, pop, timed generations, target, and `yes`/`not run`/`n/a` per implementation); the verdict section drops protocol's per-case "no verdict" reasons and keeps the error rows, the `Sub-verdicts` line and the closing `N run(s) not ok` line.
-The worker redirects stdout/stderr for `prepare`, the warmup and the timed loop; the quality curve covers warmup + timed generations, so the new side's build generation (excluded by `generations_consumed_before_timing`) is the only index the two sides do not share.
+The worker redirects stdout/stderr for `prepare`, the warmup and the timed loop.
+`protocol.untimed_warmup_generations = max(0, warmup - generations_consumed_before_timing)`, so the fitness curve holds `untimed + timed` entries: one fewer on the new side, whose build generation is run but excluded — a target reached at absolute generation `g` is reported as index `g - 1` there.
+Both sides still evolve the same total `warmup + timed` generations when `warmup >= 1`; with `--warmup 0` the new side's build generation cannot be subtracted and it evolves one generation more than the old side for the same `--generations`.
 ## Adapter Contract
 ```python
 class Adapter:
