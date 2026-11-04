@@ -6,14 +6,16 @@ Every assertion is a structural invariant on a hand-written population — a con
 The oracles are formulas re-derived from the documentation (numpy loops and closed forms), never a second copy of the kernel's gather/mask data movement.
 The suite exists because these steps are the only ones rewritten from a data-dependent `evoxc.while_loop` into fixed-length `evoxc.scan`s: a mask that writes one slot too many, a sort tie-order or a residual correction changes every seeded run while the forward pass still looks correct.
 Comparison against the pre-rewrite operator is `../../parity`'s job, not this directory's.
+The package surface is pinned too: `test_exports.py` checks that every documented `tensorneat.algorithm.*` spelling resolves to the class its defining submodule exposes and is listed in `__all__`.
 
 ## Layout and counts
 `test_spawn.py` (69) — both allocators and the two spawn building blocks.
 `test_speciation.py` (16) — the two speciation scans, dead-slot handling, the leftover and counter rules, the split-centre shape contract.
 `test_parent_selection.py` (22) — survivor prefix, elite pinning, father-wins-tie, per-block draws, `elite_mask`.
 `test_neat_tell.py` (37) — `_sanitize_fitness`, `tell` order/determinism/shape preservation, stagnation, `ask`/`transform`/`forward` wiring, `_batched` chunking, constructor validation.
+`test_exports.py` (4) — the `tensorneat.algorithm` public surface: each documented spelling resolves to the class its defining submodule exposes, appears in `__all__`, and every `__all__` entry resolves via `getattr`.
 `conftest.py` — module fixtures, the `SpeciesState`/`State` table factories, and the two graph runners.
-Whole directory: 144 passed, 0 xfailed, 0 failed, 0 skipped in ~28 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
+Whole directory: 148 passed, 0 xfailed, 0 failed, 0 skipped in ~4 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
 
 ## Fixtures (`conftest.py`)
 Module fixtures return modules only: `species` (`tensorneat.algorithm.neat.species`), `neat_module` (`neat.py`), `common`, `errors`, `payloads` (`support.payloads`).
@@ -47,6 +49,7 @@ Files stay under ~1000 lines (`test_neat_tell.py` sits at 987, `test_speciation.
 `_kernels.pair_parents` caps the survivor count as `max(min(member_count, pop_size), 1)`, which differs from the documented `min(member_count, pop_size)` only for a live species with `member_count == 0`; such a table never receives a block, so the case is unreachable through the public path.
 `_kernels.block_layout`'s docstring says the `spawn > 0` mask term is what keeps a zero-spawn species from owning a slot; with the last-qualifying block rule that term is redundant (a `>= 0` mask gives identical arrays on every valid table), so no test can distinguish it.
 `HyperNEAT`'s `weight_threshold`/`max_weight` validation is **not** here: those are `HyperNEAT.__init__` arguments and belong to `../hyperneat/`.
+`test/release_gate_no_jax.py`'s resolved-surface list names `tensorneat.algorithm.NEAT`/`HyperNEAT` only, while `src/tensorneat/CONTEXT.md` documents `tensorneat.algorithm.HyperNEATFeedForward` as well; the package now re-exports it and `./test_exports.py` pins it, and the release-gate list is test-owned (reported upward).
 
 ## Constraints
 Backend is `"numpy"`; the per-test guard in `../conftest.py` fails any test that leaves `jax`/`torch`/`brax`/`gymnax`/`mujoco` in `sys.modules`.
@@ -62,5 +65,6 @@ Deterministic and fast: no timing, no network, no GPU, no `tmp_path` persistence
 | `./test_speciation.py` | the two speciation scans, dead slots, leftover rule, counter advance, split-centre shape contract. |
 | `./test_parent_selection.py` | survivor prefix, one-member species, elite pinning and `elite_mask`, father-wins-tie, per-block draws, RNG hygiene. |
 | `./test_neat_tell.py` | `_sanitize_fitness`, `tell` order/shape/determinism, stagnation, `ask`/`transform`/`forward`, chunking, constructor validation. |
+| `./test_exports.py` | `tensorneat.algorithm.__all__` and the documented spellings (`BaseAlgorithm`, `NEAT`, `HyperNEAT`, `HyperNEATFeedForward`), including the identity with the defining submodule. |
 | `./conftest.py` | module fixtures, table factories, `species_kernel`/`raw_kernel`. |
 | `../../../src/tensorneat/algorithm/neat` | code under test (`NEAT`, `SpeciesController`, `_kernels`, `_validation`) — read-only, escalate changes upward. |

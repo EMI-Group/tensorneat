@@ -7,6 +7,7 @@ This layer owns no network mathematics: genomes own `transform/forward/grad/dist
 Cost profile: one population digest plus `2 · species_size` population-shaped compatibility rows in `speciate` (scan 1's whole table measured up front on the dense path inside one fixed-length `evoxc.scan`, scan 2's measured in-loop) and `O(pop_size)` selection/crossover/mutation per generation; no `max_nodes × max_nodes` tensor ever appears here.
 Measured with the real `DefaultGenome`/`XOR` (see `./neat/CONTEXT.md` `## Measured Cost`): `Pipeline.step` runs in ~43 / ~170 / ~305 ms per generation at pop 100 / 500 / 1000 (`species_size=20`), with peak RSS at or below the pre-digest tree in every cell.
 `speciate` is still the top term above pop 300 and it is per-pair bound: the pair count `2 · species_size · pop_size` is irreducible, and the cost of one pair is the genome's per-pair homologue sort.
+`__init__.py` is the package surface: it re-exports `BaseAlgorithm`, `NEAT`, `HyperNEAT` and `HyperNEATFeedForward` (the last one from `./hyperneat`), and `__all__` lists exactly those four names.
 
 ## Kernel Contract (binding for this subtree)
 Batch-first: population is axis 0, always; a kernel is written once over the whole batch.
@@ -64,7 +65,7 @@ Speciation (the digest, the matrix, the scans) draws no randomness, so batching 
 When `pop_batch_size` chunks a population kernel into a `scan`, the algorithm pre-splits `n_batches` keys with `evoxc.random.split_n` and passes the stacked `(n_batches,)` int64 array as the scan's `xs`, so each step receives a valid rank-0 key.
 Key-form is whatever `splitmix64` produces (rank-0 int64); nothing here assumes a JAX `PRNGKey`.
 There is no `random.choice` and no probability vector: uniform parent rank slots come from `evoxc.random.randint` with a broadcast symbolic `high`, which is also the fix for the legacy zero-survivor division.
-No random draw happens inside a control-flow body, so keys never need to travel through a loop carry.
+Keys never travel through a loop carry: when `pop_batch_size` chunks a population kernel, the pre-split rank-0 keys travel as the scan's `xs`, and each step draws its own population-shaped randomness from its step key inside the loop body.
 
 ## Divergences from the Legacy JAX Baseline (deliberate fixes)
 1. `survive_size == 0` (a 1-member species) produced NaN probabilities and killed `random.choice`; now `high = max(survive_size, 1)` yields two identical parents (self-crossover is the identity).
@@ -148,6 +149,7 @@ Kernels are additionally verified by building each one through `evoxc.build` on 
 ## Routing Table
 | Path | Responsibility |
 | --- | --- |
+| `./__init__.py` | Package surface only: re-exports `BaseAlgorithm`, `NEAT`, `HyperNEAT`, `HyperNEATFeedForward` and lists them in `__all__`. |
 | `./base.py` | `BaseAlgorithm` batch-first protocol: `setup(state=None)`/`ask`/`transform`/`forward`/`tell`/`show_details` plus `num_inputs`/`num_outputs`/`pop_size`. |
 | `./neat` | `NEAT` population cycle (ask/tell, elite handling, `pop_batch_size` scan batching), `SpeciesController` + `SpeciesState`, the `_kernels.py` graph helpers, the `_distance.py` digest-backed distance rows (`DistanceRows`, dense `matrix` table) and the `_validation.py` host validators. |
 | `./hyperneat` | `HyperNEAT` / `HyperNEATFeedForward` batch CPPN→substrate decode (`SubstrateSchedule` payload wrapper), the `genes.py` `HyperNEATNode`/`HyperNEATConn` kernels, and the `./hyperneat/substrate` package of host-only coordinate geometry (`DefaultSubstrate`/`FullSubstrate`/`MLPSubstrate`). |
