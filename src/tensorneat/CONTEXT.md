@@ -69,25 +69,30 @@ Exactly one `evoxc.random.split` happens at the pipeline boundary per generation
 `best_genome.npz` is omitted when no generation produced a finite fitness; a bare `step` loop writes no files (`auto_run`/`_analyse` is the writer).
 
 ## Measured Cost
-numpy reference backend, one config per fresh process, build excluded, one warmup + 6 timed `step` calls, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)` + `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)` + `XOR()`, seed 42:
+numpy reference backend, XOR, seed 42, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, build excluded, 3 warmup + 20 timed `Pipeline.step`, one process per cell, before/after measured in one session that alternated the two trees:
 
-| pop | build (one-off) | ms/generation (median / min) | legacy JAX | ratio |
+| cell | build (one-off) | median / mean ms per generation now | median / mean before the pass | peak RSS now / before |
 | --- | --- | --- | --- | --- |
-| 100 | 2.2 s | 54.7 / 51.3 | 51 | 1.07× |
-| 500 | 3.9 s | 352.5 / 343.7 | 109 | 3.2× |
-| 1000 | 4.5 s | 642.4 / 603.5 | 157 | 4.1× |
+| xor p100 | 0.255 s | 38.58 / 40.05 | 43.47 / 44.18 | 114.4 / 118.2 MiB |
+| xor p500 | 0.314 s | 159.90 / 161.37 | 268.39 / 256.41 | 240.5 / 260.8 MiB |
+| xor p1000 | 0.399 s | 270.08 / 280.26 | 342.21 / 408.28 | 391.5 / 431.6 MiB |
+| xor3d p500 | 0.320 s | 176.98 / 177.70 | 290.04 / 289.17 | 264.7 / 291.3 MiB |
 
-The box drifts ±30 % between sessions, so the ratio against the frozen legacy baseline is the load-bearing number, never the absolute milliseconds.
-Remaining hot spots at `pop ≥ 500`: `speciate` dominates `tell` (2 phases × 20 species slots × P distance measurements = 4 000 / 20 000 / 40 000 pairs per generation, ~7.5 µs/pair at pop 100 to ~13 µs/pair at pop 1000 after the digest API), `breed` is second (~30 / ~76 / ~148 ms in the phase-sum protocol) and `evaluate` (`transform` + `forward` on the tiled `4P` batch) is last.
-The pair count is irreducible under NEAT's assignment semantics, and the reference interpreter pays per traced op and per element while the legacy baseline was the same work fused by XLA — so parity at large `P` is not reachable on `backend="numpy"`.
+The box drifts ±30 % between sessions, so the ratio against the frozen legacy baseline (51 / 109 / 157 ms per generation at pop 100 / 500 / 1000) is the load-bearing number, never the absolute milliseconds.
+`benchmarks/PERF_NUMPY.md` holds this hand-maintained before/after record, its profile split and the reproduce commands.
+`benchmarks/RESULTS.md` predates this pass, so its new-side rows are stale and only `run_benchmark.py` may re-render it — never hand-edit it.
+A generation executes **8 150 IR ops** (10 767 before the pass), and ~63 % of the remaining wall time is the numpy interpreter's fixed per-op cost (~13 µs of operand resolution, dtype/shape validation and `Tensor` construction in `evoxc/backends/numpy/interpreter.py::_run_block`), so **executed op count is the lever for any further win**; host-side bookkeeping in `Pipeline.step` is 0.1 %.
+`speciate` is still the largest phase — two fixed-length scans over `species_size` slots, one population-shaped distance row per slot, the rows produced inside one dedicated `evoxc.scan` — followed by the mutation/crossover chain and `transform`; the forward level loop is a fixed 8-op step per iteration, run `depth + 1` times.
+The digest is paid once per generation (`prepare_distance`), while the distance rows are measured `species_size * 2` times, so the population is tiled into the digest rather than re-prepared per centre.
+The pair count `species_size * 2 * pop_size` is irreducible under NEAT's assignment semantics, and the reference interpreter pays per traced op and per element while the legacy baseline was the same work fused by XLA — so parity at large `P` is not reachable on `backend="numpy"` by kernel-level tuning alone.
 `backend="iree"` runs every shipped case end to end since the graph formulations were made v1-exportable, but on llvm-cpu it is 5–24× slower per generation than the interpreter and costs 8–11 s of `iree-compile` per static shape; `benchmarks/BACKENDS.md` holds the measured table, the protocol and the per-gate fix record.
 `backend="xla"` needs a user-supplied PJRT plugin `.so` (`EVOXC_PJRT_PLUGIN`); `backend="tvm"` is untested.
 No compiled backend beats the numpy interpreter on this box, so the reference interpreter stays the default.
-Current per-generation op counts: `forward` 112 traced ops (749 before the level loop was reformulated), `execute_mutation` 1360 (3114), `measure_distance` 7.5 µs/pair (25–48 µs before the digest API).
+Current per-generation op counts: `forward` is 110 static ops in the pipeline build (98 in the genome-side recursive count of the same graph, whose level body runs `depth + 1` times), `execute_mutation` is ~438 traced ops with the whole mutation chain ~340 executed ops per generation, and `measure_distance` is 94 traced ops / ~2.39 ms per call at pop 500 against 163 traced ops for the once-per-generation `prepare_distance`.
 
 ## Known Issues / Notes for Agents
 `test/integration/` drives `Pipeline` end-to-end on the numpy backend (`setup`/`step`/`auto_run`, the batch-first best-genome payload, determinism per seed, one build per shape signature, checkpoint round-trip); `test/unit/` covers the kernels and `test/parity/` the legacy comparison, the latter needing the `bench` extra so its jax-dependent cases skip without it.
-`benchmarks/RESULTS.md` records the CPU speed contract as `FAIL`: on `backend="numpy"` a generation is slower than the frozen JAX baseline at every measured case and population (1.5–9× there, 1.07–4.1× under the 6-step protocol above).
+`benchmarks/RESULTS.md` records the CPU speed contract as `FAIL` but predates this pass, so its new-side rows are stale and only `run_benchmark.py` may re-render the verdict; against the numbers above a generation is 0.76× / 1.47× / 1.72× legacy at pop 100 / 500 / 1000.
 `docs/source/` carries one autodoc stub per public module here, so a new module needs a matching `docs/source/tensorneat.<module>.rst` plus its toctree entry (the rule is in `docs/CONTEXT.md`).
 
 ## Constraints
@@ -97,6 +102,7 @@ Current per-generation op counts: `forward` 112 traced ops (749 before the level
 - NaN padding semantics of the pre-rewrite library are preserved (`test/parity/` depends on them); `select` chains stand in for `lax.switch`.
 - Errors: user/config validation raises `common.errors.TensorNEATError` (and its subclasses); tensor/backend errors are never caught and re-wrapped.
 - Files ≤ ~1000 lines; shared math lives in `common/`, never duplicated per genome/algorithm.
+- The numpy interpreter keeps every SSA result of a block alive until that block returns, so a kernel's live set is charged once per enclosing block: never hoist a kernel out of a `while`/`scan` without measuring peak RSS (hoisting the 20 speciation rows was 28 % faster and 1.7× the memory; measuring them inside one `evoxc.scan` is 40 % faster and below the starting memory).
 - `pipeline.py` (996 lines) is one job — the single compile site plus the design, caching, overflow and measured-cost documentation that belongs next to it; the host-side payload helpers live in `./host_payload.py` so the file stays under the line budget.
 
 ## Routing Table
