@@ -325,6 +325,56 @@ class HyperNEAT(BaseAlgorithm):
             biased,
         )
 
+    def prepare_forward(
+        self, state: State, transformed: Any, pop: Any = None, samples: int = 1
+    ) -> Any:
+        """Derive the substrate pass's loop-invariant operands, for many queries.
+
+        Args:
+            state: Current algorithm state.
+            transformed: :class:`SubstrateSchedule` returned by :meth:`transform`.
+            pop: Ignored -- the substrate payload lives inside ``transformed``, which is
+                already expanded to the query rows; the argument keeps the algorithm
+                signature uniform.
+            samples: Must be ``1``: the substrate schedule's population axis already
+                carries every query row, so there is no sample axis to expand.
+
+        Returns:
+            The substrate genome's opaque prepared record, for :meth:`forward_prepared`.
+
+        Raises:
+            TensorNEATError: If ``samples`` is not ``1``.
+        """
+        if samples != 1:
+            raise TensorNEATError(
+                "HyperNEAT.prepare_forward: the substrate schedule is already expanded to "
+                f"the query rows, so samples must be 1, got {samples!r}"
+            )
+        return self.hyper_genome.prepare_pass(
+            state,
+            transformed.schedule,
+            transformed.node_keys,
+            transformed.node_attrs,
+            transformed.conn_keys,
+            transformed.conn_attrs,
+            1,
+        )
+
+    def forward_prepared(
+        self, state: State, transformed: Any, prepared: Any, inputs: Any
+    ) -> Any:
+        """Run the substrate network from a prepared record, appending the bias column.
+
+        The per-query half of :meth:`forward`: same bias concatenation and the same genome
+        call, with every loop-invariant operand taken from ``prepared``.
+        """
+        batch = int(inputs.shape[0])
+        ones = enp.ones((batch, 1), dtype=evoxc.float32)
+        biased = enp.concatenate([inputs, ones], axis=1)
+        return self.hyper_genome.forward_prepared(
+            state, transformed.schedule, prepared, biased
+        )
+
     def tell(self, state: State, fitness: Any) -> State:
         """Feed one generation of substrate fitness back into the CPPN evolution.
 

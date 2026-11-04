@@ -21,7 +21,7 @@ class BaseAlgorithm:
     Notes:
         * Implementations must not branch on traced values and must not read host
           values (``to_numpy``/``.item()``/``int()``) inside
-          ``ask``/``transform``/``forward``/``tell``.
+          ``ask``/``transform``/``forward``/``forward_prepared``/``tell``.
         * Shapes are static per construction: population size, ``max_nodes`` and
           ``max_conns`` are fixed at build time, so a shape change forces the
           pipeline to rebuild the evoxc graph.
@@ -80,6 +80,10 @@ class BaseAlgorithm:
     def forward(self, state: State, transformed: Any, inputs: Any) -> Any:
         """Run a decoded batch of networks.
 
+        A caller that queries one payload many times should call
+        :meth:`prepare_forward` once and :meth:`forward_prepared` per query,
+        which is the same computation with the loop-invariant half hoisted.
+
         Args:
             state: Current algorithm state.
             transformed: Batch-first schedule returned by :meth:`transform`.
@@ -87,6 +91,44 @@ class BaseAlgorithm:
 
         Returns:
             ``(pop_size, *output_shape)`` outputs.
+        """
+        raise NotImplementedError
+
+    def prepare_forward(
+        self, state: State, transformed: Any, pop: Any = None, samples: int = 1
+    ) -> Any:
+        """Derive the loop-invariant operands of one forward pass.
+
+        Whatever the genome and payload need computed once per pass, for reuse
+        across many queries of the same batch shape; the returned record is
+        opaque to the pipeline.
+
+        Args:
+            state: Current algorithm state.
+            transformed: Batch-first schedule returned by :meth:`transform`.
+            pop: Population pytree the schedule was derived from; ``None`` means
+                the algorithm's own current population.
+            samples: Static tiling factor of the ``pop_size * samples`` rows the
+                pass will be queried with.
+
+        Returns:
+            An opaque prepared record for :meth:`forward_prepared`.
+        """
+        raise NotImplementedError
+
+    def forward_prepared(
+        self, state: State, transformed: Any, prepared: Any, inputs: Any
+    ) -> Any:
+        """Run one forward pass from a :meth:`prepare_forward` record.
+
+        Args:
+            state: Current algorithm state.
+            transformed: The schedule the record was prepared with.
+            prepared: Record returned by :meth:`prepare_forward`.
+            inputs: ``(pop_size * samples, *input_shape)`` input activations.
+
+        Returns:
+            ``(pop_size * samples, *output_shape)`` outputs.
         """
         raise NotImplementedError
 

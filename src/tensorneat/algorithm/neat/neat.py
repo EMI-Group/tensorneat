@@ -468,14 +468,16 @@ class NEAT(BaseAlgorithm):
     ) -> Any:
         """Run the decoded batch of networks.
 
+        A caller that queries one payload many times should call
+        :meth:`prepare_forward` once and :meth:`forward_prepared` per query.
+
         Args:
             state (State): Current state.
             transformed (Any): Schedule returned by :meth:`transform`.
             inputs (Any): ``(P, *input_shape)`` activations.
-            pop (Any, optional): Gene payload the schedule was derived from;
-                ``None`` means ``state.pop``.  The problem layer may pass an
-                explicit payload when it evaluates a population other than the
-                one stored on the state.
+            pop (Any, optional): Payload the schedule was derived from; ``None``
+                means ``state.pop``.  The problem layer may pass an explicit
+                payload when it evaluates a population other than the state's.
 
         Returns:
             Any: ``(P, *output_shape)`` activations.
@@ -491,6 +493,39 @@ class NEAT(BaseAlgorithm):
             inputs,
         )
 
+    def prepare_forward(
+        self, state: State, transformed: Any, pop: Any = None, samples: int = 1
+    ) -> Any:
+        """Derive the genome's loop-invariant operands of one forward pass.
+
+        Args:
+            state (State): Current state.
+            transformed (Any): Schedule returned by :meth:`transform`.
+            pop (Any, optional): Payload the schedule was derived from; ``None``
+                means ``state.pop``, like :meth:`forward`.
+            samples (int): Static tiling factor of the ``P * samples`` rows the
+                pass will be queried with.
+
+        Returns:
+            Any: The genome's opaque prepared record for :meth:`forward_prepared`.
+        """
+        payload = state.pop if pop is None else pop
+        return self.genome.prepare_pass(
+            state,
+            transformed,
+            payload.node_keys,
+            payload.node_attrs,
+            payload.conn_keys,
+            payload.conn_attrs,
+            samples,
+        )
+
+    def forward_prepared(
+        self, state: State, transformed: Any, prepared: Any, inputs: Any
+    ) -> Any:
+        """Run one forward pass from a prepared record (:meth:`prepare_forward`)."""
+        return self.genome.forward_prepared(state, transformed, prepared, inputs)
+
     def tell(self, state: State, fitness: Any) -> State:
         """Consume one generation of fitness and build the next population.
 
@@ -501,10 +536,7 @@ class NEAT(BaseAlgorithm):
            selection.
         2. **Advance the counter**: ``generation += 1`` *before* the species
            update, matching the legacy order -- stagnation is therefore judged
-           against the generation that produced the fitness just consumed.  The
-           increment goes through :func:`_as_scalar_f32`, which emits a ``cast``
-           or a ``reshape`` only when the static dtype/rank need one, so the
-           0-d ``float32`` counter costs a single ``add``.
+           against the generation that produced the fitness just consumed.
         3. **Species bookkeeping**: ``SpeciesController.update_species`` returns
            the updated state plus the parent pairs ``(winner, loser,
            elite_mask)``; it also consumes the *first* of the generation's
@@ -668,24 +700,16 @@ class NEAT(BaseAlgorithm):
 
         Note:
             **Rank contract.** ``max_node_key``/``max_conn_marker`` return one
-            maximum per individual, ``(P,) int32``, so the base is per-individual
-            and uniqueness is only guaranteed *within* an individual's own gene
-            keys: keys are effectively namespaced per individual, and a key
-            allocated for one genome may collide with a key held by another
-            genome (legal -- the mutation kernel is batch-first and only ever
-            inspects an individual's own rows).  ``base + 1 + arange(P)`` is
-            strictly greater than *that* individual's own maximum.  The marker
-            path therefore reshapes the ``(P,)`` base to ``(P, 1)`` before adding
-            the ``(P, 3)`` offsets, so each individual's three markers are
-            strictly above its own maximum marker and distinct from each other.
-            Node keys and markers live in different key columns, so a numerical
-            coincidence between an allocated node key and an allocated marker
-            within one individual is meaningless.
-            The width ``3`` is a genome-level convention: one mutation call may
-            add at most three connections per genome.  Both maxima come from the
-            genome helpers ``max_node_key``/``max_conn_marker``, which apply the
-            padding encoding themselves; this module never infers validity from
-            NaN.  The ``+1`` offsets are baked into the ``int32`` arange
+            maximum per individual, ``(P,) int32``, so uniqueness is guaranteed
+            only *within* an individual's own rows -- the only rows the batch-first
+            mutation kernel inspects -- and the ``+1`` offsets are strictly above
+            that individual's own maximum.  The marker path therefore reshapes the
+            ``(P,)`` base to ``(P, 1)`` before adding the ``(P, 3)`` offsets, so an
+            individual's three markers are distinct and above its own maximum.  The
+            width ``3`` is a genome-level convention: one mutation call adds at most
+            three connections.  Both maxima come from the genome helpers, which
+            apply the padding encoding themselves; this module never infers validity
+            from NaN.  The ``+1`` offsets are baked into the ``int32`` arange
             constants (``arange(1, P + 1)``, ``arange(1, 3P + 1)``) rather than
             added as a separate rank-0 constant, so each allocation is a single
             ``add`` and no ``int64`` promotion can creep in.
