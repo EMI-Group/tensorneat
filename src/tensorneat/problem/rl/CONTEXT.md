@@ -91,7 +91,7 @@ The box drifts ±30 % between processes, so the ratios are the load-bearing numb
 | MountainCar | 1000 | 999 | 1 | 318.9 | 80.8 | 4.0× | 0.019 / 0.69 |
 
 Both new environments are cheap enough that the numpy interpreter's fixed per-op cost, not the element count, sets the time: 10× the population costs ≈1.07–1.09× (Pendulum/MountainCar at 200 steps) and 10× the horizon costs ≈2.55× (Pendulum 200 → 500) / ≈5.0× (MountainCar 200 → 999).
-Their step bodies are leaner than CartPole's 60 traced ops: Pendulum is 32 real ops (33 with the block terminator, ~29 without the toy policy's own 3) and MountainCar is 37 real ops (38 with the terminator), because neither carries an alive mask in the Pendulum case and MountainCar folds the goal test into the transition it already split.
+Their dynamics bodies are leaner than CartPole's 54 (the executed body is 58 loop-invariant forward ops plus the dynamics — see the per-timestep op budget below): Pendulum is 32 real ops (33 with the block terminator, ~29 without the toy policy's own 3) and MountainCar is 37 real ops (38 with the terminator), because neither carries an alive mask in the Pendulum case and MountainCar folds the goal test into the transition it already split.
 iree is 3.4–10.0× faster than the numpy interpreter on both components, with a ≈0.65–0.70 s one-off build per shape.
 
 Pipeline level (`pop_batch_size` unset, one generation per `step`, numpy backend, CPython 3.12): `step` median, the same `step` with `problem.evaluate` monkeypatched to zeros, the difference (the evaluate share) and this node's rollout share of it.
