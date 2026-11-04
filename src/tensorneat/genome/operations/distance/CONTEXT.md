@@ -91,11 +91,13 @@ Defining the centre sentinel *as* the fold of an absent row is what lets the `do
 It must not be `int64` max: max equals the next composite after a padding row and would manufacture a false homologue at the last merged position.
 The centre's tag is `0`, so the node family's `_tagged` skips its `add` and costs one `multiply` plus one `select`.
 Injectivity plus the tag make a homologous pair exactly an adjacent `(centre, population)` pair whose composites differ by one; the parity is what proves the neighbour is a real population gene, so no separate tag test is needed.
-The merge concatenates the **digest side first** and the centre second: then the merged index of a population gene *is* its digest row, and the tail reads the row table straight off the successor with no offset arithmetic.
-Sequence per family: `concatenate` to `(P, 2M)`, one **stable** `argsort`, its inverse via a second **stable** `argsort` of the permutation, then two centre-width gathers — the successor's merged index and the composite it carries.
+The merge concatenates the **digest side first**, the centre second and one **trailing column** of `_PAD_CENTRE` third: then the merged index of a population gene *is* its digest row, the tail reads the row table straight off the successor with no offset arithmetic, and the trailing column guarantees every centre gene has a successor position in range.
+Sequence per family: `concatenate` to `(P, 2M + 1)`, one **stable** `argsort`, its inverse via a second **stable** `argsort` of the permutation, then two centre-width gathers — the successor's merged index and the composite it carries.
 Nothing later is `2M`-wide: the homology test, the row table and both counts stay at the centre's own width `M`.
 The inverse permutation is the one measured formulation trade-off: `argsort(order)` is two ops, while scattering the ranks costs four to eight, and with both sorts stable the `argsort` is also 1.05 → 0.29 ms at pop 1000, so the scatter is behind on both counts.
-The successor position is clamped to `2 * M - 1` rather than range-checked and masked: the last merged position always holds a padded row (both sentinels sit above every real composite), and no sentinel equals a real `composite + 1`, so the clamped read cannot pass the homology test.
+The trailing column is why the successor gather needs **no `minimum` clamp and no in-range mask**: `_PAD_CENTRE` is the maximum of the merged row (above every real composite and above `_PAD_POPULATION`), so no centre gene sits at the last position and `position + 1 <= 2M` holds by construction.
+The one op it costs (a concatenate input that is already a `(P, 1)` static) is paid back by the removed `minimum`, the removed `offsets_last` static and the removed trailing-column mask — and a clamped read at position `2M` could only return the trailing sentinel, which never equals a real `composite + 1`.
+`evoxc.slice(x, start, limit)` takes **lengths**, not end indices (`start + limit` is the exclusive end), which is why the centre slice is `((0, count), (pop_size, count))`.
 `evoxc.slice(x, start, limit)` takes **lengths**, not end indices (`start + limit` is the exclusive end), which is why the centre slice is `((0, count), (pop_size, count))`.
 
 ## Sort semantics (`stable=True` is a performance rule, not a tie rule)
