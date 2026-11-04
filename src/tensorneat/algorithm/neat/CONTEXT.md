@@ -23,6 +23,7 @@ The layer's own work is one population digest plus `2 · species_size` distance 
 `setup(state=None) -> State` requires `state.randkey` (`TensorNEATError` otherwise), registers `pop_size` (static int), `pop` (`GenomeTensors`, axis 0 = individual), `generation` (0-d float32) and `species`, and advances `randkey`.
 `setup` is **host-side**: it builds and runs one small init graph (`split(randkey)` → `genome.initialize` → species seeding) and cannot be called inside an active trace.
 `ask(state) -> GenomeTensors` (zero ops, returns `state.pop`); `transform(state, pop=None)` / `forward(state, transformed, inputs, pop=None)` delegate to the genome; `tell(state, fitness) -> State` runs the algebra below.
+`prepare_forward(state, transformed, pop=None, samples=1)` / `forward_prepared(state, transformed, prepared, inputs)` are the same delegation split in two, calling `genome.prepare_pass` / `genome.forward_prepared` with the payload (`pop`, else `state.pop`) and `samples`; `forward` is their composition.
 `show_details(state, fitness) -> None` is the only host-side member; `num_inputs`/`num_outputs`/`pop_size` are read-only properties (`pop_size` backed by `_pop_size`).
 Private members: `_sanitize_fitness` and `_finite_bound` (module functions), `_seed_species(self, cfg, first)`, `_static_state(state)`, `_build_options(state)`, `_create_next_generation(state, winner, loser, elite_mask)`, `_new_gene_keys(state)`, `_batched(kernel, key, *args)`, `_gene_counts(state, payload)`, `_gene_count_executable(state, payload)`, `_distance_rows(digest, population)`.
 
