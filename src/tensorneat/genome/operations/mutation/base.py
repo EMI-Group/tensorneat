@@ -122,32 +122,6 @@ def _edge_key_row(
     return enp.reshape(enp.stack(columns, axis=1), (pop_size, 1, key_width))
 
 
-def _gated(
-    gate: evoxc.SymbolicTensor,
-    new: evoxc.SymbolicTensor,
-    old: evoxc.SymbolicTensor,
-) -> evoxc.SymbolicTensor:
-    """Keep ``new`` where ``gate`` is true and ``old`` where it is false.
-
-    The writers of ``genome.utils`` are unconditional (a scatter can never be a per-row
-    no-op), so every structural helper writes garbage into a redirected row and this
-    ``select`` is what turns "refused" into a bit-identical row — ``-0.0`` and ``NaN``
-    included, because nothing is recomputed for a refused individual.
-
-    Args:
-        gate: ``(P,)`` bool eligibility mask.
-        new: Written payload of rank 1, 2 or 3.
-        old: Original payload of the same shape as ``new``.
-
-    Returns:
-        ``old`` where ``gate`` is false, ``new`` where it is true.
-    """
-    # ``select`` broadcasts the operands but not a lower-rank predicate, so the ``(P,)``
-    # gate is expanded to the payload's rank (``(P, 1)``, ``(P, 1, 1)``, ...).
-    mask = enp.reshape(gate, (gate.shape[0],) + (1,) * (len(old.shape) - 1))
-    return evoxc.select(mask, new, old)
-
-
 class _StageContext:
     """One structural stage's shared row bookkeeping plus the uniform-bound pair.
 
