@@ -27,8 +27,12 @@ build:
       - UV_PROJECT_ENVIRONMENT="$READTHEDOCS_VIRTUALENV_PATH" uv sync --extra docs
     build:
       html:
-        - UV_PROJECT_ENVIRONMENT="$READTHEDOCS_VIRTUALENV_PATH" uv run --no-sync sphinx-build -T -b html docs "$READTHEDOCS_OUTPUT/html"
+        # `-T` prints a full traceback when an exception escapes; the strictness
+        # comes from `-W` plus `sphinx.fail_on_warning: true` below. Overriding
+        # `build.html` replaces RTD's default sphinx command -- which is where
+        # RTD injects `-W` -- so the override passes it explicitly.
+        - UV_PROJECT_ENVIRONMENT="$READTHEDOCS_VIRTUALENV_PATH" uv run --no-sync sphinx-build -T -W -b html docs "$READTHEDOCS_OUTPUT/html"
 
 sphinx:
   configuration: docs/conf.py
-  fail_on_warning: false
+  fail_on_warning: true
