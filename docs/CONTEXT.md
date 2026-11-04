@@ -41,5 +41,5 @@ Spot-check the RL pages the same way: `id="tensorneat.problem.rl.pendulum.Pendul
 |---|---|
 | `./conf.py` | Sphinx configuration only (paths, version, extensions, autodoc defaults, theme). |
 | `./index.rst` | Front page: intent, quickstart, API-reference toctree, external links. |
-| `./requirements.txt` | `docs`-extra dependencies for a plain `pip install -r` build. |
+| `./requirements.txt` | Sphinx toolchain pin only (`sphinx`, `sphinx-rtd-theme`); not a build path — install the project with `uv sync --extra docs`, never with pip. |
 | `./source/` | Autodoc stubs mirroring the `src/tensorneat` tree: `modules.rst` root, package landing pages, one page per module. |
