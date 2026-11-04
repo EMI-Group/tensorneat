@@ -8,7 +8,7 @@ Alignment is by exact key-column match, resolved with one sort per array — nev
 
 This module owns only the generic driver: validate that the two parents are shaped alike,
 split the single key into one key per gene family, and hand each family to
-:meth:`BaseCrossover.find_homologous` / :meth:`BaseCrossover.crossover_gene_attrs` — the
+:meth:`BaseCrossover.align_gene_rows` / :meth:`BaseCrossover.crossover_gene_attrs` — the
 alignment primitive lives in :mod:`..alignment` (together with the rank normaliser
 :func:`~tensorneat.genome.operations.alignment.key_rows`) and the gene hook in
 :class:`~tensorneat.genome.gene.base.BaseGene`.
@@ -92,8 +92,10 @@ class BaseCrossover(StatefulBaseClass):
             side of the trace and no tensor op is spent on it.  The offspring's key arrays
             are parent 1's tensors, returned untouched: a crossover never invents an
             innovation number.  The two family-specific steps are supplied by the concrete
-            subclass — :meth:`find_homologous` (alignment) and :meth:`crossover_gene_attrs`
-            (attribute recombination) — so this driver stays family-agnostic.  A node key
+            subclass — :meth:`align_gene_rows` (alignment) and :meth:`crossover_gene_attrs`
+            (attribute recombination) — so this driver stays family-agnostic.  Alignment
+            returns the matched row *and* its mask together, so the mask is never recovered
+            with a second sentinel comparison at this call site.  A node key
             table is two-dimensional (one key column); a ``(P, N, 1)`` view that spells the
             key axis out is accepted as well and returned verbatim, which is what the shared
             :func:`~tensorneat.genome.operations.alignment.key_rows` normaliser allows.
@@ -114,7 +116,7 @@ class BaseCrossover(StatefulBaseClass):
             genome.node_gene,
             node_key,
             node_attrs1,
-            self.find_homologous(key_rows(node_keys1), key_rows(node_keys2)),
+            self.align_gene_rows(key_rows(node_keys1), key_rows(node_keys2)),
             node_attrs2,
         )
         conn_attrs = self.crossover_gene_attrs(
@@ -122,7 +124,7 @@ class BaseCrossover(StatefulBaseClass):
             genome.conn_gene,
             conn_key,
             conn_attrs1,
-            self.find_homologous(key_rows(conn_keys1), key_rows(conn_keys2)),
+            self.align_gene_rows(key_rows(conn_keys1), key_rows(conn_keys2)),
             conn_attrs2,
         )
         return GenomeTensors(node_keys1, node_attrs, conn_keys1, conn_attrs)

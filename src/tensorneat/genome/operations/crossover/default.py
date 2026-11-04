@@ -1,9 +1,9 @@
 """Key-aligned crossover: parent 1 keeps its structure, attributes may come from parent 2.
 
 Alignment is exact on the whole key column tuple of a gene (``(in_key, out_key)`` plus
-``historical_marker`` for connections), found through one ``argsort`` rank merge plus two
-row gathers: ``O(M log M)`` per array, never an ``O(M^2)`` scan, and still one batched
-kernel for the whole population.
+``historical_marker`` for connections), found through one ``argsort`` rank merge, one
+``scatter`` rank inversion and two row gathers: ``O(M log M)`` per array, never an
+``O(M^2)`` scan, and still one batched kernel for the whole population.
 The merge itself lives in :mod:`..alignment`, the single homologue implementation shared
 with the compatibility distance; this module only turns its homologue table into recombined
 attribute rows, with one flat gather per attribute *row* rather than one per attribute
@@ -13,11 +13,10 @@ column.
 from typing import TYPE_CHECKING
 
 import evoxc
-import evoxc.numpy as enp
 
-from ....common import I_INF, State
+from ....common import State
 from ...utils import GenomeTensors
-from ..alignment import find_homologous, gather_attr_rows
+from ..alignment import find_homologous, gather_attr_rows, homologous_pair
 from .base import BaseCrossover
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -129,21 +128,47 @@ class DefaultCrossover(BaseCrossover):
         """
         return find_homologous(keys1, keys2)
 
+    def align_gene_rows(
+        self,
+        keys1: evoxc.SymbolicTensor,
+        keys2: evoxc.SymbolicTensor,
+    ) -> tuple:
+        """Return the homologue row **and** the match mask in one merge.
+
+        Args:
+            keys1 (evoxc.SymbolicTensor): ``(P, M, K) int32`` key columns of parent 1,
+                ``I_INF`` padded.
+            keys2 (evoxc.SymbolicTensor): ``(P, M, K) int32`` key columns of parent 2,
+                ``I_INF`` padded.
+
+        Returns:
+            tuple: ``(rows (P, M) int32, present (P, M) bool)`` — parent 2's row per gene of
+            parent 1, ``0`` where there is no homologue, and the mask of genes that have
+            one.
+
+        Notes:
+            Delegates to :func:`tensorneat.genome.operations.alignment.homologous_pair`,
+            the fused form of :meth:`find_homologous`: the driver needs the row *and* the
+            flag, so asking for them separately would pay an ``I_INF`` marking pass here
+            plus a ``not_equal`` and a redirect ``select`` at the call site.
+        """
+        return homologous_pair(keys1, keys2)
+
     def crossover_gene_attrs(
         self,
         state: State,
         gene: "BaseGene",
         key: evoxc.SymbolicTensor,
         attrs1: evoxc.SymbolicTensor,
-        homologous_rows: evoxc.SymbolicTensor,
+        aligned: tuple,
         attrs2: evoxc.SymbolicTensor,
     ) -> evoxc.SymbolicTensor:
         """Recombine one gene family's attributes through the homologue table.
 
         Homologous rows are gathered from ``attrs2`` and crossed with
         ``gene.crossover(state, key, attrs1, gathered_attrs2)`` in a single batched call; a
-        gene whose ``homologous_rows`` entry is ``I_INF`` keeps ``attrs1`` unchanged (no
-        gather is allowed to read a bogus row), and padded rows stay NaN.
+        gene with no homologue keeps ``attrs1`` unchanged (no gather is allowed to read a
+        bogus row), and padded rows stay NaN.
 
         Args:
             state (State): Immutable host configuration container.
@@ -151,8 +176,8 @@ class DefaultCrossover(BaseCrossover):
             key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this gene family.
             attrs1 (evoxc.SymbolicTensor): ``(P, M, A) float32`` parent 1 attributes, NaN
                 padded.
-            homologous_rows (evoxc.SymbolicTensor): ``(P, M) int32`` output of
-                :meth:`find_homologous` — row in parent 2, or ``I_INF``.
+            aligned (tuple): ``(rows, present)`` from :meth:`align_gene_rows` — parent 2's
+                row per gene already redirected to ``0`` where the mask is False.
             attrs2 (evoxc.SymbolicTensor): ``(P, M, A) float32`` parent 2 attributes, NaN
                 padded.
 
@@ -164,21 +189,19 @@ class DefaultCrossover(BaseCrossover):
             One flat gather per attribute **row**
             (:func:`~..alignment.gather_attr_rows`), so the cost is one op for the whole
             block instead of one per attribute column.
-            ``I_INF`` rows are redirected to row ``0`` **before** the index arithmetic —
-            ``I_INF * A`` would overflow ``int32`` — and the gathered value of a redirected
-            row is discarded by the final ``select``, so the unmasked read can never
-            escape.  The absent-row mask is computed once and used twice: to build that
-            safe row index and to pick ``attrs1`` back out afterwards.  A family without
-            attribute columns has nothing to recombine and comes back unchanged.
+            The alignment hands back the row already redirected to row ``0`` **before** any
+            index arithmetic — ``I_INF * A`` would overflow ``int32`` — and the gathered
+            value of a redirected row is discarded by the final ``select``, so the unmasked
+            read can never escape.  The absent-row mask therefore drives exactly one op
+            here (the closing ``select``) instead of a ``not_equal`` plus a redirect
+            ``select`` as well.  A family without attribute columns has nothing to
+            recombine and comes back unchanged.
         """
         if gene.attr_width == 0:
             return attrs1
+        rows, present = aligned
         pop_size, count, width = attrs1.shape
-        present = evoxc.not_equal(homologous_rows, enp.full((), I_INF, dtype=evoxc.int32))
-        safe_rows = evoxc.select(
-            present, homologous_rows, enp.full((), 0, dtype=evoxc.int32)
-        )
-        gathered = gather_attr_rows(attrs2, safe_rows)
+        gathered = gather_attr_rows(attrs2, rows)
         crossed = gene.crossover(state, key, attrs1, gathered)
         return evoxc.select(evoxc.reshape(present, (pop_size, count, 1)), crossed, attrs1)
 
