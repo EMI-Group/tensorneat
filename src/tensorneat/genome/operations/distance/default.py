@@ -420,16 +420,23 @@ class DefaultDistance(BaseDistance):
             digest route (:meth:`distance_from_alignment`) and the dense single-centre route
             (:func:`.dense.measure_centre`) cannot drift apart: the three differ only in how
             ``matched`` and the aligned attribute rows are produced.
+            The shipped ``compatibility_disjoint == 1.0`` config skips the disjoint
+            ``multiply`` outright: ``x * 1.0f`` is a bitwise identity for the ``float32``
+            value it would produce (the counts are small integers, so the cast is exact and
+            finite), so the op is pure dispatch.  A static host check on the Python float
+            decides, so any other weight keeps the multiply.  When this method pools its own
+            constants it pools none for a unit weight (nothing would read it); a ``consts``
+            tuple handed in by the caller comes from :meth:`._tail_constants`, i.e. from this
+            same operator, so its first entry holds exactly this weight.
         """
-        disjoint, weight, one = (
-            consts if consts else (None, None, None)
-        )
-        if disjoint is None:
-            disjoint, weight, one = (
-                pool.f32(self.compatibility_disjoint),
-                pool.f32(self.compatibility_weight),
-                pool.f32(1.0),
-            )
+        disjoint, weight, one = (consts if consts else (None, None, None))
+        if self.compatibility_disjoint == 1.0:
+            disjoint = None
+        elif disjoint is None:
+            disjoint = pool.f32(self.compatibility_disjoint)
+        if one is None:
+            weight = pool.f32(self.compatibility_weight)
+            one = pool.f32(1.0)
         # ``2 * matched`` as an integer add rather than a multiply by an ``int64`` literal: the
         # product is exact either way (the counts are small), and the add needs no constant.
         non_homologous = evoxc.subtract(
@@ -439,10 +446,11 @@ class DefaultDistance(BaseDistance):
         # Counts are small integers, so ``float32(max(cnt1, cnt2))`` is exact and the
         # maximum is cheaper on the integer dtypes than on two casts.
         denominator = evoxc.cast(evoxc.maximum(cnt1, cnt2), evoxc.float32)
-        numerator = evoxc.multiply(
-            evoxc.cast(non_homologous, evoxc.float32),
-            disjoint,
-        )
+        structural = evoxc.cast(non_homologous, evoxc.float32)
+        if disjoint is not None:
+            numerator = evoxc.multiply(structural, disjoint)
+        else:
+            numerator = structural
         if attribute_distance is not None:
             numerator = evoxc.add(
                 numerator,
