@@ -22,7 +22,6 @@ import evoxc.numpy as enp
 import numpy as np
 
 from ..common import State, TensorNEATError, Transformed
-from .utils import check_cycles as _check_cycles
 from .window import (
     _column_index,
     _column_mask,
@@ -129,8 +128,7 @@ class NodeStepMixin:
     (:class:`_StepStatics`, built by :meth:`_hit_conn_attrs`), the per-level reduce
     (:meth:`_node_step`) and the attribute/output row helpers around them — and the payload
     predicates that kernel and the algorithm share (:meth:`node_exists`,
-    :meth:`conn_exists`, :meth:`max_node_key`, :meth:`max_conn_marker`, and the
-    :meth:`check_cycles` gate the mutation operator asks).
+    :meth:`conn_exists`, :meth:`max_node_key`, :meth:`max_conn_marker`).
 
     It expects the composing class to provide ``node_gene``, ``conn_gene``, ``num_outputs``
     and ``network_type`` — i.e. to be a ``BaseGenome`` (or a subclass of one) — and keeps the
@@ -347,19 +345,6 @@ class NodeStepMixin:
         update = evoxc.logical_and(update_mask, any_slot(live))
         return evoxc.select(update, z, values)
 
-    def _is_output_row(self, node_keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
-        """Flag the node rows read out as network outputs.
-
-        Args:
-            node_keys: ``(P, N) int32`` node keys, ``I_INF`` padded.
-
-        Returns:
-            ``(P, N) bool``, True on rows ``max_nodes-num_outputs..max_nodes-1``, which the
-            node gene leaves unactivated.
-        """
-        pop_size, max_nodes = (int(size) for size in node_keys.shape)
-        return self._output_row_mask(pop_size, max_nodes)
-
     def _output_row_mask(
         self, pop_size: int, max_nodes: int
     ) -> evoxc.SymbolicTensor:
@@ -463,32 +448,3 @@ class NodeStepMixin:
             exists, markers, fill(tuple(markers.shape), 0, dtype=markers.dtype)
         )
         return evoxc.cast(enp.max(safe, axis=-1), evoxc.int32)
-
-    # --------------------------------------------------------------- cycle gate
-    def check_cycles(
-        self,
-        node_keys: evoxc.SymbolicTensor,
-        conn_keys: evoxc.SymbolicTensor,
-        src_keys: evoxc.SymbolicTensor,
-        dst_keys: evoxc.SymbolicTensor,
-    ) -> evoxc.SymbolicTensor:
-        """Ask whether adding one edge per individual would close a cycle.
-
-        Documented delegation to ``.utils.check_cycles``; the mutation operator calls the
-        predicate through the genome, so a genome can opt out by ``network_type`` — a
-        recurrent genome accepts cycles, and its answer is a constant ``False``.
-
-        Args:
-            node_keys: ``(P, N) int32`` node keys, ``I_INF`` padded.
-            conn_keys: ``(P, E, CK) int32`` connection keys, ``I_INF`` padded.
-            src_keys: ``(P,) int32`` new edge source node keys.
-            dst_keys: ``(P,) int32`` new edge destination node keys.
-
-        Returns:
-            ``(P,) bool`` True where the new edge would close a cycle; False for absent or
-            degenerate keys, and always False outside a feedforward genome.
-        """
-        pop_size = int(node_keys.shape[0])
-        if self.network_type != "feedforward":
-            return fill((pop_size,), False, dtype=evoxc.bool_)
-        return _check_cycles(node_keys, conn_keys, src_keys, dst_keys)

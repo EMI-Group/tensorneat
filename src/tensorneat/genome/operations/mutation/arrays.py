@@ -27,7 +27,6 @@ __all__ = [
     "masked_random_row",
     "random_row",
     "row_offsets",
-    "take_block",
     "take_block_at",
     "take_rows",
     "uniform_bounds",
@@ -258,35 +257,6 @@ def take_rows(
     flat_rows = enp.reshape(rows, (rows.shape[0], -1))
     index = enp.reshape(evoxc.add(flat_rows, offsets), (-1,))
     return enp.reshape(evoxc.gather(x_flat, index, axis=0), tuple(rows.shape))
-
-
-def take_block(
-    x_flat: evoxc.SymbolicTensor,
-    offsets: evoxc.SymbolicTensor,
-    rows: evoxc.SymbolicTensor,
-    columns: evoxc.SymbolicTensor,
-    width: int,
-) -> evoxc.SymbolicTensor:
-    """Gather the ``width`` cells of every indexed row out of a flattened payload.
-
-    Args:
-        x_flat: ``(P * R,)`` flattened batch-first source whose rows are ``width`` wide.
-        offsets: ``(P, 1)`` batch strides from :func:`row_offsets` (``R`` as the width).
-        rows: ``(P,)`` ``int32`` row indices in ``[0, R / width)``.
-        columns: ``(1, width)`` ``int32`` constant ``[0, 1, ..., width - 1]``.
-        width: Number of columns per row (static; needed for the flat index arithmetic).
-
-    Returns:
-        ``(P, width)`` tensor of ``x``'s dtype.
-
-    Raises:
-        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
-    """
-    span = evoxc.add(
-        evoxc.multiply(enp.reshape(rows, (rows.shape[0], 1)), i32(width)), columns
-    )
-    index = enp.reshape(evoxc.add(span, offsets), (-1,))
-    return enp.reshape(evoxc.gather(x_flat, index, axis=0), (rows.shape[0], width))
 
 
 def take_block_at(
