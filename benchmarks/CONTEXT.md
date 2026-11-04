@@ -6,7 +6,6 @@ The rewrite's real wins are recorded rather than argued: no JAX/torch runtime de
 `RESULTS.md` is the honest measured record of that FAIL and is never softened by hand: its verdict is computed by `harness/protocol.py` from the committed JSON, so flipping it needs new measurements, not new prose.
 Nothing here ships: the harness never imports both implementations in one process (JAX thread pools and evoxc/iree allocators would corrupt timings), it spawns one subprocess per run and renders `RESULTS.md` from the measured JSON.
 `RESULTS.md` is generated evidence, never hand-edited.
-`RESULTS.md` is generated evidence, never hand-edited.
 ## Layout
 - `run_benchmark.py` — CLI: plans the case matrix, spawns the worker subprocesses, aggregates, regenerates `RESULTS.md`.
 - `cases.py` — the case matrix: the logical workload (problem, genome, NEAT config, pop/gen budget, target) declared as data and shared by both implementations.
