@@ -486,7 +486,10 @@ class BaseGene(StatefulBaseClass):
                     f"got {tuple(values.shape)}"
                 )
             reshaped.append(evoxc.reshape(evoxc.cast(values, evoxc.int32), (*shape, 1)))
-        return evoxc.concatenate(reshaped, axis=-1)
+        # Last axis of the ``(*shape, 1)`` columns, written non-negative: the
+        # StableHLO exporter forwards the axis verbatim as ``dimension``, which
+        # must be non-negative.
+        return evoxc.concatenate(reshaped, axis=len(shape))
 
     def from_attrs(
         self,
