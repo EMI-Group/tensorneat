@@ -283,8 +283,9 @@ class NEAT(BaseAlgorithm):
            ``randkey`` into an *initialisation* key and the key carried into
            generation 0, call ``genome.initialize(cfg, init_key, pop_size)``
            once for the whole population, create the 0-d ``generation`` counter
-           and seed the species controller with population slot ``0`` (one
-           individual, no population axis) as the single live species' centre;
+           and seed the species controller with population slot ``0`` (that
+           genome's bare payload rows -- the centre-table convention, not a
+           one-individual batch) as the single live species' centre;
         4. ``register`` ``pop`` (a :class:`GenomeTensors`, one leading axis of
            length ``P``), ``generation`` (0-d float32 ``0.0``) and ``species``,
            and ``update`` the already-present ``randkey`` with the advanced key.
@@ -332,8 +333,9 @@ class NEAT(BaseAlgorithm):
             init_key, next_key = evoxc.random.split(randkey)
             payload = self.genome.initialize(cfg, init_key, pop_size)
             generation = enp.full((), 0.0, dtype=evoxc.float32)
-            # One individual without a population axis: the initial species
-            # centre.  ``gather`` with a 0-d index drops axis 0.
+            # The species-centre convention, not the pipeline's batch-first
+            # genome contract: a centre slot holds one genome's bare rows, so
+            # ``gather`` with a 0-d index drops axis 0 on purpose.
             first = GenomeTensors(
                 *(evoxc.gather(field, 0, axis=0) for field in payload)
             )
@@ -357,15 +359,18 @@ class NEAT(BaseAlgorithm):
 
         Args:
             cfg (State): Static (tensor-free) state carrying the genome layout.
-            first (GenomeTensors): One individual without a population axis.
+            first (GenomeTensors): One genome's bare payload rows (no population
+                axis): a species centre slot stores a single genome, so this is not
+                a one-individual batch.
 
         Returns:
             SpeciesState: The generation-0 species table.
 
         Note:
-            ``SpeciesController.setup`` takes one ``GenomeTensors`` individual --
-            no population axis, because it is a single centre genome -- and
-            returns the threaded state, so only ``.species`` is kept here.
+            ``SpeciesController.setup`` takes one genome's bare payload rows --
+            the centre-table convention, not a one-individual batch, because each
+            centre slot stores a single genome -- and returns the threaded state,
+            so only ``.species`` is kept here.
         """
         return self.species.setup(cfg, first).species
 

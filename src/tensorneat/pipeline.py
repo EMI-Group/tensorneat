@@ -92,15 +92,13 @@ snapshot state (so the phase sum slightly over-counts a real generation):
 
 The numpy reference interpreter pays per traced op *and* per element, whereas the
 legacy baseline was the same work fused by XLA, so parity at ``pop >= 500`` is
-**not reachable on ``backend="numpy"``**.  The compiled route is currently blocked
-inside ``evoxc`` rather than here: ``evoxc.scan`` desugars to ``while`` plus
-gather/scatter and a matrix-valued scan carry needs a rank-3 scatter the v1
-StableHLO exporter rejects; ``iree``'s llvm-cpu compiler SIGSEGVs
-non-deterministically on a ``while`` with >= 3 carried values plus a ``select``;
-a compile costs ~3-7 s per few-thousand-op graph; and there is no committed
-llvm-cpu measurement above ~8 k ops.  The shipped backend is therefore the
-reference interpreter -- no compiled win is claimed, and a compiled backend must
-be re-evaluated when ``evoxc`` lifts those limits.
+**not reachable on ``backend="numpy"``**.  The compiled route itself works:
+``evoxc.build(..., backend="iree")`` lowers, compiles and runs every shipped case
+end to end, it is just 5x (pop 100) / 24x (pop 500) / 23x (pop 1000) slower per
+generation than the reference interpreter on this CPU, and a compile costs
+~9-11 s per static shape.  The numbers, the measurement protocol and the per-gate
+fix record are in ``benchmarks/BACKENDS.md``.  ``"numpy"`` therefore stays the
+default and the measured backend: no compiled win is claimed on this hardware.
 
 Current per-generation op counts: ``forward`` 112 traced ops (749 before the
 level loop was reformulated), ``execute_mutation`` 1360 (3114), and
