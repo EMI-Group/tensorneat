@@ -1,8 +1,7 @@
-tensorneat.algorithm.hyperneat.substrate package
-================================================
+tensorneat.algorithm.hyperneat.substrate
+========================================
 
-Submodules
-----------
+Substrate layouts (full, MLP, default) a HyperNEAT CPPN is queried on.
 
 .. toctree::
    :maxdepth: 4
@@ -11,10 +10,3 @@ Submodules
    tensorneat.algorithm.hyperneat.substrate.default
    tensorneat.algorithm.hyperneat.substrate.full
    tensorneat.algorithm.hyperneat.substrate.mlp
-
-Module contents
----------------
-
-.. automodule:: tensorneat.algorithm.hyperneat.substrate
-   :members:
-   :show-inheritance:

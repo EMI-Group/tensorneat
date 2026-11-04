@@ -51,7 +51,7 @@ API reference
    :maxdepth: 2
    :caption: API reference
 
-   source/tensorneat
+   source/modules
 
 Links
 -----

@@ -1,17 +1,9 @@
-tensorneat.problem.rl package
-=============================
+tensorneat.problem.rl
+=====================
 
-Submodules
-----------
+Reinforcement-learning problems (CartPole).
 
 .. toctree::
    :maxdepth: 4
 
    tensorneat.problem.rl.cartpole
-
-Module contents
----------------
-
-.. automodule:: tensorneat.problem.rl
-   :members:
-   :show-inheritance:

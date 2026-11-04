@@ -1,8 +1,7 @@
-tensorneat.genome.gene.conn package
-===================================
+tensorneat.genome.gene.conn
+===========================
 
-Submodules
-----------
+Connection gene families: base, default and origin connections.
 
 .. toctree::
    :maxdepth: 4
@@ -10,10 +9,3 @@ Submodules
    tensorneat.genome.gene.conn.base
    tensorneat.genome.gene.conn.default
    tensorneat.genome.gene.conn.origin
-
-Module contents
----------------
-
-.. automodule:: tensorneat.genome.gene.conn
-   :members:
-   :show-inheritance:

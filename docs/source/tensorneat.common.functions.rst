@@ -1,8 +1,7 @@
-tensorneat.common.functions package
-===================================
+tensorneat.common.functions
+===========================
 
-Submodules
-----------
+Activation and aggregation registries, with their sympy mirrors.
 
 .. toctree::
    :maxdepth: 4
@@ -12,10 +11,3 @@ Submodules
    tensorneat.common.functions.agg
    tensorneat.common.functions.agg_sympy
    tensorneat.common.functions.manager
-
-Module contents
----------------
-
-.. automodule:: tensorneat.common.functions
-   :members:
-   :show-inheritance:

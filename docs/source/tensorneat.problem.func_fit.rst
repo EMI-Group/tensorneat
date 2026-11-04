@@ -1,8 +1,7 @@
-tensorneat.problem.func\_fit package
-====================================
+tensorneat.problem.func_fit
+===========================
 
-Submodules
-----------
+Function-fitting problems: XOR, XOR3d and custom vector fit.
 
 .. toctree::
    :maxdepth: 4
@@ -11,10 +10,3 @@ Submodules
    tensorneat.problem.func_fit.func_fit
    tensorneat.problem.func_fit.xor
    tensorneat.problem.func_fit.xor3d
-
-Module contents
----------------
-
-.. automodule:: tensorneat.problem.func_fit
-   :members:
-   :show-inheritance:

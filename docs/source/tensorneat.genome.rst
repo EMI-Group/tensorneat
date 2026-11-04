@@ -1,21 +1,13 @@
-tensorneat.genome package
-=========================
+tensorneat.genome
+=================
 
-Subpackages
------------
+Genome representations and the tensorized operations applied to them.
 
 .. toctree::
    :maxdepth: 4
 
    tensorneat.genome.gene
    tensorneat.genome.operations
-
-Submodules
-----------
-
-.. toctree::
-   :maxdepth: 4
-
    tensorneat.genome.base
    tensorneat.genome.default
    tensorneat.genome.grad
@@ -24,10 +16,3 @@ Submodules
    tensorneat.genome.step
    tensorneat.genome.utils
    tensorneat.genome.window
-
-Module contents
----------------
-
-.. automodule:: tensorneat.genome
-   :members:
-   :show-inheritance:

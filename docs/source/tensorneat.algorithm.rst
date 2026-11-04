@@ -1,26 +1,11 @@
-tensorneat.algorithm package
-============================
+tensorneat.algorithm
+====================
 
-Subpackages
------------
+Algorithm drivers: plain NEAT and the substrate-based HyperNEAT variant.
 
 .. toctree::
    :maxdepth: 4
 
    tensorneat.algorithm.hyperneat
    tensorneat.algorithm.neat
-
-Submodules
-----------
-
-.. toctree::
-   :maxdepth: 4
-
    tensorneat.algorithm.base
-
-Module contents
----------------
-
-.. automodule:: tensorneat.algorithm
-   :members:
-   :show-inheritance:

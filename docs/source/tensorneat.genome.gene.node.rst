@@ -1,8 +1,7 @@
-tensorneat.genome.gene.node package
-===================================
+tensorneat.genome.gene.node
+===========================
 
-Submodules
-----------
+Node gene families: base, default, origin and bias nodes.
 
 .. toctree::
    :maxdepth: 4
@@ -11,10 +10,3 @@ Submodules
    tensorneat.genome.gene.node.bias
    tensorneat.genome.gene.node.default
    tensorneat.genome.gene.node.origin
-
-Module contents
----------------
-
-.. automodule:: tensorneat.genome.gene.node
-   :members:
-   :show-inheritance:

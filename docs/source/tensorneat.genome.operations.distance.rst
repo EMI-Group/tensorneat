@@ -1,8 +1,7 @@
-tensorneat.genome.operations.distance package
-=============================================
+tensorneat.genome.operations.distance
+=====================================
 
-Submodules
-----------
+Speciation distances and the distance digest.
 
 .. toctree::
    :maxdepth: 4
@@ -13,10 +12,3 @@ Submodules
    tensorneat.genome.operations.distance.dense
    tensorneat.genome.operations.distance.digest
    tensorneat.genome.operations.distance.layout
-
-Module contents
----------------
-
-.. automodule:: tensorneat.genome.operations.distance
-   :members:
-   :show-inheritance:

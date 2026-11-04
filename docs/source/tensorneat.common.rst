@@ -1,20 +1,12 @@
-tensorneat.common package
-=========================
+tensorneat.common
+=================
 
-Subpackages
------------
+Host-side plumbing shared by every subtree: state, errors, registries, tensorization.
 
 .. toctree::
    :maxdepth: 4
 
    tensorneat.common.functions
-
-Submodules
-----------
-
-.. toctree::
-   :maxdepth: 4
-
    tensorneat.common.errors
    tensorneat.common.host_graph
    tensorneat.common.state
@@ -22,10 +14,3 @@ Submodules
    tensorneat.common.sympy_tools
    tensorneat.common.tensorization
    tensorneat.common.tools
-
-Module contents
----------------
-
-.. automodule:: tensorneat.common
-   :members:
-   :show-inheritance:
