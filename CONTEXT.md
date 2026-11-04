@@ -37,6 +37,18 @@ That contract is measured on the `numpy` reference backend; the `iree` compiled 
 Legacy measured on this machine (JAX 0.12 CPU, 1 thread-bound box): 51 ms/gen at pop 100, 109 ms/gen at pop 500, 157 ms/gen at pop 1000.
 The winning structural idea is *edge-proportional, depth-parallel* evaluation: work scales with real connections and network depth, not with `max_nodes × max_nodes` padding waste.
 
+## Measured Cost of one generation
+`backend="numpy"`, XOR, seed 42, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, build excluded, 3 warmup + 20 timed `Pipeline.step`, one process per cell, before/after one op-count pass taken in a single session (`benchmarks/PERF_NUMPY.md` holds the full record, the profile split and the reproduce commands):
+| cell | median ms/gen before | median ms/gen now | peak RSS before → now |
+| --- | --- | --- | --- |
+| xor p100 | 43.47 | 38.58 | 118.2 → 114.4 MiB |
+| xor p500 | 268.39 | 159.90 | 260.8 → 240.5 MiB |
+| xor p1000 | 342.21 | 270.08 | 431.6 → 391.5 MiB |
+| xor3d p500 | 290.04 | 176.98 | 291.3 → 264.7 MiB |
+A generation is now **8 150 executed IR ops** (was 10 767), and ~63 % of the remaining wall time is the numpy interpreter's fixed per-op cost (~13 µs: operand resolution + dtype/shape validation + `Tensor` construction in `evoxc/backends/numpy/interpreter.py::_run_block`), not array work — so **executed op count is the lever for any further win**, and host-side bookkeeping in `Pipeline.step` is 0.1 %.
+The interpreter keeps every SSA result of a block alive until that block returns, so a kernel's live set is charged once per enclosing block: **never hoist a kernel out of a `while`/`scan` without measuring peak RSS** (hoisting the 20 speciation rows was 28 % faster and 1.7× the memory; measuring them inside one `evoxc.scan` is 40 % faster and below the starting memory).
+`benchmarks/RESULTS.md` predates this pass (its new-side rows are stale; the verdict must be re-rendered by `run_benchmark.py`, never hand-edited).
+
 ## Constraints
 - `import tensorneat` must never import `jax`, `torch`, `brax`, `gymnax`, or `mujoco` (a release-gate test enforces this).
 - Requires Python >= 3.11 (evoxc's floor); runtime deps are `evoxc`, `numpy`, `sympy`, `networkx`, `matplotlib`.
