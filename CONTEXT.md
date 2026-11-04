@@ -13,7 +13,7 @@ The library keeps its research identity (GECCO 2024 Best Paper, arXiv 2404.01817
 - `pyproject.toml` + `uv.lock` + `.python-version` — packaging, the locked environment, and the interpreter pin; `README.md` is the front page and must match the code.
 ## API Surface
 - `from tensorneat import Pipeline, algorithm, genome, problem, common`; `tensorneat.__version__` is the installed distribution version.
-- `Pipeline(algorithm, problem, seed=42, fitness_target=..., generation_limit=1000, backend="numpy", device=None, compile_options=None, is_save=False, is_detailed=True)` → `setup()` (host-only, builds nothing), `step(state)`, `auto_run(state)`, `show(state, best)`.
+- `Pipeline(algorithm, problem, seed=42, fitness_target=1, generation_limit=1000, backend="numpy", device=None, compile_options=None, is_save=False, save_dir=None, is_detailed=True, show_problem_details=False, pop_batch_size=None)` → `setup()` (host-only, builds nothing), `step(state)`, `auto_run(state)`, `show(state, best)`.
 - `algorithm.NEAT(...)`, `algorithm.HyperNEAT(substrate, neat)`, `genome.DefaultGenome/RecurrentGenome`, `problem.XOR/XOR3d/CustomFuncFit/CartPole/Pendulum/MountainCarContinuous`, `common.ACT/AGG/State`.
 - A genome payload is a four-array record (`node_keys`, `node_attrs`, `conn_keys`, `conn_attrs`) and is **batch-first**: `auto_run` returns `best` as a one-individual batch (`(1, max_nodes)`, …), which `show` and `genome.network_dict(state, best)` consume; bare rows are accepted by the host helpers and written one-genome-per-file by checkpointing.
 - Configuration objects are constructor-level and host-side; every numerical operation is a batch-first kernel inside an `evoxc` graph.
