@@ -8,12 +8,12 @@ replaces the four helpers' sequential full-array rewrites (each of which had to 
 whole array with ``select``) by one write per slot, with the slot-0 clear and the
 node-deletion detach sharing a single clearing pass over the connection arrays.
 
-A slot is written by comparing the array's row-index constant against the slot's row
-:func:`~.arrays.write_rows`: a row index equal to the array's own row count matches nothing,
-which is the "no write" case, so no dump row and no flat index block is needed and the
-number of traced ops stays proportional to the number of *distinct* accesses.  That is the
-whole point of this module under the reference interpreter: a traced op costs ~80 µs largely
-independent of element count, so the stage's cost is its *op count*.
+A node slot is written by comparing the array's row-index constant against the slot's row
+(the pattern of :func:`~.arrays.write_rows`): a row index equal to the array's own row count
+matches nothing, which is the "no write" case, so no dump row and no flat index block is
+needed.  A connection slot goes through one flat ``scatter`` instead, because a ``select``
+pays whole-array traffic.  Both shapes keep the stage's cost proportional to the number of
+*distinct* accesses and to the cells actually written.
 """
 
 from typing import NamedTuple
@@ -23,7 +23,7 @@ import evoxc
 import evoxc.numpy as enp
 
 from ...utils import GenomeTensors
-from .arrays import graph_constant, write_rows
+from .arrays import graph_constant
 
 class AddNodePlan(NamedTuple):
     """Candidate rows and values of one node split.
@@ -133,7 +133,6 @@ class EditContext(NamedTuple):
         free_conn_row: ``(P,) int32`` first free connection row (``0`` where there is none).
         free_conn_any: ``(P,) bool`` "this individual has a free connection row".
         sentinel: Rank-0 ``int32`` ``I_INF``, the "no key" value written into cleared rows.
-        zero: Rank-0 ``int32`` ``0``.
         nan_fill: Rank-0 ``float32`` NaN, the "no value" value written into cleared rows.
         in_degree_limit: Rank-0 ``int32`` ``genome.max_in_degree``.
         node_row_limit: Rank-0 ``int32`` ``N``, the "no write" node row.
@@ -165,7 +164,6 @@ class EditContext(NamedTuple):
     free_conn_row: evoxc.SymbolicTensor
     free_conn_any: evoxc.SymbolicTensor
     sentinel: evoxc.SymbolicTensor
-    zero: evoxc.SymbolicTensor
     nan_fill: evoxc.SymbolicTensor
     in_degree_limit: evoxc.SymbolicTensor
     node_row_limit: evoxc.SymbolicTensor
@@ -342,17 +340,18 @@ def apply(
     pop_size = node_keys.shape[0]
     edge_count = conn_keys.shape[1]
     key_width, attr_width = conn_keys.shape[2], conn_attrs.shape[2]
-    written_node_keys = write_rows(
-        node_keys,
-        context.node_row_index,
-        edit.node_rows,
-        enp.reshape(edit.node_keys, (pop_size, 1)),
+    # The two node arrays share the row layout, so the row-index comparison is built once
+    # and broadcast over the attribute axis instead of being recomputed per array.
+    node_write = evoxc.equal(
+        context.node_row_index, enp.reshape(edit.node_rows, (pop_size, 1))
     )
-    written_node_attrs = write_rows(
-        node_attrs,
-        context.node_row_column,
-        edit.node_rows,
+    written_node_keys = evoxc.select(
+        node_write, enp.reshape(edit.node_keys, (pop_size, 1)), node_keys
+    )
+    written_node_attrs = evoxc.select(
+        enp.reshape(node_write, (pop_size, node_keys.shape[1], 1)),
         enp.reshape(edit.node_attrs, (pop_size, 1, node_attrs.shape[2])),
+        node_attrs,
     )
     # One clearing pass over the connection arrays for slot 0 plus the detach mask, so the
     # whole stage pays one full-array select per array instead of two.

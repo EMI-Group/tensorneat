@@ -603,7 +603,6 @@ class BaseMutation(StatefulBaseClass):
             free_conn_row=free_conn_row,
             free_conn_any=free_conn_any,
             sentinel=sentinel,
-            zero=_int32(0),
             nan_fill=enp.full((), float("nan"), dtype=evoxc.float32),
             in_degree_limit=_int32(genome.max_in_degree),
             node_row_limit=_int32(node_count),
