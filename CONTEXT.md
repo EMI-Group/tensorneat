@@ -55,7 +55,7 @@ Remaining lever, measured and out of scope so far: the padded gene geometry (`ma
 | `./examples` | Runnable scripts per problem family; six of twelve cross their fitness target inside the shipped demo budget (all twelve exit 0). |
 | `./docs` | Sphinx configuration, autodoc stubs (one per public module) and the built-site rules. |
 | `./tutorials` | `quickstart.ipynb` for the current API (`legacy_jax/` keeps the pre-rewrite notebooks, concepts only). |
-| `./imgs` | Static assets referenced by README and tutorials (logo, network/RL figures). |
+| `./imgs` | Static assets; only the two `evox_brand_*.svg` logos are referenced (README header) — the network/RL figures and GIFs are unreferenced pre-rewrite leftovers. |
 | `./.github/workflows` | `ci.yaml` (uv sync + test + parity + import-hygiene + optional iree) and the PyPI release workflow. |
 | `pyproject.toml`, `uv.lock`, `.python-version` | Packaging metadata, the locked environment, the interpreter pin — a dependency change needs `uv lock`. |
 | `.readthedocs.yaml` | Read the Docs build (Python 3.12, uv-based install, sphinx-build). |
