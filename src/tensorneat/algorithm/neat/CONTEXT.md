@@ -104,6 +104,7 @@ Dispatch budget per generation: `1` `prepare_distance` + `2 · species_size` pop
 `evoxc` de-sugars `scan` into `while` + `gather`/`scatter`, so a trip count must be static and the carry must keep identical dtypes and shapes: both speciation phases are `scan(f, carry, enp.arange(species_size))` with per-slot masks, never a data-dependent `while_loop`.
 The legacy early-exit conditions survive as masks, and because every write is mask-then-single-`scatter` (`scatter_row` for the rank-3 gene tables) the extra iterations are provably no-ops.
 Carries are kept narrow and packed (`idx2species` and the running distance as two `(P,)` arrays; the species keys plus `next_species_key` as one `(S+1,)` array) because wide `select`-bearing carries are a known iree codegen hazard.
+Scan 1 carries those three plus the four centre gene tables (9 values); scan 2 carries the same three plus the rank-1 `seed_table`/`created_mask` (7 values), and the created centre rows are rebuilt after it — see `## Species Algebra`.
 No random draw happens inside a scan body — keys never travel through a carry.
 
 ## StableHLO Export Rules (binding for every kernel here)
