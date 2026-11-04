@@ -13,7 +13,7 @@ Nothing here is imported by `src/`, `test/` or `examples/`; tutorials are read b
 - The same section says `"xla"` has no pip extra and no installable dependency at all: the evoxc xla adapter drives a user-supplied PJRT C API plugin `.so` found through `plugin_path` in `compile_options` or the `EVOXC_PJRT_PLUGIN` environment variable, and nothing provides one on this box.
   `"tvm"` is an `evoxc[tvm]` extra that this project's measurements never attempted.
 - The "where to go next" section names the three simulator-free RL environments the package ships and their scripts: `CartPole` (`examples/rl/cartpole.py`, discrete), `Pendulum` (`examples/rl/pendulum.py`, continuous torque) and `MountainCarContinuous` (`examples/rl/mountaincar.py`, continuous force).
-- Re-execute it after any API change, from the repo root: `export PATH=/root/.local/bin:$PATH`, `uv sync --all-extras`, then
+- Re-execute it after any API change, from the repo root: `uv sync --all-extras`, then
   `uv run --with jupyter,nbconvert,nbclient,ipykernel jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=600 tutorials/quickstart.ipynb`
   — the committed outputs were regenerated from the current tree by exactly that command (exit 0, ~7 s wall clock, ~0.26 s of it the `evoxc.build` for the generation graph).
 
