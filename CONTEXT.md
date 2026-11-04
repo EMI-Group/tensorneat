@@ -28,7 +28,7 @@ The library keeps its research identity (GECCO 2024 Best Paper, arXiv 2404.01817
 `"xla"` requires a user-supplied PJRT C API plugin (unavailable on this box) and `"tvm"` is untested.
 A backend that cannot run a kernel raises; nothing ever silently falls back to another backend.
 ## Performance
-`benchmarks/RESULTS.md` is the generated old-vs-new report and its verdict on CPU timing is **FAIL**: the numpy interpreter is still ~1.5–1.7× slower per generation than the frozen JAX baseline at pop 500–1000, and node-for-node the rewrite is a portability/dependency trade, not a speed-up.
+`benchmarks/RESULTS.md` is the generated old-vs-new report and its verdict is **FAIL** (timing and quality): the numpy interpreter beats the frozen JAX baseline on XOR (1.15×/1.68×/2.79× faster at pop 100/500/1000) but loses on XOR3d (0.61×/0.59×/0.88× of the old speed) and Pagie (0.17×), and four cases also miss the quality tolerance; node-for-node the rewrite is a portability/dependency trade with a mixed CPU-speed record, not a uniform speed-up.
 The rewrite's wins are real and recorded: no JAX/torch runtime dependency, one explicit persistent graph per shape, ~5× lower build latency, lower memory on the compiled leg, and numpy/iree/xla/tvm behind one `backend=` argument.
 `benchmarks/PERF_NUMPY.md` records the numpy op-count pass that cut a generation by 39 % (pop 500) and 45 % (pop 1000) with bit-identical results; its committed before/after pair is the reference for further work.
 Remaining lever, measured and out of scope so far: the padded gene geometry (`max_nodes`/`max_conns` multiply every per-pair op) and `evoxc`'s interpreter per-op overhead (~63 % of a generation).
