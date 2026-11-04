@@ -1,9 +1,8 @@
 # TensorNEAT benchmark — thread-bound sensitivity (XOR family, --threads 1)
 
-> **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
-> `benchmarks/results/threads1.json` at 2026-11-02T06:31:32+00:00. It must not be hand-edited:
-> Re-rendered from that same JSON at 2026-11-04T07:48:56+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
-> rerun the CLI instead, or the numbers below stop matching the recorded evidence.
+> **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from `benchmarks/results/threads1.json` at 2026-11-02T06:31:32+00:00.
+> Re-rendered from that same JSON at 2026-11-04T19:39:05+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> It must not be hand-edited: rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *This is the thread-bound sensitivity run (`--threads 1`, the declared-contract condition) of the XOR family; the authoritative default-thread matrix is `RESULTS.md`.*
 
@@ -131,7 +130,7 @@ By population size:
 Worst case: `xor_p1000` at 3.17x (1991.6 vs 627.5 MiB old, +1364 MiB).
 The new side's peak grows with the population in the XOR family (145.3 → 1049.6 → 1991.6 MiB at pop 100, 500, 1000), while the old row moves only from 578.4 to 627.5 MiB.
 
-Mechanism, as far as these runs support one: the old side's floor is the JAX/XLA runtime itself (192.2–192.4 MiB right after import); the new side starts from 72.8 MiB. Beyond those floors the new peak tracks the population while the old peak stays close to its runtime floor, so the working set the numpy interpreter materialises per generation is what grows with `pop_size × max_nodes × max_conns`; these runs do not attribute that growth to a single dominant term.
+Mechanism, as far as these runs support one: the old side's floor is the JAX/XLA runtime itself (192.2–192.4 MiB right after import); the new side starts from 72.8 MiB. Beyond those floors the new peak tracks the population while the old peak stays close to its runtime floor, so the footprint is the other axis from the compute claim above — the numpy interpreter materialises padded `pop_size × max_nodes × max_conns` tensors every generation, and it is that tensor geometry, not the live edge count, that the peak follows; these runs do not attribute that growth to a single dominant term.
 
 This section is written from the same `speedup` values as the headline and old-vs-new tables; it does not assume the new side is the winner. A rerun that changes those numbers changes this text with them.
 
@@ -141,7 +140,7 @@ Where the new side lands relative to the declared contract:
 - Contract at pop 500 (`xor_p500`): 109.00 ms/gen declared; measured old 127.71 ms/gen (1.17x declared); measured new 360.12 ms/gen (3.30x declared, i.e. the new side is slower than the contract here).
 - Contract at pop 1000 (`xor_p1000`): 157.00 ms/gen declared; measured old 252.06 ms/gen (1.61x declared); measured new 665.46 ms/gen (4.24x declared, i.e. the new side is slower than the contract here).
 
-The declared contract (51/109/157 ms/gen at pop 100/500/1000) was measured on a 1-thread-bound box; this run used `--threads 1`, so the comparison to the contract is informational and the measured old row on this box is what the verdict uses.
+The declared contract (51/109/157 ms/gen at pop 100/500/1000) is the recorded reference baseline (`reference_ms_per_generation` in `benchmarks/cases.py`, copied into every run record), not a number this box reproduces: `--threads 0` measured 38.99/295.33/807.30 ms/gen on the old side and `--threads 1` measured 35.79/127.71/252.06 ms/gen on the old side (`benchmarks/results/authoritative.json`, `benchmarks/results/threads1.json`). This run used `--threads 1`, so the comparison to the contract is informational and the measured old row on this box is what the verdict uses.
 
 ## Quality curves
 
@@ -188,10 +187,14 @@ Percent columns are generation `round(fraction × N)` of the N recorded generati
 | xor_p500 | 500 | 109.00 | 127.71 | 1.17x |
 | xor_p1000 | 1000 | 157.00 | 252.06 | 1.61x |
 
-The performance contract in `../CONTEXT.md` declares legacy CPU numbers measured on a
-1-thread-bound box (51 ms/gen at pop 100, 109 ms/gen at pop 500, 157 ms/gen at pop 1000).
-The generator prints those next to the old row measured on this box; the verdict uses the
-measured row.
+The performance contract in `../CONTEXT.md` declares the legacy CPU reference
+baseline (51 ms/gen at pop 100, 109 ms/gen at pop 500, 157 ms/gen at pop 1000),
+recorded as `reference_ms_per_generation` in `cases.py` and copied into every run
+record. It is a reference figure, not a reading of this box: the declared numbers
+reproduce at neither thread setting here, so the generator prints them next to the
+old row measured in the same run and the verdict uses that measured row. The
+win/lose section quotes the measured readings at both thread settings whenever it
+has comparable pairs.
 
 ## What is not compared
 
