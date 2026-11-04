@@ -133,10 +133,12 @@ committed `RESULTS.md` is untouched):
 | xor_p500 | 321.37 | 157.16 | 2.04× | PASS | 722.5 / 240.9 MiB |
 | xor_p1000 | 830.10 | 271.70 | 3.06× | PASS | 706.3 / 391.9 MiB |
 
-Read this as *internal* evidence only: this environment resolves `jax 0.10.2`, while the committed
-`RESULTS.md` was measured with `jax 0.12.0.1`, whose old-side rows are much faster (157 / 246.76 ms at
-p500 / p1000). The contract verdict must therefore be re-rendered by the harness on the same JAX
-version as the record it replaces; this file does not claim a contract PASS.
+Read this as *internal* evidence only. This box resolves `jax 0.10.2` for both sides of the comparison,
+and the committed `RESULTS.md` (measured at `ebeaf1f8` with the same `jax 0.10.2`) records old-side
+rows of 295.33 / 807.30 ms at p500 / p1000 against 321.37 / 830.10 ms for this 50-generation pair, so
+the session, not the interpreter version, is what separates them. The contract verdict must therefore
+be re-rendered by the harness on the same interpreter and box as the record it replaces; this file
+does not claim a contract PASS.
 The `xor_p1000` quality row fails against the JAX side, which is a search-trajectory difference, not a
 kernel one: the two sides use different PRNGs, and the new tree is bit-identical to `a697531` (same
 seed ⇒ same evolution), so that verdict is unchanged by this pass.
@@ -157,13 +159,11 @@ seed ⇒ same evolution), so that verdict is unchanged by this pass.
 Protocol: same box, `backend="numpy"`, harness seeds 42/43/44 (repeat `r` uses `seed + r`),
 `--generations 150 --warmup 3 --repeats 3`. `after` = the case-scoped run on HEAD `90d97b4`, record
 `benchmarks/results/fix_after.json` (a git-ignored scratch record, rendered to `$TMPDIR/fix_after.md`,
-so the committed `RESULTS.md` was never rewritten). `before` = the committed
-`benchmarks/results/authoritative.json` (HEAD `ce5bb88`, same protocol, same box family). Both sides
-of the old-vs-new column come from the same pass-2 run.
+so the committed `RESULTS.md` was never rewritten). `before` = the committed `benchmarks/results/authoritative.json` (measured at `ebeaf1f8`, the commit its own environment fingerprint stores, and rendered into `RESULTS.md`, which is committed at `ce5bb88`; same protocol, same box family). Both sides of the old-vs-new column come from the same pass-2 run.
 
 ### Headline
 
-| case | before — new side, `authoritative.json` @ `ce5bb88`<br>ms/gen · peak RSS · build | after — new side, `fix_after.json` @ `90d97b4`<br>per repeat → median ms/gen · peak RSS · build | old side — JAX, same run<br>per repeat → median ms/gen | speed-up old/new |
+| case | before — new side, `authoritative.json` measured at `ebeaf1f8`<br>ms/gen · peak RSS · build | after — new side, `fix_after.json` @ `90d97b4`<br>per repeat → median ms/gen · peak RSS · build | old side — JAX, same run<br>per repeat → median ms/gen | speed-up old/new |
 | --- | --- | --- | --- | --- |
 | `custom_pagie_p500` | 3156.73 · 4577.1 MiB · 2.256 s (0.16× of the old 496.45 ms/gen) | 833.81 / 960.63 / 799.88 → **833.81** · 1361.4 MiB · 1.63 s | 629.22 / 520.84 / 539.19 → 539.19 | **0.65×** |
 | `cartpole_p100` (new-only: the pre-rewrite library has no evoxc CartPole) | 381.73 · 110.6 MiB · 0.549 s | 268.51 / 310.58 / 275.24 → **275.24** · 111.0 MiB · 0.46 s | n/a | n/a |
@@ -171,12 +171,13 @@ of the old-vs-new column come from the same pass-2 run.
 | `xor3d_p500` (control) | 171.16 · 265.5 MiB (0.63× of old) | 188.50 / 176.91 / 183.22 → **183.22** · 237.2 MiB · 0.54 s | 111.84 / 94.68 / 132.84 → 111.84 | 0.61× |
 
 Every `before` cell is the new-side row of the committed `results/authoritative.json` (measured at
-`ce5bb88`, rendered into the committed `RESULTS.md`); the `(1.83× of old)` / `(0.63× of old)` notes are
-that record's own same-run old-vs-new ratios. Every `after` cell is the new-side row of
-`results/fix_after.json` (measured at `90d97b4`, same case config, 3 repeats, median taken over the
-three repeats, peak RSS the per-run high-water mark). The old-side column and the speed-up column are
-both taken from that pass-2 run, so the ratio never mixes sessions; `cartpole_p100` is `n/a` on the
-old side because the frozen pre-rewrite library ships no evoxc CartPole.
+`ebeaf1f8`, rendered into the committed `RESULTS.md` at `ce5bb88`); the `(1.83× of old)` /
+`(0.63× of old)` notes are that record's own same-run old-vs-new ratios. Every `after` cell is the
+new-side row of `results/fix_after.json` (measured at `90d97b4`, same case config, 3 repeats, median
+taken over the three repeats, peak RSS the per-run high-water mark). The old-side column and the
+speed-up column are both taken from that pass-2 run, so the ratio never mixes sessions;
+`cartpole_p100` is `n/a` on the old side because the frozen pre-rewrite library ships no evoxc
+CartPole.
 
 The `custom_pagie_p500` cell is the point of the pass: wall time and peak RSS both fall sharply,
 about **−74 % wall and −70 % RSS** against the `before` record (3156.73 → 833.81 ms/gen,
