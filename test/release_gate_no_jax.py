@@ -13,8 +13,9 @@ separate statements, from weakest to strongest:
    forbidden top-level module: a green (1) can still hide a *deferred* import,
    which only fires later; a red (2) names the module that was reached for.
 3. The documented public surface resolves — ``Pipeline``, ``algorithm.NEAT``/
-   ``HyperNEAT``, ``genome.DefaultGenome``/``RecurrentGenome``, ``problem.XOR``/
-   ``XOR3d``/``CustomFuncFit``/``CartPole``, ``common.ACT``/``AGG``/``State`` —
+   ``HyperNEAT``/``HyperNEATFeedForward``, ``genome.DefaultGenome``/
+   ``RecurrentGenome``, ``problem.XOR``/``XOR3d``/``CustomFuncFit``/``CartPole``,
+   ``common.ACT``/``AGG``/``State`` —
    and ``tensorneat.__file__`` lives under ``src/tensorneat/``, so the gate is
    exercising *this checkout* and not an unrelated installed copy.
 4. A whole (tiny) XOR run still evolves on the numpy backend with the hook
@@ -78,6 +79,7 @@ PUBLIC_API = (
     "tensorneat.Pipeline",
     "tensorneat.algorithm.NEAT",
     "tensorneat.algorithm.HyperNEAT",
+    "tensorneat.algorithm.HyperNEATFeedForward",
     "tensorneat.genome.DefaultGenome",
     "tensorneat.genome.RecurrentGenome",
     "tensorneat.problem.XOR",
@@ -357,7 +359,7 @@ def test_import_is_guarded_by_an_import_hook() -> None:
 def test_public_api_is_present() -> None:
     """Invariant: the documented entry points resolve, and they come from this checkout.
 
-    ``Pipeline``, the two algorithms, the two genomes, the four problems and
+    ``Pipeline``, the three algorithms, the two genomes, the four problems and
     ``common.ACT``/``AGG``/``State`` are what ``README``/``docs`` promise, so a
     green release must actually export them. ``tensorneat.__file__`` is asserted
     to sit under ``src/tensorneat/``: a gate that silently imported an installed

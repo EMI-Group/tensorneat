@@ -11,7 +11,6 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import evoxc
-import evoxc.numpy as enp
 import numpy as np  # host-only: the ``activate_time`` validation of the constructor
 
 from ..common import State, TensorNEATError
