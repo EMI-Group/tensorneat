@@ -103,9 +103,19 @@ The recurrent executor (`RecurrentGenome`) ignores `max_depth` — it ticks a fi
 `problem`'s `FuncFit.show` rebuilds the nested schedule with `evoxc.tree_unflatten`, so a `SubstrateSchedule` survives the round trip and `Pipeline.show` reports a decoded substrate.
 `pipeline.py`: creates `randkey`; this node seeds nothing and draws no randomness.
 
+## Backend Behaviour (`iree`)
+`backend="iree"` (iree-base-compiler 3.11.0, llvm-cpu) compiles and runs this node's whole generation graph end to end, so HyperNEAT is no longer the holdout among the shipped cases.
+The graph needs nothing beyond `broadcast_to`/`reshape`/`concatenate`/`gather`-class static ops from the CPPN decode, and the one exporter blocker it had was the negative `concatenate` axis documented under `## Constraints`.
+Reference measurement, `HyperNEAT(FullSubstrate(4 inputs, 3 hidden, 1 output), NEAT(pop_size=20, species_size=5, survival_threshold=0.1, genome=DefaultGenome(num_inputs=4, num_outputs=1, output_transform=ACT.tanh)), activation=ACT.tanh, activate_time=3, output_transform=ACT.sigmoid)` + `XOR3d()`, seed 42, `setup()` + 3 `step()`s:
+`iree` — one `evoxc.build` inside the first `step` at `build_seconds == 10.32` (`builds == 1`), then 35.8 / 36.4 ms per step; max fitness −0.375114 / −0.375004 / −0.375004.
+`numpy` — `build_seconds == 1.96`, 32.8 / 33.1 ms per step, the same max fitness.
+Cross-backend the `node_keys`/`conn_keys` payloads are exactly equal, the Node/conn attr NaN padding patterns are exactly equal (3600/3600 and 1920/1920 NaN cells at step 0), the finite attr cells and the fitness differ by ≤ 7.2e-7 (float32 reassociation), and `randkey`/`generation` are bit-identical — the decode is weight-identical across backends, only the last bits of the reductions move.
+
 ## Constraints
 No `jax` / `torch` / `numpy.random` on the compute path; `numpy` is used only in `__init__`/`_static_bounds` validation, for `np.ascontiguousarray` before `evoxc.from_numpy`, and in host-only `repr`/`to_dict`.
 No (un)vectorization of any kind: no `vmap`, no `fori_loop`, no `switch`; this node contains no `cond`/`while_loop`/`scan` of its own and every kernel is region-free and batch-first.
+Axes in graph ops are written as non-negative static integers: `forward` concatenates the bias column with `axis=1`, `_conn_keys` with `axis=2` and `_attr_columns` stacks with `axis=2`, never `-1`, because the StableHLO exporter forwards a `concatenate` axis verbatim as `stablehlo.concatenate`'s `dimension`, which StableHLO requires to be non-negative — a `-1` axis makes `iree-compile` reject the whole generation graph.
+Do not reintroduce a negative axis in any other graph op either (`gather`/`scatter`/`slice`/`broadcast`/reduction `axis=`): `evoxc.stack` normalises a negative axis internally, every other op does not, so the rule is uniform here.
 No `.at[...]` updates, no `tile` on batched data (evoxc's `tile` has no batching rule), no `repeat`, no `max/sum(where=…)`, no `any`/`all`: mask with `evoxc.select`, reduce afterwards.
 `evoxc` `getitem` is static-only and rejects `Ellipsis`, so column selection goes through the genes' `column_of` (which wraps `genome.gene.base.column`'s explicit `(slice(None),) * (ndim - 1) + (index,)` key) rather than a literal last-axis index.
 Python `if`/`for` over constructor configuration is legal and unrolls at trace time; branching on traced values is a `TraceError`.
