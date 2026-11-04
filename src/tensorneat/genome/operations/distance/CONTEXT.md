@@ -225,6 +225,12 @@ A **scatter-derived inverse permutation** instead of `argsort(order)`: behind on
 **Making the centre-side `dot` serve the digest side as well**: the digest half must stay in *sorted* order (it is the run `stable=True` exploits), and the composite there is produced once per generation, so swapping its 11 ops for 4 would save 7 ops/generation and lose the sorted prefix used by the merge.
 **Removing the trailing padding column and clamping the successor instead**: equal in ops (one `concatenate` input vs one `minimum`) but the clamp needs its own `offsets + 2M - 1` static and a mask for the out-of-range successor read, which measured as the larger graph.
 
+## Known Issues
+`BaseDistance.gene_measure` (`base.py:335-383`) calls `_measure_family` without its required `statics` argument, so that standalone entry raises `TypeError`; nothing in `src/` or `test/` calls it (the live route is `measure` → `_measure_family`, `base.py:279-303`).
+The `base.py` module docstring (`base.py:13-15`) still claims both routes share `distance_from_rows`; the row-wise digest route ends in `DefaultDistance.distance_from_alignment` and never touches that adapter.
+`measure_alignment` casts the inverse permutation over all `2M + 1` columns (`digest.py:699-703`) although the slice keeps only the `M` centre columns: slicing the `int64` inverse first and casting second is value-identical at the same op count and removes one `(P, 2M + 1)` `int32` pass per family per call.
+`_key_row_matches` reshapes `digest_key_cols` to its flat view per call (`digest.py:828`), which is centre-independent and could travel in the family's `MeasureStatics` (marker-column genes only, 1 op/call).
+
 ## Cross-node needs (measured here, owned elsewhere)
 `algorithm/neat/_distance.py` (`DistanceRows`, 188 generation ops) and `genome/base.py::prepare_distance/measure_distance` should thread **one `ConstantPool` per generation** into `prepare`/`measure`; the pool already accepts it, and the ~163 constants the distance files still emit per generation would collapse to the handful of distinct values (~150 ops).
 `algorithm/` should keep structurally allocated keys below `genome.key_span` (or carry a raised span in the shape signature): that is what makes the dense route exact for every payload, and it is the same fix that stops the execution schedule from silently dropping evolved genes.
