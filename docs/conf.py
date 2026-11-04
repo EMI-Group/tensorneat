@@ -1,40 +1,45 @@
+"""Sphinx configuration for the TensorNEAT documentation."""
+
 import os
 import sys
-sys.path.insert(0, os.path.abspath('.'))
-sys.path.insert(0, os.path.abspath('../src'))
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 
-# Configuration file for the Sphinx documentation builder.
-#
-# For the full list of built-in configuration values, see the documentation:
-# https://www.sphinx-doc.org/en/master/usage/configuration.html
+# Import the package from this checkout when it is not installed (``pip install
+# -e .`` / the ``docs`` extra).  Paths are absolute so the build does not depend
+# on the directory Sphinx was started from; a missing ``src/`` is not an error,
+# the installed distribution is used instead.
+SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+if os.path.isdir(SRC_DIR):
+    sys.path.insert(0, SRC_DIR)
 
 # -- Project information -----------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'TensorNEAT'
-copyright = '2025, Lishuang Wang'
-author = 'Lishuang Wang'
+project = "TensorNEAT"
+copyright = "2025, Lishuang Wang"
+author = "Lishuang Wang"
+
+try:
+    release = distribution_version("tensorneat")
+except PackageNotFoundError:
+    release = "0.2.0"
+version = release
 
 # -- General configuration ---------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx.ext.napoleon',
-    'sphinx.ext.viewcode',
+    "sphinx.ext.autodoc",
+    "sphinx.ext.napoleon",
+    "sphinx.ext.viewcode",
 ]
 
-autodoc_mock_imports = [
-    "evox"
-]
+autodoc_default_options = {
+    "members": True,
+    "show-inheritance": True,
+    "undoc-members": False,
+}
 
-
-templates_path = ['_templates']
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
-
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # -- Options for HTML output -------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'sphinx_rtd_theme'
-html_static_path = ['_static']
+html_theme = "sphinx_rtd_theme"
