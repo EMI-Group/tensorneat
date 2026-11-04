@@ -63,6 +63,7 @@ The durable fix belongs to `algorithm/`: keep structurally allocated keys below 
 A gene family with no attribute column (`attr_specs = ()`, e.g. an unweighted HyperNEAT/CPPN connection gene) contributes an empty `(P, M, 0)` block here: `_gather_rows` returns it unchanged (a zero-width row has exactly one permutation, itself) instead of tracing a `0`-step index block.
 `node_count (P,) int32` / `conn_count (P,) int32` — real (present) genes per individual, i.e. the length of the valid prefix.
 `node_key_cols (P, N, NK) int32` / `conn_key_cols (P, E, CK) int32` — key columns permuted into the same order, the exact-match oracle for a gene whose key width exceeds `_FOLDED_KEYS`; for a narrower key the fold is already injective, so the field keeps the *unpermuted* key table (`key_rows`) and the merge reads it not at all.
+`node_statics` / `conn_statics` (`layout.MeasureStatics`: the merge scalars, the two `(P, 1)` stride tables `offsets`/`offsets + 1`/`offsets + 2M - 1`, and an `AttrStatics` sub-bundle with the width scalar, the `(P, 1, A)` gather base, the `float32` zero, the flat attribute view and the operator's three tail weights) — appended last, built once in `prepare_family`, and the reason `measure` traces neither a constant nor an index table.
 `node_dense (P, N) int32` / `conn_dense (P, E) int32` — dense key-table slot of each gene, **permuted into the digest's order** so the fast path pairs it with `attrs` positionally; `node_real` / `conn_real (P, M) bool` — the in-range mask; `node_oor` / `conn_oor (P,) int64` — present genes the dense table cannot address, the precondition diagnostic above.
 `prepare` writes no RNG and touches no host memory, so a digest is valid for one generation and cacheable for the whole speciate pass.
 The centre is *never* prepared: `measure` packs the centre's key rows itself (`_pack`, or `dense_slot` on the fast path).
@@ -99,15 +100,23 @@ The digest side of the merge is ascending by construction, so the merged sort se
 This is safe rather than lucky because none of these sorts has a *meaningful* tie: a homologous pair differs by one, real composites are unique inside a genome, and the only equal values are padding rows, whose attributes are `NaN` on both sides and which can never pass the homology test.
 Stability also *pins* tie order to input order and matches a compiled backend's count-mode `argsort`, so the reference interpreter and a compiled backend agree on ties as well as on values.
 
+## Cost law of this node (how to spend an op budget here)
+The reference interpreter charges a roughly fixed **~13 µs per executed IR op**, almost independent of element count, so op count is the metric and wall clock only a sanity check; `constant`, `reshape` and `arange` are each one full op, and `evoxc` never deduplicates constants.
+A per-call body runs `2 * species_size = 40` times per generation, so **anything that does not depend on the centre belongs in `prepare`**: every rank-0 scalar, every per-individual flat index block and every flat view of a population block now travels in `FamilyDigest.statics` (`MeasureStatics` + `AttrStatics`, see `./layout.py`) rather than being rebuilt per call.
+Measured effect of that rule alone: the distance bucket lost its last `constant`/`arange`/`batch_offsets` lines entirely (536 rank-0 constants + 160 `batch_offsets` ops + 160 attribute-index ops per generation before), and one merge `measure` call went from 4 638/40 ≈ 116 executed ops to ≈ 88.
+Ops inside a region pay per trip, so this rule is doubly binding for anything the generation traces once and runs many times.
+
 ## Cost (measured, numpy reference backend, seed-42 XOR population after 5 generations, build excluded, 1 warmup + 5 timed runs, one fresh process per pop)
 
 | kernel | P=100 | P=500 | P=1000 |
 |---|---|---|---|
-| `prepare` (dense fields + `oor` included) | 140 ops | 140 | 140 |
-| `prepare` + `measure` (batch-1 centre, **dense**) | 252 ops / 187 788 B constants | 252 / 203 788 B | 252 / 223 788 B |
-| `prepare` + `measure` (batch-`P` centre, merge) | 287 ops / 189 460 B | 287 / 211 860 B | 287 / 239 860 B |
+| `prepare` (dense fields, `oor` and both statics bundles) | 160 ops | 160 | 160 |
+| `prepare` + `measure` (batch-`P` centre, merge) | 281 ops | 281 | 281 |
+| `measure` marginal, merge route (the shipped one) | 121 ops | 121 | 121 |
 | `execute_distance` (unchanged) | 218 ops | 218 | 218 |
-| `measure`'s own marginal constants | 16 B (4 rank-0 int32) | 16 B | 16 B |
+| source-line attribution of one merge `measure` | merge `measure_alignment` 40, per-call `constant` 0, aligned-attribute term 14, scalar tail 22, family add 1, gene-side `gene.distance` ~31 (not this node) | same | same |
+
+Executed ops of one seed-42 XOR generation at pop 500 (`Pipeline.step` 6-step protocol): whole graph **10 865 → 9 647**, this node's bucket **4 638 → 3 580** (−23 %, of which 1 `prepare` + 40 `measure` calls at 160 + 40 × ~88 executed).
 
 Baked constant bytes of the `prepare` + `measure(batch 1)` graph, `enp.zeros` → `window.fill` (pop 1000): **839 772 → 223 788 B** (−615 984 B), largest single constant **404 000 → 90 008 B**; at pop 100 `249 372 → 187 788 B`, pop 500 `511 772 → 203 788 B`.
 What is left is irreducible: the two `key_span`-scaled `(width + 1,)` int32 tables (22 502 cells = 90 008 B each, `S = 150`) plus a handful of small seeds.
@@ -176,12 +185,17 @@ A **galloping / `log2 M`-step binary search** of each centre composite in the di
 A **scatter-derived inverse permutation** instead of `argsort(order)`: behind on both ops (7 vs 2) and ms (1.05 vs 0.29).
 **`masked_flat_scatter` for the dense route's attribute reorder**: 18 ops of out-of-range redirect against 7 for the raw flat `evoxc.scatter` (the indices are already in `[0, M]`).
 **A `key_span`-derived composite radix**: aliases genes the moment `algorithm/` allocates a key outside the span (`2**31` folding is injective for the whole `int32` range and costs the same).
+**Dropping the two `cast(argsort(...), int32)` in the merge** (2 ops per family per call = 160/generation): the casts are what keep `order`, the successor gather index and the row table `int32`; without them three `(P, M)` index blocks become `int64` and the kernel pays ~10 % more milliseconds, so the casts stay (the measured trade is recorded at the call site).
+**Folding `(P, M, 1)` key columns through `_pack` to save one `reshape` per column**: `valid` must come back `(P, M)` for `count`/`_tagged`, so the saved reshape is paid again on the mask — a net zero.
+**Stacking both families' scalars to trace the scalar tail once per call** (the dense route's trick): stacking costs 3 `concatenate`/`reshape` pairs, so the row-wise route would save one op per call (22 → 21) — not worth the second spelling of the tail.
 **Hashing an out-of-range key into the dense table** (e.g. `key % width`): trades a documented precondition for silent collisions, which would make two different genes homologous.
 
 ## Cross-node needs (measured here, owned elsewhere)
 `algorithm/neat/_distance.py` (`DistanceRows`, 188 generation ops) and `genome/base.py::prepare_distance/measure_distance` should thread **one `ConstantPool` per generation** into `prepare`/`measure`; the pool already accepts it, and the ~163 constants the distance files still emit per generation would collapse to the handful of distinct values (~150 ops).
 `algorithm/` should keep structurally allocated keys below `genome.key_span` (or carry a raised span in the shape signature): that is what makes the dense route exact for every payload, and it is the same fix that stops the execution schedule from silently dropping evolved genes.
 `algorithm/neat/_distance.py::DistanceRows.row` must keep passing a **batch-1 centre** to `measure_distance` to get the fast path; a population-shaped centre is legal but always takes the row-wise merge (`DistanceRows.matrix` does that on purpose, one digest row per centre).
+**Measured, and the largest remaining win outside this node:** the shipped `speciate` pass does **not** use the dense fast path — `DistanceRows` hands `measure_distance` a population-shaped centre, so all 40 calls per generation take the row-wise merge (~88 executed ops each) while `dense.py` stays dead code in the live pipeline.
+A batch-1 centre per species slot would take `dense.py`'s ~50-op route instead and make this node's `measure` cost roughly halve again; that is an `algorithm/` change and is reported upward, not made here.
 `genome/gene/base.py:50` reads attribute columns with one kept-axis slice plus one reshape per column: 132 + 132 traced ops per generation at pop 500/1000, and the per-column attribute arithmetic of `BaseGene.distance` is now the largest remaining block inside `measure`.
 `operations/alignment.py` (this node's shared aligner): the row identity is an `int64` carrier with one sign flip, so the alignment path carries no unsigned value any more; the graph-level residue here is only the removed `u32` span constant, i.e. none.
 
