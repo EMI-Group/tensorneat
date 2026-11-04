@@ -618,6 +618,16 @@ def _requote_meta_value(tokens: list[str], flag: str, value) -> list[str]:
     for it. A record written before that change stored ``" ".join(argv)``, which loses the
     boundaries of an argument containing spaces (``--report-title``, ``--report-note``); the
     exact value is still in ``meta``, so its token span is found and re-joined into one token.
+
+    The reproduce line is *the run's* command, so it is rebuilt from the stored
+    ``meta.command`` and never from a value the current render overrode. When
+    ``--report-title``/``--report-note`` is passed to ``--render-from-json`` the override
+    replaces ``meta``'s value, so the exact match above cannot succeed even though the split
+    span is still there; the structural fallback then re-joins the span that runs from the
+    token after the flag up to the next token starting with ``--`` (or to the end of argv),
+    which is exactly the argument the stored command holds. It fires only in that situation:
+    an unmodified record matches exactly, and a command whose value already occupies one
+    token is re-joined to that same token.
     """
     expected = text(value, "").strip()
     if not expected or flag not in tokens:
@@ -626,7 +636,12 @@ def _requote_meta_value(tokens: list[str], flag: str, value) -> list[str]:
     for end in range(start + 1, len(tokens) + 1):
         if " ".join(tokens[start:end]) == expected:
             return tokens[:start] + [expected] + tokens[end:]
-    return tokens
+    end = start
+    while end < len(tokens) and not tokens[end].startswith("--"):
+        end += 1
+    if end <= start:
+        return tokens
+    return tokens[:start] + [" ".join(tokens[start:end])] + tokens[end:]
 
 
 def _command_tokens(doc: dict) -> list[str]:
