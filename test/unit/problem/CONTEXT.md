@@ -41,7 +41,7 @@ A constant policy survives exactly 9 steps from rest in *both* directions (the d
 `B = P * repeat_times` depends only on the product, so `P = 4, R = 1` and `P = 2, R = 2` draw the same four initial states from the same key — that identity pins the individual-major `(P, R)` layout without any analytic return value.
 
 ## Recovering `obs0` for Pendulum and MountainCar
-Neither environment has a `reset_scale` knob, so there is no configuration that pins its initial state, and the draw still has to come from `evoxc.random`.
+Neither environment exposes a user reset knob — Pendulum hard-codes `theta ~ pi*U(-1, 1)` and `theta_dot ~ max_speed*U(-1, 1)`, and MountainCar derives its `U(-0.6, -0.4)` draw from module constants — so no configuration pins the initial state and the draw still has to come from `evoxc.random`.
 `_reset_observations(run_in_graph, evoxc, env, batch, key_seed)` retraces the environment's own `_reset` in a one-op graph with the key rebuilt from the integer `key_seed` inside the trace, and takes the host result — the same `run_evaluate` rebuilds the identical key, so the oracle is fed exactly the states the graph starts from.
 That is why the agreement is bit-exact in float32: the oracle runs the documented dynamics on the same numbers, in the same order.
 A state-dependent policy needs the oracle to see the state it acted on, so the rollouts return `(total, states)` and the policy is evaluated per step from `states[:, t]`, mirroring what `act_fn` sees inside the loop.
