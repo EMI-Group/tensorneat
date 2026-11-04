@@ -2,7 +2,7 @@
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
 > `benchmarks/results/threads1.json` at 2026-11-02T06:31:32+00:00. It must not be hand-edited:
-> Re-rendered from that same JSON at 2026-11-04T07:22:59+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-04T07:25:48+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *This is the thread-bound sensitivity run (`--threads 1`, the declared-contract condition) of the XOR family; the authoritative default-thread matrix is `RESULTS.md`.*
