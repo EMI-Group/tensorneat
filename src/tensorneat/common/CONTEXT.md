@@ -65,7 +65,7 @@ Derivation recipe (validated against a numpy oracle, keep the shape of it):
 6. `node_level` = `while_loop` longest-path relaxation over the `(P, N, K)` table, inputs pinned to 0, in the narrowest carrier dtype. The default runs the level-only relaxation (cap `N`) and then decides **in-graph** with `evoxc.cond` whether any valid edge violates `level[dst] > level[src]`: no violation ⇔ acyclic (a cycle always leaves one violation), and the level-only answer is then exact; a violation runs the two-relaxation machinery (`level` + `reach`, cap `2N`, snapshot at `N`) that reports every node on/after a live cycle as `I_INF`. `acyclic=True` returns the level-only answer directly.
 7. `topo_key`, `input_slot`, `output_slot` are then free.
 
-Cost: `O(P * (S + C log C + N*K*D))` with `D` = max depth, i.e. edge-proportional except for the `N*K` padding and the one-off `key_span` table; **no `cumsum`, no scatter-with-reduce, no `max_nodes**2` matrix**.
+Cost: `O(P * (S + C log C + N*K*D))` with `D` = max depth, i.e. edge-proportional except for the `N*K` padding and the one-off `key_span` table; **no `cumsum`, no unsigned dtype, no scatter-with-reduce, no `max_nodes**2` matrix**.
 `transform` runs once per generation, so its cost is amortized over the whole generation.
 
 ## Measured cost
