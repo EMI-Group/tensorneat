@@ -104,6 +104,17 @@ Rejected levers (measured; do not re-derive):
 - **A `-2**30` sentinel instead of the `select(greater(best, -1), best + 1, -1)` guard**: an unsettled predecessor would settle its child at `0`; caught by the field-by-field diff.
 - **A trusted, guard-free index block everywhere** (the escape test is what makes the backend *raise* instead of reading a neighbouring row): only offered as an opt-in `trusted=True` and only used where the index range is provably inside the table.
 
+### The derivation tail is trimmed (landed; ~3 % of `transform`)
+Four dead-op removals outside `node_levels` took `derive_schedule` from **356 to 339 executed ops** and the whole `transform` from **6.66 to 6.47 ms** (median of interleaved rounds of 15 `evoxc.run`, build excluded, pop 500 / XOR / seed 42; the box drifts, so the ~0.97 ratio is the result).
+The `Transformed` fields compared equal on the real pipeline population and on a synthetic cyclic population (absent rows, unmatched keys, in-degree > `K`, both key spellings, `acyclic` both ways).
+
+- `evoxc.cast` is emitted **even when source and target dtype agree**, so `_key_indices` skips it for canonical `int32` keys (5 ops).
+- `_slot_of` does not pass `present` to `prepare_flat_index`: `_key_indices` has already replaced every out-of-range key by `0`, so that redirect `select` was a no-op (4 ops).
+- `edge_valid` is `max(src, dst) < max_nodes` — a slot is `I_INF` or in `[0, N)` — instead of two `not_equal`s and a `logical_and` (2 ops).
+- `incoming_table` leaves a garbage cell on a row that does not land in the window; `_window_pair` redirects every `keep == False` write to its dump slot before the index is formed, so the two `select`s that sanitised those cells were dead (2 ops).
+
+End-to-end the win sits inside the generation-to-generation noise (`transform` is ~4 % of `Pipeline.step`), so the `transform` ratio, not ms/generation, is the measurement.
+
 ### `node_levels` is at its op floor (re-measured; do not re-derive)
 Where the time goes at the real window: on a real feed-forward XOR population (seed 42, generation 7, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100)`, `NEAT(pop_size=500, species_size=20)`, so `(P, N, K) = (500, 50, 4)` and depth ≈ 4), `node_levels(acyclic=True)` is 2.79–3.15 ms of a 6.9–7.2 ms `derive_schedule` (the box drifts; the ratio is the result, ~40–45 %).
 Its fast path is ~16 executed ops per loop trip over `depth + 1` trips, i.e. ~35–40 µs per op at this size, so the loop is bound by *executed op count* and every lever below was measured as neutral or worse (base = 100 %, interleaved rounds of 15 `evoxc.run`, build excluded, medians of 5 alternating rounds).
