@@ -25,6 +25,7 @@ test/
     common/  genome/  algorithm/  problem/
   parity/                same kernels vs the frozen legacy JAX library, marker `parity`
   integration/           whole-Pipeline runs, marker `slow`
+  backends/              compiled-backend runs (marker `requires_iree`), skips without `evoxc[iree]`
 ```
 Every directory that holds test modules carries an `__init__.py`: pytest's default prepend import mode names a module by its basename, so un-namespaced directories collide (`test/unit/genome/test_forward.py` vs `test/parity/test_forward.py`) and abort the session with an import-mismatch error.
 Current counts: `unit/common` 155, `unit/genome` 95, `unit/algorithm` 140 passed + 4 strict xfail, `unit/problem` 62, `parity` 53, `integration` 17 (skipped until the pipeline lands), release gate 4.
