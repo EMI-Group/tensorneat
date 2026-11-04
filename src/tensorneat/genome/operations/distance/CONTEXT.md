@@ -136,7 +136,24 @@ The two `argsort`s (4 ops of a family's merge) are the wall-clock hot spot but n
 Both permutations are cast to `int32` on purpose: dropping the two casts saves 2 ops per family per call but makes three index blocks `int64`, which measured ~10 % more milliseconds.
 The two families' scalar tails cannot be traced once without stacking their inputs, and the three `concatenate`/`reshape` pairs that stacking needs cost more than the 1 op they save (measured: 22 → 21).
 The largest remaining block inside a `measure` call is `gene.distance` plus its column reads, which live in another node's files.
-Element volume is already minimal on the merge route (one `P × M` block per family) and the dense route's floor is set by the same per-op charge, so the next lever here is the *number of calls*, not their body: the shipped `speciate` measures a population-shaped centre, which forces the merge — `./dense.py`'s batch-1 route is only reachable from a caller that passes one centre (see the cross-node note below).
+Element volume on the merge route is already minimal (one `P × M` block per family), and the remaining per-call body is op-floor work, so the only lever left in this node's *own* files is the number of calls — see `## Dense versus merge at the live call site`.
+
+## Dense versus merge at the live call site (measured, `algorithm/` owns the switch)
+`measure` picks its route from the centre's **batch width**, and the live pipeline sends a population-shaped one: `algorithm/neat/_distance.py::DistanceRows.row` / `_kernels.py::single_payload` tile the slot's single centre row to `pop_size` rows (`repeat_leading`, 4 arrays × 4 ops) before the call, so every one of the 40 calls per generation takes the merge.
+Measured on a real evolved seed-42 XOR payload with keys inside `[0, key_span)` (build excluded, medians of 7; a fresh process per cell):
+
+| cell | pop 500 | pop 1000 |
+|---|---|---|
+| `prepare` | 167 ops / 2.84 ms | 167 ops / 4.84 ms |
+| `measure`, tiled centre (merge, the shipped route) | 98 ops / 2.43 ms | 98 ops / 4.45 ms |
+| `measure`, batch-1 centre (dense) | 102 ops / 1.25 ms | 102 ops / 1.44 ms |
+| the tiling itself (`single_payload`) | 16 ops / 0.15 ms per call | same |
+
+The dense route is **+4 traced ops and 1.9–3.1× faster in milliseconds**: its cost is element-free of the `(P, 2M + 1) int64` merge, i.e. of the two sorts and the two wide gathers, which is where the merge's time goes. Op count therefore misleads on this comparison — the interpreter's per-op charge is not constant across block widths.
+`tobytes()` identity holds for a tiled centre: the tiled merge, the batch-1 dense route and `execute_distance` return the same `(P,)` vector on every measured cell (both gene families, default and `OriginNode + OriginConn`), so the swap is value-preserving wherever `node_oor == conn_oor == 0`.
+Projected generation-level effect if `algorithm/` passed the batch-1 centre instead of tiling it (40 calls, `species_size=20`): **−480 executed ops/generation** (−640 tiling ops + 4 reshapes kept, +160 for the dense body) and **≈ −47 ms at pop 500 / −120 ms at pop 1000**, i.e. roughly a quarter of a generation on this box.
+The obstacle is the documented `key_span` precondition, not the kernel: the live allocator leaves out-of-range keys in most genomes from the first generations on (measured `node_oor`/`conn_oor` = 2 / 4 at pop 500 and 1000), and only those centres diverge — the same fix that stops the execution schedule from silently dropping evolved genes also makes this switch exact.
+A batch-1 centre is never worse even when the dense gate fails: `measure` then broadcasts it itself (`_broadcast_payload`, 12 ops) instead of the caller's 16.
 
 ## Constraints
 - **No unsigned dtypes in a graph — `iree`'s declared dtype set has none** (`float16/float32/float64/int8/int16/int32/int64/bool`, `evoxc/backends/adapters/iree.py::_dtype_capabilities`), so a `uint32`/`uint64` operand, result, constant or graph-boundary value makes that backend refuse the whole graph (`BackendError: capability drift`). Use **same-width signed carriers**: a range test is `logical_and(greater_equal(key, 0), less(key, S))` on `int32` (`+1` op for a one-column key, `+2` for two columns, against the unsigned one-comparison form), which is the same truth value for every `int32` value while `0 <= S < 2**31` — guarded statically in `layout.dense_width`, the one place `key_span` becomes a table geometry. The `>= 0` half is not decoration: a negative structural key must land in the dump slot exactly as `I_INF` does.
