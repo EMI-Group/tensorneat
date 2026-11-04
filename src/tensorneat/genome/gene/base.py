@@ -31,6 +31,27 @@ HASH_SHIFT_LEFT: int = 6
 HASH_SHIFT_RIGHT: int = 2
 
 
+def _column_view(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
+    """Read one static column of the last axis, keeping the width-1 axis.
+
+    ``tensor[..., index:index + 1]`` spelled explicitly (evoxc's static indexing
+    rejects ``Ellipsis``/``None``): one ``slice`` view, no ``reshape``. A kernel that
+    reads every column of one block can broadcast on that ``(..., 1)`` axis and pay a
+    single trailing ``reshape`` instead of one per read (:meth:`BaseGene.distance`
+    does).
+
+    Args:
+        tensor: Any traced tensor whose last axis is the gene column axis.
+        index: Static (non-negative) column index.
+
+    Returns:
+        ``(*tensor.shape[:-1], 1)``-shaped view of column ``index``.
+    """
+    rank = len(tensor.shape)
+    slicer = (slice(None),) * (rank - 1) + (slice(index, index + 1),)
+    return tensor[slicer]
+
+
 def column(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
     """Read one static column of the last axis of a traced tensor.
 
@@ -40,6 +61,11 @@ def column(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
     ``reshape`` drops it, because the reverse-mode rule of an axis-dropping integer
     index has no usable cotangent shape -- a sliced-then-reshaped read is
     differentiable, which is what ``Genome.grad`` needs for every gene attribute.
+
+    The read is :func:`_column_view` (one ``slice`` view) plus the trailing
+    ``reshape``; a kernel reading every column of one block should use
+    :func:`_column_view` and reshape once at the end, which is where the block form
+    of :meth:`BaseGene.distance` wins its ops back.
 
     Two ops is the floor this ``evoxc`` offers, and it is a cheap floor -- measured on
     the reference interpreter, not assumed. ``x[..., i]`` (an ``int`` index) lowers to
@@ -60,9 +86,7 @@ def column(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
     Returns:
         ``tensor.shape[:-1]``-shaped view of column ``index``.
     """
-    rank = len(tensor.shape)
-    slicer = (slice(None),) * (rank - 1) + (slice(index, index + 1),)
-    return evoxc.reshape(tensor[slicer], tuple(tensor.shape[:-1]))
+    return evoxc.reshape(_column_view(tensor, index), tuple(tensor.shape[:-1]))
 
 
 def option_masks(
@@ -711,16 +735,27 @@ class BaseGene(StatefulBaseClass):
         Sums over the attribute axis: ``|delta|`` for float specs and ``!=`` for int
         specs, so a changed option index contributes exactly 1.
 
-        The column-by-column form is deliberate: it costs ``2 * attr_width`` :func:`column`
-        reads plus one arithmetic op per column, which reads as the gene-side block with
-        the most traced ops in a generation, but every one of those reads is a ``slice``
-        plus a ``reshape`` *view* and the arithmetic runs on ``(*shape,)`` columns. Fusing
-        the columns into one attribute-block pass (subtract/``not_equal`` over the whole
-        ``(*shape, attr_width)`` block, one ``select`` and one last-axis ``reduce_sum``)
-        removes ~240 of the ~250 reads per generation at ``pop_size=500`` and was 3.3x
-        *slower* (2.83 vs 0.87 ms per call at ``(2000, 50, 4)``) -- elementwise work moves
-        from 0.4 MB columns to 1.6 MB blocks and an innermost-axis reduction is the most
-        expensive op class here. Traced-op count is not the cost driver for this kernel.
+        One block ``subtract`` is shared by both parents, then every attribute column
+        is read as a width-1 *view* (:func:`_column_view`: one ``slice``, no
+        ``reshape``) and one trailing ``reshape`` drops the width axis at the end.
+        Measured on the reference interpreter (pop 500 payload at generation 5, one
+        fresh process per run): the node gene on ``(500, 50, 4)`` costs 16 ops /
+        0.235 ms against 27 ops / 0.300 ms for the old per-read-:func:`column` form,
+        and the conn gene on ``(500, 100, 1)`` 4 ops / 0.065 ms against 6 ops /
+        0.073 ms; end to end the executed ops attributed to the ``genome/gene``
+        source bucket drop from ~1450 to ~900 per ``Pipeline.step``.
+        The fully blocked form (``subtract`` + ``abs`` + indicator over the whole
+        ``(*shape, attr_width)`` block, one static kind mask, one ``select``, one
+        last-axis ``reduce_sum``) is 9 ops but 0.73 ms per call -- 3x the wall clock
+        of this form -- and neither a block ``abs`` (1 op fewer) nor a blocked
+        indicator for a contiguous int run (2 ops fewer) helped (0.250 / 0.328 ms), so
+        the per-column views stay.
+        An int column compares the *difference* against a rank-0 zero, which equals
+        comparing the parents for every finite value (option indices are exact small
+        floats) and for NaN padding (both sides NaN -> ``not_equal(NaN, 0)`` is True,
+        exactly as ``not_equal(NaN, NaN)`` was); only an infinite value in an
+        option-index column would tell them apart, and the gene tables cannot produce
+        one (options are integers, padding is NaN).
 
         Args:
             state: Host configuration container.
@@ -734,15 +769,20 @@ class BaseGene(StatefulBaseClass):
         """
         if not self.attr_specs:  # no column to compare: the attribute distance is 0
             return enp.zeros(tuple(attrs1.shape[:-1]), dtype=evoxc.float32)
+        delta = evoxc.subtract(attrs1, attrs2)
+        zero = None
         total = None
+        # Left-to-right over ``attr_specs``: the float32 summation order is observable.
         for index, spec in enumerate(self.attr_specs):
-            first, second = column(attrs1, index), column(attrs2, index)
+            column_delta = _column_view(delta, index)
             if spec.kind == "float":
-                term = evoxc.abs(evoxc.subtract(first, second))
+                term = evoxc.abs(column_delta)
             else:
-                term = evoxc.cast(evoxc.not_equal(first, second), evoxc.float32)
+                if zero is None:  # one rank-0 zero shared by every option-index column
+                    zero = enp.full((), 0.0, dtype=evoxc.float32)
+                term = evoxc.cast(evoxc.not_equal(column_delta, zero), evoxc.float32)
             total = term if total is None else evoxc.add(total, term)
-        return total
+        return evoxc.reshape(total, tuple(attrs1.shape[:-1]))
 
     def hash(self, keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
         """Hash gene key rows for fast key alignment in crossover/distance.
