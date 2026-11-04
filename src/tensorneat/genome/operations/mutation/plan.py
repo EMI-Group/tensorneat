@@ -1,12 +1,16 @@
-"""The structural write plan: one ``select`` per payload array slot for the whole stage.
+"""The structural write plan: one ``select`` per payload-array slot for one stage.
 
-The four structural operations are mutually exclusive per individual (one shared gate draw),
-so at most **one** node row and **three** connection rows change per individual and
-generation.  Expressing the stage as a plan — "which row of which array receives which
-value", plus the data-dependent set of connections a node deletion detaches — therefore
-replaces the four helpers' sequential full-array rewrites (each of which had to re-gate a
-whole array with ``select``) by one write per slot, with the slot-0 clear and the
-node-deletion detach sharing a single clearing pass over the connection arrays.
+The four structural operations are **independent** per individual (four rows of one gate
+draw, each its own Bernoulli decision) and run in sequence add-node → delete-node →
+add-conn → delete-conn, each stage planning against the payload the previous stage left
+behind.  One stage therefore writes at most **one** node row and **three** connection rows
+per individual, and it may not need a node row or a cleared connection row at all.
+Expressing a stage as a plan — "which row of which array receives which value", plus the
+data-dependent set of connections a node deletion detaches — replaces sequential
+full-array rewrites (each of which had to re-gate a whole array with ``select``) by one
+write per slot, with the slot-0 clear and the node-deletion detach sharing a single
+clearing pass over the connection arrays.  A stage's :class:`Edit` is the
+single-operation form of the same machinery.
 
 A node slot is written by comparing the array's row-index constant against the slot's row:
 a row index equal to the array's own row count matches nothing, which is the "no write" case,
@@ -106,10 +110,11 @@ __all__ = [
 class EditContext(NamedTuple):
     """Row bookkeeping shared by every operation of one structural stage.
 
-    Built once per :meth:`~.base.BaseMutation.mutate_structure` call: the presence masks,
-    the row-index constants, the masked-draw ingredients of the shared masks and the flat
-    index blocks are identical for all four operations, so sharing them is what keeps the
-    stage's op count proportional to the number of distinct accesses.
+    Built once per stage inside :meth:`~.base.BaseMutation.mutate_structure` — against the
+    payload that stage starts from, because the previous stage may have moved a row.  The
+    presence masks, the row-index constants, the ingredients of the shared masks and the
+    flat index blocks are identical for all operations of the stage, so sharing them is
+    what keeps the stage's op count proportional to the number of distinct accesses.
 
     Attributes:
         node_row_index: ``(1, N) int32`` constant ``[0, 1, ..., N-1]`` (row-range masks and
@@ -183,22 +188,29 @@ class Edit(NamedTuple):
 
     Row sentinels (the array's own length) mean "no write" and match no row of
     :func:`apply`'s row-index constants; values at such a slot are irrelevant, never
-    duplicated into a real row.
+    duplicated into a real row.  Fields an individual **stage** statically never uses are
+    ``None`` and are skipped by :func:`apply`: the ``node_*`` trio for the two connection
+    stages, and ``drop`` for every stage but delete-node (a ``None`` ``drop`` merges no
+    detach mask into the clearing pass, which is the same thing as an all-``False`` one).
 
     Attributes:
         node_rows: ``(P,) int32`` node row to write, ``N`` for "none".
-        node_keys: ``(P,) int32`` key value written at ``node_rows``.
-        node_attrs: ``(P, NA) float32`` attribute value written at ``node_rows``.
-        conn_rows: Three ``(P,) int32`` connection rows to write, ``E`` for "none".  Slot
-            order is clear / identity-or-add / copy, applied in that order, so a later slot
-            wins where two slots name the same row.
-        conn_keys: Three key values written at ``conn_rows``: the rank-0 ``I_INF`` sentinel
-            (a cleared row) and two ``(P, 1, CK)`` blocks.
-        conn_attrs: Three attribute values written at ``conn_rows``: the rank-0 NaN sentinel
-            and two ``(P, 1, CA)`` blocks.
+        node_keys: ``(P,) int32`` key value written at ``node_rows`` — or the rank-0
+            ``I_INF`` sentinel, broadcast by the write's ``select``, when the stage only
+            ever clears a row.
+        node_attrs: ``(P, NA) float32`` attribute value written at ``node_rows`` — or the
+            rank-0 NaN sentinel under the same rule.
+        conn_rows: Connection rows to write, ``E`` for "none".  Slot 0 is the cleared row,
+            then the scatter slots (identity / add / copy).  Slots are applied in order, so
+            a later slot wins where two slots name the same row.
+        conn_keys: Key values written at ``conn_rows``: the rank-0 ``I_INF`` sentinel (a
+            cleared row) after the ``(P, 1, CK)`` blocks.
+        conn_attrs: Attribute values written at ``conn_rows``: the rank-0 NaN sentinel after
+            the ``(P, 1, CA)`` blocks.
         drop: ``(P, E) bool`` connection rows a node deletion detaches, cleared in the same
-            pass as slot 0 (a deletion writes no row of its own, and slot 0 always carries
-            the same cleared value, so the two masks never overlap).
+            pass as slot 0 — or ``None`` for a stage that detaches nothing (a deletion
+            writes no row of its own, and slot 0 always carries the same cleared value, so
+            the two masks never overlap).
     """
 
     node_rows: evoxc.SymbolicTensor
@@ -208,6 +220,29 @@ class Edit(NamedTuple):
     conn_keys: tuple
     conn_attrs: tuple
     drop: evoxc.SymbolicTensor
+
+
+def _slot_block(
+    value: evoxc.SymbolicTensor, shape: tuple[int, ...]
+) -> evoxc.SymbolicTensor:
+    """Shape a slot value to the rank :func:`apply`'s ``select`` broadcasts against.
+
+    A stage that only ever clears a row hands over the shared **rank-0** ``I_INF``/NaN
+    constant — one op, and no population-scaled graph constant — while a stage that writes
+    a real value hands over a ``(P, ...)`` block.  The two need different ops: a rank-0
+    operand is grown with ``broadcast_to`` (a trailing-axis expansion is not a
+    ``broadcast_to``) and a block is reshaped to insert the trailing axes.
+
+    Args:
+        value: Rank-0 sentinel or a ``(P, ...)`` block.
+        shape: Destination shape of the write slot.
+
+    Returns:
+        ``SymbolicTensor`` of ``shape``.
+    """
+    if len(value.shape) == 0:
+        return enp.broadcast_to(value, shape)
+    return enp.reshape(value, shape)
 
 
 def _dump_cells(
@@ -305,23 +340,35 @@ def apply(
     node_attrs: evoxc.SymbolicTensor,
     conn_keys: evoxc.SymbolicTensor,
     conn_attrs: evoxc.SymbolicTensor,
+    write_nodes: bool = True,
+    clear_conn: bool = True,
 ) -> GenomeTensors:
-    """Write one plan into the payload: one clear pass, one scatter and two node writes.
+    """Write one stage's plan into the payload: one clear pass, one scatter, two node writes.
 
-    Connection slot 0 always writes the *cleared* value — the ``_merge_plan`` of the
-    operator fills its key/attribute value with the shared rank-0 ``I_INF``/NaN constants —
-    so it carries exactly what the node-deletion detach clears and the two share a single
-    ``select`` pass.
+    Connection slot 0 always writes the *cleared* value when the stage clears — the
+    :meth:`~.base.BaseMutation._stage_edit` of that stage fills its key/attribute value with
+    the shared rank-0 ``I_INF``/NaN constants — so it carries exactly what a
+    node-deletion detach clears and the two share a single ``select`` pass.
     That is bit-identical to clearing slot 0 and then ``drop``: an individual whose slot 0
-    really names a row (an add-node or a delete-connection) has an all-False ``drop``, and a
-    delete-node individual points every slot at the "no write" row, which matches no row of
-    the row-index constant.  The masks cannot overlap, so their order is unobservable.
+    really names a row (an add-node or a delete-connection) has an all-``False`` ``drop``
+    (``drop`` is ``None`` for such a stage, so no mask is merged at all), and a delete-node
+    individual points every slot at the "no write" row, which matches no row of the
+    row-index constant.  The masks cannot overlap, so their order is unobservable.
     Slots 1 and 2 name two different rows of the same individual (an add-node split writes
     both of its new edges), so they go into one flat ``scatter``
     (:func:`_scatter_slots`): it addresses only the written cells, where a ``select`` per
     slot would pay for the whole array twice under the element-volume-bound interpreter.
     Slot order inside the scatter is unobservable because the two slots never name the same
     row (the copy edge goes to a *later* free row than the identity edge).
+
+    The two keyword flags are **static** specializations of the same machinery, not runtime
+    branches: a stage that statically cannot write a node row passes ``write_nodes=False``
+    and gets its ``node_*`` arrays back untouched, and a stage that clears no connection row
+    of its own (add-conn, whose slot 0 names the "no write" row) passes
+    ``clear_conn=False`` and feeds the arrays straight into the scatter.  Both flags
+    default to ``True``, which is exactly the behaviour of the full clear-and-write form, so
+    flipping either one can never change an individual's bits — only the ops that are
+    provably invisible.
 
     Args:
         edit (Edit): The plan.
@@ -331,6 +378,10 @@ def apply(
             padded.
         conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection key rows.
         conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` connection attribute rows.
+        write_nodes (bool): Static flag; ``False`` skips both node-array ``select``s because
+            this stage writes no node row.
+        clear_conn (bool): Static flag; ``False`` skips the two connection clearing
+            ``select``s because this stage's slot 0 names no row.
 
     Returns:
         GenomeTensors: the four payload arrays after the plan, same shapes and dtypes.  An
@@ -340,66 +391,76 @@ def apply(
     pop_size = node_keys.shape[0]
     edge_count = conn_keys.shape[1]
     key_width, attr_width = conn_keys.shape[2], conn_attrs.shape[2]
-    # The two node arrays share the row layout, so the row-index comparison is built once
-    # and broadcast over the attribute axis instead of being recomputed per array.
-    node_write = evoxc.equal(
-        context.node_row_index, enp.reshape(edit.node_rows, (pop_size, 1))
-    )
-    written_node_keys = evoxc.select(
-        node_write, enp.reshape(edit.node_keys, (pop_size, 1)), node_keys
-    )
-    written_node_attrs = evoxc.select(
-        enp.reshape(node_write, (pop_size, node_keys.shape[1], 1)),
-        enp.reshape(edit.node_attrs, (pop_size, 1, node_attrs.shape[2])),
-        node_attrs,
-    )
-    # One clearing pass over the connection arrays for slot 0 plus the detach mask, so the
-    # whole stage pays one full-array select per array instead of two.
-    clear_mask = evoxc.logical_or(
-        evoxc.equal(
+    written_node_keys = node_keys
+    written_node_attrs = node_attrs
+    if write_nodes:
+        # The two node arrays share the row layout, so the row-index comparison is built
+        # once and broadcast over the attribute axis instead of being recomputed per array.
+        node_write = evoxc.equal(
+            context.node_row_index, enp.reshape(edit.node_rows, (pop_size, 1))
+        )
+        written_node_keys = evoxc.select(
+            node_write, _slot_block(edit.node_keys, (pop_size, 1)), node_keys
+        )
+        written_node_attrs = evoxc.select(
+            enp.reshape(
+                node_write, (pop_size, node_keys.shape[1], 1)
+            ),
+            _slot_block(edit.node_attrs, (pop_size, 1, node_attrs.shape[2])),
+            node_attrs,
+        )
+    written_conn_keys = conn_keys
+    written_conn_attrs = conn_attrs
+    if clear_conn:
+        # One clearing pass over the connection arrays for slot 0 plus the detach mask, so
+        # the stage pays one full-array select per array instead of two.
+        clear_mask = evoxc.equal(
             context.conn_row_column,
-            enp.reshape(edit.conn_rows[0], (pop_size, 1, 1)),
-        ),
-        enp.reshape(edit.drop, (pop_size, edge_count, 1)),
-    )
-    written_conn_keys = evoxc.select(clear_mask, context.sentinel, conn_keys)
-    written_conn_attrs = evoxc.select(clear_mask, context.nan_fill, conn_attrs)
+            _slot_block(edit.conn_rows[0], (pop_size, 1, 1)),
+        )
+        if edit.drop is not None:
+            clear_mask = evoxc.logical_or(
+                clear_mask, enp.reshape(edit.drop, (pop_size, edge_count, 1))
+            )
+        written_conn_keys = evoxc.select(clear_mask, context.sentinel, conn_keys)
+        written_conn_attrs = evoxc.select(clear_mask, context.nan_fill, conn_attrs)
     # Slots 1 and 2 name *different* rows for the same individual (an add-node split writes
     # both of its new edges), so no single ``select`` can express them; one flat ``scatter``
     # over the two rows addresses only the written cells and replaces two full-array passes
-    # per array.
+    # per array.  A stage with a single slot has nothing to scatter.
     slots = len(edit.conn_rows) - 1
-    slot_rows = enp.stack(tuple(edit.conn_rows[1:]), axis=1)
-    slot_valid = enp.reshape(
-        evoxc.less(slot_rows, context.conn_row_limit), (pop_size, slots, 1)
-    )
-    slot_rows = enp.reshape(slot_rows, (pop_size, slots, 1))
-    written_conn_keys = _scatter_slots(
-        written_conn_keys,
-        slot_rows,
-        slot_valid,
-        enp.concatenate(list(edit.conn_keys[1:]), axis=1),
-        context.conn_key_base,
-        context.key_width,
-        graph_constant(_dump_cells(pop_size, edge_count, key_width, slots)),
-        pop_size,
-        edge_count,
-        key_width,
-        slots,
-    )
-    written_conn_attrs = _scatter_slots(
-        written_conn_attrs,
-        slot_rows,
-        slot_valid,
-        enp.concatenate(list(edit.conn_attrs[1:]), axis=1),
-        context.conn_attr_base,
-        context.attr_width,
-        graph_constant(_dump_cells(pop_size, edge_count, attr_width, slots)),
-        pop_size,
-        edge_count,
-        attr_width,
-        slots,
-    )
+    if slots > 0:
+        slot_rows = enp.stack(tuple(edit.conn_rows[1:]), axis=1)
+        slot_valid = enp.reshape(
+            evoxc.less(slot_rows, context.conn_row_limit), (pop_size, slots, 1)
+        )
+        slot_rows = enp.reshape(slot_rows, (pop_size, slots, 1))
+        written_conn_keys = _scatter_slots(
+            written_conn_keys,
+            slot_rows,
+            slot_valid,
+            enp.concatenate(list(edit.conn_keys[1:]), axis=1),
+            context.conn_key_base,
+            context.key_width,
+            graph_constant(_dump_cells(pop_size, edge_count, key_width, slots)),
+            pop_size,
+            edge_count,
+            key_width,
+            slots,
+        )
+        written_conn_attrs = _scatter_slots(
+            written_conn_attrs,
+            slot_rows,
+            slot_valid,
+            enp.concatenate(list(edit.conn_attrs[1:]), axis=1),
+            context.conn_attr_base,
+            context.attr_width,
+            graph_constant(_dump_cells(pop_size, edge_count, attr_width, slots)),
+            pop_size,
+            edge_count,
+            attr_width,
+            slots,
+        )
     return GenomeTensors(
         written_node_keys,
         written_node_attrs,
