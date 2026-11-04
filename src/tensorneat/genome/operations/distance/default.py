@@ -365,26 +365,20 @@ class DefaultDistance(BaseDistance):
 
         attribute_distance = None
         if attr_width:
-            # Attribute row of parent 2 behind every gene of parent 1: the row offset is
-            # ``row * A`` and the ``(P, M, A)`` block adds the within-row column.  ``rows`` is
-            # already redirected to row ``0`` where a gene has no homologue, so no ``I_INF``
-            # index reaches the backend and the flat index needs no range check of its own.
-            # The ``(P, 1, A)`` base (within-row column plus per-individual row stride) and the
-            # flat ``(P * M * A,)`` view of the attribute block are per-generation constants of
-            # the digest, so this call pays one ``multiply``, one ``reshape`` and one ``add`` on
-            # top of the two value-dependent ops; the gather's own result is already
-            # ``(P, M, A)``.
-            row_offsets = evoxc.reshape(
-                evoxc.multiply(rows, statics.width_i32), (pop_size, count, 1)
-            )
-            attrs2_flat = statics.attrs_flat
-            if attrs2_flat is None:
-                attrs2_flat = evoxc.reshape(attrs2, (pop_size * count * attr_width,))
-            homologous_attrs = evoxc.gather(
-                attrs2_flat,
-                evoxc.add(row_offsets, statics.base),
-                axis=0,
-            )
+            # Attribute row of parent 2 behind every gene of parent 1, as one **row** gather:
+            # the block is viewed as ``(P * M, A)`` (a per-generation reshape of the digest) and
+            # ``rows + arange(0, P * M, M)`` is the ``(P, M)`` row index, so the gather returns
+            # ``(P, M, A)`` directly.  ``rows`` is already redirected to row ``0`` where a gene
+            # has no homologue, so no ``I_INF`` index reaches the backend and the flat index
+            # needs no range check of its own.  The index add is a last-axis broadcast, which
+            # is cheap; spelling the same index as ``(P, M, 1) + (P, 1, A)`` materialises
+            # ``P * M * A`` int32 through a two-axis broadcast and measured 10-20x slower, and
+            # the row gather itself is 2-3x cheaper than the flat gather over the same elements.
+            index = evoxc.add(rows, statics.base)
+            attrs2_rows = statics.attrs_rows
+            if attrs2_rows is None:
+                attrs2_rows = evoxc.reshape(attrs2, (pop_size * count, attr_width))
+            homologous_attrs = evoxc.gather(attrs2_rows, index, axis=0)
             pair_distance = gene.distance(state, attrs1, homologous_attrs)
             attribute_distance = evoxc.reduce_sum(
                 evoxc.select(homologous, pair_distance, statics.zero_f32), axes=1

@@ -198,36 +198,33 @@ class AttrStatics(NamedTuple):
     route builds the same four fields per call.
 
     Attributes:
-        width_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` attribute width ``A``, the row stride
-            of the aligned-attribute gather.
-        base (evoxc.SymbolicTensor): ``(P, 1, A) int32`` ``columns + rows_stride``, the base of
-            the aligned-attribute flat gather — one ``add`` per call on top of it; an empty
-            ``(0, 1, 0)`` block for a family with no attribute column.
+        base (evoxc.SymbolicTensor): ``(P, 1) int32`` ``arange(0, P * M, M)`` — the row base of
+            the aligned-attribute **row** gather, so one ``add`` against the ``(P, M)`` homologue
+            table is the whole index; an empty ``(0, 1)`` block for a family with no attribute
+            column.
         zero_f32 (evoxc.SymbolicTensor): rank-0 ``float32`` ``0.0``, the value a non-homologous
             gene of the attribute term is zeroed to.
-        attrs_flat (evoxc.SymbolicTensor | None): the family's attribute block flattened to
-            ``(P * M * A,)``, the index space of the aligned-attribute gather — hoisted for the
-            same reason as :attr:`base`, since a ``reshape`` is a fully-charged op and the
-            ``2 * species_size`` calls of a generation used to pay it once each.  ``None`` for
-            a caller that holds no attribute block (the width-``0`` scaffold), in which case
-            the gather never runs.
+        attrs_rows (evoxc.SymbolicTensor | None): the family's attribute block as a
+            ``(P * M, A)`` **row table**, the gathered operand — hoisted for the same reason as
+            :attr:`base`, since a ``reshape`` is a fully-charged op and the ``2 * species_size``
+            calls of a generation used to pay it once each.  ``None`` for a caller that holds no
+            attribute block (the width-``0`` scaffold), in which case the gather never runs.
         tail (tuple): the scalar tail's three rank-0 ``float32`` constants —
             ``compatibility_disjoint``, ``compatibility_weight`` and ``1.0`` — or ``()`` for an
             operator without a fixed tail (see
             :meth:`~tensorneat.genome.operations.distance.base.BaseDistance._tail_constants`).
     """
 
-    width_i32: evoxc.SymbolicTensor
     base: evoxc.SymbolicTensor
     zero_f32: evoxc.SymbolicTensor
-    attrs_flat: "evoxc.SymbolicTensor | None"
+    attrs_rows: "evoxc.SymbolicTensor | None"
     tail: tuple
 
 
-#: Placeholder of a family with no attribute column (``attr_width == 0``) and of the
-#: standalone :func:`.digest.match_rows` entry, which knows no attribute width at all: a
-#: ``0``-width index block, so the caller takes its static ``attr_width == 0`` branch.
-_NO_ATTR_BLOCK = (0, 1, 0)
+#: Placeholder index block of a family with no attribute column (``attr_width == 0``) and of
+#: the standalone :func:`.digest.match_rows` entry, which knows no attribute width at all: a
+#: ``0``-row index block, so the caller takes its static ``attr_width == 0`` branch.
+_NO_ATTR_BASE = (0, 1)
 
 
 def build_attr_statics(
@@ -248,42 +245,39 @@ def build_attr_statics(
         attr_width (int): Static attribute width ``A``; ``0`` gives an empty base.
         tail (tuple[float, float, float] | None): ``(disjoint, weight, one)`` of the operator
             supplying the scalar tail, or ``None`` for an operator that has none.
-        attrs (evoxc.SymbolicTensor | None): ``(P, M, A) float32`` attribute block whose flat
-            view the aligned-attribute gather indexes; ``None`` keeps
-            :attr:`AttrStatics.attrs_flat` unset (a caller with no attribute block).
+        attrs (evoxc.SymbolicTensor | None): ``(P, M, A) float32`` attribute block whose
+            ``(P * M, A)`` row view the aligned-attribute gather indexes; ``None`` keeps
+            :attr:`AttrStatics.attrs_rows` unset (a caller with no attribute block).
 
     Returns:
         AttrStatics: the family's attribute-distance scaffold.
 
     Notes:
-        ``base`` is a ``P``-scaled graph constant — ``(P, 1, A) int32``, ~8 KB at ``P = 500``
-        and ~16 KB at ``P = 1000`` — and it is exactly what the ``2 * species_size`` calls of a
-        generation used to rebuild: a ``columns`` ``arange`` (one ``constant`` op), a row-stride
-        ``arange`` (another) and the ``reshape`` in front of it (a third).  The alternative, a
-        *materialised* ``(P, M, A)`` zero block, is what the population-scaled-fill rule in
-        ``window.fill`` forbids: this one is a static index table, not a data buffer.
+        ``base`` is a ``P``-scaled graph constant — ``(P, 1) int32``, ~2 KB at ``P = 500`` and
+        ~4 KB at ``P = 1000`` — and it is exactly what the ``2 * species_size`` calls of a
+        generation used to rebuild: a row-stride ``arange`` (one ``constant`` op) and the
+        ``reshape`` in front of it (another).  The alternative, a *materialised* ``(P, M, A)``
+        zero block, is what the population-scaled-fill rule in ``window.fill`` forbids: this one
+        is a static index table, not a data buffer.
+        The ``(P, M, A)`` index block the previous spelling built per call (``rows * A`` plus a
+        ``(P, 1, A)`` base) cost 10-20× a contiguous arithmetic op on the reference interpreter
+        (a two-axis broadcast ``add`` over 100 k int32 measured ~200 µs against ~9 µs for the
+        ``(P, M) + (P, 1)`` form), which is why the gather is a **row** gather into the hoisted
+        ``(P * M, A)`` view: one cheap ``add`` for the whole index and one ``np.take`` along
+        axis 0 with ``A``-wide rows, which is itself 2-3× cheaper than the flat gather over the
+        same element count.
     """
     return AttrStatics(
-        pool.i32(attr_width),
         (
-            evoxc.add(
-                enp.arange(0, attr_width, dtype=evoxc.int32),
-                evoxc.reshape(
-                    enp.arange(
-                        0,
-                        pop_size * count * attr_width,
-                        count * attr_width,
-                        dtype=evoxc.int32,
-                    ),
-                    (pop_size, 1, 1),
-                ),
+            evoxc.reshape(
+                enp.arange(0, pop_size * count, count, dtype=evoxc.int32), (pop_size, 1)
             )
             if attr_width
-            else enp.zeros(_NO_ATTR_BLOCK, dtype=evoxc.int32)
+            else enp.zeros(_NO_ATTR_BASE, dtype=evoxc.int32)
         ),
         pool.f32(0.0),
         (
-            evoxc.reshape(attrs, (pop_size * count * attr_width,))
+            evoxc.reshape(attrs, (pop_size * count, attr_width))
             if attrs is not None and attr_width
             else attrs
         ),
@@ -321,7 +315,7 @@ def build_statics(
         tail (tuple[float, float, float] | None): ``(disjoint, weight, one)`` of the operator
             supplying the scalar tail, or ``None`` for an operator that has none.
         attrs (evoxc.SymbolicTensor | None): ``(P, M, A) float32`` attribute block of this
-            family, hoisted into :attr:`AttrStatics.attrs_flat`; ``None`` when the caller has
+            family, hoisted into :attr:`AttrStatics.attrs_rows`; ``None`` when the caller has
             no block to hand over.
 
     Returns:

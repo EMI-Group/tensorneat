@@ -116,24 +116,34 @@ What is *not* hoistable is anything derived from the centre payload: `_pack`, `_
 
 ## Cost (measured, numpy reference backend, seed-42 XOR population after 5 generations, build excluded, one fresh process per pop)
 
-| kernel | ops |
-|---|---|
-| `prepare` (both families: dense fields, `oor`, both statics bundles) | 167 |
-| `prepare` + `measure` (batch-`P` centre, merge) | 266 |
-| `measure` marginal, merge route (the tiled centre the pipeline sends) | 98 |
-| `measure` marginal, batch-1 centre (dense route) | 102 |
+| kernel | ops | ms/call, pop 500 | ms/call, pop 1000 |
+|---|---|---|---|
+| `prepare` (both families: dense fields, `oor`, both statics bundles) | 163 | 2.63 | 4.13 |
+| `prepare` + `measure` (batch-`P` centre, merge) | 257 | 5.19 | 8.56 |
+| `measure` marginal, merge route (the tiled centre the pipeline sends) | 94 | 2.56–2.62 | 4.33–4.43 |
+| `measure` marginal, batch-1 centre (dense route) | 102 | 1.38 | 2.03 |
 | `execute_distance` (pair-wise, unchanged contract) | 225 |
 
-The counts are independent of `P` (measured identical at pop 100 / 500 / 1000), counted recursively over `module.functions[*].entry_block` and every `op.regions` body with terminators included; the op-nodes-only convention `test/unit/genome/test_distance_digest.py` asserts on reads 167 / 265 / 98 / 102 / 224, and its ceilings are `PREPARE_OP_CEILING = 210` / `MEASURE_OP_CEILING = 120`.
-Source-line attribution of one merge `measure` call: `measure_alignment` 17 per family (34), aligned-attribute term ~6 per family, scalar tail ~11 per family, family add 1, `_pack`/`_tagged` 4 + 4, and **zero** per-call `constant` ops; `gene.distance` and its column reads (~31) belong to `../gene/`.
-Executed ops of one seed-42 XOR generation at pop 500 (`Pipeline.step` 6-step protocol, `species_size=20`): whole graph **8 813**, this node's bucket **3 222** — one `prepare` executed once (167) plus 40 `measure` calls at ~76 executed ops each once the gene-side ops are excluded.
-The 40 calls are 4 *traced* call sites (two per speciation phase, each inside a region that runs 10 times), so the traced body is what the multiplying op count pays.
+The counts are independent of `P` (measured identical at pop 100 / 500 / 1000), counted recursively over `module.functions[*].entry_block` and every `op.regions` body with terminators included; the op-nodes-only convention `test/unit/genome/test_distance_digest.py` asserts on reads 163 / 256 / 94 / 102 / 224, and its ceilings are `PREPARE_OP_CEILING = 210` / `MEASURE_OP_CEILING = 120`.
+Per-call milliseconds are medians of 7 timed `evoxc.run` of a `prepare`-once + 6×`measure` body, per-call taken as `(total − prepare)/6`; the merge cell is the range over the harness's `merge-tiled` and `merge-only-tiled` routes, because the box drifts ±30 % between sessions — the ratio to `prepare` and to the dense route is the load-bearing number, never the absolute.
+**A `measure` call is sort-bound, not dispatch-bound**: the two `argsort`s plus their two `int32` casts are 27–30 % of the call (0.70 ms of 2.29 ms at pop 500; ~1.7 ms of 4.4 ms at pop 1000), and every other op is an ordinary `(P, M)` pass at 5–90 µs.
+Per-op wall time of one merge `measure` call at pop 500, in execution order, node family (`M = 50, A = 4`) then conn family (`M = 100, A = 1`): `not_equal` 14 / 14 µs, `cast` to `int64` 8 / 59, `multiply` 11 / —, `select` 27 / —, `concatenate` 46 / 84, `reshape` 3 / 4, **`argsort` 95 / 160**, `cast` to `int32` 21 / 47, **`argsort` inverse 147 / 168**, `cast` 19 / 44, `slice` 5 / 5, `add` (index) 30 / 41, `gather` (successor) 40 / 64, `add` 19 / 21, `gather` (candidate) 33 / 92, `add` 12 / 21, `equal` 10 / 17, `select` 23 / 40, `reduce_sum` 30 + 21 / 33 + 27, attribute tail `add` + `gather` + `subtract` 23 + 61 + 52 / 35 + 77 + 20, `gene.distance` column reads ~55 / ~12, `select` 24 / 37, `reduce_sum` 20 / 23, scalar tail 11 ops ≈ 45 / 50.
+The dense route emits the same kinds of pass but no `(P, 2M + 1)` block, so nothing in it grows with the merged width.
+Source-line attribution of one merge `measure` call: `measure_alignment` 15 per family (30), aligned-attribute term 5 per family, scalar tail ~11 per family, family add 1, `_pack`/`_tagged` 4 + 4, and **zero** per-call `constant` ops; `gene.distance` and its column reads (~31) belong to `../gene/`.
+Executed ops of one seed-42 XOR generation at pop 500 (`Pipeline.step` protocol, `species_size=20`), same-session A/B: whole graph **8 693 → 8 529**, this node's bucket **3 702 → 3 538** — one `prepare` executed once plus ~41 `measure` calls, so one op removed per call removes exactly 41 from the generation.
+A generation's op total is not a constant: it moves with the number of species slots the two speciation phases run (an empty slot still executes its `measure`), so only same-session A/B pairs are comparable.
+End-to-end, same-session A/B at `benchmarks/backend_measure.py --backend numpy --generations 20 --warmup 3`: `Pipeline.step` median **183.2 → 177.8 ms** at pop 500 (mean 186.4 → 179.8) and **435.6 → 410.3 ms** at pop 1000 (mean 428.8 → 420.0), i.e. −3 % and −6 %, which is what 41 calls × the per-call saving predicts (0.13 ms / 0.6 ms).
+The `measure` route is therefore the node's dominant cost *and* its owned budget: 41 calls × 2.6 ms (pop 500) is ~59 % of a 178 ms generation, against `prepare`'s one-off 2.6 ms.
 Baked constant bytes of the `prepare` + `measure(batch 1)` graph at pop 1000: 223 788 B total, largest single constant 90 008 B (a `key_span`-scaled `(width + 1,) int32` dense table); pop 100 187 788 B, pop 500 203 788 B.
 `measure` itself adds four rank-0 constants; every other byte is a table or a seed built once in `prepare`.
 
 ### Where the remaining ops are, and why this is near the floor
 The two `argsort`s (4 ops of a family's merge) are the wall-clock hot spot but not an op-count one; see `## Rejected` for the substitutions and their measurements.
 Both permutations are cast to `int32` on purpose: dropping the two casts saves 2 ops per family per call but makes three index blocks `int64`, which measured ~10 % more milliseconds.
+Both sorts keep `stable=True`, including the *inverse*, even though a permutation has no ties: the unstable kind measured **3.08 ms against 2.62 ms** per tiled `measure` at pop 500 and **5.67 against 4.33 ms** at pop 1000 (same session, same harness), because timsort still finds the run the digest half leaves in `order`.
+The aligned-attribute read is a **row** gather, not a flat one: `layout.AttrStatics` hoists a `(P, 1)` `arange(0, P * M, M)` row base and a `(P * M, A)` row view of the digest's attribute block, so the per-call index is one last-axis-broadcast `add` on the `(P, M)` homologue table and the gather is `np.take(..., axis=0)` over `A`-wide rows.
+Measured at pop 500: the old `(P, M, 1) + (P, 1, A)` two-axis-broadcast index materialised 100 k / 200 k `int32` and cost **200 µs**, the `(P, M) + (P, 1)` row index costs **8 µs**, and the row gather (85 µs) beats a flat gather over the same elements (105–120 µs) — together 4 fewer ops and 0.13 / 0.6 ms per call at pop 500 / 1000.
+The rule a future agent needs: never build a `(P, M, A)`-shaped index block — index in `(P, M)` and let the gathered operand carry the attribute axis.
 The two families' scalar tails cannot be traced once without stacking their inputs, and the three `concatenate`/`reshape` pairs that stacking needs cost more than the 1 op they save (measured: 22 → 21).
 The largest remaining block inside a `measure` call is `gene.distance` plus its column reads, which live in another node's files.
 Element volume on the merge route is already minimal (one `P × M` block per family), and the remaining per-call body is op-floor work, so the only lever left in this node's *own* files is the number of calls — see `## Dense versus merge at the live call site`.
@@ -144,14 +154,14 @@ Measured on a real evolved seed-42 XOR payload with keys inside `[0, key_span)` 
 
 | cell | pop 500 | pop 1000 |
 |---|---|---|
-| `prepare` | 167 ops / 2.84 ms | 167 ops / 4.84 ms |
-| `measure`, tiled centre (merge, the shipped route) | 98 ops / 2.43 ms | 98 ops / 4.45 ms |
-| `measure`, batch-1 centre (dense) | 102 ops / 1.25 ms | 102 ops / 1.44 ms |
+| `prepare` | 163 ops / 2.63 ms | 163 ops / 4.13 ms |
+| `measure`, tiled centre (merge, the shipped route) | 94 ops / 2.56–2.62 ms | 94 ops / 4.33–4.43 ms |
+| `measure`, batch-1 centre (dense) | 102 ops / 1.38 ms | 102 ops / 2.03 ms |
 | the tiling itself (`single_payload`) | 16 ops / 0.15 ms per call | same |
 
-The dense route is **+4 traced ops and 1.9–3.1× faster in milliseconds**: its cost is element-free of the `(P, 2M + 1) int64` merge, i.e. of the two sorts and the two wide gathers, which is where the merge's time goes. Op count therefore misleads on this comparison — the interpreter's per-op charge is not constant across block widths.
+The dense route is **+8 traced ops and 1.9–2.1× faster in milliseconds**: its cost is element-free of the `(P, 2M + 1) int64` merge, i.e. of the two sorts and the two wide gathers, which is where the merge's time goes. Op count therefore misleads on this comparison — the interpreter's per-op charge is not constant across block widths.
 `tobytes()` identity holds for a tiled centre: the tiled merge, the batch-1 dense route and `execute_distance` return the same `(P,)` vector on every measured cell (both gene families, default and `OriginNode + OriginConn`), so the swap is value-preserving wherever `node_oor == conn_oor == 0`.
-Projected generation-level effect if `algorithm/` passed the batch-1 centre instead of tiling it (40 calls, `species_size=20`): **−480 executed ops/generation** (−640 tiling ops + 4 reshapes kept, +160 for the dense body) and **≈ −47 ms at pop 500 / −120 ms at pop 1000**, i.e. roughly a quarter of a generation on this box.
+Projected generation-level effect if `algorithm/` passed the batch-1 centre instead of tiling it (40 calls, `species_size=20`): **−320 executed ops/generation** (−640 tiling ops, +320 for the dense body) and **≈ −50 ms at pop 500 / −92 ms at pop 1000**, a quarter to a fifth of a generation on this box.
 The obstacle is the documented `key_span` precondition, not the kernel: the live allocator leaves out-of-range keys in most genomes from the first generations on (measured `node_oor`/`conn_oor` = 2 / 4 at pop 500 and 1000), and only those centres diverge — the same fix that stops the execution schedule from silently dropping evolved genes also makes this switch exact.
 A batch-1 centre is never worse even when the dense gate fails: `measure` then broadcasts it itself (`_broadcast_payload`, 12 ops) instead of the caller's 16.
 
