@@ -74,6 +74,36 @@ from ._kernels import (
 SPAWN_MODES = ("rank", "fitness")
 
 
+def _first_centre_table(species_size: int, row: Any, fill: Any, dtype: Any) -> Any:
+    """``(S,) + row.shape`` centre table whose row ``0`` is ``row``, rest ``fill``.
+
+    Generation 0 has exactly one live species, whose centre is the first
+    individual, so every trailing row is the genome's own dead-slot padding
+    (``0`` for the integer key arrays, ``NaN`` for the float attribute arrays).
+
+    Written as a ``concatenate`` of the reshaped first row with a constant fill
+    block rather than as a row ``scatter``: every row is written here, so there
+    is nothing to mask, and the StableHLO v1 exporter rejects a ``scatter`` on a
+    rank-3 operand along axis 0 (the ``(S, N, NA)``/``(S, E, CA)`` tables) while
+    a ``concatenate`` exports at every rank.
+
+    Args:
+        species_size (int): Static species slots ``S`` (``>= 1``).
+        row: One individual's gene array, rank ``1`` (``node_keys``) or ``2``
+            (attributes / conn keys), without a species axis.
+        fill: Padding value for the dead rows.
+        dtype: Static dtype of the table (``evoxc.int32`` or ``evoxc.float32``).
+
+    Returns:
+        ``(S,) + row.shape`` tensor, row ``0`` equal to ``row``.
+    """
+    head = evoxc.reshape(row, (1,) + tuple(row.shape))
+    if species_size == 1:
+        return head
+    tail = enp.full((species_size - 1,) + tuple(row.shape), fill, dtype=dtype)
+    return enp.concatenate([head, tail], 0)
+
+
 
 
 @dataclass(frozen=True)
@@ -287,33 +317,17 @@ class SpeciesController(StatefulBaseClass):
                 last_improved=evoxc.scatter(dead, 0, _const(0.0)),
                 member_count=evoxc.scatter(dead, 0, _const(float(self.pop_size))),
                 idx2species=enp.zeros((self.pop_size,), dtype=evoxc.float32),
-                center_node_keys=evoxc.scatter(
-                    enp.zeros((species_size,) + tuple(node_keys.shape), dtype=evoxc.int32),
-                    0,
-                    node_keys,
+                center_node_keys=_first_centre_table(
+                    species_size, node_keys, 0, evoxc.int32
                 ),
-                center_node_attrs=evoxc.scatter(
-                    enp.full(
-                        (species_size,) + tuple(node_attrs.shape),
-                        float("nan"),
-                        dtype=evoxc.float32,
-                    ),
-                    0,
-                    node_attrs,
+                center_node_attrs=_first_centre_table(
+                    species_size, node_attrs, float("nan"), evoxc.float32
                 ),
-                center_conn_keys=evoxc.scatter(
-                    enp.zeros((species_size,) + tuple(conn_keys.shape), dtype=evoxc.int32),
-                    0,
-                    conn_keys,
+                center_conn_keys=_first_centre_table(
+                    species_size, conn_keys, 0, evoxc.int32
                 ),
-                center_conn_attrs=evoxc.scatter(
-                    enp.full(
-                        (species_size,) + tuple(conn_attrs.shape),
-                        float("nan"),
-                        dtype=evoxc.float32,
-                    ),
-                    0,
-                    conn_attrs,
+                center_conn_attrs=_first_centre_table(
+                    species_size, conn_attrs, float("nan"), evoxc.float32
                 ),
                 next_species_key=_const(1.0),
             )
