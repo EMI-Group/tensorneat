@@ -90,12 +90,17 @@ MAX_CONNS = 100
 STEPS = 2
 
 #: Traced-op ceiling of one ``measure`` call (the marginal cost on top of a
-#: ``prepare``).  Measured: 119.  The cap is a doubling guard, not a target.
-MEASURE_OP_CEILING = 140
+#: ``prepare``).  Measured: 98 (119 before the connection family folded its key
+#: columns with one ``dot`` and the merge dropped its successor clamp).  The cap
+#: is a doubling guard, not a target.
+MEASURE_OP_CEILING = 120
 
 #: Traced-op ceiling of one ``prepare`` call, which runs once per generation.
-#: Measured: 161.
-PREPARE_OP_CEILING = 200
+#: Measured: 167 (161 before the per-generation ``key_fold`` constant and the
+#: merge's trailing padding column were added there).  ``prepare`` runs once per
+#: generation against ``2 * species_size`` ``measure`` calls, so the two ceilings
+#: are not the same budget.
+PREPARE_OP_CEILING = 210
 
 
 # --------------------------------------------------------------------------- #
@@ -460,6 +465,33 @@ def test_measure_rejects_a_centre_that_disagrees_with_the_digest(
 # --------------------------------------------------------------------------- #
 # op budget
 # --------------------------------------------------------------------------- #
+def test_padding_rows_carry_the_sentinel_in_every_key_column(payloads, evolved):
+    """Invariant: an absent gene row is ``I_INF`` in *every* key column.
+    Oracle: the payload contract (and ``initialize``, which writes each absent
+    gene row as ``I_INF`` across its whole key row).  ``digest._pack_centre``
+    relies on it: the centre's connection family folds its key columns into one
+    ``int64`` composite with a ``dot`` and derives row validity from that
+    composite (``valid = composite != _PAD_CENTRE``, the composite of an
+    all-``I_INF`` row) instead of reading the leading key column, which is the
+    same predicate only while no absent row carries a real digit beside a padded
+    one.
+    Assertion: every connection row of the evolved payload whose first key column
+    is ``I_INF`` is ``I_INF`` in all of its key columns, and at least one such row
+    exists so the assertion is not vacuous (the node rows are rank 2, i.e. one key
+    column, so the invariant is trivial there but still checked).
+    """
+    sentinel = np.iinfo(np.int32).max
+    keys = np.asarray(evolved.conn_keys)
+    absent = keys[:, :, 0] == sentinel
+    assert absent.any(), "the fixture carries no padding connection row"
+    assert (keys[absent] == sentinel).all(), (
+        "a padding connection row carries a non-sentinel key digit, so folding the "
+        "key columns would not reproduce that row's validity"
+    )
+    node_keys = np.asarray(evolved.node_keys)
+    assert (node_keys == sentinel).any(), "the fixture carries no padding node row"
+
+
 def _count_ops(block):
     """Traced IR ops of one block, nested region blocks included.
 
@@ -502,8 +534,8 @@ def test_measure_stays_under_its_op_budget(runner, routes, evolved):
 
     Assertion: tracing ``prepare`` and ``prepare + measure`` on the evolved
     payload gives a marginal cost at or below ``MEASURE_OP_CEILING`` (measured:
-    119) and a ``prepare`` cost at or below ``PREPARE_OP_CEILING`` (measured:
-    161), with the marginal cost strictly positive so an accidental
+    98) and a ``prepare`` cost at or below ``PREPARE_OP_CEILING`` (measured:
+    167), with the marginal cost strictly positive so an accidental
     ``measure``-free graph cannot pass.
     """
     import evoxc

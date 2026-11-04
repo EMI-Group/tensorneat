@@ -25,8 +25,11 @@ same kind of derivation — Python ints read off static shapes, with no value-de
 
 * :data:`_KEY_BASE` and :data:`_FOLDED_KEYS` — the radix and column count of the packed key
   identity both routes match genes by.
-* :func:`_column` — the one static key-column read of the two routes (a kept-axis slice plus a
-  reshape, because ``evoxc`` rejects an axis-dropping index).
+* :func:`_column` and :func:`_prefix` — the two static key-column reads of the two routes (a
+  kept-axis slice, plus a ``reshape`` for the single column, because ``evoxc`` rejects an
+  axis-dropping index).
+* :func:`key_fold` — the ``(2, 1) int64`` weight matrix of the one-``dot`` two-column fold that
+  :func:`.digest._pack_centre` applies to a connection key table.
 * :func:`dense_width`, :func:`dense_rows` and :func:`dense_slot` — the key → slot geometry of
   the dense table, i.e. what :class:`DenseLayout` addresses and the static gate sizes.
 
@@ -81,6 +84,59 @@ def _column(table: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
     return evoxc.reshape(table[slicer], tuple(int(size) for size in table.shape[:-1]))
 
 
+def _prefix(table: evoxc.SymbolicTensor, count: int) -> evoxc.SymbolicTensor:
+    """Read the leading ``count`` key columns of a ``(..., K)`` table as a kept-axis block.
+
+    Args:
+        table: ``(P, M, K)`` key-column block, ``K >= count``.
+        count: Static number of leading columns to keep.
+
+    Returns:
+        ``(P, M, count)`` view of the first ``count`` columns.
+
+    Notes:
+        One ``slice`` op and no ``reshape``: the column axis is kept, so the block is
+        already the shape :func:`~.digest._pack_centre`'s ``dot`` contracts over.
+    """
+    rank = len(table.shape)
+    slicer = (slice(None),) * (rank - 1) + (slice(0, int(count)),)
+    return table[slicer]
+
+
+def key_fold(
+    pool: ConstantPool, *, key_base: int, tag_scale: int
+) -> evoxc.SymbolicTensor:
+    """Build the ``(2, 1) int64`` weight matrix of the two-column key fold.
+
+    Args:
+        pool (ConstantPool): Per-trace constant pool (the two rank-0 values it holds are
+            shared with the rest of the family's scaffold).
+        key_base (int): Radix of the positional fold (``2**31``).
+        tag_scale (int): Side-tag scale of the composite (``2``).
+
+    Returns:
+        ``(2, 1) int64`` matrix ``[[key_base * tag_scale], [tag_scale]]`` — the fold *with*
+        the tag scale, so ``dot(cast(keys, int64), fold)`` is the side-scaled composite in
+        one op.
+
+    Notes:
+        ``evoxc.dot`` needs rank ``>= 2`` on both sides, so the weights are a ``(2, 1)``
+        matrix rather than a ``(2,)`` vector.  The scale being folded into the weights is
+        what makes an all-``I_INF`` row (an absent gene, whose every key column is the
+        padding sentinel) fold to exactly the centre padding sentinel — see
+        :data:`~.digest._PAD_CENTRE` — so the centre side needs no ``select``.
+        Built once per generation into :attr:`MeasureStatics.fold_i64`; a ``measure`` call
+        therefore traces neither of its two constants.
+    """
+    return evoxc.concatenate(
+        (
+            enp.full((1, 1), key_base * tag_scale, dtype=evoxc.int64),
+            enp.full((1, 1), tag_scale, dtype=evoxc.int64),
+        ),
+        axis=0,
+    )
+
+
 class MeasureStatics(NamedTuple):
     """Per-generation scaffolding of one gene family's row-wise ``measure`` route.
 
@@ -103,13 +159,18 @@ class MeasureStatics(NamedTuple):
             ``composite + 1`` homologue test.
         pad_centre_i64 (evoxc.SymbolicTensor): rank-0 ``int64`` padding sentinel of the centre
             side of the merge.
-        offsets (evoxc.SymbolicTensor): ``(P, 1) int32`` ``arange(0, P * 2M, 2M)`` — the row
-            stride of the ``2M``-wide merged block (``batch_offsets``, hoisted).
+        fold_i64 (evoxc.SymbolicTensor): ``(2, 1) int64`` weight matrix of the two-column key
+            fold (:func:`key_fold`) — the one ``dot`` that turns a ``(P, M, 2)`` key table into
+            the centre side's scaled composite.  Read only by a family whose key row folds two
+            columns; the one-column node family keeps its two-scalar spelling.
+        pad_column_i64 (evoxc.SymbolicTensor): ``(P, 1) int64`` trailing column of the merged
+            block, every entry the centre padding sentinel — above every real composite and
+            every population sentinel, so it sorts last and every centre gene has a successor
+            position (:func:`.digest.measure_alignment`).
+        offsets (evoxc.SymbolicTensor): ``(P, 1) int32`` ``arange(0, P * (2M + 1), 2M + 1)`` —
+            the row stride of the merged block (``batch_offsets``, hoisted).
         offsets_plus_one (evoxc.SymbolicTensor): ``(P, 1) int32`` ``offsets + 1``, so the
             successor position and its flat base are one ``add`` instead of two.
-        offsets_last (evoxc.SymbolicTensor): ``(P, 1) int32`` ``offsets + (2M - 1)`` — the
-            clamp target of the successor position, i.e. the last row of the *same*
-            individual's merged block.
         attr (AttrStatics): the aligned-attribute scaffold the scalar tail consumes — shared
             with the pair-wise route, which passes its own through the same argument.
     """
@@ -120,9 +181,10 @@ class MeasureStatics(NamedTuple):
     tag_scale_i64: evoxc.SymbolicTensor
     one_i64: evoxc.SymbolicTensor
     pad_centre_i64: evoxc.SymbolicTensor
+    fold_i64: evoxc.SymbolicTensor
+    pad_column_i64: evoxc.SymbolicTensor
     offsets: evoxc.SymbolicTensor
     offsets_plus_one: evoxc.SymbolicTensor
-    offsets_last: evoxc.SymbolicTensor
     attr: "AttrStatics"
 
 
@@ -269,11 +331,13 @@ def build_statics(
         The merge's ``(P, 1)`` stride table is a ``P``-scaled graph constant — ~8 KB for both
         families at ``P = 1000`` — and it is exactly what the ``2 * species_size`` calls of a
         generation used to rebuild: an ``arange`` is one ``constant`` op and the ``reshape`` in
-        front of it is another.  The two derived strides cost one ``add`` each *here* instead of
-        one per call, and both rank-0 pools are the generation's own, so a value the other
-        family also needs costs one op.
+        front of it is another.  The derived stride costs one ``add`` *here* instead of one per
+        call, and both rank-0 pools are the generation's own, so a value the other family also
+        needs costs one op.
     """
-    merged_width = 2 * count
+    # The merged block carries the digest half, the centre half and one trailing column (see
+    # :func:`.digest.measure_alignment`), so its row stride is ``2M + 1``.
+    merged_width = 2 * count + 1
     offsets = evoxc.reshape(
         enp.arange(0, pop_size * merged_width, merged_width, dtype=evoxc.int32),
         (pop_size, 1),
@@ -285,9 +349,10 @@ def build_statics(
         pool.i64(tag_scale),
         pool.i64(1),
         pool.i64(pad_centre),
+        key_fold(pool, key_base=key_base, tag_scale=tag_scale),
+        fill((pop_size, 1), pad_centre, evoxc.int64),
         offsets,
         evoxc.add(offsets, pool.i32(1)),
-        evoxc.add(offsets, pool.i32(merged_width - 1)),
         build_attr_statics(
             pool,
             pop_size=pop_size,
@@ -579,5 +644,6 @@ __all__ = [
     "dense_rows",
     "dense_slot",
     "dense_width",
+    "key_fold",
     "reorder",
 ]

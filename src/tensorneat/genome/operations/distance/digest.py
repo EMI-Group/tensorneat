@@ -6,9 +6,9 @@ re-sorted ``2 * species_size`` times per generation.
 This module splits that work: :func:`prepare_family` sorts one gene family of the population
 **once** per generation (packed key composites, the attribute rows permuted into the same
 order, and the valid-gene count), and :func:`measure_alignment` merges one centre genome
-against that digest with a single sort of the ``2 * M`` concatenation — no per-pair ``O(M^2)``
-matrix, no re-sort of the population and no key-row re-verification for a one- or two-column
-gene.
+against that digest with a single sort of the ``2 * M + 1`` concatenation — no per-pair
+``O(M^2)`` matrix, no re-sort of the population and no key-row re-verification for a one- or
+two-column gene.
 
 The composite is what makes the merge exact: a gene row folds its key columns into one
 ``int64`` value ``pack``, positionally and most significant first, in base ``2**31``.
@@ -19,6 +19,10 @@ because it allocates structural keys per individual) still packs to its own comp
 of aliasing another gene's.  Composite equality is therefore key-row equality, and the legacy
 hash-then-verify pair (two key-row gathers plus a ``reduce_min``) disappears for a node key
 and for an ``(in_key, out_key)`` connection key.
+A connection key is folded *and* tag-scaled by one integer ``dot`` against a ``(2, 1)`` weight
+matrix (:func:`_pack_centre`), which is four traced ops where the two column reads, two casts
+and three arithmetic ops it replaces were eleven; the node family keeps the two-scalar spelling,
+because a ``(P, M)`` table has no key axis for ``dot`` to contract.
 That out-of-range key is the one thing that can make the single-centre fast path
 (:mod:`.dense`) disagree with this module's merge, because the dense table cannot address it:
 :func:`prepare_family` therefore counts the present genes whose key falls outside
@@ -37,7 +41,10 @@ gene sorts before its population counterpart and a homologous pair is an adjacen
 ``(centre, population)`` pair whose composites differ by one.  Both sides' padding rows carry
 their own sentinel above every real composite, and the sentinels are two apart and even, so
 neither a ``(padding, padding)`` nor a ``(padding, gene)`` adjacency can ever pass the
-"differ by one and the right neighbour is population-tagged" test.
+"differ by one and the right neighbour is population-tagged" test.  The centre sentinel is
+*defined* as the fold of an absent row (every key column is ``I_INF`` by payload contract), so
+the one-``dot`` centre fold reaches it without a ``select``, and the merge appends one column of
+it to the concatenation so the last sorted position has a successor.
 
 Determinism: both sorts of this module (the digest's in :func:`prepare_family` and the merge's
 two in :func:`measure_alignment`) use ``stable=True``, which is a **performance** choice, not
@@ -79,6 +86,7 @@ from .layout import (
     DenseLayout,
     MeasureStatics,
     _column,
+    _prefix,
     build as build_layout,
     build_statics,
     dense_rows,
@@ -94,11 +102,19 @@ _TAG_BITS = 1
 _TAG_CENTRE = 0
 _TAG_POPULATION = 1
 
-#: Padding sentinels of the two sides: above every real composite, even (so they never pass
+#: Weights of the two folded key columns, tag scale included: ``k0 * _FOLD_HI + k1 * _FOLD_LO``
+#: is ``pack * 2``, i.e. the centre side's composite, in one ``dot`` (see ``_pack_centre``).
+_FOLD_HI = _KEY_BASE << _TAG_BITS
+_FOLD_LO = 1 << _TAG_BITS
+
+#: Padding sentinels of the two sides, above every real composite, even (so they never pass
 #: the "the right neighbour is population-tagged" test) and two apart (so a
 #: ``(centre padding, population padding)`` adjacency never differs by one).
-_PAD_CENTRE = (1 << 63) - 2
-_PAD_POPULATION = (1 << 63) - 4
+#: ``_PAD_CENTRE`` is *defined* as the fold of an absent gene row — every key column is
+#: ``I_INF`` by payload contract — which is why the one-``dot`` centre fold needs no ``select``
+#: to reach it and why a merged block can carry it as its trailing column.
+_PAD_CENTRE = I_INF * _FOLD_HI + I_INF * _FOLD_LO
+_PAD_POPULATION = _PAD_CENTRE - 2
 
 
 class FamilyDigest(NamedTuple):
@@ -271,6 +287,51 @@ def _pack(
             evoxc.cast(_column(keys, index), evoxc.int64),
         )
     return composite, valid
+
+
+def _pack_centre(
+    keys: evoxc.SymbolicTensor, statics: MeasureStatics
+) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+    """Fold the centre genome's key table into its scaled composites with one ``dot``.
+
+    Args:
+        keys: ``(P, M, K) int32`` key table with ``K >= _FOLDED_KEYS``, ``I_INF`` padded.
+        statics (MeasureStatics): the family's per-generation scaffold, read for the ``(2, 1)``
+            fold weights and the centre padding sentinel.
+
+    Returns:
+        ``(composite (P, M) int64, valid (P, M) bool)`` — the centre side's sort key
+        (``pack * 2``, the tag being ``0``) and its "real gene" mask.
+
+    Notes:
+        ``k0 * 2**32 + k1 * 2`` is exactly ``(k0 * 2**31 + k1) * 2`` — the positional fold of
+        :func:`_pack` with the tag scale applied — but it is *one* ``dot`` instead of two
+        column reads, two casts, a ``multiply``, an ``add`` and a ``multiply``: four traced ops
+        against eleven, at the price of one ``(P, M, 2) int64`` block and an integer matmul
+        (measured: 0.29 ms of element work at ``P = 1000``, against four interpreter ops).
+        The arithmetic is exact integer arithmetic on ``int64``: the largest legal key is
+        ``I_INF - 1``, so the largest real composite is ``2**63 - 2**32 - 4`` and nothing
+        overflows.
+        ``valid`` is read off the composite instead of the leading key column, which is the
+        same predicate: the payload contract makes every key column of an absent row ``I_INF``,
+        so such a row folds to exactly ``_PAD_CENTRE`` and to nothing else (a real row's
+        composite is at most ``2**63 - 2**32 - 4``).  That identity is also why this path needs
+        no ``select`` to reach the centre padding sentinel: the value it would write is already
+        there.  A payload that broke the invariant — a row whose leading column is ``I_INF`` but
+        a later one is not — would count as a live gene here; ``test/unit/genome/
+        test_distance_digest.py`` asserts the invariant on a real evolved payload for both
+        shipped key layouts.
+        ``evoxc.dot`` contracts the key axis (the second operand's rows are its axis 0), so a
+        table wider than ``_FOLDED_KEYS`` — ``OriginConn``'s ``historical_marker`` — is cut to
+        its leading columns with one ``slice``; the extra columns are verified row-for-row by
+        :func:`measure_alignment` instead of being folded.
+    """
+    pop_size, count = int(keys.shape[0]), int(keys.shape[1])
+    width = int(keys.shape[2])
+    columns = keys if width == _FOLDED_KEYS else _prefix(keys, _FOLDED_KEYS)
+    folded = evoxc.dot(evoxc.cast(columns, evoxc.int64), statics.fold_i64)
+    composite = evoxc.reshape(folded, (pop_size, count))
+    return composite, evoxc.not_equal(composite, statics.pad_centre_i64)
 
 
 def _tagged(
@@ -561,11 +622,19 @@ def measure_alignment(
         ``reduce_min`` — and the tag bit is checked explicitly, because
         ``(population, centre)`` composites can also differ by one (that is what the second
         tag bit used to rule out).
-        The successor position is clamped to ``2 * M - 1`` instead of being range-checked and
-        masked: the last merged position always holds a padded row (both sentinels sit above
-        every real composite), and no sentinel can equal a real ``composite + 1``, so the
-        clamped read cannot pass the homology test — one ``clamp`` in place of a ``less`` and
-        a ``select``, with no separate "in range" mask to carry.
+        The merged block carries one trailing column of the centre padding sentinel, so the
+        last sorted position belongs to it and *every* centre gene has a successor: the
+        successor read is one ``add`` and one ``gather``, with no clamp and no "in range" mask.
+        The trailing value is what makes that safe in both directions — it sorts above every
+        real composite (``<= 2**63 - 2**32 - 4``) and above the population padding sentinel
+        (``_PAD_POPULATION``), and it cannot pass the homology test: a real centre gene's
+        ``composite + 1`` is at most ``2**63 - 2**32 - 3`` and a centre *padding* row's is
+        ``2**63 - 1``, while the candidate there is ``2**63 - 2``.  So a centre gene that sits
+        right before that column reads a successor index of ``2M`` (one past the digest half)
+        only when it is not homologous, exactly where the clamp used to redirect it.  The
+        trailing value is the centre padding sentinel rather than ``int64`` max on purpose:
+        ``max`` *would* equal a centre padding row's ``composite + 1`` and turn a padded row
+        into a "homologue" at index ``2M``.
         A gene with more key columns than ``_FOLDED_KEYS`` verifies the whole key row of its
         candidate pair against ``digest_key_cols``, so its homology is full-tuple key-row
         equality, never a comparison truncated to the folded columns.
@@ -594,20 +663,29 @@ def measure_alignment(
             pad_centre=_PAD_CENTRE,
             tail=None,
         )
-    pack, valid = _pack(keys, statics.iinf_i32, statics.key_base_i64)
-    composite = _tagged(
-        pack,
-        valid,
-        _TAG_CENTRE,
-        statics.pad_centre_i64,
-        statics.tag_scale_i64,
-        statics.one_i64,
-    )
-    merged_width = 2 * count
+    if len(keys.shape) == 3 and int(keys.shape[2]) >= _FOLDED_KEYS:
+        # A connection key folds its two key columns (plus the tag scale) in one ``dot``, which
+        # already lands on the centre padding sentinel where the row is absent.
+        composite, valid = _pack_centre(keys, statics)
+    else:
+        pack, valid = _pack(keys, statics.iinf_i32, statics.key_base_i64)
+        composite = _tagged(
+            pack,
+            valid,
+            _TAG_CENTRE,
+            statics.pad_centre_i64,
+            statics.tag_scale_i64,
+            statics.one_i64,
+        )
+    # The merged block carries the digest half, the centre half and one trailing column whose
+    # value is the centre padding sentinel — above every real composite and every population
+    # sentinel, so it sorts last and every centre gene has a successor position in range (see
+    # the Notes).  ``2 * count`` therefore becomes ``2 * count + 1``.
+    merged_width = 2 * count + 1
     # The digest side goes first so that the merged index of a population gene *is* its
     # digest row: the tail then reads the row table as ``successor`` and needs no
     # ``subtract(successor, count)`` (two ops and a constant per family per call).
-    merged = evoxc.concatenate((digest_keys, composite), axis=1)
+    merged = evoxc.concatenate((digest_keys, composite, statics.pad_column_i64), axis=1)
     merged_flat = evoxc.reshape(merged, (pop_size * merged_width,))
     # ``int32`` indices: ``gather`` accepts ``int64`` too, but the 64-bit sort below and the
     # 64-bit index blocks it would force cost ~10 % of this kernel's milliseconds for two
@@ -624,16 +702,12 @@ def measure_alignment(
         (pop_size, count),
     )
     offsets = statics.offsets
-    # The last sorted position has no successor; clamping redirects that (necessarily
-    # non-homologous, see the docstring) read to the largest composite instead of masking it.
-    # ``min(position + 1, 2M - 1) + offsets`` and ``min(position + offsets + 1,
-    # offsets + 2M - 1)`` are the same integer — a per-row constant commutes with ``min`` —
-    # so the flat base rides on the clamp and the successor read needs no second ``add``.
+    # The trailing column is the merged block's maximum, so no centre gene sits at the last
+    # position and ``position + 1 <= 2M`` holds for every one of them: the flat base is one
+    # ``add``, no clamp and no "in range" mask.
     successor = evoxc.gather(
         evoxc.reshape(order, (pop_size * merged_width,)),
-        evoxc.minimum(
-            evoxc.add(position, statics.offsets_plus_one), statics.offsets_last
-        ),
+        evoxc.add(position, statics.offsets_plus_one),
         axis=0,
     )
     candidate = evoxc.gather(merged_flat, evoxc.add(successor, offsets), axis=0)
