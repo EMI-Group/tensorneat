@@ -488,17 +488,23 @@ class SpeciesController(StatefulBaseClass):
             sparse table (1-3 live slots of 20 at pop 8/100) would pay for the
             rows of slots that cannot write, so the lazy path is kept there.
         Note:
-            **Above ``_kernels.GATED_ROWS`` every scan iteration measures its own
-            centre row unconditionally, one population-shaped call per slot.**
-            Scan 1's centre is the carry row of that slot (no earlier iteration
-            can rewrite it, because every ``scatter`` writes index ``slot`` and
-            each slot is visited once); scan 2's is ``pop[seed]`` for a creating
-            slot and the post-scan-1 carry row otherwise.  Once the species table
-            is full every slot is live and nothing is skippable, so a lazy row's
-            ``if`` region costs more than it saves (see ``_kernels.GATED_ROWS``).
-            The gate is a pure static predicate, so exactly one of the two paths
-            reaches the graph, and both compute the same ``(pop_size,)`` rows from
-            the same kernel with the same population-shaped centre.
+            **Above ``_kernels.GATED_ROWS`` scan 1's whole centre table is
+            measured *before* the scan** (``distance_fn.matrix``, one
+            population-shaped call per centre row) and each iteration reads its
+            own row with a ``gather``, while scan 2 measures its selected centre
+            per iteration -- ``pop[seed]`` for a creating slot, the post-scan-1
+            carry row otherwise.  Scan 1's centre for slot ``i`` is the carry row
+            ``i`` and no earlier iteration can rewrite it (every ``scatter``
+            writes index ``slot`` and each slot is visited once), so the pre-scan
+            table holds exactly the centre every iteration reads and the rows are
+            the same floats (the compatibility kernel is row-independent).  Once
+            the species table is full every slot is live and nothing is
+            skippable, so a lazy row's ``if`` region costs more than it saves
+            (see ``_kernels.GATED_ROWS``).  The gate is a pure static predicate,
+            so exactly one of the two paths reaches the graph.  The dense path
+            needs the digest-backed callable (``DistanceRows.matrix``) and raises
+            ``TensorNEATError`` for any other callable -- there is no silent
+            fallback to the slower shape.
         """
         population = self._population(state, pop)
         values = _kernels.speciate(

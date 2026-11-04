@@ -36,24 +36,50 @@ population.
 
 Measured cost
 -------------
-``speciate`` on the numpy reference backend, ``species_size=20``, medians of
-three runs of five after four warm generations, same box:
+``speciate`` on the numpy reference backend, ``species_size=20``, one
+configuration per fresh process, ``Pipeline.step`` medians of one warmup plus
+twenty timed generations after three setup generations, interleaved A/B against
+the pre-change tree on the same box (which drifts by tens of percent between
+sessions, so read the paired ratios):
 
-* ``P = 100``: 30.7-32.1 ms with the old ``K = 4`` centre grouping, 31.6-33.3 ms
-  with one call per centre (parity, within the box's drift);
-* ``P = 500``: 235.0-237.5 ms before, 229.5-240.0 ms now (parity);
-* ``P = 1000``: 439.8-441.8 ms before, 387.3-391.4 ms now (about 12 % faster).
+* ``P = 100`` (gated path, unchanged): 43.0 ms before, 42.9 ms now;
+* ``P = 500`` (dense path): 266.6 ms before, 230.9 ms now (about 13 % faster,
+  and the best of three paired rounds in each direction);
+* ``P = 1000`` (dense path): 463.0 ms before, 451.5 ms now (parity).
 
-The per-centre call shape itself is what the population-shaped contract costs:
-measured with the rows still pre-computed before each scan (``2 * species_size``
-distance trace sites and scan 2's per-iteration ``create`` ``cond``, 11 111 graph
-ops against 3 353), it was +18 % at ``P = 500``, because four-centre calls
-amortise the interpreter's per-op overhead over four populations.  Measuring the
-same rows inside the scan bodies instead -- one trace site per phase, 1 361 ops,
-no ``cond`` -- wins it back and then some: the wide batches were also
-materialising ``species_size * pop_size`` rows per digest leaf, which is the cost
-that dominated at ``P = 1000``.  The grouping and the pre-measurement were the
-expensive parts, not the per-centre call.
+The win is scan 1's: ``speciate`` measures that centre table with :meth:`matrix`
+before the scan instead of one population-shaped call inside every iteration, so
+the compatibility kernel leaves the ``while`` body (59 ops per iteration instead
+of 228).  The *number* of executed ops is unchanged -- the same kernel runs once
+per centre either way -- so the gain is the interpreter's per-iteration region
+and carry overhead, not the arithmetic.
+
+Two variants were measured and rejected.  Pre-measuring *both* scans needs a
+``cond`` for scan 2's data-dependent ``pop[seed]`` centre and costs ~+50 % peak
+RSS (832 vs 556 MiB at ``P = 500``, 1540 vs 1021 MiB at ``P = 1000``) for no
+timed gain.  Grouping several centres into one ``measure_distance`` call (a
+tiled digest and a ``block * pop_size``-row centre batch) is 12 % cheaper than
+one call per centre in isolation at ``P = 500`` (66.6 vs 75.4 ms for twenty
+rows), but *slower* end to end: the wider batches materialise ``block`` times
+bigger temporaries, which costs more than the dispatch it saves (block of 4:
+266 ms at ``P = 500`` against 231 ms for one centre per call, and 472 vs 383 ms
+at ``P = 1000``).  Running the ``matrix`` rows inside a dedicated ``scan``
+instead of at the top level is bit-identical and restores the base tree's peak
+RSS and build (260.9 MiB / 0.35 s vs 539.0 MiB / 0.69 s at ``P = 500``) but
+loses the whole wall win, ending at parity with the pre-change tree (247.6-279.8
+ms against 261.9-270.9), so the top-level table stays.
+
+Peak memory
+-----------
+``matrix`` builds ``S`` top-level kernel calls, and ``evoxc``'s numpy interpreter
+keeps every SSA result of a block in that block's environment until the graph
+returns, so all ``S`` kernels' ``(pop_size, 2 * max_conns, ...)`` intermediates
+stay resident for the rest of the generation: 261 -> 539 MiB at ``P = 500``,
+431 -> 976 MiB at ``P = 1000``, and +0.34 s of one-off build (a loop body is
+traced once, a static loop traces ``S`` copies of the kernel).
+That is the price of keeping the kernel out of the reservation ``while``
+region, and it is measured, not incidental: any future hoist has to report peak
+RSS and build next to its wall time.
 """
 
 from __future__ import annotations
@@ -277,7 +303,10 @@ class DistanceRows:
             the batch width the digest was prepared with.  Concatenating rows of
             single calls keeps every transient at one population instead of
             ``K`` of them; the static row loop is trace-time only and costs no
-            graph op.
+            graph op.  The rows themselves are measured at the *top level* of
+            the generation graph, so their intermediates stay resident -- see
+            `Peak memory` in the module docstring before moving this into a
+            loop.
         """
         count = int(centres[0].shape[0])
         rows = [
