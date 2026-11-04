@@ -644,6 +644,7 @@ def prepare_family(
         tag_scale=1 << _TAG_BITS,
         pad_centre=_PAD_CENTRE,
         tail=tail,
+        attrs=attrs_sorted,
     )
     # The digest side of the fast path stores the *star* slot: a usable key keeps its table
     # cell, everything else reads the never-owned padding cell, so `owner_at < count` alone is

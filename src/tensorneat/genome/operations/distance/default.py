@@ -369,14 +369,19 @@ class DefaultDistance(BaseDistance):
             # ``row * A`` and the ``(P, M, A)`` block adds the within-row column.  ``rows`` is
             # already redirected to row ``0`` where a gene has no homologue, so no ``I_INF``
             # index reaches the backend and the flat index needs no range check of its own.
-            # The ``(P, 1, A)`` base (within-row column plus per-individual row stride) is a
-            # per-generation constant of the digest, so this call pays one ``add`` on top of the
-            # two value-dependent ops; the gather's own result is already ``(P, M, A)``.
+            # The ``(P, 1, A)`` base (within-row column plus per-individual row stride) and the
+            # flat ``(P * M * A,)`` view of the attribute block are per-generation constants of
+            # the digest, so this call pays one ``multiply``, one ``reshape`` and one ``add`` on
+            # top of the two value-dependent ops; the gather's own result is already
+            # ``(P, M, A)``.
             row_offsets = evoxc.reshape(
                 evoxc.multiply(rows, statics.width_i32), (pop_size, count, 1)
             )
+            attrs2_flat = statics.attrs_flat
+            if attrs2_flat is None:
+                attrs2_flat = evoxc.reshape(attrs2, (pop_size * count * attr_width,))
             homologous_attrs = evoxc.gather(
-                evoxc.reshape(attrs2, (pop_size * count * attr_width,)),
+                attrs2_flat,
                 evoxc.add(row_offsets, statics.base),
                 axis=0,
             )

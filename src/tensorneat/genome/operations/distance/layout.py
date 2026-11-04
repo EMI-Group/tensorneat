@@ -103,6 +103,12 @@ class AttrStatics(NamedTuple):
             ``(0, 1, 0)`` block for a family with no attribute column.
         zero_f32 (evoxc.SymbolicTensor): rank-0 ``float32`` ``0.0``, the value a non-homologous
             gene of the attribute term is zeroed to.
+        attrs_flat (evoxc.SymbolicTensor | None): the family's attribute block flattened to
+            ``(P * M * A,)``, the index space of the aligned-attribute gather — hoisted for the
+            same reason as :attr:`base`, since a ``reshape`` is a fully-charged op and the
+            ``2 * species_size`` calls of a generation used to pay it once each.  ``None`` for
+            a caller that holds no attribute block (the width-``0`` scaffold), in which case
+            the gather never runs.
         tail (tuple): the scalar tail's three rank-0 ``float32`` constants —
             ``compatibility_disjoint``, ``compatibility_weight`` and ``1.0`` — or ``()`` for an
             operator without a fixed tail (see
@@ -112,6 +118,7 @@ class AttrStatics(NamedTuple):
     width_i32: evoxc.SymbolicTensor
     base: evoxc.SymbolicTensor
     zero_f32: evoxc.SymbolicTensor
+    attrs_flat: "evoxc.SymbolicTensor | None"
     tail: tuple
 
 
@@ -128,6 +135,7 @@ def build_attr_statics(
     count: int,
     attr_width: int,
     tail: tuple[float, float, float] | None,
+    attrs: "evoxc.SymbolicTensor | None" = None,
 ) -> AttrStatics:
     """Build one family's :class:`AttrStatics` (once per generation).
 
@@ -138,6 +146,9 @@ def build_attr_statics(
         attr_width (int): Static attribute width ``A``; ``0`` gives an empty base.
         tail (tuple[float, float, float] | None): ``(disjoint, weight, one)`` of the operator
             supplying the scalar tail, or ``None`` for an operator that has none.
+        attrs (evoxc.SymbolicTensor | None): ``(P, M, A) float32`` attribute block whose flat
+            view the aligned-attribute gather indexes; ``None`` keeps
+            :attr:`AttrStatics.attrs_flat` unset (a caller with no attribute block).
 
     Returns:
         AttrStatics: the family's attribute-distance scaffold.
@@ -170,17 +181,16 @@ def build_attr_statics(
         ),
         pool.f32(0.0),
         (
+            evoxc.reshape(attrs, (pop_size * count * attr_width,))
+            if attrs is not None and attr_width
+            else attrs
+        ),
+        (
             (pool.f32(tail[0]), pool.f32(tail[1]), pool.f32(1.0))
             if tail is not None
             else ()
         ),
     )
-
-
-#: Placeholder of a family with no attribute column (``attr_width == 0``) and of the
-#: standalone :func:`.digest.match_rows` entry, which knows no attribute width at all: a
-#: ``0``-width index block, so the caller takes its static ``attr_width == 0`` branch.
-_NO_ATTR_BLOCK = (0, 1, 0)
 
 
 def build_statics(
@@ -193,6 +203,7 @@ def build_statics(
     tag_scale: int,
     pad_centre: int,
     tail: tuple[float, float, float] | None,
+    attrs: "evoxc.SymbolicTensor | None" = None,
 ) -> MeasureStatics:
     """Build one family's :class:`MeasureStatics` (once per generation).
 
@@ -207,6 +218,9 @@ def build_statics(
         pad_centre (int): Padding sentinel of the centre side of the merge.
         tail (tuple[float, float, float] | None): ``(disjoint, weight, one)`` of the operator
             supplying the scalar tail, or ``None`` for an operator that has none.
+        attrs (evoxc.SymbolicTensor | None): ``(P, M, A) float32`` attribute block of this
+            family, hoisted into :attr:`AttrStatics.attrs_flat`; ``None`` when the caller has
+            no block to hand over.
 
     Returns:
         MeasureStatics: the family's static scaffold.
@@ -240,6 +254,7 @@ def build_statics(
             count=count,
             attr_width=attr_width,
             tail=tail,
+            attrs=attrs,
         ),
     )
 
