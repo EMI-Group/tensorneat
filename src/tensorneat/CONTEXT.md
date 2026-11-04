@@ -106,4 +106,5 @@ Current per-generation op counts: `forward` 112 traced ops (749 before the level
 | `./algorithm` | `NEAT` (ask/tell/speciation), `HyperNEAT` and substrates — batched, fixed-length scans, no vmap-over-control-flow. |
 | `./problem` | Task layer: `FuncFit`/`XOR`/`XOR3d`/`CustomFuncFit` and the evoxc-native `CartPole` rollout. |
 | `./pipeline.py` | Host-side compile site, generation loop, logging/checkpointing, `show`. |
-| `./__init__.py` | Re-exports `Pipeline` and the four subpackages. |
+| `./host_payload.py` | Host-only payload helpers: config rendering (`_jsonable`/`_config_value`/`_declared_shape`), batch tiling (`_repeat_batch`/`_run_network`), schedule overflow lookup and the batch-first `_one_individual` arity check. |
+| `./__init__.py` | Re-exports `Pipeline`, the four subpackages and `__version__`. |
