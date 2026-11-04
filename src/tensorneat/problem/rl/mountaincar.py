@@ -10,6 +10,7 @@ import evoxc.numpy as enp
 from ..base import BaseProblem, finalize_fitness, static_batch_size
 from ...common.errors import TensorNEATError
 from ._common import (
+    prepared_query,
     require_non_negative,
     require_positive,
     require_positive_int,
@@ -377,11 +378,13 @@ class MountainCarContinuous(BaseProblem):
         ``max_step`` timesteps, carry ``(obs (B, 2), alive (B,), total (B,),
         step ())`` with ``B = pop_size * repeat_times`` in individual-major
         order.
+        The policy query is prepared once for the whole rollout, so the per-pass
+        operands are not re-derived per timestep.
 
         Args:
             keys: One rank-0 evoxc key for the single reset draw.
             act_fn: Callable mapping ``(B, 2)`` observations to ``(B, 1)``
-                logits.
+                logits, or a prepared-query object exposing ``prepare``.
             pop_size: Number of individuals ``P`` (static).
 
         Returns:
@@ -393,6 +396,7 @@ class MountainCarContinuous(BaseProblem):
         """
         consts = self._constants()
         batch = pop_size * self.repeat_times
+        query = prepared_query(act_fn, batch)
         obs0 = self._reset(keys, consts, batch)
         init = (
             obs0,
@@ -402,7 +406,7 @@ class MountainCarContinuous(BaseProblem):
         )
         obs, _, total, _ = evoxc.while_loop(
             self._loop_cond(consts),
-            self._loop_body(act_fn, consts),
+            self._loop_body(query, consts),
             init,
         )
         return total, obs
@@ -467,7 +471,7 @@ class MountainCarContinuous(BaseProblem):
         return cond
 
     def _loop_body(
-        self, act_fn: Callable, consts: _MountainCarConstants
+        self, query: Callable, consts: _MountainCarConstants
     ) -> Callable:
         """Build the per-timestep body of the rollout loop.
 
@@ -488,8 +492,10 @@ class MountainCarContinuous(BaseProblem):
         would silently produce a ``(B, B)`` total).
 
         Args:
-            act_fn: Callable mapping ``(B, 2)`` observations to ``(B, 1)``
-                logits.
+            query: The policy query, prepared once for the whole rollout by
+                :func:`._common.prepared_query` so the per-pass operands are not
+                re-derived per timestep; maps ``(B, 2)`` observations to
+                ``(B, 1)`` logits.
             consts: The bundle from :meth:`_constants`.
 
         Returns:
@@ -506,7 +512,7 @@ class MountainCarContinuous(BaseProblem):
                 The next carry, same tree and leaf types.
             """
             obs, alive, total, index = carry
-            logits = act_fn(obs)
+            logits = query(obs)
             action = self._action_from_logits(logits)
             next_obs, done = self._advance(obs, action, consts)
             bonus = enp.where(done, consts.goal_reward, consts.zero)

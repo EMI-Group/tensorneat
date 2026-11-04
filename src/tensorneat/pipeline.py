@@ -34,9 +34,13 @@ rebuilds the genome -- and a lossy schedule is never used.
 
 Tiled batches: a problem tiles its dataset (``P * S`` rows) or its episodes
 (``P * R`` rows) over the population axis, while the genome kernels are
-batch-first over ``P``.  The ``act_fn`` this module hands the problem passes the
-schedule and the payload on at ``P`` rows and the tiled inputs as they arrive; the
-genome expands its sample-invariant operands itself
+batch-first over ``P``.  The ``act_fn`` this module hands the problem is a
+:class:`~tensorneat.host_payload._NetworkActFn`: ``act_fn(inputs)`` is one query
+through ``algorithm.prepare_forward``/``algorithm.forward_prepared`` at ``P`` rows
+with the tiled inputs as they arrive, and ``act_fn.prepare(batch_rows)`` derives a
+pass once for a problem that queries the same batch shape many times (a rollout
+loop), so the genome's loop-invariant operands are not re-derived per timestep.
+Either way the genome expands its sample-invariant operands itself
 (:func:`~tensorneat.genome.window.by_samples`), individual-major as the problem tiles.
 
 A "best genome" is **batch-first**: the selected individual is a one-individual
@@ -115,7 +119,6 @@ global executable.
 from __future__ import annotations
 
 import datetime
-import inspect
 import json
 import os
 import time
@@ -129,11 +132,11 @@ from .algorithm import BaseAlgorithm
 from .common import State, StatefulBaseClass, TensorNEATError, to_numpy
 from .genome.utils import GenomeTensors
 from .host_payload import (
+    _NetworkActFn,
     _config_value,
     _declared_shape,
     _jsonable,
     _one_individual,
-    _run_network,
     _schedule_overflow,
 )
 from .problem import BaseProblem
@@ -145,7 +148,7 @@ __all__ = ["Pipeline"]
 _RUNTIME_KEYS: tuple[str, ...] = ("pop", "generation", "species", "randkey")
 
 
-# The host payload helpers (``_run_network``, ``_one_individual``, ...) live in
+# The host payload helpers (``_NetworkActFn``, ``_one_individual``, ...) live in
 # :mod:`tensorneat.host_payload` and are imported above.
 
 # --------------------------------------------------------------------------- #
@@ -525,23 +528,6 @@ class Pipeline(StatefulBaseClass):
         entries["pop_size"] = int(self.algorithm.pop_size)
         return State(**entries)
 
-    def _forward_adapter(self) -> Callable[[Any, Any, Any, Any], Any]:
-        """Adapt ``algorithm.forward`` to ``(state, transformed, inputs, payload)``.
-
-        ``NEAT.forward`` accepts the payload explicitly (which is what lets the
-        *expanded* payload of a tiled batch reach the genome instead of the
-        unexpanded one on the state); ``HyperNEAT.forward`` hides its substrate
-        payload inside its schedule and takes three arguments.
-        ``inspect.signature`` runs once per build, never inside a trace.
-        """
-        if "pop" in inspect.signature(self.algorithm.forward).parameters:
-            return lambda state, transformed, inputs, payload: self.algorithm.forward(
-                state, transformed, inputs, payload
-            )
-        return lambda state, transformed, inputs, payload: self.algorithm.forward(
-            state, transformed, inputs
-        )
-
     def _generation_kernel(self, config: State, species_tree: Any) -> Callable:
         """Build the traced function of one whole generation.
 
@@ -559,7 +545,6 @@ class Pipeline(StatefulBaseClass):
         """
         algorithm = self.algorithm
         problem = self.problem
-        forward = self._forward_adapter()
         species_leaves = int(species_tree.num_leaves)
 
         def kernel(
@@ -593,11 +578,11 @@ class Pipeline(StatefulBaseClass):
                 pop=pop, generation=generation, species=species, randkey=tell_key
             )
             transformed = algorithm.transform(current, pop)
-
-            def act_fn(inputs: Any) -> Any:
-                """Run the whole population on one tiled batch of samples."""
-                return _run_network(current, forward, transformed, pop, inputs)
-
+            act_fn = _NetworkActFn(
+                lambda: (current, transformed, pop),
+                algorithm.forward_prepared,
+                algorithm.prepare_forward,
+            )
             fitness = problem.evaluate(current, eval_key, act_fn, transformed)
             next_state = algorithm.tell(current, fitness)
             overflow = _schedule_overflow(transformed)
@@ -889,13 +874,15 @@ class Pipeline(StatefulBaseClass):
             executable, *(evoxc.from_numpy(np.ascontiguousarray(f)) for f in fields)
         )
 
-    def _constant_act_fn(self, state: State, payload: GenomeTensors) -> Callable:
-        """An ``act_fn(batch) -> outputs`` that carries its payload as graph constants.
+    def _constant_act_fn(self, state: State, payload: GenomeTensors) -> _NetworkActFn:
+        """An ``act_fn`` that carries its payload as graph constants.
 
-        It is valid inside *any* trace -- including the one a problem builds for
-        its ``show`` report -- because it rebuilds ``payload`` with
-        ``evoxc.constant`` and re-derives the schedule there; a concrete tensor
+        Its ``source()`` rebuilds ``payload`` with ``evoxc.constant`` and re-derives
+        the schedule **per call**, so it is valid inside *any* trace -- including the
+        one a problem builds for its ``show`` report -- because a concrete tensor
         captured in a closure would raise ``evoxc.TraceError`` instead.
+        A one-shot caller (func-fit ``show``) therefore behaves exactly as before,
+        while a ``prepare``-based caller derives the payload, state and schedule once.
 
         ``payload`` is taken **as given** -- already batch-first at its own
         population size: :meth:`show` passes one individual, ``_analyse`` the whole
@@ -903,20 +890,23 @@ class Pipeline(StatefulBaseClass):
         """
         config = self._static_config(state)
         algorithm = self.algorithm
-        forward = self._forward_adapter()
         arrays = tuple(np.ascontiguousarray(to_numpy(field)) for field in payload)
 
-        def act_fn(inputs: Any) -> Any:
-            """Run the baked genome over one batch of inputs."""
+        def source() -> tuple[State, Any, GenomeTensors]:
+            """Bake the payload as constants and derive its schedule in this trace.
+
+            Returns:
+                ``(state, transformed, payload)`` with the payload as graph constants.
+            """
             one = GenomeTensors(
                 *(evoxc.constant(evoxc.from_numpy(array)) for array in arrays)
             )
             network = config.register(pop=one)
-            return _run_network(
-                network, forward, algorithm.transform(network, one), one, inputs
-            )
+            return network, algorithm.transform(network, one), one
 
-        return act_fn
+        return _NetworkActFn(
+            source, algorithm.forward_prepared, algorithm.prepare_forward
+        )
 
     def show(self, state: State, best: Any) -> None:
         """Print the behaviour of one genome.

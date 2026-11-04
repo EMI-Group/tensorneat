@@ -9,7 +9,13 @@ import evoxc.numpy as enp
 
 from ..base import BaseProblem, finalize_fitness, static_batch_size
 from ...common.errors import TensorNEATError
-from ._common import require_positive, require_positive_int, returns_of, to_numpy
+from ._common import (
+    prepared_query,
+    require_positive,
+    require_positive_int,
+    returns_of,
+    to_numpy,
+)
 
 __all__ = ["Pendulum"]
 
@@ -327,11 +333,13 @@ class Pendulum(BaseProblem):
         ``evoxc.random.uniform`` and runs one ``evoxc.while_loop`` over
         ``max_step`` timesteps, carry ``(obs (B, 2), total (B,), step ())`` with
         ``B = pop_size * repeat_times`` in individual-major order.
+        The policy query is prepared once for the whole rollout, so the per-pass
+        operands are not re-derived per timestep.
 
         Args:
             keys: One rank-0 evoxc key for the single reset draw.
             act_fn: Callable mapping ``(B, 2)`` observations to ``(B, 1)``
-                logits.
+                logits, or a prepared-query object exposing ``prepare``.
             pop_size: Number of individuals ``P`` (static).
 
         Returns:
@@ -343,6 +351,7 @@ class Pendulum(BaseProblem):
         """
         consts = self._constants()
         batch = pop_size * self.repeat_times
+        query = prepared_query(act_fn, batch)
         obs0 = self._reset(keys, consts, batch)
         init = (
             obs0,
@@ -351,7 +360,7 @@ class Pendulum(BaseProblem):
         )
         obs, total, _ = evoxc.while_loop(
             self._loop_cond(consts),
-            self._loop_body(act_fn, consts),
+            self._loop_body(query, consts),
             init,
         )
         return total, obs
@@ -423,7 +432,7 @@ class Pendulum(BaseProblem):
 
     def _loop_body(
         self,
-        act_fn: Callable,
+        query: Callable,
         consts: _PendulumConstants,
     ) -> Callable:
         """Build the per-timestep body of the rollout loop.
@@ -439,8 +448,10 @@ class Pendulum(BaseProblem):
         episode is scored over the full horizon.
 
         Args:
-            act_fn: Callable mapping ``(B, 2)`` observations to ``(B, 1)``
-                logits.
+            query: The policy query, prepared once for the whole rollout by
+                :func:`._common.prepared_query` so the per-pass operands are not
+                re-derived per timestep; maps ``(B, 2)`` observations to
+                ``(B, 1)`` logits.
             consts: The bundle from :meth:`_constants`.
 
         Returns:
@@ -457,7 +468,7 @@ class Pendulum(BaseProblem):
                 The next carry, same tree and leaf types.
             """
             obs, total, index = carry
-            logit = act_fn(obs)
+            logit = query(obs)
             next_obs, cost = self._advance(obs, logit, consts)
             return (
                 next_obs,

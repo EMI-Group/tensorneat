@@ -10,6 +10,7 @@ import evoxc.numpy as enp
 from ..base import BaseProblem, finalize_fitness, static_batch_size
 from ...common.errors import TensorNEATError
 from ._common import (
+    prepared_query,
     require_non_negative,
     require_positive,
     require_positive_int,
@@ -342,11 +343,13 @@ class CartPole(BaseProblem):
         ``max_step`` timesteps, carry ``(obs (B, 4), alive (B,), total (B,),
         step ())`` with ``B = pop_size * repeat_times`` in individual-major
         order.
+        The policy query is prepared once for the whole rollout, so the per-pass
+        operands are not re-derived per timestep.
 
         Args:
             keys: One rank-0 evoxc key for the single reset draw.
             act_fn: Callable mapping ``(B, 4)`` observations to ``(B, 2)``
-                logits.
+                logits, or a prepared-query object exposing ``prepare``.
             pop_size: Number of individuals ``P`` (static).
 
         Returns:
@@ -358,6 +361,7 @@ class CartPole(BaseProblem):
         """
         consts = self._constants()
         batch = pop_size * self.repeat_times
+        query = prepared_query(act_fn, batch)
         obs0 = evoxc.random.uniform(
             keys,
             (batch, _OBS_DIM),
@@ -372,7 +376,7 @@ class CartPole(BaseProblem):
         )
         obs, _, total, _ = evoxc.while_loop(
             self._loop_cond(consts),
-            self._loop_body(act_fn, consts),
+            self._loop_body(query, consts),
             init,
         )
         return total, obs
@@ -407,7 +411,7 @@ class CartPole(BaseProblem):
         return cond
 
     def _loop_body(
-        self, act_fn: Callable, consts: _CartPoleConstants
+        self, query: Callable, consts: _CartPoleConstants
     ) -> Callable:
         """Build the per-timestep body of the rollout loop.
 
@@ -422,8 +426,10 @@ class CartPole(BaseProblem):
         separate flag, which is why no post-loop poison reduction is needed.
 
         Args:
-            act_fn: Callable mapping ``(B, 4)`` observations to ``(B, 2)``
-                logits.
+            query: The policy query, prepared once for the whole rollout by
+                :func:`._common.prepared_query` so the per-pass operands are not
+                re-derived per timestep; maps ``(B, 4)`` observations to
+                ``(B, 2)`` logits.
             consts: The bundle from :meth:`_constants`.
 
         Returns:
@@ -440,7 +446,7 @@ class CartPole(BaseProblem):
                 The next carry, same tree and leaf types.
             """
             obs, alive, total, index = carry
-            logits = act_fn(obs)
+            logits = query(obs)
             force = self._force_from_logits(logits, consts)
             next_obs, dead = self._advance(obs, force, consts)
             reward = enp.where(

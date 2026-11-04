@@ -141,7 +141,10 @@ class BaseProblem(StatefulBaseClass):
                 ``act_fn(batch, *input_shape) -> (batch, *output_shape)`` with
                 the batch on axis 0. ``batch`` is not necessarily ``P``: func
                 fit tiles the dataset (``P * S``) and rollouts repeat episodes
-                (``P * R``).
+                (``P * R``). A problem that queries the network repeatedly may
+                call ``act_fn.prepare(batch_rows)`` once and use the returned
+                query, which derives the pass's loop-invariant operands once; a
+                callable without ``prepare`` is used as given.
             transformed: Batch-first execution schedule from
                 ``Genome.transform``. The only thing a problem may read from it
                 is ``static_batch_size(transformed)``, which is schema

@@ -14,9 +14,9 @@ Two rules keep it honest:
   would break ``import tensorneat``); they are only legal inside a helper that
   the caller invokes while a trace is active.
 
-``returns_of`` is therefore the one traced helper here -- it is inlined into the
-caller's graph exactly like ``problem.base.finalize_fitness`` -- while every
-other name runs on the host only.
+``returns_of`` and ``prepared_query`` are therefore the two traced helpers here --
+they are inlined into the caller's graph exactly like
+``problem.base.finalize_fitness`` -- while every other name runs on the host only.
 """
 
 from typing import Any
@@ -29,6 +29,7 @@ import evoxc.numpy as enp
 from ...common.errors import TensorNEATError
 
 __all__ = [
+    "prepared_query",
     "require_non_negative",
     "require_positive",
     "require_positive_int",
@@ -121,6 +122,28 @@ def require_non_negative(owner: str, name: str, value: Any) -> float:
     if number < 0.0:
         raise TensorNEATError(f"{owner}: {name} must be non-negative, got {number}")
     return number
+
+
+def prepared_query(act_fn: Any, batch: int) -> Any:
+    """Prepare ``act_fn``'s policy pass once for the whole rollout.
+
+    A rollout queries the same network once per timestep, so deriving the
+    loop-invariant operands per query would repeat that work ``max_step`` times;
+    this returns the prepared-query callable instead.
+    A genome-free closure (a unit suite's policy, a user kernel) exposes no
+    ``prepare`` and is returned unchanged, so ``evaluate`` keeps working with a
+    plain callable.
+
+    Args:
+        act_fn: The ``act_fn`` the problem received.
+        batch: Rows one query will carry, ``B = P * R`` (static).
+
+    Returns:
+        ``act_fn.prepare(batch)`` when ``act_fn`` supports it, else ``act_fn``.
+    """
+    if getattr(act_fn, "prepare", None) is None:
+        return act_fn
+    return act_fn.prepare(batch)
 
 
 def returns_of(total: Any, pop_size: int, repeat_times: int) -> Any:

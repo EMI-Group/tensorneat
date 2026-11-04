@@ -330,26 +330,19 @@ class HyperNEAT(BaseAlgorithm):
     ) -> Any:
         """Derive the substrate pass's loop-invariant operands, for many queries.
 
+        The substrate schedule is at ``P`` rows and a tiled batch is the substrate genome's
+        own ``samples`` axis, so ``samples`` is forwarded to the genome unchanged.
+
         Args:
             state: Current algorithm state.
             transformed: :class:`SubstrateSchedule` returned by :meth:`transform`.
-            pop: Ignored -- the substrate payload lives inside ``transformed``, which is
-                already expanded to the query rows; the argument keeps the algorithm
-                signature uniform.
-            samples: Must be ``1``: the substrate schedule's population axis already
-                carries every query row, so there is no sample axis to expand.
+            pop: Ignored -- the substrate payload lives inside ``transformed``; the argument
+                keeps the algorithm signature uniform.
+            samples: Static tiling factor of the ``pop_size * samples`` query rows.
 
         Returns:
             The substrate genome's opaque prepared record, for :meth:`forward_prepared`.
-
-        Raises:
-            TensorNEATError: If ``samples`` is not ``1``.
         """
-        if samples != 1:
-            raise TensorNEATError(
-                "HyperNEAT.prepare_forward: the substrate schedule is already expanded to "
-                f"the query rows, so samples must be 1, got {samples!r}"
-            )
         return self.hyper_genome.prepare_pass(
             state,
             transformed.schedule,
@@ -357,7 +350,7 @@ class HyperNEAT(BaseAlgorithm):
             transformed.node_attrs,
             transformed.conn_keys,
             transformed.conn_attrs,
-            1,
+            samples,
         )
 
     def forward_prepared(

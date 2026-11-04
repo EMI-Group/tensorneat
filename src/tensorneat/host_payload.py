@@ -2,10 +2,11 @@
 
 Everything here is host-only Python, but some of it runs *inside* an ``evoxc``
 trace: :func:`_jsonable` and friends render configuration values for ``config.txt``;
-the tiling helpers -- :func:`_slice_batch` and :func:`_run_network` -- are the body of
-the ``act_fn`` the pipeline hands a problem, i.e. plain Python that emits ops into the
-trace that calls it and walks a batch-first payload only along the leaves a forward
-pass reads; :func:`_one_individual` normalises a payload to its four batch-first arrays.
+the query helpers -- :class:`_NetworkActFn`, :func:`_prepared_query` and
+:func:`_slice_batch` -- are what the pipeline hands a problem as ``act_fn``, i.e.
+plain Python that emits ops into the trace that calls it and walks a batch-first
+payload only along the leaves a forward pass reads; :func:`_one_individual`
+normalises a payload to its four batch-first arrays.
 
 The tiled batch itself is *not* built here: a problem hands the network ``P * S`` rows
 while the schedule and the payload stay at ``P``, and the genome expands the difference
@@ -25,11 +26,12 @@ from .genome.utils import GenomeTensors
 
 __all__ = [
     "EVAL_CHUNK_ROWS",
+    "_NetworkActFn",
     "_config_value",
     "_declared_shape",
     "_jsonable",
     "_one_individual",
-    "_run_network",
+    "_prepared_query",
     "_schedule_overflow",
     "_slice_batch",
 ]
@@ -117,7 +119,7 @@ def _schedule_overflow(schedule: Any) -> Any:
 def _slice_batch(tree: Any, start: int, stop: int, pop_size: int) -> Any:
     """Slice a batch-first tree to the individuals ``[start, stop)``.
 
-    The static half of the chunked evaluate pass in :func:`_run_network`: a leaf
+    The static half of the chunked evaluate pass in :func:`_prepared_query`: a leaf
     carrying the population axis is sliced and a leaf shared by the whole population
     (a static ordering or key table, which has no such axis) comes through untouched.
     The bounds are static ints, so the slice is one graph op per leaf.  The walk is
@@ -136,43 +138,112 @@ def _slice_batch(tree: Any, start: int, stop: int, pop_size: int) -> Any:
     return evoxc.tree_map(take, tree)
 
 
-def _run_network(
+class _NetworkActFn:
+    """The ``act_fn`` a problem receives: one query, or one pass prepared per batch shape.
+
+    A problem that queries one network many times -- a rollout calls the policy once
+    per timestep -- calls :meth:`prepare` **before** its loop and queries the returned
+    callable inside it, so the loop-invariant genome prelude is derived once per
+    generation instead of once per timestep.
+    ``act_fn(inputs)`` stays the one-shot path (func fit, ``show``): it prepares a pass
+    for exactly that batch and queries it once, i.e. the pre-hoisting behaviour.
+
+    The collaborator triple is injected, so the class stays algorithm-agnostic:
+    ``source()`` returns ``(state, transformed, payload)`` inside the active trace,
+    ``forward`` is ``algorithm.forward_prepared`` and ``prepare`` is
+    ``algorithm.prepare_forward``.
+    """
+
+    def __init__(
+        self,
+        source: Callable[[], tuple[State, Any, GenomeTensors]],
+        forward: Callable[..., Any],
+        prepare: Callable[..., Any],
+    ) -> None:
+        """Store the trace-time source and the algorithm's prepared-pass pair.
+
+        Args:
+            source: Zero-argument callable returning ``(state, transformed, payload)``;
+                called once per :meth:`prepare`, always inside the active trace.
+            forward: ``algorithm.forward_prepared``.
+            prepare: ``algorithm.prepare_forward``.
+        """
+        self._source = source
+        self._forward = forward
+        self._prepare = prepare
+
+    def __call__(self, inputs: Any) -> Any:
+        """Query the network once on ``inputs``, preparing a pass for exactly its batch.
+
+        Args:
+            inputs: ``(P * S, *input_shape)`` input activations, tiled individual-major.
+
+        Returns:
+            ``(P * S, *output_shape)`` outputs.
+        """
+        return self.prepare(int(inputs.shape[0]))(inputs)
+
+    def prepare(self, batch_rows: int) -> Callable[[Any], Any]:
+        """Prepare one forward pass for a tiled batch of ``batch_rows`` rows.
+
+        Called once per generation by a problem that queries the network repeatedly;
+        the returned query may then be called any number of times on inputs of exactly
+        that row count.
+
+        Args:
+            batch_rows (int): Rows the pass will be queried with, ``P * S``.
+
+        Returns:
+            Callable: ``query(inputs) -> outputs`` for that one batch shape.
+        """
+        state, transformed, payload = self._source()
+        return _prepared_query(
+            state,
+            self._forward,
+            self._prepare,
+            transformed,
+            payload,
+            int(batch_rows),
+        )
+
+
+def _prepared_query(
     state: State,
-    forward: Callable[[Any, Any, Any, Any], Any],
+    forward: Callable[..., Any],
+    prepare: Callable[..., Any],
     transformed: Any,
     payload: GenomeTensors,
-    inputs: Any,
-) -> Any:
-    """Evaluate a population on a tiled batch (the body of every ``act_fn``).
+    batch_rows: int,
+) -> Callable[[Any], Any]:
+    """Prepare one forward pass for ``batch_rows`` tiled rows and return its query.
 
-    ``transformed``/``payload`` arrive batch-first over ``P`` and stay there;
-    ``inputs`` is ``(P * S, *input_shape)``.  The ``forward`` adapter
-    (:meth:`Pipeline._forward_adapter`) is handed both at their native ``P`` rows and
-    the tiled inputs as they arrive: the genome derives the sample count from the two
-    static shapes and expands its own sample-invariant operands, so no repeat is
+    ``transformed``/``payload`` arrive batch-first over ``P`` and stay there, the query
+    is asked for ``P * S = batch_rows`` rows, and the genome derives ``S`` from the two
+    static shapes and expands its own sample-invariant operands -- so no repeat is
     emitted here and nothing has to be kept in step with a ``forward``'s read set.
 
     The one regrouping that remains is a chunk budget: a tiled block wider than
     :data:`EVAL_CHUNK_ROWS` rows is evaluated in groups of individuals whose own block
-    fits that budget, and the group outputs are concatenated in row order.  This is
-    bit-identical because every op of a ``forward`` is row-local -- ``gather`` /
-    ``multiply`` / a reduce over the window axis / ``select`` / the elementwise
-    ``output_transform`` -- and because the one population-wide quantity, the level
-    ``while_loop``'s depth bound, is a *maximum*: a group's maximum never exceeds the
-    global one and does bound each of its own rows, so the only level a row can miss is
-    one beyond the static ``max_depth``, exactly as in the unchunked pass.
+    fits that budget, the group passes are prepared **once at trace time**, and the
+    group outputs are concatenated in row order.  This is bit-identical because every
+    op of a ``forward`` is row-local -- ``gather`` / ``multiply`` / a reduce over the
+    window axis / ``select`` / the elementwise ``output_transform`` -- and because the
+    one population-wide quantity, the level ``while_loop``'s depth bound, is a
+    *maximum*: a group's maximum never exceeds the global one and does bound each of
+    its own rows, so the only level a row can miss is one beyond the static
+    ``max_depth``, exactly as in the unchunked pass.
 
-    The groups are a Python loop, so every group's entry-block intermediates stay
-    alive until the generation returns; that is the interpreter's per-block live
-    set, and nesting an ``evoxc.scan`` around the forward's level ``while_loop``
-    would recover the peak but needs the control-flow nesting this package forbids
-    -- only ``test/backends`` could prove it portable, so it stays out.
+    The groups are a Python loop, so every group's entry-block intermediates stay alive
+    until the generation returns; that is the interpreter's per-block live set, and
+    nesting an ``evoxc.scan`` around the forward's level ``while_loop`` would recover
+    the peak but needs the control-flow nesting this package forbids -- only
+    ``test/backends`` could prove it portable, so it stays out.
 
     Raises:
-        TensorNEATError: If the batch is not a positive multiple of ``P``.
+        TensorNEATError: If ``batch_rows`` is not a positive multiple of ``P``.
     """
     row_count = int(payload.node_keys.shape[0])
-    batch = int(inputs.shape[0])
+    batch = int(batch_rows)
     factor, remainder = divmod(batch, row_count)
     if remainder or factor < 1:
         raise TensorNEATError(
@@ -180,27 +251,62 @@ def _run_network(
             f"not a positive multiple of the population {row_count}; a tiled "
             "dataset must be individual-major over the population axis"
         )
+
+    def guard(inputs: Any) -> None:
+        """Reject a query whose static row count is not the prepared one.
+
+        Raises:
+            TensorNEATError: If ``inputs`` does not carry ``batch_rows`` rows.
+        """
+        rows = int(inputs.shape[0])
+        if rows != batch:
+            raise TensorNEATError(
+                f"this forward pass was prepared for {batch} row(s) but the query was "
+                f"asked for {rows}; a prepared pass serves exactly one batch shape, so "
+                "prepare a new pass for a different row count"
+            )
+
     chunk = (
         row_count
         if row_count * factor <= EVAL_CHUNK_ROWS
         else max(1, EVAL_CHUNK_ROWS // factor)
     )
     if chunk >= row_count:
-        return forward(state, transformed, inputs, payload)
-    outputs = []
+        prepared = prepare(state, transformed, payload, factor)
+
+        def query(inputs: Any) -> Any:
+            """Evaluate the whole population on the prepared batch."""
+            guard(inputs)
+            return forward(state, transformed, prepared, inputs)
+
+        return query
+
+    groups = []
     for start in range(0, row_count, chunk):
         stop = min(start + chunk, row_count)
         # Individual ``p`` owns the tiled rows ``p * factor .. (p + 1) * factor - 1``
         # (individual-major), so the group's rows are one contiguous block of ``inputs``.
-        outputs.append(
-            forward(
-                state,
-                _slice_batch(transformed, start, stop, row_count),
-                inputs[start * factor : stop * factor],
-                _slice_batch(payload, start, stop, row_count),
+        group_transformed = _slice_batch(transformed, start, stop, row_count)
+        group_payload = _slice_batch(payload, start, stop, row_count)
+        groups.append(
+            (
+                start * factor,
+                stop * factor,
+                group_transformed,
+                prepare(state, group_transformed, group_payload, factor),
             )
         )
-    return evoxc.concatenate(outputs, axis=0)
+
+    def query_chunked(inputs: Any) -> Any:
+        """Evaluate every prepared group on its contiguous block of the batch."""
+        guard(inputs)
+        outputs = [
+            forward(state, group_transformed, prepared, inputs[begin:end])
+            for begin, end, group_transformed, prepared in groups
+        ]
+        return evoxc.concatenate(outputs, axis=0)
+
+    return query_chunked
 
 
 def _one_individual(payload: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
