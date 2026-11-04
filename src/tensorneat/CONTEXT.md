@@ -61,6 +61,7 @@ A non-zero `Transformed.edge_overflow` means the schedule dropped connections, s
 The check is host-side on the graph's returned maximum: a traced value never drives Python control flow.
 
 ## Key Discipline
+`Pipeline.setup` creates the one root key (`evoxc.random.key(seed)`); `NEAT.setup` then splits it once inside the init graph so `init_key` draws the whole population's attributes and the other half is carried into generation 0.
 Exactly one `evoxc.random.split` happens at the pipeline boundary per generation: `eval_key` goes to the problem and the advanced key goes to `tell`, which advances it again before the generation returns.
 `step` stores that returned key on the new state, so one `step` is exactly one generation of key advance and `(seed, config, shape)` reproduces a run.
 
