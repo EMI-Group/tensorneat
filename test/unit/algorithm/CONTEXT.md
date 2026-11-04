@@ -11,9 +11,9 @@ Comparison against the pre-rewrite operator is `../../parity`'s job, not this di
 `test_spawn.py` (69) — both allocators and the two spawn building blocks.
 `test_speciation.py` (16) — the two speciation scans, dead-slot handling, the leftover and counter rules, the split-centre shape contract.
 `test_parent_selection.py` (22) — survivor prefix, elite pinning, father-wins-tie, per-block draws, `elite_mask`.
-`test_neat_tell.py` (33 + 4 strict xfail) — `_sanitize_fitness`, `tell` order/determinism/shape preservation, stagnation, `ask`/`transform`/`forward` wiring, `_batched` chunking, constructor validation.
+`test_neat_tell.py` (37) — `_sanitize_fitness`, `tell` order/determinism/shape preservation, stagnation, `ask`/`transform`/`forward` wiring, `_batched` chunking, constructor validation.
 `conftest.py` — module fixtures, the `SpeciesState`/`State` table factories, and the two graph runners.
-Whole directory: 140 passed, 4 xfailed, 0 failed, 0 skipped in ~3.4 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
+Whole directory: 144 passed, 0 xfailed, 0 failed, 0 skipped in ~28 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
 
 ## Fixtures (`conftest.py`)
 Module fixtures return modules only: `species` (`tensorneat.algorithm.neat.species`), `neat_module` (`neat.py`), `common`, `errors`, `payloads` (`support.payloads`).
@@ -35,18 +35,13 @@ The residual lands on the first **live** slot (slot `0` only after the descendin
 `stagnation_reference` and `sanitize_reference` are the documented closed forms.
 The father-wins-tie rule is pinned by *reproducing* the draw: the test runs the documented `evoxc.random.randint(key, (S,2,P), 0, survive)` plus `flat_gather` in its own one-op graph, then asserts `winner` is the father and `loser` the mother on an all-tied table.
 
-## Pinned source defect (4 strict xfails in `test_neat_tell.py`)
-`src/tensorneat/algorithm/neat/neat.py::NEAT._new_gene_keys` reshapes the `(P,)` result of `genome.max_node_key`/`max_conn_marker` to `()`, so `NEAT.tell` raises `evoxc.ShapeError: reshape: element counts differ: 8 vs 1` for any `pop_size > 1`.
-Reproducer: `NEAT(genome=payloads.default_genome(), pop_size=8, species_size=4).setup(State(randkey=evoxc.random.key(42)))`, then trace `tell` on a `(8,)` fitness vector; `pop_size == 1` works.
-The four tests that drive a real `tell` carry `@pytest.mark.xfail(strict=True, reason=TELL_DEFECT)` and flip to XPASS (a failure) the moment `src/` is fixed; the rest of the `tell` coverage runs through the species-level kernels and a `pop_size == 1` state.
-
 ## Gotchas for agents
 pytest **hangs** (no output, needs a kill) when a test lets an exception escape an evoxc graph under the default `--tb=auto`; use `--tb=short` while debugging a deliberately broken kernel.
-`import tensorneat` still loads the legacy JAX `src/tensorneat/pipeline.py` through `tensorneat/__init__`, so this suite needs `jax` installed until that file becomes evoxc-native; no test imports or uses jax, and the per-test guard in `../conftest.py` stays honest because the import happens at collection time.
+The suite imports `tensorneat` without `jax`: `src/tensorneat/pipeline.py` is evoxc-native and the per-test guard in `../conftest.py` keeps any optional framework out of `sys.modules`.
 A `generation` value registered as a host 0-d numpy constant cannot be consumed by `_kernels.scalar_f32` inside a trace; send it as a positional graph input instead.
 `evoxc.Tensor` has no `__array__`, so `np.asarray` on a kernel result silently yields a 0-d object array — unwrap with `support.runner.to_numpy` (or `.numpy()`).
 Shapes stay small (`pop ≤ 8`, `max_nodes ≤ 8`) except where a test exists specifically to trip a static bound; `test_neat_tell.py` shares one `NEAT.setup` per test, which is the slowest thing in the directory (~0.5 s).
-Files stay under ~1000 lines (`test_neat_tell.py` sits at 1005, `test_speciation.py` at 1000); one module per `SpeciesController`/`NEAT` responsibility, not one per source file.
+Files stay under ~1000 lines (`test_neat_tell.py` sits at 987, `test_speciation.py` at 1000); one module per `SpeciesController`/`NEAT` responsibility, not one per source file.
 
 ## Known documentation drift in `src/` (reported upward, not asserted here)
 `_kernels.pair_parents` caps the survivor count as `max(min(member_count, pop_size), 1)`, which differs from the documented `min(member_count, pop_size)` only for a live species with `member_count == 0`; such a table never receives a block, so the case is unreachable through the public path.

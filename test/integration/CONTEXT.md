@@ -2,16 +2,14 @@
 
 ## Intent
 Prove the *assembled* library rather than its kernels: a `Pipeline` built from the documented public API evolves XOR, reproduces itself from `(seed, config, shapes)`, survives a shape-signature change, and leaves a loadable checkpoint.
-Seventeen tests across four modules drive the real `Pipeline` (`setup` → `step` / `auto_run`) on the numpy reference interpreter and assert on what the pipeline returns or writes, never on an intermediate kernel.
+Twenty tests across five modules drive the real `Pipeline` (`setup` → `step` / `auto_run`) on the numpy reference interpreter and assert on what the pipeline returns, prints or writes, never on an intermediate kernel.
 No `jax`/`torch`, no network, no GPU, no wall-clock assertions: a run is judged by generations, fitness, payload shapes and compile counts.
 Every module carries `pytestmark = [pytest.mark.slow]`; `pytest -m slow` selects the directory, the default gate leaves it out.
 
-## Current state: the whole directory skips, structurally
-`src/tensorneat/pipeline.py` is still the pre-rewrite JAX implementation, so `conftest.py::missing_evoxc_pipeline_features(tn)` reports what is missing and `require_evoxc_pipeline(tn)` raises `pytest.skip`.
+## Current state: every test runs
+`src/tensorneat/pipeline.py` is the evoxc compile site, so `conftest.py::missing_evoxc_pipeline_features(tn)` returns an empty list and `require_evoxc_pipeline(tn)` does not skip; all 20 tests run on the numpy backend.
 The probe is structural, never hardcoded: it inspects `inspect.signature(tn.Pipeline.__init__)` for the four documented compile kwargs (`PIPELINE_COMPILE_KWARGS = ("backend", "device", "compile_options", "is_detailed")`), checks whether the loaded `tensorneat.pipeline` module binds `jax`/`jnp`, and scans that module's source file for a top-level `import jax` (it never imports jax to find out).
-The autouse fixture `_evoxc_pipeline_required(tn)` applies the probe to every test in the directory, so a module that forgets the guard still skips instead of erroring.
-Today's reason, identical for all 17 tests: `pipeline.py is still the legacy JAX implementation: Pipeline.__init__ lacks the 'backend' parameter; … lacks the 'device' …; … 'compile_options' …; … 'is_detailed' …; tensorneat.pipeline binds jax, jnp; tensorneat.pipeline:5 has a top-level import jax, jax.numpy as jnp; the evoxc compile site has not landed`.
-The list is empty once `pipeline.py` becomes evoxc-native, so the suite flips to running by itself — no test edit, no skip to delete.
+The autouse fixture `_evoxc_pipeline_required(tn)` applies the probe to every test in the directory, so a regression that reintroduces an evoxc-free pipeline reports a skip naming the missing features instead of a directory of opaque errors.
 No module imports `tensorneat` or a `support` module at module scope: `tn`, `payloads` and `runner` are `support.lazy.require` fixtures, and only `numpy`/`json`/`pytest` plus `from integration.conftest import …` appear at module scope.
 
 ## How a test builds and drives a `Pipeline`
@@ -48,29 +46,31 @@ The recipe is validated today against a hand-written numpy forward pass (max abs
 | `./test_determinism.py` | 5 | Same seed ⇒ bit-identical trajectory and `state.pop` payloads; a different seed differs; disturbing the global `numpy.random` state between two runs changes nothing; a run neither reseeds nor consumes the global stream; `state.randkey` advances and is a function of the seed. Eight generations per comparison, exact equality (NaN-padded attrs compared with `equal_nan=True`, no tolerance). |
 | `./test_shape_rebuild.py` | 4 | `pop_size` 8/16 each evolve at their own width, and a fresh 8-wide pipeline still works after the 16-wide one; widening `max_nodes` 8→16 with `max_conns` 16→32 and `max_in_degree` 4→8 produces the wider padded payload with zero `edge_overflow`; a second step of the same signature adds no compile call while a pipeline of a different width does; an extra generation on an already-run pipeline keeps the population scorable at its width. |
 | `./test_checkpoint.py` | 3 | `is_save=True` with `save_dir=tmp_path` writes a JSON `config.txt`, a `log.txt` with the documented header and one line per generation, `genomes/<generation>.npz` and `genomes/best_genome.npz`; the log's `Generation`/`Max` columns agree with `fitness_history`; the npz's four split arrays plus its `fitness` scalar round-trip through `numpy.load` into a P=1 payload that re-scores to the recorded and logged value. |
+| `./test_show_best.py` | 3 | The documented reporting tail `state, best = auto_run(state)` → `show(state, best)`: a one-generation run's best prints the XOR report (`input:/target:/predict:` for all four samples plus one finite `loss:` line); the best is the batch-first `(1, max_nodes)`/`(1, max_conns, key_width)` payload and `show` accepts the bare per-individual rows a checkpoint stores as the same individual (character-identical reports); `show_problem_details=True` reports `Generation: 1,` and prints no `<label> failed (...)` line, so the `_constant_act_fn` diagnostics path runs to completion. |
 
 ## Requirements this suite imposes on `pipeline.py` (cross-node)
 `Pipeline.step` must return a tuple with the new `State` first and the `(pop_size,)` fitness last; `step_once` rejects anything else with a message quoting that contract.
 `Pipeline.auto_run` must return `(state, best_genome)` with the best a P=1 batched `GenomeTensors` padded to the static signature, and must record the run's best fitness so the checkpoint and the re-score agree.
 `Pipeline` must expose `pop_size`, and must keep `State` keys `pop`, `generation`, `randkey` (`NEAT.setup`/`tell` own them).
+`Pipeline.show` must accept `auto_run`'s batch-first `best_genome` unchanged and the same genome as bare per-individual rows, print the problem's report and return `None`; `show_problem_details=True` must not abort a run when a diagnostics hook raises (it reports the failure on stdout instead).
 The compile site must reach the compiler through `evoxc.build`, `build_cached`, `lower` or `compile`; otherwise `test_a_second_generation_of_the_same_shape_does_not_compile_again` skips, naming exactly that requirement.
 `is_save` must keep the legacy layout (`config.txt` as `json.dumps(show_config(), indent=4)`, the `LOG_COLUMNS` header, one appended line per generation, per-generation and best-genome npz files), and `best_genome.npz` must store `node_keys`/`node_attrs`/`conn_keys`/`conn_attrs` plus a scalar `fitness`, because the payload has no bitcast and cannot be packed into a mixed-dtype `nodes`/`conns` pair.
 `pipeline.fitness_history` is optional: `fitness_history()` falls back to `<save_dir>/log.txt`, which `is_save=True` always writes.
 
 ## Budget
-Measured while skipping: `pytest test/integration -m slow` is 17 skipped in ~0.6 s; the whole `-m slow` gate is ~1.1 s plus the release-gate failure it does not own.
-Once `pipeline.py` lands the directory is budgeted under ~20 s, dominated by `test_xor_run::test_auto_run_reaches_the_xor_fitness_target` (`pop_size=100`, up to 250 generations, one compile per shape); every other module runs 1–10 generations at `pop_size≤16`.
-The convergence budget is calibrated from the legacy curve in `benchmarks/RESULTS.md` (`pop_size=100` reached `mse ≤ 0.1` at generation 77 and `mse ≈ 0.0099` by generation 150); the evoxc rewrite draws different numbers, so it must be re-measured the first time the module actually runs.
+Measured on this machine: `pytest -m slow` is **21 passed, 4 skipped in ~86 s** — the 20 tests here plus the release gate's XOR run; the 4 skips are the four JAX parity modules.
+`test_xor_run::test_auto_run_reaches_the_xor_fitness_target` dominates (`pop_size=100`, up to 250 generations, one compile per shape); every other module runs 1–10 generations at `pop_size≤16`, and `./test_show_best.py` spends one generation per test case.
+The convergence budget is calibrated from the legacy curve in `benchmarks/RESULTS.md` (`pop_size=100` reached `mse ≤ 0.1` at generation 77 and `mse ≈ 0.0099` by generation 150); the evoxc rewrite reaches its target inside the configured budget on this machine.
 
 ## Known issues / uncertainty
-The convergence budget above is evidence-based, not measured on evoxc — the first real run is the calibration.
+The convergence budget is the legacy-calibrated one; the evoxc run reaches the target inside it, so it stays headroom rather than a measured floor.
 `test_step_advances_one_generation_and_reports_one_fitness_per_individual` assumes the fitness returned by `step` belongs to the population the step consumed (`state_before.pop`); a pipeline that returned post-`tell` fitness instead would fail it loudly.
 `test_the_best_fitness_is_non_decreasing_across_generations` rests on NEAT's per-species elitism preserving the population maximum; if species spawn allocation can drop the elite, this is the assertion to revisit (it is not weakened).
 `state.generation` is asserted to reach exactly `generation_limit` on fixed-length runs and `1` after a single step; a different counter base would surface there.
 Nothing in this directory can observe the pipeline's per-shape cache object itself — only the compile counts — and the off-shape "must raise" contract is not testable from outside a cached executable, so it is not asserted here.
 
 ## Conventions
-Every test has a real body; the only skips are the directory-level probe and the documented compile-observability gap in `./test_shape_rebuild.py`.
+Every test has a real body and none skips; the structural probe stays armed but no longer fires, and the compile-count test finds a real entry point.
 Assertions are never weakened to get green: a genuine `src/` defect is reported (or pinned with `xfail(strict=True)` and a one-line reason), never hidden behind a tolerance or a skip.
 Shapes stay small (`pop_size` 8/16, `max_nodes ≤ 16`), checkpoint tests always pass `save_dir=tmp_path`, and `log.txt`'s `Cost Time` column is parsed but never asserted on.
 Files stay under ~1000 lines; one test module per documented behaviour area, module basenames unique across the tree.
@@ -88,6 +88,7 @@ No new dependency, no `import jax`, no network, no GPU, `backend="numpy"` everyw
 | `./test_determinism.py` | Reproducibility from `(seed, config, shapes)`; global numpy RNG neither read nor written; `randkey` advance. |
 | `./test_shape_rebuild.py` | Static-shape contract: per-width runs, wider genome signature, compile-once-then-reuse, rerun consistency. |
 | `./test_checkpoint.py` | `is_save` artefacts: `config.txt`, `log.txt`, `genomes/*.npz`, and the npz round trip. |
+| `./test_show_best.py` | The documented reporting tail: `auto_run`'s best is directly showable, batch-first and bare rows describe the same individual, `show_problem_details` never aborts a run. |
 | `../support` | `runner` (only `evoxc` entry point for test-built graphs), `payloads`, `lazy.require`. |
 | `../unit` | Kernel-level correctness suite (the oracle this directory builds on, never re-tests). |
 | `../../src/tensorneat` | Code under test — read-only; `pipeline.py` owns the compile site, the cache and the checkpoint layout. |

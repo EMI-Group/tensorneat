@@ -11,7 +11,7 @@ Assertions are closed forms, the independent numpy references of `../support/ora
 `test_problem_api.py` — 18 cases from 10 tests: per-sample `input_shape`/`output_shape` (and `(S,) + shape` consistency with the dataset), arity pairing with `algorithm.NEAT.num_inputs`/`num_outputs`, `setup(state)` adding no keys, `static_batch_size`'s leading dimension and its four rejections, `finalize_fitness`'s exact six-entry mapping, host-side `show`, the `show_details` no-op, and the absent legacy `jitable` flag.
 `conftest.py` — the resolved inputs (`problem`, `common`, `algorithm`, `payloads`, `oracle`, `runner`, `evoxc`, `enp`), the host `state`, the fake execution schedule and its factory, and the two graph runners (`run_evaluate`, `run_in_graph`).
 `__init__.py` — namespace marker; the directory must stay an importable package (pytest's prepend import mode names a module by its basename).
-62 collected cases, 0 skips, 0 xfail, ~2 s wall on the numpy backend; the whole directory belongs to the default gate `pytest -m "not parity and not slow"`.
+62 collected cases, 0 skips, 0 xfail, ~4 s wall on the numpy backend; the whole directory belongs to the default gate `pytest -m "not parity and not slow"`.
 
 ## Oracles used (never the kernel under test)
 `support.oracle.func_fit_loss` (the reduction over the sample *and* output axes) and `support.oracle.cartpole_rollout` + `cartpole_params` (the only CartPole oracle, since the legacy RL problems are gone).

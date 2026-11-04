@@ -6,20 +6,21 @@ Each assertion compares against something independent of the implementation unde
 This directory is the whole content of the default gate; `./parity` (legacy JAX oracle) and `./integration` (whole `Pipeline`) are the two suites that go beyond it.
 
 ## Counts
-`./common` 155 passed, `./genome` 95, `./algorithm` 140 passed + 4 strict xfail, `./problem` 62 — 452 passed and 4 xfailed in the gate.
-`./genome` dominates the wall clock at ~18 s (one traced executable per graph) while the other three take 2–3 s each, for ~25 s total.
-The 4 xfails are pinned to a single `src/` defect and are expected to stay xfailed; everything else in this node is green.
+`./common` 155 passed, `./genome` 100, `./algorithm` 144, `./problem` 62 — 461 passed and 0 xfailed in the subdirectories, plus `./test_version.py` (2) at this node's root.
+`./genome` dominates the wall clock at ~52 s (one traced executable per graph), `./algorithm` takes ~28 s, `./common` ~12 s and `./problem` ~4 s.
+Everything in this node is green: there is no xfail and no skip.
 
 ## How to run
-`python -m pytest test/unit -m "not parity and not slow"` (or plain `pytest` from the repo root) — numpy backend, no optional dependency, ~25 s.
+`python -m pytest test/unit -m "not parity and not slow"` (or plain `pytest` from the repo root) — numpy backend, no optional dependency, ~95 s.
 `pytest test/unit/<sub> -k <expr>` narrows the same gate while keeping the leak guard active.
-`test/unit/algorithm` and `test/unit/genome` are also comfortable alone (`~3 s` / `~18 s`); no module here needs a network, a GPU or parallelism.
+`test/unit/algorithm` and `test/unit/genome` are also comfortable alone (`~28 s` / `~52 s`); no module here needs a network, a GPU or parallelism.
 
 ## Layout
 `./common` — schedule (`tensorization`) derivation and validation, flat gather/scatter/mutation helpers, ACT/AGG dispatch, host graph walks, `State`.
 `./genome` — gene payloads, forward/recurrent/grad kernels, mutation/crossover/distance invariants, host-only introspection.
 `./algorithm` — NEAT `tell` algebra: speciation, stagnation, spawn allocation, parent selection.
 `./problem` — func-fit losses (`mse`/`rmse`/`mae`/`mape`) and the CartPole rollout.
+`./test_version.py` — the package's `__version__` metadata and its `PackageNotFoundError` fallback.
 Every directory here carries `__init__.py` (pytest's prepend import mode names a module by basename, so un-namespaced directories collide with `./parity`/`./integration`).
 
 ## Oracles
@@ -33,17 +34,14 @@ Kernels are built only through `../support/runner.py` (`run_defn`/`run_graph`/`t
 `pytest_sessionstart` freezes the session baseline — the forbidden modules already in `sys.modules` — and a session-scoped autouse fixture does it when the conftest is loaded only at collection time; the freeze is idempotent, so it happens exactly once.
 A session-wide recorder wraps `builtins.__import__` and notes every import *statement* whose root module is in `("jax", "jaxlib", "torch", "brax", "gymnax", "mujoco")` together with the file that executed it.
 The autouse per-test fixture fails a test whose body or module let a forbidden module in, reporting the offending module and the importing file.
-The recorder is what gives the guard teeth: `import tensorneat` still loads the legacy JAX `pipeline.py`, so `jax`/`jaxlib` are in `sys.modules` before the first unit test and a bare set difference cannot see a test that imports them afterwards.
-It also supplies the allowances the guard needs: an import executed from `src/` (that `src/` defect), from `pytest.importorskip`, or from another suite (parity imports `jax` while it is collected, so `pytest test/unit test/parity` must not fail here) is not this suite's leak; one executed from a file below this directory is.
+The recorder is what gives the guard teeth: it attributes a forbidden import to the file that executed it, including an import performed by a module under test during a test body.
+It also supplies the allowances the guard needs: an import executed from `src/`, from `pytest.importorskip`, or from another suite (parity imports `jax` while it is collected, so `pytest test/unit test/parity` must not fail here) is not this suite's leak; one executed from a file below this directory is.
 Each leak is reported once and forgotten, so one bad import does not turn every later test red.
 Not covered: a dynamic `importlib.import_module` of an already-loaded framework, and anything a subprocess does — that is `../release_gate_no_jax.py`'s job, which checks the package itself in a clean interpreter.
 
 ## Known items
-`./algorithm/test_neat_tell.py` carries 4 `xfail(strict=True)` markers pinned to a real `src/` defect: `src/tensorneat/algorithm/neat/neat.py::NEAT._new_gene_keys` reshapes the per-individual `(P,)` result of `genome.max_node_key`/`max_conn_marker` to `()`, so `NEAT.tell` raises `evoxc.ShapeError: reshape: element counts differ: P vs 1` for `pop_size > 1`.
-Those 4 markers turn into XPASS (a hard failure) the moment the source is fixed, which is the signal to delete them.
-`../release_gate_no_jax.py` (test root, not this node) is red on 3 of its 4 tests until `src/tensorneat/pipeline.py` stops importing jax (`test_public_api_is_present`, the 4th, passes).
-`../integration` skips structurally until the evoxc-native `Pipeline` lands.
 `./genome/test_mutation.py` is at the ~1000-line concern threshold; split it by operation family (add-node / add-conn / mutate-weight / toggle / delete) if it grows further.
+No test in this node is xfailed or skipped.
 
 ## Conventions
 One module per source module, named `test_<module>.py`; the directory tree mirrors `../../src/tensorneat/`.
@@ -63,6 +61,7 @@ A test may not edit `../../src`, `../../benchmarks` or `pyproject.toml`; a disco
 | `./genome` | payload layout, forward/recurrent/grad kernels, mutation/crossover/distance invariants, host introspection. |
 | `./algorithm` | NEAT `tell` algebra: speciation, stagnation, spawn allocation, parent selection. |
 | `./problem` | func-fit losses (`mse`/`rmse`/`mae`/`mape`) and the CartPole rollout. |
+| `./test_version.py` | `tensorneat.__version__` against the distribution metadata, plus the `PackageNotFoundError` fallback. |
 | `./conftest.py` | session baseline + import recorder: the per-test optional-framework guard. |
 | `../support` | shared runner, hand-built payloads and numpy oracles used by every suite here. |
 | `../release_gate_no_jax.py` | import-hygiene gate on the package in a clean subprocess (test root, not this node). |

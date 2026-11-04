@@ -12,7 +12,7 @@ This is test code: it is imported (`from support.runner import run_defn ...`) an
 `run_graph(graph, *arrays, backend="numpy")` → `lower`→`compile`→`load`→`run` for an already traced `evoxc.Graph` (what `genome.grad` returns).
 `compile_graph(graph, backend="numpy")`, `to_numpy(tree)`, `spec_like(array)`, `tensor(array)`, `DEFAULT_BACKEND = "numpy"`.
 Arguments may be nested pytrees of arrays (a `Transformed` namedtuple, a dict of payloads): `_split_arg` recurses, so the spec tree always mirrors the runtime tree; the spec shape is read off the *wrapped* tensor because `evoxc.from_numpy` reports a 0-d array as shape `(1,)`.
-`lazy.py::require(module)` imports a module at call time and converts a design-skeleton `NotImplementedError` into a named `pytest.skip`, so a suite stays collectable while `src/` is unfinished; every suite's `conftest.py` resolves the package through it inside a module-scoped fixture.
+`lazy.py::require(module)` imports a module at call time and converts a `NotImplementedError` raised during that import into a named `pytest.skip`; every other error surfaces. Every suite's `conftest.py` resolves the package through it inside a module-scoped fixture.
 Rules the runner exists to encode: statics must be passed **again** at `run` (they are baked per call here), an `Executable` is not callable, and `evoxc.Tensor` has no `__array__`.
 A test that needs a *method* inside a graph closes over the host objects and passes only tensors/statics: `run_defn(lambda nk, ck: genome.transform(state, nk, ck), node_keys, conn_keys)` — never nest two `@evoxc.defn` functions.
 ### `payloads.py` (implemented)
@@ -25,7 +25,7 @@ The default widths are the real gene layouts (`NA=4` = `bias, response, aggregat
 `attrs=None` writes the neutral row (`(bias=0, response=1, aggregation=0, activation=0)` / `(weight=1)`), and `key == I_INF` (any endpoint `I_INF` for `set_conn`) *clears* the row back to the sentinels instead of writing garbage.
 `set_conn` writes the connection's row index into the key columns past `(input_index, output_index)` — the documented `historical_marker` of `OriginConn`.
 `default_genome(**kwargs)` / `recurrent_genome(**kwargs)` / `genome_state(genome)` — a `DefaultGenome`/`RecurrentGenome` with default genes and operators over `num_inputs=2, num_outputs=1, max_nodes=8, max_conns=16`, and the `State` from its `setup(State())`.
-The two factories only construct the genome and call `setup`; a `NotImplementedError` raised by a `src` constructor is the source skeleton's and propagates untouched (src is filled in in parallel).
+The two factories only construct the genome and call `setup`; any error a `src` constructor raises propagates untouched.
 `chain_payload(...)`, `skip_payload(...)`, `isolated_payload(...)`, `ring_payload(...)` — the four canonical topologies the forward/grad tests start from (dense chain, a node bypassed by its consumers, a node with no edges, a recurrent cycle).
 Each topology builder takes `pop_size`, `max_nodes`, `max_conns`, `num_inputs`, `num_outputs`, the three widths and `weight`, uses node key == row index, and documents the exact rows/edges/levels it writes in its docstring.
 ### `functions_ref.py` (implemented)

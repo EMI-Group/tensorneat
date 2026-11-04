@@ -22,8 +22,8 @@ Every run is ``generation_limit=1`` with ``fitness_target=1.0`` (XOR fitness is 
 ``pop_size`` is 8 or 16 and ``max_nodes`` at most 16, which keeps the module at a few seconds on the numpy reference interpreter; compiles are counted, never timed.
 Why nothing here is a module-scope ``tensorneat`` import
 -------------------------------------------------------
-``tensorneat`` arrives through the ``tn`` fixture and the payload helpers through ``./conftest``, which resolves everything lazily with ``support.lazy.require``; a module-scope import would turn a named skip into a collection error while ``src/`` is mid-rewrite.
-The directory-wide autouse probe ``require_evoxc_pipeline`` is the only guard: while ``pipeline.py`` is still the legacy JAX module every test here skips with the exact list of missing evoxc features, and the skip disappears by itself once the evoxc compile site lands.
+``tensorneat`` arrives through the ``tn`` fixture and the payload helpers through ``./conftest``, which resolves everything lazily with ``support.lazy.require``; a failed import names a skip instead of turning the module into a collection error.
+The directory-wide autouse probe ``require_evoxc_pipeline`` is the only guard: it requires every documented evoxc-pipeline feature and skips with the exact list of anything missing.
 """
 from __future__ import annotations
 

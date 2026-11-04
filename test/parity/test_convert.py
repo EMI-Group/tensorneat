@@ -19,10 +19,8 @@ which is exactly why it needs its own tests:
   actually use.
 
 ``from_legacy`` is exercised through a stand-in ``payload_factory`` so it does not
-need ``support.payloads`` (which imports ``tensorneat`` and therefore skips while
-``src/`` is a skeleton); the default factory is covered by
-:func:`test_sentinels_match_the_package_constants`, which skips until the package
-imports.
+depend on ``support.payloads`` (which imports ``tensorneat``); the default factory
+is covered by :func:`test_sentinels_match_the_package_constants`.
 """
 
 from __future__ import annotations
@@ -308,14 +306,11 @@ def test_sentinels_match_the_package_constants(convert):
     """Invariant: the duplicated ``I_INF``/``KEY_MAX`` equal the package's own constants.
 
     Oracle: ``tensorneat.common.tools.I_INF`` (``int32`` max) and ``KEY_MAX``
-    (``1 << 24``).  ``convert`` re-declares them so it stays importable while
-    ``src/`` is a skeleton (``import tensorneat`` currently raises); this test is
-    what keeps the duplication honest.
+    (``1 << 24``).  ``convert`` re-declares them so it stays a pure-numpy layer;
+    this test is what keeps the duplication honest.
 
     Assertion: ``convert.I_INF == tools.I_INF`` and
-    ``convert.KEY_MAX == tools.KEY_MAX``; ``support.lazy.require`` turns the
-    pending-implementation ``NotImplementedError`` into a skip, so the check starts
-    running the moment the package imports.
+    ``convert.KEY_MAX == tools.KEY_MAX``.
     """
     from support.lazy import require
 

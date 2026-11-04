@@ -13,14 +13,6 @@ advances, ``ask`` costs no op, ``pop_batch_size`` chunking is a pure reshape, th
 constructor rejects every out-of-domain argument, and ``ask`` → ``transform`` →
 ``forward`` wire up on the default genome.
 
-Strict xfails: a source defect
-------------------------------
-``NEAT.tell`` raises ``evoxc.ShapeError`` for any ``pop_size > 1``: ``_new_gene_keys``
-reshapes the genome's ``(P,)`` ``max_node_key`` result to ``()`` (``neat.py:574``).
-``pop_size == 1`` runs to completion, which pins the cause, so the four tests that
-drive a real ``tell`` keep their full assertions under ``xfail(strict=True)``: they
-flip to XPASS once the source is fixed.
-
 Oracles used here (never the implementation)
 --------------------------------------------
 :func:`sanitize_reference` and :func:`stagnation_reference` are closed forms, the
@@ -61,12 +53,6 @@ POP_SIZE = 8
 POP_FIELDS = ("node_keys", "node_attrs", "conn_keys", "conn_attrs")
 #: State entries that are *runtime tensors*; everything else is static configuration.
 STATE_TENSOR_KEYS = ("pop", "generation", "species", "randkey")
-
-#: One-line cause shared by every strict xfail below (see the module docstring).
-TELL_DEFECT = (
-    "src defect: NEAT._new_gene_keys reshapes genome.max_node_key's (P,) result "
-    "to () -> evoxc.ShapeError for pop_size > 1"
-)
 
 
 # --------------------------------------------------------------------------- #
@@ -395,7 +381,6 @@ def test_sanitize_fitness_rejects_a_non_population_vector(neat_module, errors, s
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(strict=True, reason=TELL_DEFECT)
 def test_tell_increments_the_generation_before_the_species_update(
     algorithm, neat_state, species
 ):
@@ -759,7 +744,6 @@ def test_stagnation_exempts_the_best_ranked_species_not_the_first_slot(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(strict=True, reason=TELL_DEFECT)
 def test_tell_preserves_the_population_size_and_payload_shapes(
     algorithm, neat_state, species
 ):
@@ -833,7 +817,6 @@ def test_setup_requires_the_pipeline_to_have_created_the_randkey(algorithm, comm
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(strict=True, reason=TELL_DEFECT)
 def test_tell_is_deterministic_for_the_same_state_and_fitness(algorithm, neat_state, species):
     """
     Invariant: ``tell(state, fitness)`` twice yields byte-identical next states.
@@ -854,7 +837,6 @@ def test_tell_is_deterministic_for_the_same_state_and_fitness(algorithm, neat_st
     assert same_bytes(first_key, second_key)
 
 
-@pytest.mark.xfail(strict=True, reason=TELL_DEFECT)
 def test_tell_advances_the_randkey(algorithm, neat_state):
     """
     Invariant: the next state's ``randkey`` differs from the one it consumed.

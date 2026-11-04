@@ -14,7 +14,7 @@ is cached by the Pipeline per shape signature like any other genome graph.
 
 A genome object is passed in rather than mixed in: these functions read its public statics
 (``num_inputs``, ``max_in_degree``, ``max_depth``, ``network_type``), its genes and transforms,
-plus the two output helpers ``_output_row_mask``/``_output_values`` that stay in ``base.py``
+plus the two output helpers ``_output_row_mask``/``_output_values`` that live in ``step.py``
 because the plain forward uses them too.  ``base.py`` imports this module; this module never
 imports ``base.py`` at runtime.
 
