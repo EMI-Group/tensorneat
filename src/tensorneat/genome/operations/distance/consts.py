@@ -8,6 +8,12 @@ A :class:`ConstantPool` is created once per top-level kernel entry (one ``prepar
 ``measure`` / ``gene_measure`` call, or one whole generation when the caller threads it) and
 updated in place, so each ``(dtype, value)`` pair costs exactly one op.
 
+Only **signed** integer and floating dtypes live here: ``evoxc``'s ``iree`` backend declares
+``float16/float32/float64/int8/int16/int32/int64/bool`` and nothing unsigned, so a ``uint32``
+operand or constant makes that backend refuse the whole graph
+(``BackendError: capability drift``).  The dense table's range test is therefore spelled in
+``int32`` (two comparisons per key column) rather than in the unsigned one-comparison form.
+
 The pool is per-trace state: a traced ``SymbolicTensor`` belongs to the builder that produced
 it, so a pool must never outlive the trace it was created in and must never be module-global.
 Reusing one tensor as several op operands is safe — it is a plain value with more than one
@@ -33,17 +39,15 @@ class ConstantPool:
     Attributes:
         _i32 (dict): ``int`` value to ``int32`` rank-0 tensor.
         _i64 (dict): ``int`` value to ``int64`` rank-0 tensor.
-        _u32 (dict): ``int`` value to ``uint32`` rank-0 tensor.
         _f32 (dict): ``repr`` of a float to ``float32`` rank-0 tensor.
     """
 
-    __slots__ = ("_i32", "_i64", "_u32", "_f32")
+    __slots__ = ("_i32", "_i64", "_f32")
 
     def __init__(self):
         """Start an empty pool for one traced entry point."""
         self._i32 = {}
         self._i64 = {}
-        self._u32 = {}
         self._f32 = {}
 
     def i32(self, value: int) -> evoxc.SymbolicTensor:
@@ -79,27 +83,6 @@ class ConstantPool:
         if tensor is None:
             tensor = enp.full((), value, dtype=evoxc.int64)
             self._i64[value] = tensor
-        return tensor
-
-    def u32(self, value: int) -> evoxc.SymbolicTensor:
-        """Return the pooled rank-0 ``uint32`` constant ``value``.
-
-        Args:
-            value: Static non-negative integer baked into the trace.
-
-        Returns:
-            Rank-0 ``uint32`` tensor — the bound of the dense table's per-column range test,
-            which a negative ``int32`` key fails after the unsigned cast.
-
-        Notes:
-            Separate from :meth:`i32`: ``evoxc`` compares like dtypes only, so a range test
-            against an ``int32`` bound would have to pay two comparisons per key column
-            (``>= 0`` and ``< S``) instead of one.
-        """
-        tensor = self._u32.get(value)
-        if tensor is None:
-            tensor = enp.full((), value, dtype=evoxc.uint32)
-            self._u32[value] = tensor
         return tensor
 
     def f32(self, value: float) -> evoxc.SymbolicTensor:

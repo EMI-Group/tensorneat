@@ -399,8 +399,16 @@ def dense_width(gene, key_span: int) -> int:
     Notes:
         The slot is an ``int32`` gather/scatter index, so a width beyond ``2**31 - 1`` (a key
         span above ~46 000) is not addressable; the fast path's static gate checks that.
+
+    Raises:
+        ConfigError: If ``key_span`` is not in ``[0, 2**31)`` — the slot and the range test of
+            :func:`dense_rows` are signed ``int32`` quantities.
     """
     span = int(key_span)
+    if not 0 <= span < _KEY_BASE:
+        raise ConfigError(
+            f"dense key table: key_span must lie in [0, 2**31), got {span}"
+        )
     return span + 1 if int(gene.key_width) == 1 else span * span + 1
 
 
@@ -433,9 +441,11 @@ def dense_rows(
     Notes:
         Node keys are their own slot; a connection slot is ``in_key * S + out_key``, so the fold
         is injective for keys inside ``[0, S)`` and the trailing dump slot catches the rest.
-        The range test is one ``cast`` to ``uint32`` plus one ``less`` per index column: a
-        negative key becomes a huge unsigned value, so it fails the same comparison ``I_INF``
-        fails and no separate sentinel test is needed.
+        The range test is **signed and same-width** (``int32``): ``evoxc``'s ``iree`` backend
+        declares no unsigned dtype, so the one-comparison ``cast(key, uint32) < S`` form cannot
+        be exported.  ``0 <= key < S`` says the same thing for every ``int32`` key — including
+        that a negative key lands in the dump slot exactly as ``I_INF`` does — as long as
+        ``0 <= S < 2**31`` (guarded statically in :func:`dense_width`).
         One function for both callers because the leading key column feeds three of the results
         — the slot, the range test and the presence test — and reading it once is what keeps a
         centre family at one read per key column (the round-1 spelling read it twice).
@@ -453,7 +463,9 @@ def dense_rows(
         # a single individual, so its gene-row axis is all the caller reads.
         keys = evoxc.reshape(keys, (count, int(keys.shape[2])))
     dump = pool.i32(dense_width(gene, span) - 1)
-    bound = pool.u32(span)
+    # Signed int32 bounds of the range test; ``bound`` is also the connection-fold radix.
+    zero = pool.i32(0)
+    bound = pool.i32(span)
     sentinel = pool.i32(I_INF)
 
     def _row(x):
@@ -463,19 +475,23 @@ def dense_rows(
             return x
         return evoxc.reshape(x, (count,))
 
+    def _in_range(column):
+        # ``0 <= column < span`` in signed int32: bit-identical to the unsigned form for every
+        # int32 value while span < 2**31, and exportable to a backend without unsigned dtypes.
+        return evoxc.logical_and(
+            evoxc.greater_equal(column, zero), evoxc.less(column, bound)
+        )
+
     if int(gene.key_width) == 1:
         column = keys if len(keys.shape) == 2 else _column(keys, 0)
         column = _row(column)
-        real = evoxc.less(evoxc.cast(column, evoxc.uint32), bound)
+        real = _in_range(column)
         present = evoxc.not_equal(column, sentinel)
         return evoxc.select(real, column, dump), real, present
     first = _row(_column(keys, 0))
     second = _row(_column(keys, 1))
-    real = evoxc.logical_and(
-        evoxc.less(evoxc.cast(first, evoxc.uint32), bound),
-        evoxc.less(evoxc.cast(second, evoxc.uint32), bound),
-    )
-    slot = evoxc.add(evoxc.multiply(first, pool.i32(span)), second)
+    real = evoxc.logical_and(_in_range(first), _in_range(second))
+    slot = evoxc.add(evoxc.multiply(first, bound), second)
     present = evoxc.not_equal(first, sentinel)
     return evoxc.select(real, slot, dump), real, present
 
@@ -585,7 +601,6 @@ def prepare_family(
         count=int(keys.shape[1]),
         attr_width=int(attrs.shape[-1]),
         width=dense_width(gene, key_span),
-        key_span=key_span,
         tail=tail,
         dense=dense,
     )
