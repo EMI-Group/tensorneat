@@ -5,7 +5,8 @@ so at most **one** node row and **three** connection rows change per individual 
 generation.  Expressing the stage as a plan — "which row of which array receives which
 value", plus the data-dependent set of connections a node deletion detaches — therefore
 replaces the four helpers' sequential full-array rewrites (each of which had to re-gate a
-whole array with ``select``) by one write per slot and one clearing ``select``.
+whole array with ``select``) by one write per slot, with the slot-0 clear and the
+node-deletion detach sharing a single clearing pass over the connection arrays.
 
 A slot is written by comparing the array's row-index constant against the slot's row
 :func:`~.arrays.write_rows`: a row index equal to the array's own row count matches nothing,
@@ -190,14 +191,15 @@ class Edit(NamedTuple):
         node_keys: ``(P,) int32`` key value written at ``node_rows``.
         node_attrs: ``(P, NA) float32`` attribute value written at ``node_rows``.
         conn_rows: Three ``(P,) int32`` connection rows to write, ``E`` for "none".  Slot
-            order is delete / identity-or-add / copy, applied in that order, so a later slot
+            order is clear / identity-or-add / copy, applied in that order, so a later slot
             wins where two slots name the same row.
         conn_keys: Three key values written at ``conn_rows``: the rank-0 ``I_INF`` sentinel
             (a cleared row) and two ``(P, 1, CK)`` blocks.
         conn_attrs: Three attribute values written at ``conn_rows``: the rank-0 NaN sentinel
             and two ``(P, 1, CA)`` blocks.
-        drop: ``(P, E) bool`` connection rows a node deletion detaches (cleared after the
-            slots; a deletion writes no row of its own).
+        drop: ``(P, E) bool`` connection rows a node deletion detaches, cleared in the same
+            pass as slot 0 (a deletion writes no row of its own, and slot 0 always carries
+            the same cleared value, so the two masks never overlap).
     """
 
     node_rows: evoxc.SymbolicTensor
@@ -217,7 +219,18 @@ def apply(
     conn_keys: evoxc.SymbolicTensor,
     conn_attrs: evoxc.SymbolicTensor,
 ) -> GenomeTensors:
-    """Write one plan into the payload: one ``select`` per slot plus the clearing selects.
+    """Write one plan into the payload: one ``select`` per slot, one clear pass for the rest.
+
+    Connection slot 0 always writes the *cleared* value — the ``_merge_plan`` of the
+    operator fills its key/attribute value with the shared rank-0 ``I_INF``/NaN constants —
+    so it carries exactly what the node-deletion detach clears and the two share a single
+    pass.
+    That is bit-identical to clearing slot 0 and then ``drop``: an individual whose slot 0
+    really names a row (an add-node or a delete-connection) has an all-False ``drop``, and a
+    delete-node individual points every slot at the "no write" row, which matches no row of
+    the row-index constant.  The masks cannot overlap, so their order is unobservable.
+    Slots 1 and 2 are then applied in their current order, because a later slot wins where
+    two name the same row.
 
     Args:
         edit (Edit): The plan.
@@ -247,20 +260,31 @@ def apply(
         edit.node_rows,
         enp.reshape(edit.node_attrs, (pop_size, 1, node_attrs.shape[2])),
     )
-    # One row comparison per connection slot, reused by the key and the attribute array: the
-    # two arrays share their row layout, so the mask is built once and both writes consume it.
-    masks = tuple(
-        evoxc.equal(context.conn_row_column, enp.reshape(rows, (pop_size, 1, 1)))
-        for rows in edit.conn_rows
+    # One clearing pass over the connection arrays for slot 0 plus the detach mask, so the
+    # whole stage pays one full-array select per array instead of two.
+    clear_mask = evoxc.logical_or(
+        evoxc.equal(
+            context.conn_row_column,
+            enp.reshape(edit.conn_rows[0], (pop_size, 1, 1)),
+        ),
+        enp.reshape(edit.drop, (pop_size, edge_count, 1)),
     )
-    written_conn_keys, written_conn_attrs = conn_keys, conn_attrs
-    for mask, key_values, attr_values in zip(masks, edit.conn_keys, edit.conn_attrs):
+    written_conn_keys = evoxc.select(clear_mask, context.sentinel, conn_keys)
+    written_conn_attrs = evoxc.select(clear_mask, context.nan_fill, conn_attrs)
+    # One row comparison per remaining connection slot, reused by the key and the attribute
+    # array: the two arrays share their row layout, so the mask is built once and both writes
+    # consume it.
+    for rows, key_values, attr_values in zip(
+        edit.conn_rows[1:], edit.conn_keys[1:], edit.conn_attrs[1:]
+    ):
+        mask = evoxc.equal(
+            context.conn_row_column, enp.reshape(rows, (pop_size, 1, 1))
+        )
         written_conn_keys = evoxc.select(mask, key_values, written_conn_keys)
         written_conn_attrs = evoxc.select(mask, attr_values, written_conn_attrs)
-    drop = enp.reshape(edit.drop, (pop_size, edge_count, 1))
     return GenomeTensors(
         written_node_keys,
         written_node_attrs,
-        evoxc.select(drop, context.sentinel, written_conn_keys),
-        evoxc.select(drop, context.nan_fill, written_conn_attrs),
+        written_conn_keys,
+        written_conn_attrs,
     )
