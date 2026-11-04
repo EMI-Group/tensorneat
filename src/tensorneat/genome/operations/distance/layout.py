@@ -1,22 +1,39 @@
-"""Per-generation statics of the dense single-centre route.
+"""Static geometry and per-generation statics of the two per-centre distance routes.
 
-The dense route (:mod:`.dense`) is called once per centre genome — ``2 * species_size``
-times per generation — and every call needs the same *static* scaffolding: the base of the
-owner table, the base of the centre attribute table, the centre row index, the flat
-reorder offsets, the reorder buffer, and a handful of rank-0 scalars (the gene count, the
-populations's count as ``float32``, the padding slot and the dump slot).  Those tensors
-depend only on ``(pop_size, gene count, attr width)``, so building them inside ``measure``
-paid for them ``2 * species_size`` times — and, worse, each one is a *graph constant*, so a
-generation graph carried one copy per call.
+``measure`` runs once per centre genome — ``2 * species_size`` times per generation — and
+every call needs the same *static* scaffolding, whichever route it takes:
 
-:func:`build` moves that work into :func:`.digest.prepare_family`, which runs once per
-generation: the tensors travel to every ``measure`` call as leaves of
-:class:`DenseLayout` and the calls spend their ops on value-dependent work only.
+* :class:`MeasureStatics` — the row-wise merge of :mod:`.digest` and its distance tail: the
+  rank-0 scalars (``I_INF``, ``0``, ``0.0``, the key-fold base and tag scale, the two
+  sentinels, the attribute width, the operator's three tail weights) plus the per-individual
+  flat index blocks of the merge and of the aligned-attribute gather.
+* :class:`DenseLayout` — the dense single-centre route of :mod:`.dense`: the owner table
+  base, the centre attribute table base, the centre row index, the flat reorder offsets and
+  the reorder buffer.
+
+Those tensors depend only on ``(pop_size, gene count, attr width)``, so building them inside
+``measure`` paid for them ``2 * species_size`` times — and, worse, each one is a *graph
+constant*, so a generation graph carried one copy per call.
+
+:func:`build_statics` and :func:`build` move that work into
+:func:`.digest.prepare_family`, which runs once per generation: the tensors travel to every
+``measure`` call as leaves of the digest and the calls spend their ops on value-dependent
+work only.
+
+The module also owns the *static geometry* those two bundles are built from, because it is the
+same kind of derivation — Python ints read off static shapes, with no value-dependent op:
+
+* :data:`_KEY_BASE` and :data:`_FOLDED_KEYS` — the radix and column count of the packed key
+  identity both routes match genes by.
+* :func:`_column` — the one static key-column read of the two routes (a kept-axis slice plus a
+  reshape, because ``evoxc`` rejects an axis-dropping index).
+* :func:`dense_width`, :func:`dense_rows` and :func:`dense_slot` — the key → slot geometry of
+  the dense table, i.e. what :class:`DenseLayout` addresses and the static gate sizes.
 
 Why the constants are *leaves* and not rebuilt per call: the reference interpreter charges
 per traced op rather than per element (a ``(P, M)`` add and a rank-0 constant cost the same
 order of magnitude at ``P = 1000``), so an op saved is the whole budget's unit — measured,
-see the module notes in :mod:`.dense`.
+see the module notes in :mod:`.dense` and the cost table in ``CONTEXT.md``.
 
 Slot geometry, restated because two of the scalars encode it: a family's dense table has
 ``dense_width`` cells (one per key tuple) plus **one** never-owned *padding* cell at index
@@ -29,8 +46,257 @@ version needed.
 from typing import NamedTuple
 import evoxc
 import evoxc.numpy as enp
+from ....common import I_INF
 from ...window import fill
 from .consts import ConstantPool
+
+
+#: Radix of the positional key fold.  Every legal gene key is a non-negative ``int32``, so
+#: ``2**31`` makes the fold injective for the whole key range without a ``key_span`` bound.
+_KEY_BASE = 1 << 31
+
+#: Number of key columns folded into the composite.  The remaining ones (a
+#: ``historical_marker``, i.e. 32 more bits) cannot fit below ``2**63`` and are verified
+#: row-for-row against the digest's key block instead.
+_FOLDED_KEYS = 2
+
+
+def _column(table: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
+    """Read one static key column of a ``(..., K)`` table.
+
+    Args:
+        table: ``(P, M, K)`` key-column block, or the ``(M, K)`` block of one individual's
+            gene rows (the fast path flattens its centre key table once).
+        index: Static (non-negative) column index.
+
+    Returns:
+        ``table.shape[:-1]`` view of column ``index``.
+
+    Notes:
+        A kept-axis slice plus ``reshape`` because ``evoxc`` rejects an axis-dropping
+        integer index and ``Ellipsis``/``None`` static indexing.
+    """
+    rank = len(table.shape)
+    slicer = (slice(None),) * (rank - 1) + (slice(index, index + 1),)
+    return evoxc.reshape(table[slicer], tuple(int(size) for size in table.shape[:-1]))
+
+
+class MeasureStatics(NamedTuple):
+    """Per-generation scaffolding of one gene family's row-wise ``measure`` route.
+
+    Every field is a graph constant or a static index table, so a ``measure`` call spends no
+    op on any of them: they are built once in :func:`.digest.prepare_family` (one shared
+    :class:`~.consts.ConstantPool` per generation, so a value both families need costs one op)
+    and read as leaves of the digest.  Exactly one of these per family pair is what removed
+    the ``2 * species_size`` copies of the same ten constants from a generation graph.
+
+    Attributes:
+        iinf_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` ``I_INF``, the padding sentinel the
+            key fold tests against.
+        zero_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` ``0`` — the row the merge redirects a
+            gene without a homologue to.
+        key_base_i64 (evoxc.SymbolicTensor): rank-0 ``int64`` ``2**31``, the radix of the
+            positional key fold.
+        tag_scale_i64 (evoxc.SymbolicTensor): rank-0 ``int64`` ``2`` — ``pack * 2`` leaves the
+            low bit for the side tag.
+        one_i64 (evoxc.SymbolicTensor): rank-0 ``int64`` ``1``, the population tag and the
+            ``composite + 1`` homologue test.
+        pad_centre_i64 (evoxc.SymbolicTensor): rank-0 ``int64`` padding sentinel of the centre
+            side of the merge.
+        offsets (evoxc.SymbolicTensor): ``(P, 1) int32`` ``arange(0, P * 2M, 2M)`` — the row
+            stride of the ``2M``-wide merged block (``batch_offsets``, hoisted).
+        offsets_plus_one (evoxc.SymbolicTensor): ``(P, 1) int32`` ``offsets + 1``, so the
+            successor position and its flat base are one ``add`` instead of two.
+        offsets_last (evoxc.SymbolicTensor): ``(P, 1) int32`` ``offsets + (2M - 1)`` — the
+            clamp target of the successor position, i.e. the last row of the *same*
+            individual's merged block.
+        attr (AttrStatics): the aligned-attribute scaffold the scalar tail consumes — shared
+            with the pair-wise route, which passes its own through the same argument.
+    """
+
+    iinf_i32: evoxc.SymbolicTensor
+    zero_i32: evoxc.SymbolicTensor
+    key_base_i64: evoxc.SymbolicTensor
+    tag_scale_i64: evoxc.SymbolicTensor
+    one_i64: evoxc.SymbolicTensor
+    pad_centre_i64: evoxc.SymbolicTensor
+    offsets: evoxc.SymbolicTensor
+    offsets_plus_one: evoxc.SymbolicTensor
+    offsets_last: evoxc.SymbolicTensor
+    attr: "AttrStatics"
+
+
+class AttrStatics(NamedTuple):
+    """Per-generation scaffolding of one gene family's *attribute* distance term.
+
+    Split out of :class:`MeasureStatics` because the family geometry it needs
+    (``pop_size``, gene count, attribute width, the tail weights) is exactly what a caller
+    without a digest knows: :meth:`~tensorneat.genome.operations.distance.base.BaseDistance.distance_from_alignment`
+    accepts this bundle, so the row-wise route hands over the digest's copy while the pair-wise
+    route builds the same four fields per call.
+
+    Attributes:
+        width_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` attribute width ``A``, the row stride
+            of the aligned-attribute gather.
+        base (evoxc.SymbolicTensor): ``(P, 1, A) int32`` ``columns + rows_stride``, the base of
+            the aligned-attribute flat gather — one ``add`` per call on top of it; an empty
+            ``(0, 1, 0)`` block for a family with no attribute column.
+        zero_f32 (evoxc.SymbolicTensor): rank-0 ``float32`` ``0.0``, the value a non-homologous
+            gene of the attribute term is zeroed to.
+        attrs_flat (evoxc.SymbolicTensor | None): the family's attribute block flattened to
+            ``(P * M * A,)``, the index space of the aligned-attribute gather — hoisted for the
+            same reason as :attr:`base`, since a ``reshape`` is a fully-charged op and the
+            ``2 * species_size`` calls of a generation used to pay it once each.  ``None`` for
+            a caller that holds no attribute block (the width-``0`` scaffold), in which case
+            the gather never runs.
+        tail (tuple): the scalar tail's three rank-0 ``float32`` constants —
+            ``compatibility_disjoint``, ``compatibility_weight`` and ``1.0`` — or ``()`` for an
+            operator without a fixed tail (see
+            :meth:`~tensorneat.genome.operations.distance.base.BaseDistance._tail_constants`).
+    """
+
+    width_i32: evoxc.SymbolicTensor
+    base: evoxc.SymbolicTensor
+    zero_f32: evoxc.SymbolicTensor
+    attrs_flat: "evoxc.SymbolicTensor | None"
+    tail: tuple
+
+
+#: Placeholder of a family with no attribute column (``attr_width == 0``) and of the
+#: standalone :func:`.digest.match_rows` entry, which knows no attribute width at all: a
+#: ``0``-width index block, so the caller takes its static ``attr_width == 0`` branch.
+_NO_ATTR_BLOCK = (0, 1, 0)
+
+
+def build_attr_statics(
+    pool: ConstantPool,
+    *,
+    pop_size: int,
+    count: int,
+    attr_width: int,
+    tail: tuple[float, float, float] | None,
+    attrs: "evoxc.SymbolicTensor | None" = None,
+) -> AttrStatics:
+    """Build one family's :class:`AttrStatics` (once per generation).
+
+    Args:
+        pool (ConstantPool): Pool shared by both families of a ``prepare`` call.
+        pop_size (int): Static population batch ``P``.
+        count (int): Static gene count ``M`` of the family.
+        attr_width (int): Static attribute width ``A``; ``0`` gives an empty base.
+        tail (tuple[float, float, float] | None): ``(disjoint, weight, one)`` of the operator
+            supplying the scalar tail, or ``None`` for an operator that has none.
+        attrs (evoxc.SymbolicTensor | None): ``(P, M, A) float32`` attribute block whose flat
+            view the aligned-attribute gather indexes; ``None`` keeps
+            :attr:`AttrStatics.attrs_flat` unset (a caller with no attribute block).
+
+    Returns:
+        AttrStatics: the family's attribute-distance scaffold.
+
+    Notes:
+        ``base`` is a ``P``-scaled graph constant — ``(P, 1, A) int32``, ~8 KB at ``P = 500``
+        and ~16 KB at ``P = 1000`` — and it is exactly what the ``2 * species_size`` calls of a
+        generation used to rebuild: a ``columns`` ``arange`` (one ``constant`` op), a row-stride
+        ``arange`` (another) and the ``reshape`` in front of it (a third).  The alternative, a
+        *materialised* ``(P, M, A)`` zero block, is what the population-scaled-fill rule in
+        ``window.fill`` forbids: this one is a static index table, not a data buffer.
+    """
+    return AttrStatics(
+        pool.i32(attr_width),
+        (
+            evoxc.add(
+                enp.arange(0, attr_width, dtype=evoxc.int32),
+                evoxc.reshape(
+                    enp.arange(
+                        0,
+                        pop_size * count * attr_width,
+                        count * attr_width,
+                        dtype=evoxc.int32,
+                    ),
+                    (pop_size, 1, 1),
+                ),
+            )
+            if attr_width
+            else enp.zeros(_NO_ATTR_BLOCK, dtype=evoxc.int32)
+        ),
+        pool.f32(0.0),
+        (
+            evoxc.reshape(attrs, (pop_size * count * attr_width,))
+            if attrs is not None and attr_width
+            else attrs
+        ),
+        (
+            (pool.f32(tail[0]), pool.f32(tail[1]), pool.f32(1.0))
+            if tail is not None
+            else ()
+        ),
+    )
+
+
+def build_statics(
+    pool: ConstantPool,
+    *,
+    pop_size: int,
+    count: int,
+    attr_width: int,
+    key_base: int,
+    tag_scale: int,
+    pad_centre: int,
+    tail: tuple[float, float, float] | None,
+    attrs: "evoxc.SymbolicTensor | None" = None,
+) -> MeasureStatics:
+    """Build one family's :class:`MeasureStatics` (once per generation).
+
+    Args:
+        pool (ConstantPool): Pool shared by both families of a ``prepare`` call, so a constant
+            they have in common costs one op.
+        pop_size (int): Static population batch ``P``.
+        count (int): Static gene count ``M`` of the family.
+        attr_width (int): Static attribute width ``A``; ``0`` gives an empty attribute base.
+        key_base (int): Radix of the positional key fold (``2**31``).
+        tag_scale (int): Side-tag scale of the composite (``2``).
+        pad_centre (int): Padding sentinel of the centre side of the merge.
+        tail (tuple[float, float, float] | None): ``(disjoint, weight, one)`` of the operator
+            supplying the scalar tail, or ``None`` for an operator that has none.
+        attrs (evoxc.SymbolicTensor | None): ``(P, M, A) float32`` attribute block of this
+            family, hoisted into :attr:`AttrStatics.attrs_flat`; ``None`` when the caller has
+            no block to hand over.
+
+    Returns:
+        MeasureStatics: the family's static scaffold.
+
+    Notes:
+        The merge's ``(P, 1)`` stride table is a ``P``-scaled graph constant — ~8 KB for both
+        families at ``P = 1000`` — and it is exactly what the ``2 * species_size`` calls of a
+        generation used to rebuild: an ``arange`` is one ``constant`` op and the ``reshape`` in
+        front of it is another.  The two derived strides cost one ``add`` each *here* instead of
+        one per call, and both rank-0 pools are the generation's own, so a value the other
+        family also needs costs one op.
+    """
+    merged_width = 2 * count
+    offsets = evoxc.reshape(
+        enp.arange(0, pop_size * merged_width, merged_width, dtype=evoxc.int32),
+        (pop_size, 1),
+    )
+    return MeasureStatics(
+        pool.i32(I_INF),
+        pool.i32(0),
+        pool.i64(key_base),
+        pool.i64(tag_scale),
+        pool.i64(1),
+        pool.i64(pad_centre),
+        offsets,
+        evoxc.add(offsets, pool.i32(1)),
+        evoxc.add(offsets, pool.i32(merged_width - 1)),
+        build_attr_statics(
+            pool,
+            pop_size=pop_size,
+            count=count,
+            attr_width=attr_width,
+            tail=tail,
+            attrs=attrs,
+        ),
+    )
 
 
 class DenseLayout(NamedTuple):
@@ -58,12 +324,6 @@ class DenseLayout(NamedTuple):
             :func:`~tensorneat.genome.window.fill` rather than a population-sized constant.
         pad_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` never-owned padding slot ``width``.
         dump_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` dump slot ``width - 1``.
-        tail (tuple): the scalar tail's three rank-0 ``float32`` constants —
-            ``compatibility_disjoint``, ``compatibility_weight`` and ``1.0`` — or ``()`` when the
-            route is gated off.  They are leaves because
-            :meth:`~tensorneat.genome.operations.distance.default.DefaultDistance._scalar_distance`
-            multiplies by them on every call, and ``enp.full((), v)`` is one traced op per
-            call site (``evoxc`` never deduplicates constants).
     """
 
     owner: evoxc.SymbolicTensor
@@ -75,7 +335,6 @@ class DenseLayout(NamedTuple):
     zeros: evoxc.SymbolicTensor
     pad_i32: evoxc.SymbolicTensor
     dump_i32: evoxc.SymbolicTensor
-    tail: tuple
 
 
 def build(
@@ -85,7 +344,6 @@ def build(
     count: int,
     attr_width: int,
     width: int,
-    tail: tuple[float, float, float] | None,
     dense: bool,
 ) -> DenseLayout:
     """Build one family's :class:`DenseLayout` (once per generation).
@@ -98,10 +356,7 @@ def build(
         attr_width (int): Static attribute width ``A`` (``0`` for a gene with no attribute).
         width (int): Static dense table width, dump slot included (``dense_width``).  The key
             span itself is *not* a layout scalar: the range test lives in
-            :func:`.digest.dense_rows` and reads ``key_span`` from the payload's genome.
-        tail (tuple[float, float, float] | None): ``(disjoint, weight, one)`` of the operator
-            supplying the scalar tail, or ``None`` for an operator that has none (its route then
-            builds the constants per call, as the row-wise routes do).
+            :func:`dense_rows` and reads ``key_span`` from the payload's genome.
         dense (bool): Static gate — ``False`` builds empty placeholders, because the route is
             unreachable for this family and the two big bases are exactly what the gate exists
             to avoid materialising.
@@ -116,12 +371,6 @@ def build(
         :func:`.dense.enabled` rather than here.
     """
     count_i32 = pool.i32(count)
-    # Pooled, so the two families share one op per constant: same pool, same value, same tensor.
-    tail_c = (
-        (pool.f32(tail[0]), pool.f32(tail[1]), pool.f32(1.0))
-        if (dense and tail is not None)
-        else ()
-    )
     pad_i32 = pool.i32(width)
     dump_i32 = pool.i32(width - 1)
     if not dense:
@@ -136,7 +385,6 @@ def build(
             empty,
             pad_i32,
             dump_i32,
-            tail_c,
         )
     stride = count + 1
     return DenseLayout(
@@ -151,7 +399,6 @@ def build(
         fill((pop_size,), 0.0, evoxc.float32),
         pad_i32,
         dump_i32,
-        tail_c,
     )
 
 
@@ -186,4 +433,151 @@ def reorder(values, column, layout: DenseLayout, pop_size: int, count: int):
     return evoxc.reshape(scattered, (pop_size, stride))
 
 
-__all__ = ["DenseLayout", "build", "reorder"]
+def dense_width(gene, key_span: int) -> int:
+    """Static width of one gene family's dense key table, dump slot included.
+
+    Args:
+        gene: Node or connection gene declaring ``key_width``.
+        key_span (int): Static key bound ``S`` of the payload's genome.
+
+    Returns:
+        int: ``S + 1`` for a one-column (node) key, ``S * S + 1`` for a two-or-more-column
+        (connection) key — one slot per key tuple, plus the trailing dump slot.
+
+    Notes:
+        The slot is an ``int32`` gather/scatter index, so a width beyond ``2**31 - 1`` (a key
+        span above ~46 000) is not addressable; the fast path's static gate checks that.
+
+    Raises:
+        ConfigError: If ``key_span`` is not in ``[0, 2**31)`` — the slot and the range test of
+            :func:`dense_rows` are signed ``int32`` quantities.
+    """
+    span = int(key_span)
+    if not 0 <= span < _KEY_BASE:
+        raise ConfigError(
+            f"dense key table: key_span must lie in [0, 2**31), got {span}"
+        )
+    return span + 1 if int(gene.key_width) == 1 else span * span + 1
+
+
+def dense_rows(
+    gene,
+    key_span: int,
+    keys: evoxc.SymbolicTensor,
+    pool: ConstantPool,
+    *,
+    flat: bool = False,
+) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+    """Map every gene row of one family to its dense slot, in-range flag and presence flag.
+
+    Args:
+        gene: Node or connection gene declaring ``key_width``.
+        key_span (int): Static key bound ``S``; a key outside ``[0, S)`` is not addressable and
+            lands in the dump slot.
+        keys (evoxc.SymbolicTensor): ``(P, M)`` or ``(P, M, K) int32`` key rows, ``I_INF``
+            padded.
+        pool (ConstantPool): Per-trace rank-0 constant pool.
+        flat (bool): Return the three blocks on the gene-row axis only (``(M,)``) instead of
+            ``(P, M)`` — the centre side of the fast path is a single individual, and its slot is
+            a scatter index of rank 1.
+
+    Returns:
+        ``(slot, real, present)`` — the table slot of each row (the dump slot ``D - 1`` for an
+        absent or out-of-range key), the in-range mask and the presence mask
+        (``key != I_INF``, the same predicate :func:`prepare_family` counts as ``cnt2``).
+
+    Notes:
+        Node keys are their own slot; a connection slot is ``in_key * S + out_key``, so the fold
+        is injective for keys inside ``[0, S)`` and the trailing dump slot catches the rest.
+        The range test is **signed and same-width** (``int32``): ``evoxc``'s ``iree`` backend
+        declares no unsigned dtype, so the one-comparison ``cast(key, uint32) < S`` form cannot
+        be exported.  ``0 <= key < S`` says the same thing for every ``int32`` key — including
+        that a negative key lands in the dump slot exactly as ``I_INF`` does — as long as
+        ``0 <= S < 2**31`` (guarded statically in :func:`dense_width`).
+        One function for both callers because the leading key column feeds three of the results
+        — the slot, the range test and the presence test — and reading it once is what keeps a
+        centre family at one read per key column (the round-1 spelling read it twice).
+        Trailing key columns (``OriginConn``'s ``historical_marker``) are *not* part of the slot
+        and are *not* range tested: a marker is a population-wide identity matched exactly
+        through its own table, not a key-space index.
+        A connection slot multiplies a possibly sentinel ``int32`` by ``S`` before the select
+        that discards it; the wrap is deterministic and never observed, and hoisting a
+        ``select`` in front of the product would cost an op on every real row to protect it.
+    """
+    span = int(key_span)
+    count = int(keys.shape[1])
+    if flat and len(keys.shape) == 3:
+        # One reshape for the whole table instead of one per key column: a centre key block is
+        # a single individual, so its gene-row axis is all the caller reads.
+        keys = evoxc.reshape(keys, (count, int(keys.shape[2])))
+    dump = pool.i32(dense_width(gene, span) - 1)
+    # Signed int32 bounds of the range test; ``bound`` is also the connection-fold radix.
+    zero = pool.i32(0)
+    bound = pool.i32(span)
+    sentinel = pool.i32(I_INF)
+
+    def _row(x):
+        # Flattening the *operands* rather than the results keeps the three returned blocks on
+        # one reshape apiece instead of three; a block-shaped caller skips it entirely.
+        if not flat or len(x.shape) == 1:
+            return x
+        return evoxc.reshape(x, (count,))
+
+    def _in_range(column):
+        # ``0 <= column < span`` in signed int32: bit-identical to the unsigned form for every
+        # int32 value while span < 2**31, and exportable to a backend without unsigned dtypes.
+        return evoxc.logical_and(
+            evoxc.greater_equal(column, zero), evoxc.less(column, bound)
+        )
+
+    if int(gene.key_width) == 1:
+        column = keys if len(keys.shape) == 2 else _column(keys, 0)
+        column = _row(column)
+        real = _in_range(column)
+        present = evoxc.not_equal(column, sentinel)
+        return evoxc.select(real, column, dump), real, present
+    first = _row(_column(keys, 0))
+    second = _row(_column(keys, 1))
+    real = evoxc.logical_and(_in_range(first), _in_range(second))
+    slot = evoxc.add(evoxc.multiply(first, bound), second)
+    present = evoxc.not_equal(first, sentinel)
+    return evoxc.select(real, slot, dump), real, present
+
+
+def dense_slot(
+    gene, key_span: int, keys: evoxc.SymbolicTensor, pool: ConstantPool
+) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+    """Map every gene row of one family to its dense key-table slot.
+
+    Args:
+        gene: Node or connection gene declaring ``key_width``.
+        key_span (int): Static key bound ``S``; a key outside ``[0, S)`` is not addressable and
+            lands in the dump slot.
+        keys (evoxc.SymbolicTensor): ``(P, M)`` or ``(P, M, K) int32`` key rows, ``I_INF``
+            padded.
+        pool (ConstantPool): Per-trace rank-0 constant pool.
+
+    Returns:
+        ``(slot (P, M) int32, real (P, M) bool)`` — the table slot of each row (the dump slot
+        ``D - 1`` for an absent or out-of-range key) and the row's real-gene mask.
+
+    Notes:
+        The documented two-value spelling of :func:`dense_rows`, kept for callers that want the
+        slot and the in-range mask without the presence mask.
+    """
+    slot, real, _ = dense_rows(gene, key_span, keys, pool)
+    return slot, real
+
+
+__all__ = [
+    "AttrStatics",
+    "DenseLayout",
+    "MeasureStatics",
+    "build",
+    "build_attr_statics",
+    "build_statics",
+    "dense_rows",
+    "dense_slot",
+    "dense_width",
+    "reorder",
+]

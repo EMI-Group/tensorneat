@@ -30,6 +30,7 @@ from ..alignment import find_homologous, key_rows
 from .base import BaseDistance
 from .consts import ConstantPool
 from .dense import measure_centre
+from .layout import build_attr_statics
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...base import BaseGenome
@@ -298,6 +299,7 @@ class DefaultDistance(BaseDistance):
         matched: evoxc.SymbolicTensor,
         cnt2: evoxc.SymbolicTensor,
         *,
+        statics=None,
         consts=None,
     ) -> evoxc.SymbolicTensor:
         """Compatibility distance of one gene family from a finished alignment.
@@ -315,6 +317,11 @@ class DefaultDistance(BaseDistance):
             cnt1 (evoxc.SymbolicTensor): ``(P,)`` real genes of parent 1.
             matched (evoxc.SymbolicTensor): ``(P,)`` number of homologous genes ``h``.
             cnt2 (evoxc.SymbolicTensor): ``(P,)`` real genes of parent 2.
+            statics (AttrStatics | None): The family's per-generation attribute scaffold when
+                the caller has a digest (the row-wise ``measure`` route): the rank-0 scalars and
+                the ``(P, 1, A)`` gather base, so this call traces neither a ``constant`` nor an
+                ``arange``.  ``None`` (:meth:`__call__`'s pair-wise route) builds the same four
+                fields per call from its own pool.
             consts (ConstantPool | None): Pool for the rank-0 constants of this trace;
                 ``None`` starts a private one.
 
@@ -347,6 +354,14 @@ class DefaultDistance(BaseDistance):
         pool = _pool(consts)
         pop_size, count = int(attrs1.shape[0]), int(attrs1.shape[1])
         attr_width = int(attrs1.shape[-1])
+        if statics is None:
+            statics = build_attr_statics(
+                pool,
+                pop_size=pop_size,
+                count=count,
+                attr_width=attr_width,
+                tail=self._tail_constants(),
+            )
 
         attribute_distance = None
         if attr_width:
@@ -354,32 +369,30 @@ class DefaultDistance(BaseDistance):
             # ``row * A`` and the ``(P, M, A)`` block adds the within-row column.  ``rows`` is
             # already redirected to row ``0`` where a gene has no homologue, so no ``I_INF``
             # index reaches the backend and the flat index needs no range check of its own.
-            row_offsets = enp.reshape(
-                evoxc.multiply(rows, pool.i32(attr_width)), (pop_size, count, 1)
+            # The ``(P, 1, A)`` base (within-row column plus per-individual row stride) and the
+            # flat ``(P * M * A,)`` view of the attribute block are per-generation constants of
+            # the digest, so this call pays one ``multiply``, one ``reshape`` and one ``add`` on
+            # top of the two value-dependent ops; the gather's own result is already
+            # ``(P, M, A)``.
+            row_offsets = evoxc.reshape(
+                evoxc.multiply(rows, statics.width_i32), (pop_size, count, 1)
             )
-            columns = enp.arange(0, attr_width, dtype=evoxc.int32)
-            # Row stride as a ``(P, 1, 1)`` block: ``batch_offsets`` returns ``(P, 1)``, which
-            # would broadcast against the last two axes of the ``(P, M, A)`` index block
-            # instead of the leading one.
-            rows_stride = enp.reshape(
-                enp.arange(
-                    0, pop_size * count * attr_width, count * attr_width, dtype=evoxc.int32
-                ),
-                (pop_size, 1, 1),
-            )
-            index = evoxc.add(evoxc.add(row_offsets, columns), rows_stride)
-            homologous_attrs = evoxc.reshape(
-                evoxc.gather(
-                    evoxc.reshape(attrs2, (pop_size * count * attr_width,)), index, axis=0
-                ),
-                (pop_size, count, attr_width),
+            attrs2_flat = statics.attrs_flat
+            if attrs2_flat is None:
+                attrs2_flat = evoxc.reshape(attrs2, (pop_size * count * attr_width,))
+            homologous_attrs = evoxc.gather(
+                attrs2_flat,
+                evoxc.add(row_offsets, statics.base),
+                axis=0,
             )
             pair_distance = gene.distance(state, attrs1, homologous_attrs)
             attribute_distance = evoxc.reduce_sum(
-                evoxc.select(homologous, pair_distance, pool.f32(0.0)), axes=1
+                evoxc.select(homologous, pair_distance, statics.zero_f32), axes=1
             )
 
-        return self._scalar_distance(cnt1, matched, cnt2, attribute_distance, pool)
+        return self._scalar_distance(
+            cnt1, matched, cnt2, attribute_distance, pool, consts=statics.tail
+        )
 
     def _scalar_distance(
         self,
