@@ -91,6 +91,11 @@ def _row_of(
         ``2 ** (bits - 1) > N + Q - 1``, so two entries of the same key lie at most
         ``N + Q - 1`` apart in the low field while two entries of different keys lie at least
         a whole period apart: the hit test is one range test on the difference.
+
+        The node at or after each sorted position is found by its rank, i.e. the node count
+        strictly before that position; the rank is read off an inclusive suffix count of the
+        node tags, built by log2-doubling shifts because ``cumsum`` does not export to
+        StableHLO.  Every step is static: the shift width is a host-side int.
     """
     pop_size, node_count = node_keys.shape
     query_count = queries.shape[1]
@@ -118,12 +123,34 @@ def _row_of(
     # ``cast`` to int32 truncates, which already hands back the low field; the mask clears the
     # key bits that survive above it.
     low = evoxc.bitwise_and(evoxc.cast(ordered, evoxc.int32), c_mask)
-    remaining = evoxc.cumsum(
-        evoxc.cast(evoxc.greater_equal(low, c_query), evoxc.int32), axis=1, reverse=True
-    )
-    # ``remaining`` counts the nodes at or after the position, so ``node_count - remaining`` is
-    # the rank of the first one; a trailing sentinel column keeps that index in range when no
-    # node follows (its key is I_INF + 1, so it never passes the hit test).
+    # ``remaining[p]`` is the number of nodes at or after position ``p`` — an inclusive suffix
+    # count, and ``cumsum`` is a StableHLO export deferral, so it is a Hillis-Steele doubling:
+    # after the step for ``shift`` every entry holds the sum over ``[p, p + 2 * shift)``, so
+    # ``ceil(log2(total))`` static-shift steps leave the full suffix count.  Integer addition
+    # is exact, and each step is one ``pad`` plus one ``slice`` (an over-shift reads the zero
+    # tail) plus one ``add``; the shifts are host-side ints, never graph data.
+    # The count never exceeds ``node_count`` (the flags mark one node per row and queries
+    # contribute nothing), so ``int8`` is exact while ``node_count <= 127`` and the narrower
+    # element is what the per-step pad/add pays for.
+    narrow = node_count <= 127
+    scan_dtype = evoxc.int8 if narrow else evoxc.int32
+    remaining = evoxc.cast(evoxc.greater_equal(low, c_query), scan_dtype)
+    shift = 1
+    while shift < total:
+        remaining = evoxc.add(
+            remaining,
+            evoxc.slice(
+                evoxc.pad(remaining, ((0, 0), (0, shift))),
+                (0, shift),
+                (pop_size, total),
+            ),
+        )
+        shift *= 2
+    if narrow:
+        remaining = evoxc.cast(remaining, evoxc.int32)
+    # ``node_count - remaining`` is therefore the rank of the first node at or after the
+    # position; a trailing sentinel column keeps that index in range when no node follows (its
+    # key is I_INF + 1, so it never passes the hit test).
     rank = evoxc.subtract(_static_constant(np.asarray(node_count)), remaining)
     # One sentinel *element*, broadcast down the column: the value is static data with no
     # per-individual content, so a materialised ``(P, 1)`` int64 column would only be a

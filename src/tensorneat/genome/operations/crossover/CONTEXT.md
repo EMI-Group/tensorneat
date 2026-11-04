@@ -15,7 +15,7 @@ Key tables are accepted as `(P, N)` (rank 2, the payload's node-key layout) or `
 
 ## Alignment (`../alignment.py`, the rank merge shared with distance)
 This node no longer owns an aligner: `../alignment.py` holds the one implementation both crossover and compatibility distance consume, so the two operators cannot drift apart on what a "key row" is or on how a homologue is found.
-`find_homologous` = one `argsort` per gene family: pack each key row into one `uint64` identity, concat both parents' identities, `argsort` once, take each gene's rank as the inverse permutation, and read the successor (`rank + 1`) through two row gathers — the successor's identity must equal the gene's own identity with the parent-2 tag set.
+`find_homologous` = one `argsort` per gene family: pack each key row into one `int64` identity (sign-flipped, see `../CONTEXT.md`), concat both parents' identities, `argsort` once, take each gene's rank as the inverse permutation, and read the successor (`rank + 1`) through two row gathers — the successor's identity must equal the gene's own identity with the parent-2 tag set.
 The parent tag lives in the low `_TAG_BITS` of the sort key (parent 1 = `0`), so inside a group of equal identities parent 1 sorts first and the ordering never depends on the sort being stable — which is why the sort runs unstable (4× faster on the reference interpreter).
 The successor index is clamped to the last position; the clamped gene is its own successor and its tag differs, so the clamp cannot invent a homologue.
 `row_identity` packs the first `_PACKED_KEY_WIDTH = 2` key columns side by side (31 bits each + 2 tag bits = 64, injective over the whole legal non-negative `int32` key domain); columns beyond that are confirmed exactly by `_confirm_rows`, one `equal` per spare column — never an innermost-axis reduce.
@@ -36,7 +36,7 @@ The one precondition of the merge is the payload's own uniqueness invariant: the
 `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)` + `DefaultCrossover()`: **145 traced ops**, `4.7 / 16.6 / 34.7 ms` at pop 100 / 500 / 1000.
 The 433-op baseline measured in the same session on the same box: `8.9 / 31.0 / 64.8 ms` — **1.87×** faster, and a bit-identical 6-generation seed-42 evolution trajectory (same 435→145-op operand, same `fitness_history` at pop 100).
 Per-component at pop 1000: `find_homologous` node 39 ops / 4.4 ms, `find_homologous` conn 53 ops / 11.4 ms, `gather_attr_rows` 12 ops / 0.9 and 3.7 ms.
-Inside `find_homologous` the load is element volume, not op count: the merge blocks are `(P, 2M)` `uint64` (1.6 MB at the conn family), two `argsort`s (1.8 ms each at `(P,200)`) plus one derived gather carry ~half its time.
+Inside `find_homologous` the load is element volume, not op count: the merge blocks are `(P, 2M)` `int64` (1.6 MB at the conn family), two `argsort`s (1.8 ms each at `(P,200)`) plus one derived gather carry ~half its time.
 
 ## Test Strategy
 `test/unit/genome/test_crossover.py` is the acceptance spec (its bodies are `pytest.skip` placeholders): parent-1 structure kept, per-attribute 50/50 for homologous genes, parent-1 attributes for non-homologous genes, padding preserved, self-crossover identity, and `find_homologous` exactness on shuffled parent-2 rows.

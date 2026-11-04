@@ -4,10 +4,10 @@ The dense route (:mod:`.dense`) is called once per centre genome — ``2 * speci
 times per generation — and every call needs the same *static* scaffolding: the base of the
 owner table, the base of the centre attribute table, the centre row index, the flat
 reorder offsets, the reorder buffer, and a handful of rank-0 scalars (the gene count, the
-populations's count as ``float32``, the padding slot, the dump slot and the key span as
-``uint32``).  Those tensors depend only on ``(pop_size, gene count, attr width, key_span)``,
-so building them inside ``measure`` paid for them ``2 * species_size`` times — and, worse,
-each one is a *graph constant*, so a generation graph carried one copy per call.
+populations's count as ``float32``, the padding slot and the dump slot).  Those tensors
+depend only on ``(pop_size, gene count, attr width)``, so building them inside ``measure``
+paid for them ``2 * species_size`` times — and, worse, each one is a *graph constant*, so a
+generation graph carried one copy per call.
 
 :func:`build` moves that work into :func:`.digest.prepare_family`, which runs once per
 generation: the tensors travel to every ``measure`` call as leaves of
@@ -58,8 +58,6 @@ class DenseLayout(NamedTuple):
             :func:`~tensorneat.genome.window.fill` rather than a population-sized constant.
         pad_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` never-owned padding slot ``width``.
         dump_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` dump slot ``width - 1``.
-        span_u32 (evoxc.SymbolicTensor): rank-0 ``uint32`` key span ``S``, the range bound of
-            the ``cast(key, uint32) < S`` test.
         tail (tuple): the scalar tail's three rank-0 ``float32`` constants —
             ``compatibility_disjoint``, ``compatibility_weight`` and ``1.0`` — or ``()`` when the
             route is gated off.  They are leaves because
@@ -77,7 +75,6 @@ class DenseLayout(NamedTuple):
     zeros: evoxc.SymbolicTensor
     pad_i32: evoxc.SymbolicTensor
     dump_i32: evoxc.SymbolicTensor
-    span_u32: evoxc.SymbolicTensor
     tail: tuple
 
 
@@ -88,7 +85,6 @@ def build(
     count: int,
     attr_width: int,
     width: int,
-    key_span: int,
     tail: tuple[float, float, float] | None,
     dense: bool,
 ) -> DenseLayout:
@@ -100,8 +96,9 @@ def build(
         pop_size (int): Static population batch ``P``.
         count (int): Static gene count ``M`` of the family.
         attr_width (int): Static attribute width ``A`` (``0`` for a gene with no attribute).
-        width (int): Static dense table width, dump slot included (``dense_width``).
-        key_span (int): Static key bound ``S`` of the genome.
+        width (int): Static dense table width, dump slot included (``dense_width``).  The key
+            span itself is *not* a layout scalar: the range test lives in
+            :func:`.digest.dense_rows` and reads ``key_span`` from the payload's genome.
         tail (tuple[float, float, float] | None): ``(disjoint, weight, one)`` of the operator
             supplying the scalar tail, or ``None`` for an operator that has none (its route then
             builds the constants per call, as the row-wise routes do).
@@ -127,7 +124,6 @@ def build(
     )
     pad_i32 = pool.i32(width)
     dump_i32 = pool.i32(width - 1)
-    span_u32 = pool.u32(int(key_span))
     if not dense:
         empty = enp.zeros((0,), dtype=evoxc.float32)
         return DenseLayout(
@@ -140,7 +136,6 @@ def build(
             empty,
             pad_i32,
             dump_i32,
-            span_u32,
             tail_c,
         )
     stride = count + 1
@@ -156,7 +151,6 @@ def build(
         fill((pop_size,), 0.0, evoxc.float32),
         pad_i32,
         dump_i32,
-        span_u32,
         tail_c,
     )
 

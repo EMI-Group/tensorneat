@@ -5,8 +5,8 @@ This private module holds the parts of the species algebra that are written
 
 * the graph-time constant/index helpers (``enp`` creation ops need a live trace,
   so nothing here may be precomputed on the host);
-* the shared building blocks ``sort_desc_legacy``, ``prefix_sum_exclusive`` and
-  ``membership``;
+* the shared building blocks ``sort_desc_legacy``, ``prefix_sum_exclusive``,
+  ``membership`` and ``scatter_row``;
 * spawn allocation (:func:`spawn_numbers_by_rank` / ``_by_fitness`` on top of
   :func:`spawn_from_target`), block flattening (:func:`block_layout`), parent
   pairing (:func:`pair_parents`);
@@ -22,6 +22,8 @@ arguments, because ``S``/``P`` are fixed at build time.
 from __future__ import annotations
 
 from typing import Any, Callable
+
+import numpy as np
 
 import evoxc
 import evoxc.numpy as enp
@@ -83,6 +85,39 @@ def iota_i32(length: int) -> Any:
     return enp.arange(length, dtype=evoxc.int32)
 
 
+def static_i32(values: Any) -> Any:
+    """Bake a static ``int32`` table (index vector, permutation) as a constant.
+
+    Fully static data belongs in a graph constant, not in traced arithmetic:
+    ``evoxc.constant`` emits a single ``constant`` op, while the equivalent
+    ``enp.full``/``subtract``/``enp.tril``/``evoxc.flip`` spelling would emit
+    ops that the StableHLO v1 exporter either grows or rejects outright
+    (``tril`` and ``flip`` are *deferred* there).  The values are exact
+    integers, so the constant is bit-identical to the computed form.
+    """
+    return evoxc.constant(evoxc.from_numpy(np.asarray(values, dtype=np.int32)))
+
+
+def static_f32(values: Any) -> Any:
+    """Bake a static ``float32`` table (mask, gate matrix) as a constant.
+
+    See :func:`static_i32`; the entries here are exact ``0.0``/``1.0``.
+    """
+    array = np.ascontiguousarray(values, dtype=np.float32)
+    return evoxc.constant(evoxc.from_numpy(array))
+
+
+def reversed_index(length: int) -> Any:
+    """``(length,)`` ``int32`` index vector ``[length - 1, ..., 1, 0]``.
+
+    The exportable replacement for ``evoxc.flip(x, 0)``, which the StableHLO
+    v1 exporter does not map: ``gather(x, reversed_index(n), axis=0)`` is the
+    same reversal, since a single-axis gather with static indices is
+    supported.
+    """
+    return static_i32(np.arange(length - 1, -1, -1))
+
+
 def scalar_f32(value: Any) -> Any:
     """Normalise a traced value to a rank-0 ``float32``.
 
@@ -134,12 +169,67 @@ def sort_desc_legacy(x: Any, axis: int = -1) -> Any:
 def prefix_sum_exclusive(values: Any) -> Any:
     """Exclusive prefix sum of a ``(S,)`` float vector via a triangular ``dot``.
 
-    ``evoxc.cumsum`` exists but does not export on the compiler backends.
+    ``evoxc.cumsum`` exists but is a *deferred* op on the compiler backends, and
+    so is ``enp.tril``; the strictly-lower-triangular gate matrix is therefore
+    baked as a static ``float32`` constant (``length`` is static at build time
+    and the entries are exact ``0.0``/``1.0``), which is both exportable and
+    one op cheaper than the traced ``tril``.
     """
     length = values.shape[0]
-    triangular = enp.tril(enp.ones((length, length), dtype=evoxc.float32), -1)
+    triangular = static_f32(np.tril(np.ones((length, length), dtype=np.float32), -1))
     return evoxc.reshape(evoxc.dot(triangular, enp.expand_dims(values, 1)), (length,))
 
+
+def scatter_row(table: Any, slot: Any, update: Any) -> Any:
+    """Replace row ``slot`` of a ``(S, ...)`` table with ``update``.
+
+    ``evoxc.scatter`` writes the cells numpy's ``x[slot] = update`` writes, but
+    the StableHLO v1 exporter only supports ``scatter`` on a rank-1 ``axis=0``
+    operand and on rank-2 row/column writes -- a rank-3 gene table
+    (``(S, N, NA)`` node attrs, ``(S, E, CK)`` conn keys, ...) is rejected
+    outright.  Flattening the trailing axes into one row length ``R`` turns the
+    same write into a rank-2 ``axis=0`` row scatter, which exports; the
+    reshape round-trip is shape-only, so the written cells are identical.
+    """
+    shape = tuple(table.shape)
+    if len(shape) == 2:
+        return evoxc.scatter(table, slot, update)
+    row_len = 1
+    for dim in shape[1:]:
+        row_len *= dim
+    flat = evoxc.reshape(table, (shape[0], row_len))
+    written = evoxc.scatter(flat, slot, evoxc.reshape(update, (row_len,)))
+    return evoxc.reshape(written, shape)
+
+
+def first_centre_table(species_size: int, row: Any, fill: Any, dtype: Any) -> Any:
+    """``(S,) + row.shape`` centre table whose row ``0`` is ``row``, rest ``fill``.
+
+    Generation 0 has exactly one live species, whose centre is the first
+    individual, so every trailing row is the genome's own dead-slot padding
+    (``0`` for the integer key arrays, ``NaN`` for the float attribute arrays).
+
+    Written as a ``concatenate`` of the reshaped first row with a constant fill
+    block rather than as a row ``scatter``: every row is written here, so there
+    is nothing to mask, and the StableHLO v1 exporter rejects a ``scatter`` on a
+    rank-3 operand along axis 0 (the ``(S, N, NA)``/``(S, E, CA)`` tables) while
+    a ``concatenate`` exports at every rank.
+
+    Args:
+        species_size (int): Static species slots ``S`` (``>= 1``).
+        row: One individual's gene array, rank ``1`` (``node_keys``) or ``2``
+            (attributes / conn keys), without a species axis.
+        fill: Padding value for the dead rows.
+        dtype: Static dtype of the table (``evoxc.int32`` or ``evoxc.float32``).
+
+    Returns:
+        ``(S,) + row.shape`` tensor, row ``0`` equal to ``row``.
+    """
+    head = evoxc.reshape(row, (1,) + tuple(row.shape))
+    if species_size == 1:
+        return head
+    tail = enp.full((species_size - 1,) + tuple(row.shape), fill, dtype=dtype)
+    return enp.concatenate([head, tail], 0)
 
 def membership(species_keys: Any, idx2species: Any) -> Any:
     """``(S, P)`` mask ``member[i, p] = idx2species[p] == species_keys[i]``.
@@ -282,7 +372,9 @@ def block_layout(spawn_number: Any, pop_size: int, species_size: int) -> Any:
     qualifying block rather than the number of qualifying blocks: zero-spawn
     species can sit in the middle of the table (after the sort only dead slots
     are guaranteed to trail), so a count would point at the wrong block -- hence
-    the reversed ``argmax`` (``argmax`` returns the first maximum).
+    the reversed ``argmax`` (``argmax`` returns the first maximum), with the
+    reversal spelled as a static-index ``gather`` (:func:`reversed_index`)
+    because ``evoxc.flip`` is a deferred op on the StableHLO exporter.
     """
     spawn = evoxc.cast(spawn_number, evoxc.int32)
     exclusive = prefix_sum_exclusive(evoxc.cast(spawn, evoxc.float32))
@@ -292,7 +384,12 @@ def block_layout(spawn_number: Any, pop_size: int, species_size: int) -> Any:
         evoxc.less_equal(enp.expand_dims(exclusive, 1), enp.expand_dims(slots, 0)),
     )
     reversed_loc = evoxc.cast(
-        evoxc.argmax(evoxc.flip(evoxc.cast(mask, evoxc.int32), 0), axis=0),
+        evoxc.argmax(
+            evoxc.gather(
+                evoxc.cast(mask, evoxc.int32), reversed_index(species_size), axis=0
+            ),
+            axis=0,
+        ),
         evoxc.int32,
     )
     loc = evoxc.subtract(int_const(species_size - 1), reversed_loc)
@@ -653,7 +750,7 @@ def speciate(
         onehot = evoxc.logical_and(evoxc.equal(iota_i32(pop_size), closest), claim)
         assign = evoxc.select(onehot, key_slot, assign)
         dist = evoxc.select(onehot, const(0.0), dist)
-        node_keys = evoxc.scatter(
+        node_keys = scatter_row(
             node_keys,
             slot,
             evoxc.select(
@@ -662,7 +759,7 @@ def speciate(
                 evoxc.gather(node_keys, slot, axis=0),
             ),
         )
-        node_attrs = evoxc.scatter(
+        node_attrs = scatter_row(
             node_attrs,
             slot,
             evoxc.select(
@@ -671,7 +768,7 @@ def speciate(
                 evoxc.gather(node_attrs, slot, axis=0),
             ),
         )
-        conn_keys = evoxc.scatter(
+        conn_keys = scatter_row(
             conn_keys,
             slot,
             evoxc.select(
@@ -680,7 +777,7 @@ def speciate(
                 evoxc.gather(conn_keys, slot, axis=0),
             ),
         )
-        conn_attrs = evoxc.scatter(
+        conn_attrs = scatter_row(
             conn_attrs,
             slot,
             evoxc.select(
@@ -729,10 +826,10 @@ def speciate(
             species_size,
             evoxc.select(create, evoxc.add(counter, 1.0), counter),
         )
-        node_keys = evoxc.scatter(node_keys, slot, centre[0])
-        node_attrs = evoxc.scatter(node_attrs, slot, centre[1])
-        conn_keys = evoxc.scatter(conn_keys, slot, centre[2])
-        conn_attrs = evoxc.scatter(conn_attrs, slot, centre[3])
+        node_keys = scatter_row(node_keys, slot, centre[0])
+        node_attrs = scatter_row(node_attrs, slot, centre[1])
+        conn_keys = scatter_row(conn_keys, slot, centre[2])
+        conn_attrs = scatter_row(conn_attrs, slot, centre[3])
 
         def compute_row(
             centre_node_keys,

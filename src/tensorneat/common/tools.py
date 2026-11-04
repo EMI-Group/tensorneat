@@ -29,6 +29,14 @@ Why this module exists (validated evoxc facts that shape every signature):
   ``evoxc.select(pred, on_true, on_false)``).
 * ``scatter`` is set-only (no add/max mode) and the reductions have no
   ``where=``/``initial=``; masking is done by padding with the neutral element.
+* **One index block, one scatter.** A prepared index block (or any index
+  expression, after IREE's CSE) must feed exactly one ``scatter``:
+  ``iree-compile`` collapses the emitted rank-2 ``(n, 1)`` index vector to
+  rank 1 for ``iree_linalg_ext.scatter`` through a materialization it cannot
+  legalize while a second scatter still consumes the rank-2 value, and fails
+  with ``failed to legalize unresolved materialization``. Two payloads that
+  write the *same* cells (e.g. ``in_conn`` and ``in_src``) therefore go into
+  one wider buffer and one scatter, never into two calls.
 * ``argsort`` returns ``int64`` and requires ``stable=True`` wherever
   tie-breaking must be deterministic (group ranks).
 
@@ -422,7 +430,10 @@ def flat_scatter(x, idx, updates, trusted=False):
         ``functions``). Masked writes belong in :func:`masked_flat_scatter`.
         :func:`prepare_flat_index` builds the index block and
         :func:`flat_scatter_prepared` performs the scatter, so a caller that
-        writes two payloads to the same cells hoists the former.
+        writes two payloads to the same cells hoists the former — but it must
+        **not** then call :func:`flat_scatter_prepared` twice with that block:
+        one index block feeds exactly one scatter (see the module docstring),
+        so the two payloads belong in one concatenated buffer and one call.
     """
     flat_idx = prepare_flat_index(x, idx, trusted=trusted)
     return flat_scatter_prepared(x, flat_idx, updates)
@@ -444,6 +455,13 @@ def flat_scatter_prepared(x, flat_idx, updates):
     Raises:
         evoxc.ShapeError / evoxc.BackendError: Propagated unchanged if a flat
             index escapes the flattened payload.
+
+    Notes:
+        Call this **once per index block**: two calls with the same
+        ``flat_idx`` emit two scatters sharing one index value, which
+        ``iree-compile`` rejects (see the module docstring). Two payloads that
+        write the same cells go through one call on a buffer wide enough to
+        hold both (``tensorization._window_pair`` is the worked example).
     """
     pop_size, row_len = _flat_shape(x)
     out = evoxc.scatter(

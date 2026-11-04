@@ -21,11 +21,19 @@ The library keeps its research identity (GECCO 2024 Best Paper, arXiv 2404.01817
 - Configuration objects are constructor-level and host-side; every numerical operation is a batch-first evoxc kernel (population on axis 0).
 
 ## Backends
-`backend=` is forwarded verbatim to `evoxc.build`; `"numpy"` (reference interpreter, always available), `"iree"`, `"tvm"`, `"xla"` are opt-in extras.
+`backend=` is forwarded verbatim to `evoxc.build`; `"numpy"` (reference interpreter, always available) is the measured CPU backend.
+`"iree"` (llvm-cpu) compiles and runs every shipped case end to end since the graph formulations were made v1-exportable; on this box it is **slower** than numpy per generation (5× at pop 100, 24× at pop 500, 23× at pop 1000) and costs ~9–11 s of `iree-compile` per static shape — the numbers, protocol and per-gate fix record live in `benchmarks/BACKENDS.md`.
+`"xla"` is unavailable without a user-supplied PJRT plugin `.so` (`EVOXC_PJRT_PLUGIN`); `"tvm"` is untested here.
 Unsupported shapes/kernels must raise the backend's error — never silently fall back to another backend.
+
+## Graph portability (what every kernel must respect)
+The StableHLO v1 exporter is the portability gate: `evoxc`'s `DEFERRED_OPS` (`cumsum`, `cumprod`, `tril`, `triu`, `flip`, `erf`, `gelu`, `where`, `scan`, `convolution`, `runtime_call`, `external_call`, `sparse_*`) have no emission, `scatter` accepts only rank-1 axis-0 and rank-2 row/column writes, and iree declares no unsigned dtype.
+Kernels therefore use static constants, static-index `gather`s, log2-doubling folds, same-width signed carriers (plus an explicit sign flip where unsigned *order* matters), and at most one `scatter` per prepared index block.
+The rules with their evidence live in `src/tensorneat/common/CONTEXT.md`, `src/tensorneat/algorithm/neat/CONTEXT.md` and `src/tensorneat/genome/operations/CONTEXT.md`.
 
 ## Performance Contract
 The rewrite must be at least as fast as the frozen JAX baseline on CPU (pop 100/500/1000, XOR and XOR3d), and the measurement must live in `benchmarks/RESULTS.md` (numbers + how to reproduce).
+That contract is measured on the `numpy` reference backend; the `iree` compiled leg was measured separately (see `benchmarks/BACKENDS.md`) and does not meet it, so it is not part of the verdict.
 Legacy measured on this machine (JAX 0.12 CPU, 1 thread-bound box): 51 ms/gen at pop 100, 109 ms/gen at pop 500, 157 ms/gen at pop 1000.
 The winning structural idea is *edge-proportional, depth-parallel* evaluation: work scales with real connections and network depth, not with `max_nodes × max_nodes` padding waste.
 
@@ -42,7 +50,7 @@ The winning structural idea is *edge-proportional, depth-parallel* evaluation: w
 
 ## Test Strategy
 `pytest` from the repo root (`[tool.pytest.ini_options]` in `pyproject.toml`, `testpaths = ["test"]`); `test/` mirrors the source tree.
-`test/unit/` runs on the numpy backend with no optional dependency; `test/parity/` requires the `bench` extra (JAX) and compares kernels against `benchmarks/legacy_jax`; `test/integration/` evolves XOR to the fitness target and asserts determinism for a fixed seed.
+`test/unit/` runs on the numpy backend with no optional dependency; `test/parity/` requires the `bench` extra (JAX) and compares kernels against `benchmarks/legacy_jax`; `test/integration/` evolves XOR to the fitness target and asserts determinism for a fixed seed; `test/backends/` runs a real XOR generation on `backend="iree"` and compares it with numpy, and skips cleanly without the `evoxc[iree]` extra (marker `requires_iree`, in no gate).
 `test/release_gate_no_jax.py` asserts that `import tensorneat` pulls in no JAX/torch module.
 
 ## Routing Table
@@ -50,7 +58,7 @@ The winning structural idea is *edge-proportional, depth-parallel* evaluation: w
 |---|---|
 | `./src/tensorneat` | The package: pipeline (compile site), kernel contract, genome/algorithm/problem/common subtrees. |
 | `./benchmarks` | Old-vs-new benchmark harness, frozen legacy JAX implementation, spike results, `RESULTS.md`. |
-| `./test` | Pytest suites: unit, parity vs legacy, integration, release gates. |
+| `./test` | Pytest suites: unit, parity vs legacy, integration, backends (`iree`), release gates. |
 | `./examples` | Runnable scripts for each supported problem family. |
 | `./docs` | Sphinx configuration and autodoc stubs. |
 | `./tutorials` | Teaching notebooks (JAX-era; read for concepts, not for API accuracy). |

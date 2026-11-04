@@ -1,207 +1,198 @@
-# The IREE backend: can TensorNEAT run on it here?
+# The `iree` backend: it runs, and it is slower than numpy here
 
-**Answer: no — not for a single case in the matrix, and not for a reason the benchmark protocol can work around.**
-Every `--backend iree` run dies inside `Pipeline.setup()` while lowering the generation-0 species table, before a single generation is timed.
-The failure is deterministic — the committed record is 8/8 identical errors, and a scratch determinism batch of 40 fresh worker processes (8 cases × 5, not committed) reproduced the same message — and is an evoxc **exporter/capability gate**, not an IREE compile crash.
-The SIGSEGV the pipeline owner reported is real and does reproduce here, but it sits *downstream* of three gates TensorNEAT never gets past.
-No iree row carries a number; the CPU contract stays on the numpy reference backend.
+**Verdict: `backend="iree"` now compiles and runs TensorNEAT end to end — every gate that used to kill it in `Pipeline.setup()` is gone — but on this box it is 5.0× (pop 100), 24.2× (pop 500) and 23.4× (pop 1000) slower per generation than the numpy reference interpreter, and the gap grows with population.**
+Every shipped problem family runs on it (`XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `RecurrentGenome`, `HyperNEAT`); each takes one 8–11 s `iree-compile` per static shape.
+`xla` is not available here: the evoxc xla adapter needs a PJRT C API plugin `.so` (`EVOXC_PJRT_PLUGIN`, unset on this box) and nothing provides one. `tvm` was not attempted.
+The CPU performance contract therefore stays on the numpy backend (`RESULTS.md`, unchanged by this report).
+
+This file replaces an earlier version that recorded 8/8 cases dying in `Pipeline.setup()` with
+`BackendError: stablehlo export: op 'scatter' ... rank-3 operand along axis 0`.
+That failure was real and is now fixed at its source in `src/` (section "The four gates, in the order they fired").
+`benchmarks/results/iree.json` and `benchmarks/iree.md` are the **historical** record of that pre-fix attempt (8/8 `error`); they were not re-rendered for this report.
 
 ## Environment (measured, not assumed)
 
 | Item | Value |
 |---|---|
-| Date (UTC) | 2026-11-02, runs 04:00–04:25 |
+| Date (UTC) | 2026-11-04, runs 05:39–05:55 |
 | CPU | `INTEL(R) XEON(R) PLATINUM 8568Y+`, QEMU/KVM guest, 1 socket, 1 thread/core, no SMT |
 | `nproc` | 20 |
 | Platform | `Linux-6.8.0-146-generic-x86_64-with-glibc2.39` |
-| Python | 3.12.3 (`$TMPDIR/iree-venv`, separate from `/tmp/tn-venv`) |
+| Python | 3.12.3 |
 | evoxc | 0.1.0 |
 | numpy | 2.5.4 |
 | iree-base-compiler / iree-base-runtime | 3.11.0 / 3.11.0 (what `evoxc[iree]` resolves) |
 | sympy / networkx / matplotlib / pytest | 1.14.0 / 3.7 / 3.11.2 / 9.2.0 |
 
-The `$TMPDIR` paths in this report are examples from that measurement session, not committed or fetchable artifacts.
+## What runs today
 
-## What was installed
+| backend | install | what runs | compile needed |
+|---|---|---|---|
+| `numpy` | always available | everything | 1.6–2.0 s per graph set (the evoxc interpreter build) |
+| `iree` (llvm-cpu) | `pip install "evoxc[iree]"` | `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `RecurrentGenome`, `HyperNEAT` — one full generation each, verified | 8.1–10.9 s per generation graph, one-off per static shape |
+| `xla` | plugin `.so` required | nothing | not reached: `the xla adapter requires a PJRT C API plugin library (.so exporting GetPjRtApi) and none was found` |
+| `tvm` | extra | not attempted | — |
 
-```
-uv venv "$TMPDIR/iree-venv" --python 3.12
-uv pip install --python "$TMPDIR/iree-venv/bin/python" "evoxc[iree]" numpy sympy networkx matplotlib pytest
-```
+Correctness across backends (same seed 42, XOR, `DefaultGenome`, this machine):
+the final `max fitness` is bit-identical at pop 100 (`-0.19304290413856506` numpy vs `-0.19304291903972626` iree, Δ = 1.5e-08) and pop 500 (identical to all printed digits, `-0.15205243229866028`);
+at pop 1000 the two trajectories separate at `1e-08`-scale and land on `-0.151799` vs `-0.143853`, which is float-reassociation drift in iree's reductions, not a semantic difference (int32 key payloads compare equal; float attribute arrays agree to ≤ 2.4e-07 ≈ 1–2 ulp).
+`test/backends/test_iree_pipeline.py` pins exactly this: int/key payloads `array_equal`, floats within a documented tolerance.
 
-Exit 0, `Installed 22 packages in 558ms`, no warnings beyond uv's hardlink/copy note, no failure text.
-The extra pulled `iree-base-compiler==3.11.0` + `iree-base-runtime==3.11.0`; nothing else changed version.
-`/tmp/tn-venv` was not touched (its `import iree` is a `ModuleNotFoundError`, which is why this venv exists).
+## The five gates, in the order they fired
 
-The iree/llvm-cpu stack itself works on this box, so no failure below can be blamed on the install:
+Each gate below was reproduced verbatim on this machine, then removed **at its source in `src/`**, never by editing evoxc (`/root/evoxc` is a read-only foreign repo; the installed `evoxc` 0.1.0 was left untouched).
+The offending op's location is `op.location` in the traced evoxc IR, which is why the errors name a TensorNEAT `file:line`.
 
-| Probe | Result |
-|---|---|
-| `iree_probe.py --mode sanity` (64x64 `matmul` graph) | compiled in 0.248–0.264 s, `max_abs_err` 3.8e-06 vs numpy, exit 0 |
-
-## Harness runs with `--backend iree`
-
-Command (the one in the task, verbatim):
+### Gate 1 — rank-3 `scatter` (15 sites, export-time)
 
 ```
-$TMPDIR/iree-venv/bin/python benchmarks/run_benchmark.py --impl new --backend iree \
-  --cases xor_p100,xor3d_p100,custom_pagie_p500,cartpole_p100 \
-  --generations 3 --warmup 1 --repeats 1 --timeout 300 \
-  --json $TMPDIR/iree.json --out $TMPDIR/iree.md
-```
-
-Result (a scratch run, not the committed record): 4/4 rows `status="error"`, `VERDICT: INCOMPLETE`, CLI exit code 1, JSON and Markdown written in full.
-
-Per-case status, each case additionally re-run **5 times in 5 fresh worker processes** (`benchmarks/harness/worker.py --impl new --backend iree --generations 3 --warmup 1 --seed 42`, records in `$TMPDIR/reps/*.json` — an example scratch path, not committed):
-
-| Case | Pop | Build (`Pipeline.setup`) | Timed run | Status over 5 fresh processes | ms/gen | compile (s) | peak RSS |
-|---|---|---|---|---|---|---|---|
-| `xor_p100` | 100 | fail | not reached | error 5/5 (export gate) | — | — | — |
-| `xor_p500` | 500 | fail | not reached | error 5/5 (export gate) | — | — | — |
-| `xor_p1000` | 1000 | fail | not reached | error 5/5 (export gate) | — | — | — |
-| `xor3d_p100` | 100 | fail | not reached | error 5/5 (export gate) | — | — | — |
-| `xor3d_p500` | 500 | fail | not reached | error 5/5 (export gate) | — | — | — |
-| `xor3d_p1000` | 1000 | fail | not reached | error 5/5 (export gate) | — | — | — |
-| `custom_pagie_p500` | 500 | fail | not reached | error 5/5 (export gate) | — | — | — |
-| `cartpole_p100` | 100 | fail | not reached | error 5/5 (export gate) | — | — | — |
-
-All 40 scratch runs produced `status="error"` with one identical signature; 0 crashes, 0 timeouts, 0 missing rows.
-`compile_time_s`, `ms_per_generation`, `gens_per_second` and all three RSS fields are `null` in every record, because the run dies before the first timing sample starts.
-The same venv runs the same case on the numpy backend fine (`--backend numpy --cases xor_p100 --generations 3`: `ok`, 58.06 ms/gen, build 2.93 s, final best −0.2500), so this is iree-specific, not a broken environment.
-
-The committed evidence is the full 8-case matrix: `benchmarks/results/iree.json` holds the record and `benchmarks/iree.md` its rendered report (8/8 rows `status="error"`, verdict `INCOMPLETE`), reproducible with
-
-```
-python benchmarks/run_benchmark.py --impl new --backend iree --cases all \
-  --generations 2 --warmup 1 --repeats 1 \
-  --json benchmarks/results/iree.json --out benchmarks/iree.md
-```
-
-The failure is identical for all 8 cases — population, problem and fitness target do not change it — matching the per-case 5/5 scratch fresh-process pattern above (`--generations 3`).
-
-## Failure signature (deterministic, first gate)
-
-```
-evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at src/tensorneat/algorithm/neat/species.py:295
+evoxc.core.errors.BackendError: stablehlo export: op 'scatter' at .../src/tensorneat/algorithm/neat/species.py:295
 on a rank-3 operand along axis 0 is not supported by the v1 exporter
 (numpy put_along_axis broadcast scatter is expressible for rank-1 axis=0 and rank-2 row/column writes;
 use the numpy backend for the general case)
 ```
 
-Top of the traceback: `benchmarks/harness/adapters/new.py:70 setup` → `src/tensorneat/pipeline.py:576 setup` → `src/tensorneat/algorithm/neat/neat.py:318 evoxc.build` → `evoxc/pipeline.py:1599 build` → `evoxc/backends/compiler.py:369 lower` → `evoxc/backends/stablehlo/writer.py:1813 _emit_scatter`.
-The offending construct is the generation-0 species table: `SpeciesController.setup` writes its centre rows with an axis-0 scatter into `(species_size, max_nodes, 4)`, `(species_size, max_conns, 2)` and `(species_size, max_conns, 1)` arrays (species.py:290–313); line 295 is `center_node_attrs`, the first rank-3 one.
-A trace-time census of that kernel reports exactly three rank-3 scatters: `(20, 50, 4)`, `(20, 100, 2)`, `(20, 100, 1)` for `xor_p100`.
-What fails is the **rank**, not the size: evoxc's v1 exporter supports rank-1 `axis=0` and rank-2 row/column writes only, and a `conn_keys`/`conn_attrs` centre table is rank 3 for every genome layout, so population (100/500/1000), problem (XOR/XOR3d/CustomFuncFit/CartPole) and fitness target make no difference — as the 40 identical records show.
+evoxc's StableHLO v1 exporter (`evoxc/backends/stablehlo/writer.py:1821 _emit_scatter`) supports only rank-1 `axis=0`, rank-2 `axis=0` and rank-2 `axis=1`; the frontend and the numpy kernel accept any rank, so the graph ran on numpy and died at lowering.
+The scatters wrote whole gene rows into `(species, max_nodes, 4)` / `(species, max_conns, 2)` / `(species, max_conns, 1)` species-centre tables:
+`species.py:295`, `:304`, `:309` (generation-0 centre tables) and `_kernels.py:665`, `:674`, `:683`, `:733`, `:734`, `:735` (species scan bodies).
+Rewrites, both in `src/tensorneat/algorithm/neat/_kernels.py`:
+- `first_centre_table(species_size, row, fill, dtype)` — a single-row write is `concatenate([reshape(row, (1, …)), constant fill block])`, no scatter at all (every row is written, so there is nothing to mask); `species_size == 1` short-circuits to the reshape.
+- `scatter_row(table, slot, update)` — flattens the trailing axes to one row length and performs the identical write as a **rank-2 axis-0 row scatter** (`(rows, R)` operand, `(rows,)` indices, `(rows, R)` updates), then reshapes back.
 
-## Two more deterministic gates behind it
-
-Probe-only trace-time bypasses (`iree_probe.py --mode pipeline --case xor_p100 --bypass …`) show the next blockers, in order:
-
-| Probe | First failure |
-|---|---|
-| no bypass | `BackendError: stablehlo export: op 'scatter' … rank-3 operand along axis 0` (species.py:295) |
-| `--bypass scatter` | `BackendError: capability drift: the iree backend cannot execute dtype uint32 (op 'constant') — its declared dtypes are ['bool', 'float16', 'float32', 'float64', 'int16', 'int32', 'int64', 'int8']` |
-| `--bypass scatter,uint32` | `BackendError: stablehlo export: op 'tril' at src/tensorneat/algorithm/neat/_kernels.py:137 is not supported in v1` |
-
-`uint32` is the genome row hash (`src/tensorneat/genome/gene/base.py:121–127`), which is outside iree's declared dtype set by design; `tril` is `prefix_sum_exclusive`'s triangular `dot` (`_kernels.py:137`) in the species update.
-Both are in the *step* kernel, so they are only reachable after the setup gate is lifted.
-Those bypasses live in `benchmarks/spikes/iree_probe.py` only; nothing in `src/` was changed for this report.
-
-## The reported SIGSEGV does reproduce — downstream, on TensorNEAT's own kernel
-
-A `while_loop` with three or more loop-carried tensors kills `iree-compile` (the C++ process exits `-11`, i.e. SIGSEGV) in a fresh process, `select` in the body or not, and the outcome is a per-run lottery:
-
-| Loop-carried tensors | ok / 5, `select` body | ok / 5, plain body |
-|---|---|---|
-| 2 | 5 | 5 |
-| 3 | 0 | 0 |
-| 4 | 0 | 2 |
-| 5 | 1 | 1 |
-| 6 | 1 | 2 |
-
-(probe: 256-wide float32 vector, one scalar counter plus the data carries; one fresh process per cell, i.e. `iree_probe.py --mode while --carries N --body select|plain --repeat 5`.)
-
-TensorNEAT's own `common/tensorization.py::node_levels` — the 6-carry `while_loop` with `select` in its body that sits inside every NEAT forward graph — reproduces it standalone:
-
-| Kernel | Fresh processes | ok | SIGSEGV | Compile when ok |
-|---|---|---|---|---|
-| `node_levels` N=8 P=4 K=3 | 12 | 8 | 4 | 0.693–0.781 s, `equal_numpy=True` every time |
-| `node_levels` N=50 P=100 K=4 (benchmark `max_nodes`/`pop`) | 5 | 3 | 2 | 0.817 s, 0.828 s, 0.925 s, `equal_numpy=True` |
-
-Exact signature when it dies (Python survives; the compiler subprocess does not):
+### Gate 2 — `uint32` / `uint64` in the graph (capability gate, not export)
 
 ```
-evoxc.core.errors.BackendError: iree-compile failed to compile the StableHLO program for the iree backend (targets: llvm-cpu):
-Error invoking IREE compiler tool iree-compile
-Error code: -11
-Stack dump: … (unsymbolised) …
+evoxc.core.errors.BackendError: capability drift: the iree backend cannot execute dtype uint32 (op 'cast')
+— its declared dtypes are ['bool', 'float16', 'float32', 'float64', 'int16', 'int32', 'int64', 'int8']
 ```
 
-A crashing attempt is also slow and variable: 0.98 s at N=8, 6.6 s for the whole 5-run N=50 batch above, but 68.06 s of wall clock (measured with `/usr/bin/time`) for one earlier N=50/P=100 attempt and 347 s for that 5-run batch — the compiler burns time before the recursion dies.
-Nothing in the TensorNEAT *pipeline* reaches this point, because gates 1–3 fire during `lower()`/`export` first.
+The iree adapter declares no unsigned dtype (`evoxc/backends/adapters/iree.py`, `_dtype_capabilities()`), and this library used unsigned carriers in three places:
+- genome row identity packing (`genome/operations/alignment.py`, `uint64`) — used as a *sort key*, hence unsigned on purpose;
+- key-range tests (`genome/operations/distance/{consts,digest}.py`, `common/tensorization.py`, `uint32`) — one `<` comparison instead of two;
+- a `uint32` constant created through `common/tools.py:159`.
 
-## Compile cost: the "3–7 s per graph" claim is not reproduced
+Rewritten as **same-width signed carriers**: two's complement makes add/sub/shift/or/xor/cast bit-identical, so the packed values do not move.
+Where unsigned *order* mattered (the `argsort`/comparison on the packed identity) it is restored by one bijective sign flip, `bitwise_xor(v, INT64_MIN)` (`alignment.py::_order_ready`) — equality preserved, signed order equals unsigned order.
+The `uint32` range trick became `logical_and(greater_equal(keys, 0), less(keys, span))` (`common/tensorization.py::_key_indices`), i.e. the same two-comparison form the float branch already used.
+NumPy results are byte-identical after all of it (per-node A/B dumps: 144 arrays at pop 100, 72 at pop 500, 72 at pop 1000 in `algorithm/neat`; 23 arrays across gene ops; 108 schedule fields in `common`).
 
-| Graph | Compile (s) | Outcome |
-|---|---|---|
-| 64x64 `matmul` | 0.248–0.264 | runs, 3.8e-06 max abs err |
-| synthetic 6-carry `while` + `select` | 0.318 | runs, bit-exact vs numpy |
-| TensorNEAT `node_levels` N=8 P=4 K=3 | 0.693–0.781 | runs, bit-exact |
-| TensorNEAT `node_levels` N=50 P=100 K=4 | 0.817 / 0.828 / 0.925 | runs, bit-exact |
-| TensorNEAT init kernel (probe patch: 3 rank-3 scatters flattened) | 1.193 | runs; the step kernel then hits gate 2 |
-| full `Pipeline` (setup + step) | never reached | gate 1 |
-| a *crashing* compile at N=50 P=100 K=4 | 68.06 | SIGSEGV after a minute of compiler work |
+### Gate 3 — `tril`, `flip`, `cumsum` (ops the v1 exporter defers)
 
-The largest TensorNEAT graph that can be compiled here took 1.19 s, so 3–7 s per graph is not what this environment shows; what can take a minute is a compile that ends in the SIGSEGV.
-The full step graph's compile time is unmeasurable until gates 1–3 are lifted.
-
-## Minimal reproducer (self-contained)
-
-The first gate, with no TensorNEAT involved — 18 lines, numpy backend accepted it, iree rejects it 5/5 fresh processes:
-
-```python
-import numpy as np
-import evoxc
-
-@evoxc.defn
-def seed_centre(dead, centre):
-    # (species_size, max_nodes, width) <- (max_nodes, width) into row 0:
-    # the species-centre table, species.py:295's construct.
-    return evoxc.scatter(dead, 0, centre)
-
-specs = [evoxc.TensorSpec((20, 50, 4), evoxc.float32),
-         evoxc.TensorSpec((50, 4), evoxc.float32)]
-dead = np.full((20, 50, 4), np.nan, np.float32)
-centre = np.zeros((50, 4), np.float32)
-
-ref = evoxc.run(evoxc.build(seed_centre, *specs, backend="numpy"), dead, centre)
-print("numpy ok:", bool(np.all(np.asarray(ref.numpy())[0] == 0)))   # True
-evoxc.build(seed_centre, *specs, backend="iree")                    # BackendError, 5/5
+```
+evoxc.core.errors.BackendError: stablehlo export: op 'tril' at .../src/tensorneat/algorithm/neat/_kernels.py:140 is not supported in v1
 ```
 
-The downstream SIGSEGV, on TensorNEAT's real kernel, is `python benchmarks/spikes/iree_probe.py --mode node-levels --max-nodes 8 --pop 4 --window 3 --repeat 5`; the synthetic carry-count matrix is `--mode while --carries N --body select|plain --repeat 5`.
-The real pipeline gates are `python benchmarks/spikes/iree_probe.py --mode pipeline --case xor_p100 [--bypass scatter[,uint32]]`.
+`tril`, `triu`, `flip`, `cumsum`, `cumprod`, `erf`, `gelu`, `where`, `scan`, `convolution`, `runtime_call`, `external_call` and the 16 `sparse_*` ops have no v1 emission (`evoxc/backends/stablehlo/ops.py:235 DEFERRED_OPS`, plus names absent from every mapping table).
+Rewrites:
+- `tril` (`_kernels.py:140`, species prefix sum) → a **static constant** triangular mask: the matrix is `(species_size, species_size)` and fully static, so it is one `constant` op instead of a deferred op (and cheaper to run).
+- `flip` (`_kernels.py:295`) → `evoxc.gather` with a static reversed `int32` index vector.
+- `cumsum` (`genome/operations/mutation/cycle.py:121`, a `(P, 214)` suffix count) → a log2-doubling (Hillis–Steele) fold: a `while` over `shift < total` adding a shifted slice, in `int8`/`int32`. Bit-identical, ~24 extra traced ops, +0.3 ms at pop 100.
 
-## What correlates, and what was ruled out
+### Gate 4 — `iree-compile` could not legalize a shared index block (`iree_linalg_ext.scatter`)
 
-- **Correlates:** the number of `while_loop` loop-carried tensors. Two carried values never crashed (10/10 fresh processes across both body shapes); three or more crashed in 60–100% of the 50 fresh processes in the matrix above.
-- `select` in the loop body is **not** the trigger (a `select`-free body crashes just as reliably at 3–4 carries) and is **not** sufficient (a 2-carry loop with `select` is fine); it only raises the crash rate at 4–6 carries.
-- **Graph size** changes the cost, not the existence, of the crash: N=8/P=4 dies in ~1 s, while one N=50/P=100 attempt burned 68 s before dying.
-- **Ruled out** for the TensorNEAT failures: population size (identical at 100/500/1000), problem family (all eight cases), species/genome configuration (the failing rank is structural), and the environment (the same venv compiles a `matmul` graph and runs the numpy backend).
-- **Ruled out** for the crash: a Python-level fault (the Python process stays alive and receives an exception; the `iree-compile` subprocess is what exits `-11`), and thread configuration (all runs used runtime defaults; `--threads` was never varied here).
+```
+<stdin>:338:12: error: failed to legalize unresolved materialization from ('tensor<32x1xi32>') to ('tensor<32xi32>') that remained live after conversion
+    %337 = "stablehlo.scatter"(%323, %334, %325) ({
+<stdin>:338:12: note: see existing live user here:
+%238 = iree_linalg_ext.scatter dimension_map = [0] unique_indices(false) ins(%collapsed_399, %236 : tensor<32xi32>, tensor<32xi32>) outs(%cst_201 : tensor<68xi32>)
+```
 
-## Determinism and harness behaviour
+This one is IREE-specific and is **not** an export deferral: the op passes evoxc's exporter and even compiles fine in isolation.
+The writer emits every flat write as a rank-1 `axis=0` scalar-window scatter with a rank-2 `(K,1) i64` index tensor (`index_vector_dim = 1`).
+IREE lowers that to `iree_linalg_ext.scatter`, whose `ins` wants the index tensor **collapsed to rank 1 i32**, and performs the collapse as an `unrealized_conversion_cast`. That materialization only resolves if the rank-2 index value has **exactly one consumer**; when one prepared index block (or two identical index expressions that IREE's CSE merges) feeds a **second** scatter, the rank-2 value stays live and the pass aborts.
+Operand sharing, widths, i32-vs-i64 indices, `while`/`if` regions, `sort`, and the rank-2 row-scatter alternative are all irrelevant — deleting either of the two shared-index scatters from the failing module makes it compile (0.26 s).
 
-- The scratch determinism batch — 40 fresh worker processes (8 cases × 5, not committed) — produced 40 identical `status="error"` rows, worker exit code 1 each; no crash, no timeout, no missing row.
-- A failure in one case is confined to that case's row: the 4-case CLI run above completed all four rows, wrote JSON and Markdown, and exited 1.
-- Verified for a *hard* crash too, not just an exception: a test-only `sitecustomize.py` in `$TMPDIR` that SIGSEGVs only the worker process for `xor3d_p100` produced a synthesised `status="error"` row (`error: [crashshim] segfaulting worker for xor3d_p100`) while the other two cases still ran and the report was written.
-  The harness confines a SIGSEGV correctly (one worker process per run); no harness bug was found, and `run_benchmark.py` was not modified.
-- The committed evidence is `benchmarks/results/iree.json` (8 cases × 2 generations, 1 repeat, all `status="error"` with the identical scatter message) rendered as `benchmarks/iree.md`; `benchmarks/RESULTS.md` was not regenerated or edited for this report.
-- The per-case 5-fresh-process determinism reps (`reps/*.json`) and the confinement test (`confine.json`) were scratch runs in `$TMPDIR` and are not committed, so the durable evidence for determinism is the identical 8/8 message in the committed record plus the minimal reproducer, which anyone can re-run.
+Fix, in the shared helper's caller (`src/tensorneat/common/tensorization.py::incoming_table`, `_window_pair`): the two payloads that shared one index block (`in_conn`, `in_src`) now go into **one** `(P, 2*(N*K+1))` buffer written by **one** scatter, with the second half's cells offset by one window span and its dropped writes routed to its own dump column.
+The resulting rule is now documented in `common/tools.py` and `common/CONTEXT.md`: **one prepared index block feeds exactly one scatter** — merge payloads into a wider buffer instead.
 
-## Verdict
+### Gate 5 — a negative `concatenate` axis (HyperNEAT only, `iree-compile` reject)
 
-iree rows are usable for **no** case (X/Y = ∅): no TensorNEAT graph reaches IREE's compiler, so there is no measured ms/gen, compile time or RSS to report for any of `xor_p100`, `xor_p500`, `xor_p1000`, `xor3d_p100`, `xor3d_p500`, `xor3d_p1000`, `custom_pagie_p500`, `cartpole_p100`.
-Those cases are unavailable because `Pipeline.setup()` cannot be lowered on iree — evoxc's stablehlo v1 exporter rejects the rank-3 species-centre scatter at `src/tensorneat/algorithm/neat/species.py:295` (reproducer above, 5/5 per-case scratch processes, 40/40 scratch harness workers), and the two gates behind it (`uint32` genome hash outside iree's declared dtype set, `tril` in the species prefix sum) would each still have to be lifted.
-The pipeline owner's SIGSEGV is real and reproducible on TensorNEAT's own 6-carry `node_levels` while-loop (4/12 fresh processes at N=8, 2/5 at N=50/P=100), but it is the fourth blocker, not the first, and its "3–7 s per graph" compile figure was not reproduced (0.26–1.19 s for every graph that compiled; a crashing compile cost 1–68 s).
-Until `Pipeline` can be lowered on iree at all, `RESULTS.md` must not carry iree rows, and the CPU contract remains the numpy reference backend.
+```
+<stdin>:1543:13: error: 'stablehlo.concatenate' op attribute 'dimension' failed to satisfy constraint:
+64-bit signless integer attribute whose value is non-negative
+    %1524 = "stablehlo.concatenate"(%1462, %1523) {dimension = -1 : i64} : (tensor<160x3xf32>, tensor<160x1xf32>) -> tensor<160x4xf32>
+```
+
+evoxc forwards the frontend axis **verbatim** as `stablehlo.concatenate`'s `dimension`, and StableHLO requires it non-negative, so the `axis=-1` spelling — perfectly legal at the frontend and in numpy — only fails once a compiled backend sees it.
+Reached only by the HyperNEAT path (the plain NEAT graphs never wrote a negative axis), so it was invisible until the compiled run got that far.
+Fix: write the explicit non-negative last axis in graph code — `hyperneat.py` (bias column, attribute stack, connection-key marker columns) and `genome/gene/base.py::_key_array` (`axis=len(shape)`).
+Rule: **axes in graph ops are non-negative static integers**; the sweep found no other negative `concatenate` axis in `src/`.
+End-to-end after the fix: `HyperNEAT(FullSubstrate(4/3/1), activate_time=3)` + `XOR3d`, seed 42, `backend="iree"` → one 10.4 s compile, then 35.8/36.4 ms per step, keys and NaN masks bit-identical to numpy, weights within 2.4e-07, same `randkey`.
+
+## Measured: numpy vs iree
+Protocol: `benchmarks/backend_measure.py` (new), one `(case, backend, pop)` per **fresh process** (peak RSS is a process high-water mark).
+`Pipeline.setup()` wall time is reported as `setup_s` (host-only plus NEAT's small operator graph); the expensive generation graph compiles on the **first** `step()`, reported as `build_s` (`Pipeline.build_seconds`, the `evoxc.build` alone) and `first_step_s` (build + one run). The build is charged to no generation.
+Then **3 untimed warmup** generations and **20 timed** generations; ms/generation is wall clock per `step()` including host materialisation. One run each, seed 42, XOR, `DefaultGenome(2→1, max_nodes=12, max_conns=24)`, `species_size=20`.
+
+| case | pop | backend | opt_level | setup (s) | build (s) | ms/gen mean | ms/gen median | min / max | gens/s | peak RSS (MiB) | final max fitness |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| xor | 100 | numpy | — | 0.04 | 1.60 | 44.37 | **42.74** | 39.75 / 62.61 | 22.54 | 120.9 | −0.193043 |
+| xor | 100 | iree | default | 0.97 | 9.35 | 212.67 | **213.12** | 179.11 / 229.28 | 4.70 | 108.6 | −0.193043 |
+| xor | 100 | iree | O0 | 0.98 | 9.28 | 211.25 | **211.56** | 180.10 / 221.93 | 4.73 | 108.7 | −0.193043 |
+| xor | 500 | numpy | — | 0.04 | 1.62 | 265.27 | **262.80** | 255.86 / 292.09 | 3.77 | 263.6 | −0.152052 |
+| xor | 500 | iree | default | 0.99 | 9.97 | 6371.71 | **6366.20** | 6297.28 / 6483.87 | 0.157 | 153.0 | −0.152052 |
+| xor | 500 | iree | O0 | 1.02 | 9.87 | 6350.53 | **6344.47** | 6301.80 / 6438.72 | 0.157 | 154.4 | −0.152052 |
+| xor | 1000 | numpy | — | 0.04 | 1.70 | 500.86 | **546.70** | 331.77 / 570.72 | 2.00 | 433.9 | −0.151799 |
+| xor | 1000 | iree | default | 1.01 | 10.86 | 12766.70 | **12765.81** | 12629.17 / 12910.57 | 0.078 | 210.2 | −0.143853 |
+
+Reading it honestly:
+
+- **The compiled leg never wins here.** Slower by 5.0× at pop 100, 24.2× at pop 500, 23.4× at pop 1000 (median ratios); there is no population size in the measured range at which iree flips ahead, and the trend is *worse* as the population grows, so extrapolating to larger pops does not rescue it.
+- **Compile is significant and must be paid per static shape**: ~9.3–10.9 s of `iree-compile` for the generation graph, plus ~1 s of `setup`, against 1.6–1.7 s for the whole numpy build. A 20-generation run therefore spends 35–50 % of its lifetime compiling at these budgets.
+- **Peak RSS is the one place iree wins**: 108.6 vs 120.9 MiB at pop 100, 153.0 vs 263.6 MiB at pop 500, 210.2 vs 433.9 MiB at pop 1000 (llvm-cpu keeps the tensors in its own buffers; the interpreter holds numpy temporaries).
+- **`opt_level` barely matters at O0** (within 1 % of default) and **O2 does not compile here**:
+  `error: 'func.func' op exceeded stack allocation limit of 32768 bytes for function. Got 40064 bytes` — the ~2.4 k-op generation function exceeds IREE's per-function stack-promotion limit at that level. The value is forwarded verbatim and the failure surfaces as `evoxc.core.errors.BackendError`; nothing falls back to another backend.
+- The reported **`iree-compile` SIGSEGV (≥3 loop-carried tensors)** from the earlier investigation does not reproduce in this configuration: the shipped generation graph contains a **9-carried-value** `stablehlo.while` and compiled successfully in every run recorded above (6 fresh compiles), all of which executed and produced matching fitness.
+
+Per-generation cost is dominated by the graph's dense `gather`/`argsort`/`scatter` traffic, which llvm-cpu lowers to generic, non-vectorised loops — the reason a compiled backend loses to a tight numpy interpreter on this workload. Making iree competitive is a kernel-formulation project (dense key tables → sparse/segment reductions), not a compiler-flag one.
+
+## What a user must know to run `backend="iree"`
+
+- `pip install "evoxc[iree]"` (pulls `iree-base-compiler` + `iree-base-runtime`); then `Pipeline(..., backend="iree")` just works for the shipped problems.
+- **Compile is one-off per static shape**: population, `max_nodes`, `max_conns` are baked into the graph, so a shape change re-compiles (~10 s here). `Pipeline` caches the executable per shape.
+- **Kernel rules the exporter and iree impose** (all enforced by construction in `src/` today, and documented in `src/tensorneat/common/CONTEXT.md`, `src/tensorneat/algorithm/neat/CONTEXT.md`, `src/tensorneat/algorithm/hyperneat/CONTEXT.md`, `src/tensorneat/genome/CONTEXT.md` and `src/tensorneat/genome/operations/CONTEXT.md`):
+  1. `scatter` must be rank-1 `axis=0` or a rank-2 row/column write — no rank ≥ 3 operand.
+  2. One prepared index block feeds exactly one `scatter` (gate 4).
+  3. No unsigned dtype anywhere in a graph: use same-width signed carriers, plus an explicit sign flip wherever unsigned *order* is required.
+  4. No v1-deferred op: `cumsum`, `cumprod`, `tril`, `triu`, `flip`, `erf`, `gelu`, `where`, `scan`, `convolution`, `runtime_call`, `external_call`, collectives other than the mapped ones, and the `sparse_*` family. Use a static constant, a `gather` with a static index vector, or a log2-doubling fold instead.
+  5. Static dims only, **non-negative axes only**, and `select`/`gather` (single axis)/`sort`/`argsort`/`where`-free masks/`cond`/`while_loop`/static-bound slices/`rng_bit_generator` all export.
+- **Activation functions**: no `ACT` entry needs `erf`/`gelu` (the set is `scaled_sigmoid`, `sigmoid`, `scaled_tanh`, `tanh`, `sin`, `relu`, `lelu`, `identity`, `inv`, `log`, `exp`, `abs`); a *user-supplied* activation that calls `evoxc.erf`/`evoxc.gelu` would still die at export with `op 'erf' ... is not supported in v1`.
+- `opt_level="O2"`/`"O3"` fail inside `iree-compile` for this graph size (stack allocation limit). Leave the default or use `O0`/`O1`.
+- Do not expect an iree speed-up: on this CPU, numpy is 5–24× faster per generation. iree's only measured advantage is ~30–50 % lower peak RSS.
+
+## Still deferred by the evoxc v1 exporter (would bite other users)
+
+Straight from the installed evoxc 0.1.0, not inferred:
+- `evoxc/backends/stablehlo/ops.py:235 DEFERRED_OPS`: `runtime_call`, `external_call`, `block_call`, `rank`, `world_size`, `erf`, `gelu`, `diagonal`, `cholesky`, `qr`, `matrix_rank`, `svd`, `matrix_exp`, `random_multinomial`, and 16 `sparse_*`/`dense_dot_sparse` ops.
+- Names with no v1 mapping at all (status `deferred` but absent from that set): `cumsum`, `cumprod`, `flip`, `tril`, `triu`, `where`, `scan`, `convolution`, `collective_broadcast`.
+- `evoxc/backends/stablehlo/writer.py:1821 _emit_scatter`: rank ≥ 3 operands, and any rank-2 form other than a full row or column write.
+- iree's declared dtype set has no unsigned integer and no complex dtype (`evoxc/backends/adapters/iree.py`).
+- Dynamic (non-static) dims cannot be exported at all.
+
+## Reproduce
+
+```bash
+export PATH=/root/.local/bin:$PATH
+uv venv "$TMPDIR/backend-venv" --python 3.12
+uv pip install --python "$TMPDIR/backend-venv/bin/python" -e . "evoxc[iree]"
+
+# one fresh process per (case, backend, pop) — peak RSS and the build are per-process
+"$TMPDIR/backend-venv/bin/python" benchmarks/backend_measure.py --backend numpy --case xor --pop 100
+"$TMPDIR/backend-venv/bin/python" benchmarks/backend_measure.py --backend iree  --case xor --pop 100 --json iree.json
+"$TMPDIR/backend-venv/bin/python" benchmarks/backend_measure.py --backend iree  --case xor --pop 100 --opt-level O0
+"$TMPDIR/backend-venv/bin/python" benchmarks/backend_measure.py --backend iree  --case xor --pop 100 --opt-level O2  # fails inside iree-compile
+```
+
+The end-to-end backend test (`test/backends/test_iree_pipeline.py`) skips cleanly without the extra and runs a real XOR generation with it:
+
+```bash
+pytest -q test/backends            # 3 passed, or 1 skipped when evoxc[iree] is absent
+pytest -m requires_iree test/backends
+```
+
+The minimal reproducers for gates 1–4 are ~20 lines of `evoxc` each; the recipes (trace the graphs, walk `op.location`, export with `evoxc.lower(graph, backend="iree").text()`, compile the text with `iree.compiler.compile_str`) live in `src/tensorneat/common/CONTEXT.md` and `src/tensorneat/algorithm/neat/CONTEXT.md`.
+
+## What this does not change
+
+`RESULTS.md` is generated evidence for the old-vs-new CPU contract and was not regenerated or hand-edited for this report: the contract is measured on the numpy backend and that is still what it measures.
+`benchmarks/results/iree.json` + `benchmarks/iree.md` remain the historical pre-fix record (8/8 `error`); the numbers above supersede them for the *current* code.

@@ -307,10 +307,13 @@ class HyperNEAT(BaseAlgorithm):
             ``substrate.num_inputs - 1``.  The ones column is sized from ``inputs.shape[0]``, never
             from the static ``pop_size``, because the genome expands the payload's population axis to
             ``B`` internally -- rebuilding the column from ``pop_size`` would break the tiled case.
+            The concatenate axis is the explicit non-negative last axis of the static rank ``2``
+            (``axis=1``), never ``-1``: the StableHLO exporter forwards the axis verbatim as
+            ``stablehlo.concatenate``'s ``dimension``, which must be non-negative.
         """
         batch = int(inputs.shape[0])
         ones = enp.ones((batch, 1), dtype=evoxc.float32)
-        biased = enp.concatenate([inputs, ones], axis=-1)
+        biased = enp.concatenate([inputs, ones], axis=1)
         return self.hyper_genome.forward(
             state,
             transformed.schedule,
@@ -788,6 +791,8 @@ class HyperNEAT(BaseAlgorithm):
         Note:
             A gene with no attribute columns yields an empty ``(P, rows, 0)`` array instead of
             ``enp.stack([])``, which evoxc rejects.
+            The stack axis is the explicit non-negative new last axis of the static rank ``2``
+            (``axis=2``), never ``-1``, because ``stack`` is ``expand_dims`` + ``concatenate``.
         """
         if weights is not None and not any(spec.name == "weight" for spec in specs):
             raise TensorNEATError(
@@ -803,7 +808,7 @@ class HyperNEAT(BaseAlgorithm):
                 columns.append(weights)
             else:
                 columns.append(enp.zeros((pop_size, rows), dtype=evoxc.float32))
-        return enp.stack(columns, axis=-1)
+        return enp.stack(columns, axis=2)
 
     def _conn_keys(self, pop_size: int, conns_cnt: int, key_width: int) -> Any:
         """Build the ``(P, Q, key_width)`` int32 connection key table of the substrate.
@@ -822,6 +827,9 @@ class HyperNEAT(BaseAlgorithm):
             population axis.  Any further column (the ``OriginConn`` ``historical_marker``) holds a
             deterministic unique per-row id ``arange(Q) + 1``: the substrate topology is fixed, so
             the marker only has to be distinct and reproducible, never evolvable.
+            The concatenate axis is the explicit non-negative last axis of the static rank ``3``
+            (``axis=2``), never ``-1``: the StableHLO exporter forwards the axis verbatim as
+            ``stablehlo.concatenate``'s ``dimension``, which must be non-negative.
         """
         endpoint = enp.reshape(self._graph_constant(self.substrate.conn_index), (1, conns_cnt, 2))
         keys = enp.broadcast_to(endpoint, (pop_size, conns_cnt, 2))
@@ -832,5 +840,5 @@ class HyperNEAT(BaseAlgorithm):
             enp.arange(1, conns_cnt + 1, dtype=evoxc.int32), (1, conns_cnt, 1)
         )
         extra = enp.broadcast_to(row_ids, (pop_size, conns_cnt, extra_width))
-        return enp.concatenate([keys, extra], axis=-1)
+        return enp.concatenate([keys, extra], axis=2)
 

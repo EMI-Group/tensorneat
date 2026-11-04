@@ -68,10 +68,10 @@ A gene family with no attribute column (`attr_specs = ()`, e.g. an unweighted Hy
 The centre is *never* prepared: `measure` packs the centre's key rows itself (`_pack`, or `dense_slot` on the fast path).
 
 ## Per-trace constant pool (`consts.py`)
-`ConstantPool` memoises the rank-0 `int32`/`int64`/`uint32`/`float32` constants a kernel entry needs (`i32`/`i64`/`u32`/`f32`, keyed by `repr` so `-0.0` and `0.0` stay distinct), because `enp.full((), v, dtype=...)` emits one `constant` op per call and evoxc never deduplicates them.
+`ConstantPool` memoises the rank-0 `int32`/`int64`/`float32` constants a kernel entry needs (`i32`/`i64`/`f32`, keyed by `repr` so `-0.0` and `0.0` stay distinct), because `enp.full((), v, dtype=...)` emits one `constant` op per call and evoxc never deduplicates them.
 One pool belongs to **one trace**: a `SymbolicTensor` belongs to one builder, so a pool must never be module-global or cached across `evoxc.build` calls; every entry point starts a private pool when the caller passes none.
 Reusing a pooled tensor as several operands is legal and is exactly what collapses the duplicates: the distance files dropped from 503 `constant` ops per generation to 163.
-`u32(value)` exists for the dense range test only: `evoxc` compares like dtypes only, and `cast(int32 key, uint32) < S` is one comparison per key column where `>= 0` plus `< S` would be two.
+The pool carries **signed dtypes only** — no unsigned helper exists, and none may be added (see `## Constraints`).
 The remaining constants are `int32` sort/index sentinels (`I_INF`, `1`, `merged_width - 1`, `_KEY_BASE`, the dump slot), so the next lever is a pool threaded from the generation entry (`algorithm/neat/_distance.py`), worth ~150 ops per generation and not reachable from this node.
 
 ## Merge algebra (`digest.measure_alignment`)
@@ -103,7 +103,7 @@ Stability also *pins* tie order to input order and matches a compiled backend's 
 
 | kernel | P=100 | P=500 | P=1000 |
 |---|---|---|---|
-| `prepare` (dense fields + `oor` included) | 137 ops | 137 | 137 |
+| `prepare` (dense fields + `oor` included) | 140 ops | 140 | 140 |
 | `prepare` + `measure` (batch-1 centre, **dense**) | 252 ops / 187 788 B constants | 252 / 203 788 B | 252 / 223 788 B |
 | `prepare` + `measure` (batch-`P` centre, merge) | 287 ops / 189 460 B | 287 / 211 860 B | 287 / 239 860 B |
 | `execute_distance` (unchanged) | 218 ops | 218 | 218 |
@@ -112,6 +112,9 @@ Stability also *pins* tie order to input order and matches a compiled backend's 
 Baked constant bytes of the `prepare` + `measure(batch 1)` graph, `enp.zeros` → `window.fill` (pop 1000): **839 772 → 223 788 B** (−615 984 B), largest single constant **404 000 → 90 008 B**; at pop 100 `249 372 → 187 788 B`, pop 500 `511 772 → 203 788 B`.
 What is left is irreducible: the two `key_span`-scaled `(width + 1,)` int32 tables (22 502 cells = 90 008 B each, `S = 150`) plus a handful of small seeds.
 `measure` itself adds only four rank-0 constants; every avoidable byte was the `DenseLayout` built inside `prepare`.
+
+The signed range test costs **+3 traced ops on `prepare`** (137 → 140: one `greater_equal` + one `logical_and` for the one-column node key, two of each for the two-column connection key, minus the removed `uint32` span constant, plus the pooled `int32` zero), and `1.241 → 1.340 ms` at pop 100 (median of 7 same-session runs, min 1.217 → 1.307) — once per generation against `2 * species_size` `measure` calls.
+`measure` is unchanged at 151 ops and gained no unsigned value: with `span_u32` gone from `DenseLayout`, the digest a real pipeline threads into `measure` no longer carries a `uint32` leaf at all (before: four `uint32` graph-boundary values).
 
 Round-2 same-session before → after: `measure` **141 → 111 ops**, wall clock inside drift at pop 1000 (2.43 → 2.25 ms median, minima 2.20), i.e. **2.45 → 2.25 µs/pair**; `prepare` 102 → **128 ops** (+26, once per generation against ~40 calls).
 Per-phase op attribution of the old 141 (recursive op walk + per-phase graphs, pop 1000): `dense_slot`/`slot` 8, owner scatter+gather+matched 3, per-family counts 4, attribute table pair 3, `gene.distance` **27 (node) / 6 (conn)**, reorder 5 + slice 1 + reduce 1, scalar tail **15 per family**, final `add` 1.
@@ -125,6 +128,7 @@ Round-2 rejects, measured or arithmetically excluded: fusing the per-column arit
 Remaining hot spot: `gene.distance` (33 ops) plus the two attribute block gathers; the wall clock still scales with `P × M × attr_width`, not with real gene counts.
 
 ## Constraints
+- **No unsigned dtypes in a graph — `iree`'s declared dtype set has none** (`float16/float32/float64/int8/int16/int32/int64/bool`, `evoxc/backends/adapters/iree.py::_dtype_capabilities`), so a `uint32`/`uint64` operand, result, constant or graph-boundary value makes that backend refuse the whole graph (`BackendError: capability drift`). Use **same-width signed carriers**: a range test is `logical_and(greater_equal(key, 0), less(key, S))` on `int32` (`+1` op for a one-column key, `+2` for two columns, against the unsigned one-comparison form), which is the same truth value for every `int32` value while `0 <= S < 2**31` — guarded statically in `digest.dense_width`, the one place `key_span` becomes a table geometry. The `>= 0` half is not decoration: a negative structural key must land in the dump slot exactly as `I_INF` does.
 - Trace-time kernels only: no `jax`/`torch`/`numpy.random`, no `vmap`/`scan`/`while_loop`/`cond`, no Python loop over individuals or over pairs, no eager NumPy. Nothing here is differentiable and nothing draws RNG, so repeated calls are bit-identical.
 - `prepare`/`measure` must stay plain helpers (not `@evoxc.defn`) — they are called inside the caller's graph, and a defn cannot call a defn. `DistanceDigest` must stay a pytree of tensors so it can be captured in a closure inside a trace.
 - The fast/slow decision is **static** (gene geometry, `key_span`, the `dense_single_centre` switch). No traced value ever drives Python control flow, and a partially dense `measure` is impossible by construction.
@@ -143,7 +147,7 @@ Remaining hot spot: `gene.distance` (33 ops) plus the two attribute block gather
 - The non-empty guard rides on the denominator: `maximum(float32(max(cnt1, cnt2)), 1.0)`, so an empty pair yields `0.0 / 1.0` with no second `select`.
 - Key tables are accepted as `(P, M)` or `(P, M, K)` via `alignment.key_rows`; rank-0 integer constants come from the pool (`enp.full((), v, dtype=...)` underneath) because a Python literal would widen an `int32` tensor to `int64`.
 - Errors: a parent shape mismatch, a wrong key width, a digest built for another gene axis, or a centre batch that is neither `1` nor `P` raises `ConfigError` (`TensorNEATError`); `evoxc` errors propagate unchanged.
-- Files ≤ ~1000 lines (`digest.py` 924, `base.py` 708, `default.py` 491, `dense.py` 343, `layout.py` 195, `consts.py` 124).
+- Files ≤ ~1000 lines (`digest.py` 939, `base.py` 708, `default.py` 491, `dense.py` 343, `layout.py` 189, `consts.py` 107).
 
 ## Bit-identity argument (three routes, one tail)
 `__call__`/`gene_distance`, `prepare`+`measure` (merge) and `prepare`+`measure` (dense) differ only in how the homologue table is produced — `alignment.find_homologous`, `digest.measure_alignment`, or the dense key table — and all three feed `_scalar_distance`.
@@ -160,8 +164,11 @@ Verified evidence until those bodies land (scripts live in `$TMPDIR`, not in the
   Batch-`P` `measure` is 0 mismatches on the live table too, i.e. the merge route is unaffected by the precondition.
 - **Determinism / behaviour neutrality**: five-generation seed-42 `Pipeline` XOR runs with `dense_single_centre=True` and `False` produce identical per-generation `(max, mean)` fitness and an identical final-population SHA-256 at pop 100, 500 and 1000.
 - **Byte-identity of the shared tail**: `measure` (both shapes) and `execute_distance` are `tobytes()`-equal (never `np.array_equal` — NaN is not equal to itself), and a 5-generation seed-42 pop-100 `fitness_history` matches the pre-change snapshot.
+- **`iree` export proof** (same venv, `evoxc[iree]`): `prepare_distance` and `measure_distance` (dense batch-1 and row-wise batch-`P`, digest handed over as array arguments) **build and run on `backend="iree"` with numpy-identical output** (39 digest leaves, all equal), where the pre-change tree refused `prepare_distance` with `BackendError: capability drift: ... dtype uint32 (function signature)`.
+- **Op/dtype audit** (walking `entry_block.ops` and every `op.regions` block, plus function input/output and block-argument types): `prepare_distance` 140 ops and `measure` 151 ops carry **0 unsigned values and 0 non-terminator ops with `stablehlo.ops.status(name) == "deferred"`**; only the `return` terminator reports "deferred" (it is the block terminator, not an exported op).
+- **Fixed-input identity harness** (pristine `git archive HEAD` tree vs the working tree, selected by `PYTHONPATH`): a real seed-42 XOR population after 3 `step` calls, four payload cases — evolved, planted negative/out-of-range keys (`-1`, `200`, conn `-1`/`260`, attributes copied from a live row so every gene stays contract-valid), `key_span=60` (evolved keys out of range) and `key_span=2000` (the `dense=False` placeholder path, conn gate off) — crossing `execute_distance`, `execute_distance_self`, every `prepare_distance` leaf and `measure_distance` with a digest handed over as separate array arguments (dense batch-1 and row-wise batch-`P`): **166 common arrays, 0 mismatches** (bitwise, NaN-aware), the only difference being the two dead `DenseLayout.span_u32` leaves; self-distance is exactly `0` for all 100 individuals in every case and `node_oor`/`conn_oor` equal a host recount.
 Zero-attribute families are not shipped as genes, so the `attr_width == 0` path is verified by subclassing a shipped family with `attr_specs = ()` (an unweighted connection gene) and driving `Pipeline` XOR on the numpy backend, plus `prepare`/`measure`/`execute_distance` traced and run inside one graph.
-A regression case for the dense route (and one for `attr_width == 0`) belongs in `test/unit/genome/test_distance.py` (a read-only node for `distance/`).
+A regression case for the dense route (and one for `attr_width = 0`, and one pinning the signed range test / negative-key behaviour) belongs in `test/unit/genome/test_distance.py` (a read-only node for `distance/`).
 Trace a bound method through a closure (`lambda *a: obj.method(state, *a)`) and build rank-0 RNG keys *inside* the trace (`evoxc.random.key(seed)`), because an `evoxc` key cannot cross the graph boundary as data.
 
 ## Rejected (measured, so nobody re-derives them)
@@ -176,7 +183,7 @@ A **scatter-derived inverse permutation** instead of `argsort(order)`: behind on
 `algorithm/` should keep structurally allocated keys below `genome.key_span` (or carry a raised span in the shape signature): that is what makes the dense route exact for every payload, and it is the same fix that stops the execution schedule from silently dropping evolved genes.
 `algorithm/neat/_distance.py::DistanceRows.row` must keep passing a **batch-1 centre** to `measure_distance` to get the fast path; a population-shaped centre is legal but always takes the row-wise merge (`DistanceRows.matrix` does that on purpose, one digest row per centre).
 `genome/gene/base.py:50` reads attribute columns with one kept-axis slice plus one reshape per column: 132 + 132 traced ops per generation at pop 500/1000, and the per-column attribute arithmetic of `BaseGene.distance` is now the largest remaining block inside `measure`.
-`operations/alignment.py` still embeds full-size graph constants and a private `_scalar`; its `find_homologous` is only on the pair-wise route now, so it inherits nothing from this node.
+`operations/alignment.py` (this node's shared aligner): the row identity is an `int64` carrier with one sign flip, so the alignment path carries no unsigned value any more; the graph-level residue here is only the removed `u32` span constant, i.e. none.
 
 ## Routing Table
 | File | Responsibility |
@@ -184,7 +191,7 @@ A **scatter-derived inverse permutation** instead of `argsort(order)`: behind on
 | `./base.py` | `BaseDistance`: pair-wise `__call__`, the two-phase `prepare` / `measure` drivers, the `_measure_single_centre` hook, `_measure_family`, `gene_measure`, the `distance_from_alignment` adapter, and payload/digest validation (`_validate_single`, `_validate_digest`, `_broadcast_payload`). |
 | `./default.py` | `DefaultDistance`: weights, the `dense_single_centre` switch, `_measure_single_centre` (delegates to `./dense.py`), `gene_distance` (pair-wise alignment hook), `distance_from_alignment` (the aligned attribute gather), `distance_from_rows` (its row-table spelling) and `_scalar_distance` (the one scalar tail all three routes share). |
 | `./dense.py` | The single-centre fast path: `enabled` (the static `_DENSE_MAX_BYTES`/`int32` gate), `measure_centre` (stacks both families' tail inputs and calls the shared tail once) and `_family_terms` (`FamilyTerms`: centre count, homologue count, summed attribute distance), plus the marker table, the marker-aware attribute-reorder column and `_stack`. |
-| `./layout.py` | `DenseLayout` — the fast path's per-generation statics (owner/attribute table bases, centre row index, flat reorder offsets and buffer, count/zeros/padding/dump/span scalars, the tail constants) built once in `prepare` with `genome.window.fill` for the population-scaled seeds, and `reorder` (the flat scatter that writes per-population-gene values into centre order). |
+| `./layout.py` | `DenseLayout` — the fast path's per-generation statics (owner/attribute table bases, centre row index, flat reorder offsets and buffer, count/zeros/padding/dump `int32`/`float32` scalars, the tail constants) built once in `prepare` with `genome.window.fill` for the population-scaled seeds, and `reorder` (the flat scatter that writes per-population-gene values into centre order). |
 | `./digest.py` | `FamilyDigest`/`DistanceDigest`, the injective `2**31` composite fold (`_pack`, `_tagged`, tags, padding sentinels), the per-column/permutation helpers (`_column`, `_gather_rows`, `_permute`), `dense_width`/`dense_slot` (key → table slot, dump slot for absent or out-of-range rows), `prepare_family` (which also counts the out-of-range genes the dense table cannot address), `measure_alignment`/`AlignedGenes` (the merge, both sorts `stable=True`) and `match_rows`. |
-| `./consts.py` | `ConstantPool`: per-trace rank-0 constant memoisation (`i32`/`i64`/`u32`/`f32`), the reason constants are not deduplicated by evoxc. |
+| `./consts.py` | `ConstantPool`: per-trace rank-0 constant memoisation (`i32`/`i64`/`f32`), the reason constants are not deduplicated by evoxc, and why the pool holds no unsigned dtype. |
 | `./__init__.py` | Re-exports `BaseDistance`, `DefaultDistance`, `DistanceDigest`, `FamilyDigest`. |

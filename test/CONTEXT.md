@@ -26,6 +26,7 @@ test/
     common/  genome/  algorithm/  problem/
   parity/                same kernels vs the frozen legacy JAX library, marker `parity`
   integration/           whole-Pipeline runs, marker `slow`
+  backends/              compiled-backend runs (marker `requires_iree`), skips without `evoxc[iree]`
 ```
 Every directory that holds test modules carries an `__init__.py`: pytest's default prepend import mode names a module by its basename, so un-namespaced directories collide (`test/unit/genome/test_forward.py` vs `test/parity/test_forward.py`) and abort the session with an import-mismatch error.
 Current counts: `unit/common` 155, `unit/genome` 100, `unit/algorithm` 144, `unit/problem` 62, `unit/test_version.py` 2, `parity` 53 (18 without jax), `integration` 20, release gate 4.
@@ -37,6 +38,7 @@ Current counts: `unit/common` 155, `unit/genome` 100, `unit/algorithm` 144, `uni
 - `./unit/problem` — func-fit losses against the closed form for each `error_method`, individual-major dataset tiling order, `NaN` prediction ⇒ `-inf` fitness, `CustomFuncFit` sampling from a seeded `Generator` (`method="grid"` pinned), `CartPole` construction validation and returns against a host-numpy re-implementation of the same Euler dynamics, and NaN logits ⇒ `-inf` fitness.
 - `./parity` — on *identical* genomes: `forward` values and NaN pattern (rtol 1e-5) on chain / skip / isolated / random-DAG genomes, `execute_distance` closed forms, `XOR`/`XOR3d` fitness for every `error_method`, and gradients w.r.t. `conn_attrs`/`node_attrs` (rtol 1e-4), plus the lossless-schedule guard in `convert.py`.
 - `./integration` — `Pipeline.auto_run` reaches the XOR fitness target inside a small generation budget, the same seed reproduces the same run, a shape-signature change rebuilds (and does not corrupt) the cached executable, `is_save` writes a loadable checkpoint, and the documented reporting tail `show(state, best)` prints the XOR report for the batched best and for its bare rows.
+- `./backends` — the `iree` compiled backend runs a real XOR generation end to end (`setup` + 2 `step`s, finite `(P,)` fitness, one cached build), agrees with numpy on the same seed (int/key payloads exactly, floats within a documented reduction-reassociation tolerance), and rejects an unknown compile option instead of falling back.
 - `release_gate_no_jax.py` — in a clean subprocess, `import tensorneat` leaves `jax`, `torch`, `brax`, `gymnax`, `mujoco` out of `sys.modules`, and a full XOR generation still runs.
 
 ## Shared infrastructure (`./support`)
@@ -80,6 +82,7 @@ Suite output must be deterministic — a flaky test is a bug in the test, not a 
 | `./unit` | numpy-backend kernel/invariant suites, mirroring `../src/tensorneat/`. |
 | `./parity` | kernel equality vs the frozen legacy JAX library (marker `parity`). |
 | `./integration` | whole-`Pipeline` runs, determinism, rebuild, checkpointing (marker `slow`). |
+| `./backends` | compiled-backend (`iree`) end-to-end XOR run plus numpy/iree agreement; marker `requires_iree`, in no gate (`./backends/CONTEXT.md`). |
 | `./support` | shared runner, hand-built payloads and numpy oracles for the suites above. |
 | `./release_gate_no_jax.py` | import-hygiene gate on `tensorneat` (module file, collected by the conftest hook). |
 | `../src/tensorneat` | code under test — read-only, escalate changes to the parent. |
