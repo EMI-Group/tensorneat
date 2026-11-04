@@ -113,6 +113,7 @@ There is no pytest suite in this node (`test/` is a sibling, read-only); its ver
 | `./results` | Committed evidence records (`authoritative.json`, `threads1.json`, `iree.json`) beside scratch `*.json` (git-ignored, safe to delete). |
 | `./RESULTS.md` | Generated report: environment fingerprint (with load), protocol, headline old-vs-new (median, per-repeat range, quality overlap), per-case tables, verdict, win/lose narrative with memory paragraph, per-repeat quality curves, non-comparisons, how to reproduce. |
 | `./BACKENDS.md` | Measured compiled-backend evidence: `iree` now runs end-to-end and is 5–24× slower per generation than numpy here (numbers, protocol, the four gates and their source fixes, remaining export deferrals); `xla` needs a PJRT plugin that is absent. |
+| `./PERF_NUMPY.md` | Hand-maintained before/after record of the numpy-interpreter pass (wall, peak RSS, build, executed op counts, profile split, measured deltas, reproduce commands); `RESULTS.md` stays the generated report. |
 | `./backend_measure.py` | Standalone one-configuration-per-process measurement (`setup_s`, `build_s`, 3 warmup + 20 timed generations → ms/gen, peak RSS); the protocol behind `./BACKENDS.md`. |
 | `./THREADS.md` | Generated report of the committed `--threads 1` sensitivity run of the XOR family (`results/threads1.json`); referenced by the report only when present next to it. |
 | `./iree.md` | Generated report of the IREE attempt (`results/iree.json`): 8/8 cases `error` in `Pipeline.setup`, verdict `INCOMPLETE`. |
