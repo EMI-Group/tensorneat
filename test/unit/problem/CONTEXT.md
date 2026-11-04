@@ -26,7 +26,7 @@ Identities where no absolute value exists: `inputs.shape == (S,) + input_shape`,
 `evaluate` is a plain helper inlined into the caller's graph, so `run_evaluate` closes over the problem, the `State` and the `act_fn` and passes only tensors: `run_defn(lambda *arrays: problem.evaluate(state, evoxc.random.key(key_seed), act_fn, FakeSchedule(*arrays)), *fields)`.
 The schedule is passed **field by field** and rebuilt inside the trace — the shared runner treats only top-level arrays as data, so a namedtuple argument would be baked as a static whose fields are numpy arrays.
 The key is rebuilt from an integer `key_seed` inside the trace: a rank-0 `evoxc` key has no `__array__`, and a stateless key is a compile-time constant anyway.
-`run_in_graph` is the escape hatch for the in-trace helpers that are not the whole protocol (`finalize_fitness`, `static_batch_size`, CartPole's `_force_from_logits`/`_terminated` with `_constants()`).
+`run_in_graph` is the escape hatch for the in-trace helpers that are not the whole protocol (`finalize_fitness`, `static_batch_size`, CartPole's `_force_from_logits`/`_terminated` with `_constants()`, Pendulum's `_angle_normalize`/`_reset`, MountainCar's `_advance`/`_terminated`/`_reset` and its `_loop_body` carry).
 `static_batch_size` is also correct on a host numpy schedule, which is how its rejection paths are reached without a trace; the error also escapes `evoxc.build` unchanged when raised inside one, and both routes are asserted.
 `act_fn` closures are pure `enp` — a traced tensor has no `__getitem__` and there is no eager mode — and the fake schedule is the only thing a problem may read from `transformed`.
 
