@@ -109,7 +109,7 @@ Nothing repeats the schedule or the payload any more: there is no `_repeat_batch
 
 ## Known Issues / Notes for Agents
 `test/integration/` drives `Pipeline` end-to-end on the numpy backend (`setup`/`step`/`auto_run`, the batch-first best-genome payload, determinism per seed, one build per shape signature, checkpoint round-trip); `test/unit/` covers the kernels and `test/parity/` the legacy comparison, the latter needing the `bench` extra so its jax-dependent cases skip without it.
-`benchmarks/RESULTS.md` records the CPU speed contract as `FAIL` but predates this pass, so its new-side rows are stale and only `run_benchmark.py` may re-render the verdict; against the numbers above a generation is 0.76× / 1.47× / 1.72× legacy at pop 100 / 500 / 1000.
+`benchmarks/RESULTS.md` records the CPU speed contract as `FAIL` but predates this pass, so its new-side rows are stale and only `run_benchmark.py` may re-render the verdict; against the numbers above a generation is 0.72× / 1.55× / 1.83× legacy at pop 100 / 500 / 1000 and 1.58× on Pagie.
 `docs/source/` carries one autodoc stub per public module here, so a new module needs a matching `docs/source/tensorneat.<module>.rst` plus its toctree entry (the rule is in `docs/CONTEXT.md`).
 
 ## Constraints
