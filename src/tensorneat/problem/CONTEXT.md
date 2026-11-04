@@ -2,9 +2,23 @@
 
 ## Intent
 Turn a batch-first transformed genome into one scalar fitness per individual, entirely inside an evoxc trace.
-Two families: supervised function fitting (`func_fit/`, dataset fixed at construction) and reinforcement learning (`rl/`, a batched CartPole rollout `while_loop`ed over timesteps).
+Two families: supervised function fitting (`func_fit/`, dataset fixed at construction) and reinforcement learning (`rl/`, a batched episode rollout `while_loop`ed over a static horizon).
+Three RL environments ship, all of them evoxc kernels with no simulator behind them: `CartPole` (discrete control — two logits and a survival-time return), `Pendulum` (continuous torque — one logit squashed to `max_torque * tanh`, a negated cumulative cost) and `MountainCarContinuous` (continuous force with a sparse goal bonus paid once).
 Nothing here imports a simulator, `jax` or `torch`: problems own the *algebra* (tiling, reduction, dynamics), the backend owns execution.
 A problem is pure host-side configuration (`StatefulBaseClass`) plus plain-Python kernel helpers that are inlined into the caller's graph.
+
+## API Surface
+- `tensorneat.problem` re-exports exactly `BaseProblem`, `FuncFit`, `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum`, `MountainCarContinuous`; `problem/__init__.py` is the whole public surface.
+- Supervised: `FuncFit(error_method="mse")`, `XOR(error_method="mse")` (S=4, I=2), `XOR3d(error_method="mse")` (S=8, I=3) and `CustomFuncFit(func, low_bounds, upper_bounds, method="sample", num_samples=100, step_size=None, seed=None, error_method="mse")`; their algebra is `./func_fit/CONTEXT.md`.
+- `CartPole(max_step=500, repeat_times=1, gravity=9.8, masscart=1.0, masspole=0.1, length=0.5, force_mag=10.0, dt=0.02, x_threshold=2.4, theta_threshold=12.0, reset_scale=0.05, fitness_target=None)` — `input_shape (4,)` `(x, x_dot, theta, theta_dot)`, `output_shape (2,)` (two logits, `out[1] > out[0]` pushes right), return ceiling `max_step`.
+- `Pendulum(max_step=200, repeat_times=1, gravity=10.0, mass=1.0, length=1.0, max_speed=8.0, max_torque=2.0, dt=0.05, fitness_target=None)` — `input_shape (2,)` `(theta, theta_dot)` with `theta = 0` **upright**, `output_shape (1,)` (one torque logit), return ceiling `0` (every reward is `-cost <= 0`), so `fitness_target > 0` raises.
+- `MountainCarContinuous(max_step=999, repeat_times=1, min_position=-1.2, max_position=0.6, max_speed=0.07, goal_position=0.45, goal_velocity=0.0, power=0.0015, gravity=0.0025, fitness_target=None)` — `input_shape (2,)` `(position, velocity)`, `output_shape (1,)` (one action logit), return ceiling `100` (the one-time goal bonus), so `fitness_target > 100` raises.
+- The two continuous problems own the action squashing — `u = max_torque * tanh(logit)` and `a = tanh(logit)` — so a genome used with them must leave `output_transform` unset (identity); a bounded transform would rescale the logit before `tanh` ever sees it.
+- `fitness_target` is validation-only in every RL environment: `None` skips the check, a value above that environment's return ceiling raises `TensorNEATError`, and the attribute is stored exactly as given.
+- `problem.rl._common` is the shared host-side helper module for the two continuous environments: `to_numpy(evoxc.Tensor | array)` (the `show` accessor), the three validators `require_positive_int(owner, name, value)`, `require_positive(owner, name, value)` and `require_non_negative(owner, name, value)` (messages are `<Owner>: <name> must be ...`), and the one traced helper `returns_of(total, pop_size, repeat_times)` (`(B,) -> (P, R)`, inlined into the caller's graph like `finalize_fitness`).
+  It carries no dynamics and no module-scope `enp` call, so adding an environment never edits it.
+- `cartpole.py` deliberately keeps its own `_to_numpy`/`_require_*` copies instead of importing `_common`, so its pinned validation messages stay put.
+- Everything else about an environment (helper names, validation text, `show` report format) is in `./rl/CONTEXT.md`.
 
 ## Protocol (`base.py`)
 - `evaluate(self, state, keys, act_fn, transformed) -> fitness (P,)` — fitness is **maximized**; the body runs inside an active trace.
@@ -12,8 +26,8 @@ A problem is pure host-side configuration (`StatefulBaseClass`) plus plain-Pytho
 - `act_fn(batch, *input_shape) -> (batch, *output_shape)` with population/batch on axis 0; `batch` may be `P * S` (func fit tiles the dataset) or `P * R` (rollout repeats), not necessarily `P`.
 - `transformed` is the batch-first execution schedule from `Genome.transform`; the only thing a problem may read from it is `static_batch_size(transformed)` (schema-agnostic: the static leading dim of its leaves), because problems cannot otherwise know `P`.
 - `input_shape` / `output_shape` are **per-sample** shapes (`XOR` → `(2,)` / `(1,)`), so `input_shape[-1]` equals `algorithm.num_inputs`; legacy problems returned dataset-shaped tuples — that convention is gone.
-- `setup(self, state=None) -> State` comes from `StatefulBaseClass`; `FuncFit` overrides it to validate its dataset budget first, `CartPole` inherits it unchanged (no shipped problem registers keys today).
-- `show(self, state, key, act_fn, transformed)` is **host-side** (never called from a trace): it evaluates a batch of one and prints a human-facing report.
+- `setup(self, state=None) -> State` comes from `StatefulBaseClass`; `FuncFit` overrides it to validate its dataset budget first, and the three RL environments inherit it unchanged (no shipped problem registers keys today).
+- `show(self, state, key, act_fn, transformed)` is **host-side** (never called from a trace): it evaluates a batch of one and prints a human-facing report; each RL environment builds its own one-individual graph over the rank-0 key (`evoxc.build` + `evoxc.run`) and reads the return and the final observation out of its rollout carry.
 - The schedule container is opaque to a problem, so `show` rebuilds it *inside* its one-off trace with `evoxc.tree_unflatten(evoxc.tree_structure(transformed), list(arrays))` — the leaves travel as graph data arguments and the structure comes from the pytree, never from a positional `type(transformed)(*leaves)` (that broke on HyperNEAT's nested `SubstrateSchedule`: 17 leaves against 6 fields).
   A flat `Transformed` namedtuple and a nested batch-first container therefore both round-trip, at any static `P`.
 - `show_details(self, state, key, act_fn, transformed)` is a host-side no-op hook called by `Pipeline.auto_run` when `show_problem_details=True`.
@@ -51,44 +65,83 @@ A problem is pure host-side configuration (`StatefulBaseClass`) plus plain-Pytho
 - `CartPole(..., fitness_target=None)` validates only when a target is passed (`TensorNEATError` above `max_step`); the documented parameter order is unchanged, so `benchmarks/cases.py` and the pipeline construct it without a target.
 - NaN logits act as push-left inside the rollout (`enp.greater` is false against NaN) but a NaN census (`evoxc.isnan(enp.reduce_sum(logits, axis=1))`) is accumulated into `total`, so that individual's fitness is NaN and `finalize_fitness` maps it to `-inf`.
 
+## Pendulum algebra (`rl/pendulum.py`)
+- Gym `Pendulum-v1` with Euler integration: `dt=0.05`, `gravity=10`, `mass=1`, `length=1`, `max_speed=8`, `max_torque=2`; `theta = 0` is **upright**, so the cost is smallest exactly at the unstable equilibrium.
+- Reset is **one** `U(-1, 1)` block of shape `(B, 2)`, scaled per column (`theta = raw_0 * pi`, `theta_dot = raw_1 * max_speed`), i.e. `theta ~ U(-pi, pi)`, `theta_dot ~ U(-max_speed, max_speed)`; the key is not threaded through the loop and `np.random` is never used.
+- `input_shape = (2,)` = `(theta, theta_dot)`; `output_shape = (1,)` = one torque logit, squashed inside the problem to `u = max_torque * tanh(logit)`, so `output_transform` stays unset.
+- One `evoxc.while_loop` over the static `max_step` with carry `(obs (B,2), total (B,), step ())` and **no alive mask**: there is no terminal state, so every episode is scored over the whole horizon.
+- Step body, every term on the **pre-transition** state: `cost = angle_normalize(theta)**2 + 0.1*theta_dot**2 + 0.001*u**2`, `theta_dot' = clip(theta_dot + (gravity_term*sin(theta) + torque_term*u)*dt, -max_speed, max_speed)` — the velocity clip comes **before** the angle integrates — `theta' = theta + theta_dot'*dt`, `total -= cost`.
+- `gravity_term = 3*gravity/(2*length)` and `torque_term = 3/(mass*length**2)` are precomputed host-side into the `_PendulumConstants` bundle, so the body never divides; every field is an in-trace `enp.full((), v)` built once per rollout, outside the loop.
+- `angle_normalize(x) = x - 2*pi*floor((x + pi)/(2*pi))`, the floor-mod spelling of Gym's `((x + pi) % (2*pi)) - pi`, because `evoxc.remainder` is floor-mod on numpy but `fmod` on stablehlo/iree (see Constraints) while `evoxc.floor` is an exact IEEE op on both; `enp` has neither, which is why the top-level ops are the escape hatch.
+- `_advance` returns the cost already reshaped to `(B,)`, because `(B,) - (B,1)` would broadcast into a `(B, B)` buffer.
+- Return bounds: a per-step cost is at most `pi**2 + 0.1*max_speed**2 + 0.001*max_torque**2 = 16.29`, so an episode return lives in `[-max_step*max_cost, 0]` and so does the fitness; hence the `fitness_target > 0` rejection.
+- NaN poisons through the action penalty rather than a census: `tanh(NaN) = NaN` makes `0.001*u**2` NaN, the step's cost NaN and the accumulator NaN for the rest of the episode, and `finalize_fitness` maps it to `-inf`.
+- `repeat_times` repeats are individual-major (`row p*R + r`), and `evaluate` means `returns_of(total, P, R)` over axis 1 before `finalize_fitness`.
+
+## MountainCarContinuous algebra (`rl/mountaincar.py`)
+- Gym `MountainCarContinuous-v0` with Euler integration: track `[-1.2, 0.6]`, `max_speed=0.07`, `goal_position=0.45`, `goal_velocity=0.0`, `power=0.0015`, `gravity=0.0025`; reset is one `(B, 1)` draw `U(-1, 1)` rescaled to `position ~ U(-0.6, -0.4)` (centre/half-width derived from the module literals `_RESET_LOW`/`_RESET_HIGH`) with an exact zero velocity column.
+- `input_shape = (2,)` = `(position, velocity)`; `output_shape = (1,)` = one action logit, squashed inside the problem to `a = tanh(logit)`, so `output_transform` stays unset.
+- Exact Gym order, all on the **pre-transition** state: `force = clip(a, -1, 1)` (a no-op for `|tanh| <= 1`, kept for faithfulness), `velocity' = velocity + force*power - gravity*cos(3*position)`, then `velocity' = clip(velocity', -max_speed, max_speed)`, then `position' = clip(position + velocity', min_position, max_position)`, then `velocity' = 0` where `position' == min_position and velocity' < 0` (exact float equality, because `clip` returns the bound verbatim), and `done = position' >= goal_position and velocity' >= goal_velocity`.
+- Carry `(obs (B,2), alive (B,), total (B,), step ())` over the static `max_step`; the goal test is folded into `_advance` because the transition already holds `position'`/`velocity'` in hand, and splitting the row again would cost ops per timestep.
+- Reward of a step is `bonus - penalty`, `bonus = where(done, 100, 0)` and `penalty = 0.1*a**2` charged on the **pre-clip** action (what Gym charges), accumulated as `total + where(alive, reward, 0)`.
+- **Termination differs from CartPole**: `done` here is a *success*, the terminal transition pays the `100` bonus plus that step's penalty, the state is then frozen with `enp.where(enp.expand_dims(alive, 1), next_obs, obs)`, and the accumulator is masked by the **pre-step** `alive` flag — the frozen post-goal state still satisfies `done`, so an unmasked bonus would be re-awarded on every remaining timestep.
+- Rank hygiene keeps `done` and the squared action at rank 1 (`enp.reshape`), so no `(B,1)` operand ever meets the `(B,)` accumulator.
+- Return bounds `[-(0.1*max_step), 100]`, hence the `fitness_target > 100` rejection; the honest ceiling is ≈89, never ≈100, because the penalty accrues over the ~106 steps the climb takes.
+- NaN poisons through the action penalty and survives the clip: `enp.clip` is `minimum(maximum(...))` and propagates NaN, so a live step's reward turns NaN and the accumulator follows — no NaN census — while a NaN arriving only *after* an episode terminated is dropped, because accumulation genuinely stops.
+- `show` reports "goal reached" as `return > 0` rather than testing against `100`: a solving return is ≈89 and a failing one is `<= 0` below 1000 steps.
+- `repeat_times` repeats are individual-major and `evaluate` means over axis 1, exactly as for the other two environments.
+
 ## Measured Cost (this box, evoxc 0.1.0, numpy reference backend unless stated)
 Function fitting (`XOR`/`XOR3d`, `DefaultGenome(max_nodes=50, max_conns=100)`, `NEAT(pop_size=500, species_size=20)`): a full `step` is ≈350 ms, of which the evaluate segment (transform + schedule repeat + `genome.forward` at `P*S` rows + tiling + loss) is only ≈15–30 ms; `tell`/speciation dominates.
 `evaluate` alone with a trivial `act_fn`: 0.15 ms (XOR pop 500), 0.20 ms (XOR3d pop 500), 0.26 ms (CustomFuncFit pop 200 / 50 samples).
 CartPole rollout component (`evaluate` traced alone, no genome forward): numpy 69.6 / 79.5 ms at `max_step=200` (P=100 / 1000) and 173.9 / 202.3 ms at `max_step=500`; iree-llvm-cpu 8.2 / 29.2 / 20.6 / 73.4 ms for the same cells, i.e. 2.7–8.5× cheaper, with a 0.87–1.24 s one-off build per shape versus 0.06 s on numpy.
-Cost is linear in `max_step` on both backends and sub-linear in `pop`; no crossover was measured. The authoritative table and the recommended configuration live in `./rl/CONTEXT.md`.
-At pipeline level the rollout is only 6–18 % of the CartPole evaluate share (the genome forward is the rest), and `Pipeline` cannot build on iree today for reasons owned by `algorithm`/`genome`/`common`, so the shipped default stays `numpy`.
+Pendulum rollout component, same protocol: 45.8 ms numpy / 5.4 ms iree at pop 100 and `max_step=200`, 116.9 / 13.2 at `max_step=500`, with a 0.011–0.012 s numpy build versus 0.65–0.66 s on iree.
+MountainCar rollout component, same protocol: 59.6 / 6.0 ms at pop 100 and `max_step=200`, 299.2 / 29.9 at `max_step=999`, with a 0.013–0.019 s numpy build versus 0.68–0.69 s on iree — so iree is 3.4–10.0× cheaper per generation once built.
+Cost is linear in `max_step` on both backends and nearly flat in `pop` (10× the population costs ≈1.07–1.09×), because the interpreter's fixed per-op cost sets the time for the two continuous environments (32 real ops per Pendulum step, 37 per MountainCar step, against CartPole's 60); no crossover was measured.
+At pipeline level the rollout is only 6–18 % of the CartPole evaluate share (the genome forward is the rest): a Pendulum generation with a 6-node hidden layer is 492.0 ms with an evaluate share of 465 ms and a rollout share of 9.9 %, and a MountainCar generation is 377.8 ms / 342 ms / 17.5 %, so a continuous-control generation is genome-forward-bound too.
+`Pipeline` cannot build on iree today for reasons owned by `algorithm`/`genome`/`common`, so the shipped default stays `numpy` and the iree figures above are component measurements.
+`./rl/CONTEXT.md` is the authoritative table for the three environments (per-cell numpy/iree milliseconds, build seconds, numeric agreement between backends); the rows here are the compact subset.
 
 ## Constraints
-- Compute path uses only `evoxc.numpy as enp` plus top-level `evoxc.{isnan, select, tile, from_numpy, constant}`; there is no eager mode, so never call `np.*` on a traced value.
-- `enp` gaps to remember: no `isnan`/`isfinite` (`evoxc.isnan`), no `tile`/`take`/`take_along_axis`/`einsum`/`floor`/`isfinite` (tiling is `evoxc.tile`, the rest compose from `broadcast_to`, `reshape`, `split`, `concatenate`, `where`, `select`).
+- Compute path uses only `evoxc.numpy as enp` plus top-level `evoxc.{isnan, select, tile, floor, from_numpy, constant}`; there is no eager mode, so never call `np.*` on a traced value.
+- `enp` gaps to remember: no `isnan`/`isfinite` (`evoxc.isnan`), no `tile`/`take`/`take_along_axis`/`einsum`/`floor`/`remainder` (tiling is `evoxc.tile`, wrapping is `evoxc.floor`, the rest compose from `broadcast_to`, `reshape`, `split`, `concatenate`, `where`, `select`).
+- Never wrap an angle with `evoxc.remainder`: it is floor-mod on numpy but `fmod` on stablehlo/iree, which silently made iree Pendulum returns 2.36× wrong while numpy looked perfect; `x - two_pi*floor((x + pi)/two_pi)` is bit-identical on both.
+- Rank hygiene whenever a `(B, 1)` action meets a `(B,)` accumulator: reshape the squared action and the goal mask to rank 1 (numpy broadcasting would silently build a `(B, B)` total), and broadcast `(B,)` masks with `enp.expand_dims` before `enp.where`.
+- `MountainCarContinuous`'s terminal reward must stay deferred behind the pre-step `alive` mask, otherwise the frozen post-goal state re-awards the `100` bonus every remaining timestep.
+- `enp.clip` is `minimum(maximum(...))` and propagates NaN, so a NaN continuous action survives the clip: never add a fallback that would fold the poison away, and never "sanitise" a clipped action.
 - `enp.zeros/ones/full/empty` are **graph** constants that materialise their whole array (the concrete creators of the same name live at top level `evoxc.*`); create them inside the traced function, never at module scope, and never with a shape that scales with the population or the horizon.
-- Scalar float literals become f64 constants on the stablehlo/iree path, so every arithmetic constant in a kernel is built with `enp.full((), v)` to stay float32 and to keep numpy/iree numerically aligned.
+- Scalar float literals become f64 constants on the stablehlo/iree path, so every arithmetic constant in a kernel is built with `enp.full((), v)` to stay float32 and to keep numpy/iree numerically aligned; each environment bundles them once per rollout, outside its loop.
 - Static-shape hygiene for compiler backends: use non-negative axes in `concatenate`/`split` (`axis=1`, not `axis=-1`) and keep loop outputs rank-1 — a rank-3 stacked output needs a rank-3 `scatter` that the v1 stablehlo exporter rejects.
 - No `@evoxc.defn` may call another `@evoxc.defn`, and a Python callable is not a static value: `evaluate`/`show` are plain (undecorated) helpers inlined into `Pipeline.step`'s graph, and `act_fn` reaches them by closure.
 - `show`'s `act_fn` must be a predictor over **traced** tensors (the schedule it closes over is rebuilt in the same trace); `Pipeline._constant_act_fn` satisfies that, a host-bound `functools.partial(algorithm.forward, state, transformed, payload)` raises `evoxc.TraceError`.
-- No python control flow over traced values: horizon, dataset size and population are static config; the only loop in this node is CartPole's `while_loop`.
+- No python control flow over traced values: horizon, dataset size and population are static config; the only loops in this node are the three RL `while_loop`s, each with a static trip count (`step < horizon`), never a data-dependent one.
 - Errors: constructor/config validation raises `tensorneat.common.errors.TensorNEATError`; shape/dtype/backend errors from evoxc are never caught or re-wrapped.
-- Files ≤ ~1000 lines; the tiling + reduction lives once in `func_fit/func_fit.py`, one file per concrete problem.
+- Files ≤ ~1000 lines; the tiling + reduction lives once in `func_fit/func_fit.py`, each RL environment is one self-contained file, and the genuinely generic RL host helpers live once in `rl/_common.py`.
 
 ## Test Strategy
-- `test/unit/problem/` (62 tests, numpy backend, no optional dependency) is the node's real suite: `test_func_fit.py` pins the tiling order (`p*S + s`), every `error_method` against a numpy oracle, the NaN → `-inf` mapping and the XOR/XOR3d literals; `test_cartpole.py` holds the host-numpy dynamics oracle and pins death at `|theta| > 12 deg`, frozen state after death, the fitness ceiling and per-key determinism; `test_problem_api.py` pins shapes, `static_batch_size` on a fake schedule and the `TensorNEATError` config paths.
-- `test/parity/` (needs the `bench` extra) diffs the func-fit fitness of a fixed random network against `benchmarks/legacy_jax/tensorneat_legacy/problem/func_fit` for `XOR`, `XOR3d` and `CustomFuncFit(method="grid")`, float32, `rtol≈1e-5`; there is no CartPole parity oracle (the legacy RL problems were deleted), so the unit-test oracle *is* the reference.
-- Verification beyond the suites: driving `Pipeline` end-to-end on the numpy backend (`setup`/`step`/`auto_run`/`show`) and the four examples (`examples/func_fit/{xor,xor3d,custom_func_fit}.py`, `examples/rl/cartpole.py`), plus `test/release_gate_no_jax.py`.
+- `test/unit/problem/` (numpy backend, no optional dependency) is the node's real suite: `test_func_fit.py` pins the tiling order (`p*S + s`), every `error_method` against a numpy oracle, the NaN → `-inf` mapping and the XOR/XOR3d literals; `test_cartpole.py` holds the host-numpy dynamics oracle and pins death at `|theta| > 12 deg`, frozen state after death, the fitness ceiling and per-key determinism; `test_pendulum.py` and `test_mountaincar.py` hold the host-numpy float32 oracles for the two continuous-control recurrences and pin the ordering decisions (`Pendulum`'s velocity clip before the angle update, the pre-clip MountainCar penalty, the exact min-position velocity reset, the one-time bonus masked by the pre-step alive flag) plus the NaN → `-inf` paths; `test_problem_api.py` pins shapes, `static_batch_size` on a fake schedule and the `TensorNEATError` config paths of all three RL environments.
+- `test/parity/` (needs the `bench` extra) diffs the func-fit fitness of a fixed random network against `benchmarks/legacy_jax/tensorneat_legacy/problem/func_fit` for `XOR`, `XOR3d` and `CustomFuncFit(method="grid")`, float32, `rtol≈1e-5`; there is no RL parity oracle (the legacy RL problems were deleted), so the unit-test host transcriptions are the reference for all three environments.
+- Verification beyond the suites: driving `Pipeline` end-to-end on the numpy backend (`setup`/`step`/`auto_run`/`show`) through the shipped examples under `examples/func_fit/` and `examples/rl/`, plus `test/release_gate_no_jax.py`.
 - There is no test for the dataset budget (`MAX_DATASET_NBYTES` / `validate_dataset`) or for the `evaluate` op count today; both are verified by hand.
 
 ## Known Issues
 - `Pipeline.show` on **HyperNEAT** still fails before it ever reaches this node: `HyperNEAT._query_substrate` takes `pop_size = self.pop_size` instead of the payload's leading dimension, so the pipeline's one-individual schedule derivation raises `evoxc.core.errors.ShapeError: concatenate: dims must agree, got P*Q vs 1`.
   `problem.FuncFit.show` itself handles the nested `SubstrateSchedule` (verified at `P=1` and `P>1`); the algorithm node has to derive `P` from the payload it is handed.
-- `CartPole` cannot build on TVM at all (it rejects `if`/`while`/gather/scatter), and a full `Pipeline` cannot build on iree today: `algorithm/neat/species.py` scatters a rank-3 operand along axis 0, `genome/gene/base.py` emits a `uint32` constant, and `common/tensorization.py::derive_schedule`'s `flat_scatter` fails iree-compile legalisation.
+- The RL environments control-flow on purpose, so they run on numpy / iree-llvm-cpu / xla only: TVM rejects `if`/`while`/gather/scatter, and a full `Pipeline` cannot build on iree today either — `algorithm/neat/species.py` scatters a rank-3 operand along axis 0, `genome/gene/base.py` emits a `uint32` constant, and `common/tensorization.py::derive_schedule`'s `flat_scatter` fails iree-compile legalisation.
   Both must keep failing loudly, never fall back.
-- Cross-backend CartPole fitness is not bitwise reproducible (numpy and iree round float32 differently, so a sensitive policy can differ by ±1 step); no test may assert cross-backend trajectory equality.
+- Cross-backend RL fitness is not bitwise reproducible (numpy and iree round float32 differently, so a sensitive policy can differ by ±1 step); agreement is float32 rounding (`max_rel ≈1e-6`), and no test may assert cross-backend trajectory equality.
+- `MountainCarContinuous`'s standard reward has an idle optimum of exactly `0.0` — an action near zero pays neither the `100` bonus nor the `0.1*a**2` penalty — so a tabula-rasa evolutionary run converges there instead of to a solving policy.
+  Measured: a `sign(velocity)` bang-bang policy nets ≈`90.8`, while NEAT at pop 100 ends at `-0.007 … -0.0` across horizons and hidden-layer settings.
+  This is environment semantics, not a bug: target `≈-0.5` for a demo that terminates, or budget far more generations for the bonus.
 
 ## Notes for Agents
 - Cross-node cost findings (not editable from here):
   - `genome/default.py` bakes `enp.full((P*S, max_nodes − num_inputs), nan)` as the forward value seed — the largest constant in every func-fit graph (1.92 MB at P=200/50 samples, 20 MB at S=500, 80 MB-scale at larger geometry). A `(1, width)` constant plus a broadcast would make it population-independent.
   - `common/tensorization.py` bakes 104 population-scaled constants (3.43 MB at P=200, 8.56 MB at P=500, e.g. `(P, max_conns+1)` twice per window table).
   - `problem/base.py::finalize_fitness` costs 3 ops where `evoxc.nan_to_num(x, nan=-inf)` would cost 1; not taken (inf semantics differ from numpy's).
-- On numpy, keep `max_step` small for CartPole (cost is linear in the horizon, ≈0.35 ms per step per 100 individuals) and expect a generation to be genome-forward-bound, not rollout-bound; on iree the rollout is 2.7–8.5× cheaper but no end-to-end iree run is possible today.
+  - `rl/_common.to_numpy` duplicates `common/tools.to_numpy` (the latter duck-types `.numpy()`, the former checks `isinstance(evoxc.Tensor)`); consolidating is a sibling-node decision.
+- On numpy, keep `max_step` small for every RL environment (cost is linear in the horizon, ≈0.35 ms per step per 100 individuals for CartPole, ≈0.23 for Pendulum and ≈0.30 for MountainCar) and expect a generation to be genome-forward-bound, not rollout-bound; on iree the rollouts are 3.4–10.0× cheaper but no end-to-end iree run is possible today.
+- `./rl/CONTEXT.md` holds the recommended demo configurations: Pendulum needs a 6-node hidden layer to reach ≈`-239` in 8 generations, and MountainCarContinuous converges to the idle policy, so aim at `-0.5` for a demo that terminates.
 - Re-measure with the dev harness pattern (`problem.evaluate` traced alone with a trivial `act_fn` for this node's own cost; a `step` with `evaluate` monkeypatched to zeros for the evaluate share), never with a single-shot pipeline run: build (0.5–1.2 s) dominates one generation at small budgets.
 
 ## Routing Table
@@ -96,7 +149,7 @@ At pipeline level the rollout is only 6–18 % of the CartPole evaluate share (t
 |---|---|
 | `./base.py` | `BaseProblem` protocol, `static_batch_size(transformed)`, `finalize_fitness(fitness)`. |
 | `./func_fit` | Supervised function fitting: `FuncFit` tiling + loss reduction + dataset budget, `XOR`, `XOR3d`, `CustomFuncFit`. |
-| `./rl` | Batched `CartPole` rollout (`while_loop` over timesteps), measured cost table, and the recipe for user-defined evoxc environments. |
+| `./rl` | Three batched evoxc environments — `CartPole` (discrete), `Pendulum` (continuous torque), `MountainCarContinuous` (continuous force with a one-time goal bonus) — each a `while_loop` over timesteps, plus `_common.py` host helpers, the measured cost table and the recipe for user-defined evoxc environments. |
 | `../common/errors.py` | `TensorNEATError`, the single config-validation exception (sibling — read-only, escalate writes to parent). |
 | `../genome/base.py` | Produces the batch-first `transformed` schedule this node consumes and the `forward` kernel used as `act_fn` (sibling — read-only). |
 | `../../test/unit/problem` | Unit suites for this node (sibling — read-only, escalate writes to parent). |
