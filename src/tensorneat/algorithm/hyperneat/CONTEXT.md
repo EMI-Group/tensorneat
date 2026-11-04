@@ -37,6 +37,8 @@ Every decode helper that tiles a batch takes `pop_size` as a static argument (`_
 5. `return SubstrateSchedule(schedule, *payload)`.
 `HyperNEAT.forward(state, transformed, inputs)` takes `(B, I - 1)`, appends a trailing column of ones (`B = inputs.shape[0]`, a static int — problems tile datasets over the population axis so `B` is `pop_size * samples`) and returns `(B, O)` from `hyper_genome.forward(state, schedule, node_keys, node_attrs, conn_keys, conn_attrs, biased)`.
 The bias is the **last** substrate input, which is why `num_inputs` reports `substrate.num_inputs - 1` upward.
+`HyperNEAT.prepare_forward(state, transformed, pop=None, samples=1)` ignores `pop` (the substrate payload travels inside `transformed`) and prepares `hyper_genome.prepare_pass` from that payload, raising `TensorNEATError` for `samples != 1`; `HyperNEAT.forward_prepared` is `forward` minus the prelude — the same bias column, then `hyper_genome.forward_prepared`.
+The prepared pair therefore serves queries of exactly `P` rows: a tiled `B = P * samples` query (`samples > 1`) has no prepared form and must go through `forward`.
 The expansion row order is `p * Q + q` (individual slowest) and matches the `(P, Q, C) -> (P * Q, C)` reshape; changing one without the other silently permutes weights across connections.
 `neat.pop_batch_size` does not chunk this pass: the CPPN query is a single whole-population forward over the static `(P, Q, C)` grid, so peak memory scales with `P * conns_cnt`.
 A shape change (`pop_size`, `conns_cnt`, `nodes_cnt`, or a bound change) changes the traced graph, so the pipeline rebuilds the executable; nothing in this node caches per-shape state.
