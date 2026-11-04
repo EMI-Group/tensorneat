@@ -85,9 +85,7 @@ The shipped backend is therefore the reference interpreter, and a compiled backe
 Current per-generation op counts: `forward` 112 traced ops (749 before the level loop was reformulated), `execute_mutation` 1360 (3114), `measure_distance` 7.5 µs/pair (25–48 µs before the digest API).
 
 ## Known Issues / Notes for Agents
-`test/integration/**` bodies are `pytest.skip` stubs and name `state.pop_nodes`/`state.pop_conns`, which no longer exist (the algorithm registers `pop` as a `GenomeTensors`), so the suite reports 15 skipped and verifies nothing.
-`test/unit/**` bodies are hard-coded `pytest.skip` stubs (364 skipped), and `test/parity/` passes its 18 jax-free cases while skipping the 32 that need the `bench` extra, so `pytest test` reports 22 passed, 411 skipped.
-Verification of this package currently goes through driving `Pipeline` end-to-end on the numpy backend (`setup`/`step`/`auto_run`, determinism per seed, one build per shape signature, checkpoint round-trip).
+`test/integration/` drives `Pipeline` end-to-end on the numpy backend (`setup`/`step`/`auto_run`, the batch-first best-genome payload, determinism per seed, one build per shape signature, checkpoint round-trip); `test/unit/` covers the kernels and `test/parity/` the legacy comparison, the latter needing the `bench` extra so its jax-dependent cases skip without it.
 `benchmarks/RESULTS.md` still carries the old-side baseline only (`jax 0.12`, `evoxc n/a`); its owner must re-render it from a harness run that includes the new-side rows above.
 `benchmarks/run_benchmark.py --impl new --backend numpy --cases xor_p100` drives this `step` contract unchanged (it reads fitness from the last element of the step result) and reports `INCOMPLETE` until an old-side row is measured on the same box.
 
