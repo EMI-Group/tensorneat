@@ -177,25 +177,25 @@ def _key_indices(keys: Any, key_span: int) -> tuple:
     so the caller never reads a sanitized cell by accident.
 
     The integer branch is the two-comparison range test ``0 <= key < key_span`` in
-    the key's own **signed** dtype, the same shape as the float branch below. The
-    one-comparison ``cast(keys, uint32) < key_span`` alternative (a negative key
-    becomes huge) is not portable — iree cannot execute ``uint32``, so no graph this
-    package builds may contain an unsigned dtype — and the signed spelling is
-    bit-identical on numpy (a negative key fails ``>= 0``, ``I_INF`` fails ``<
-    key_span``) for one extra elementwise op.
+    the key's own **signed** dtype (the ``cast(keys, uint32)`` shortcut is not
+    portable: no graph here may carry an unsigned dtype) and skips the identity cast.
     """
-    zero = enp.zeros(tuple(keys.shape), dtype=keys.dtype)
+    zero = _scalar_constant(0, keys.dtype)
     if keys.dtype.kind in ("i", "u"):
         in_range = enp.logical_and(
             enp.greater_equal(keys, zero),
             enp.less(keys, _scalar_constant(key_span, keys.dtype)),
         )
-        return evoxc.cast(evoxc.select(in_range, keys, zero), evoxc.int32), in_range
+        safe = evoxc.select(in_range, keys, zero)
+        # evoxc emits ``cast`` even for a dtype-identical source; int32 skips it.
+        if keys.dtype == evoxc.int32:
+            return safe, in_range
+        return evoxc.cast(safe, evoxc.int32), in_range
     in_range = enp.logical_and(
         _key_present(keys),
         enp.logical_and(
             enp.greater_equal(keys, zero),
-            enp.less(keys, enp.full(tuple(keys.shape), key_span, dtype=keys.dtype)),
+            enp.less(keys, _scalar_constant(key_span, keys.dtype)),
         ),
     )
     return evoxc.cast(evoxc.select(in_range, keys, zero), evoxc.int32), in_range
@@ -278,8 +278,9 @@ def derive_schedule(
     table = key_slot_table(node_keys, key_span)
     src = _slot_of(table, conn_in, key_span)
     dst = _slot_of(table, conn_out, key_span)
-    edge_valid = enp.logical_and(
-        enp.not_equal(src, _iinf_like(src)), enp.not_equal(dst, _iinf_like(dst))
+    # A slot is ``I_INF`` or in ``[0, N)``: "both matched" is ``max(src, dst) < N``.
+    edge_valid = enp.less(
+        enp.maximum(src, dst), _scalar_constant(max_nodes, evoxc.int32)
     )
     input_slot = _slot_of(table, _row_broadcast(input_keys, pop_size), key_span)
     output_slot = _slot_of(table, _row_broadcast(output_keys, pop_size), key_span)
@@ -373,7 +374,8 @@ def _slot_of(table, keys, key_span):
     Private body of :func:`slot_lookup`, without its width check.
     """
     indices, in_range = _key_indices(keys, key_span)
-    flat_index = prepare_flat_index(table, indices, in_range, 0, trusted=True)
+    # ``_key_indices`` already sanitised to ``0``, so ``present`` was a dead select.
+    flat_index = prepare_flat_index(table, indices, trusted=True)
     values = flat_gather_prepared(table, flat_index, indices.shape)
     return evoxc.select(in_range, values, _scalar_constant(I_INF, evoxc.int32))
 
@@ -555,14 +557,14 @@ def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
             start, prepare_flat_index(start, safe_dst, trusted=True), safe_dst.shape
         ),
     )
-    kept_column = evoxc.select(edge_valid, column, zero)
+    # Rows outside a window keep a garbage cell: ``_window_pair`` dumps them.
     in_window = enp.logical_and(
-        enp.greater_equal(kept_column, 0), enp.less(kept_column, max_in_degree)
+        enp.greater_equal(column, 0), enp.less(column, max_in_degree)
     )
     keep = enp.logical_and(edge_valid, in_window)
     target = evoxc.add(
         evoxc.multiply(safe_dst, _scalar_constant(max_in_degree, evoxc.int32)),
-        evoxc.select(keep, kept_column, zero),
+        column,
     )
     in_conn, in_src = _window_pair(
         target,
@@ -575,7 +577,7 @@ def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
     edge_overflow = evoxc.cast(
         evoxc.reduce_sum(
             evoxc.cast(
-                enp.logical_and(edge_valid, enp.greater_equal(kept_column, max_in_degree)),
+                enp.logical_and(edge_valid, enp.greater_equal(column, max_in_degree)),
                 evoxc.int32,
             ),
             axes=(1,),
