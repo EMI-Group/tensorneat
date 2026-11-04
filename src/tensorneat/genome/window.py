@@ -101,24 +101,34 @@ def _slot_index(
     Both results depend only on the schedule (``idx`` and ``mask``) and on the static
     ``row_len``, so :meth:`BaseGenome._hit_conn_attrs` derives them once per forward pass and
     every unrolled level reuses them instead of re-deriving them.
+    Two facts make this two traced ops (:func:`evoxc.minimum` and one ``add``) instead of the
+    four a mask-and-redirect form needs:
+    * the liveness mask *is* ``mask``: the schedule guarantees ``in_src`` is ``I_INF`` at
+      exactly the positions where ``in_valid`` is ``False`` (``validate_schedule`` checks it),
+      so the ``idx != I_INF`` term of ``(idx != I_INF) & mask`` is redundant — and for the
+      attribute gather the index is a widened row id, where the ``& mask`` of the old form
+      already decided every dead position;
+    * the padding sentinel only has to be brought *into range*, not redirected to a chosen
+      row: every consumer of the gathered value masks the dead slots out (the aggregation
+      neutral-fills them, ``live`` excludes them), so clamping ``I_INF`` to the last row is
+      as good as redirecting it to row ``0`` while costing one elementwise op instead of a
+      ``select`` plus the two comparisons feeding it.
     Args:
         idx: ``(P, *block) int32`` row indices into the source table's second axis; ``I_INF``
             (or a masked-out position) means "no slot".
-        mask: ``(P, *block) bool`` liveness of each slot.
+        mask: ``(P, *block) bool`` liveness of each slot; returned as the ``present`` mask.
         row_len: ``R``, the source table's second-axis length.
     Returns:
         ``(flat_index, present)``: the ``(P, *block)`` gather index into the flattened
-        ``(P * R,)`` table, with every absent slot redirected to row ``0`` of its own
+        ``(P * R,)`` table, with every absent slot clamped to row ``R - 1`` of its own
         individual (the backend never sees an out-of-range index), and the ``(P, *block) bool``
-        liveness mask — block-shaped, which is the shape the per-level value gather uses to
-        fill its dead slots with ``NaN``.
+        liveness mask.
     """
     pop_size = int(idx.shape[0])
     block = tuple(int(size) for size in idx.shape[1:])
-    present = evoxc.logical_and(enp.not_equal(idx, _iinf(idx.dtype)), mask)
-    safe = evoxc.select(present, idx, enp.zeros((), dtype=idx.dtype))
-    flat = evoxc.add(safe, _row_offsets(pop_size, row_len, len(block)))
-    return evoxc.reshape(flat, (pop_size, *block)), present
+    in_range = evoxc.minimum(idx, _i32(row_len - 1))
+    flat = evoxc.add(in_range, _row_offsets(pop_size, row_len, len(block)))
+    return evoxc.reshape(flat, (pop_size, *block)), mask
 
 
 def _row_offsets(pop_size: int, row_len: int, block_rank: int) -> evoxc.SymbolicTensor:
@@ -152,17 +162,31 @@ def _row_offsets(pop_size: int, row_len: int, block_rank: int) -> evoxc.Symbolic
 
 
 def _column_index(
-    rows: evoxc.SymbolicTensor, attr_width: int
+    rows: evoxc.SymbolicTensor, attr_width: int, row_len: int
 ) -> evoxc.SymbolicTensor:
     """Widen a ``(P, N, K)`` connection-row index to every attribute column.
+    ``attr_width == 1`` (the shipped families) is the flat row id itself: the widening is a
+    single trailing-axis ``reshape``, because multiplying by ``1`` and adding the all-zero
+    column would be two elementwise passes over ``(P, N, K)`` plus a constant for a value the
+    gather already addresses. The multi-column form clamps the row id into the table *before*
+    scaling it: ``I_INF * CA`` wraps ``int32``, and while the position is masked dead anyway, an
+    out-of-range index is undefined behaviour for the compiled backends, so the clamp keeps
+    every gather index in ``[0, P * R * CA)`` without a ``select``.
     Args:
         rows: ``(P, N, K) int32`` connection **row** index of each window slot.
         attr_width: ``CA``, the number of attribute columns of one connection row.
+        row_len: ``R``, the number of connection rows of one individual.
     Returns:
         ``(P, N, K, CA) int32`` index into the flattened ``(P, E * CA)`` attribute table,
         i.e. ``row * CA + column``.
     """
-    scaled = evoxc.reshape(evoxc.multiply(rows, _i32(attr_width)), (*rows.shape, 1))
+    widened = evoxc.reshape(rows, (*rows.shape, 1))
+    if attr_width == 1:
+        return widened
+    in_range = evoxc.minimum(rows, _i32(row_len - 1))
+    scaled = evoxc.reshape(
+        evoxc.multiply(in_range, _i32(attr_width)), (*rows.shape, 1)
+    )
     column = evoxc.constant(
         evoxc.from_numpy(
             np.ascontiguousarray(
@@ -192,46 +216,27 @@ def _column_mask(present: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
 def _gather_prepared(
     x: evoxc.SymbolicTensor,
     flat_index: evoxc.SymbolicTensor,
-    present: evoxc.SymbolicTensor,
-    fill: float | evoxc.SymbolicTensor | None,
 ) -> evoxc.SymbolicTensor:
     """Gather one already-indexed window out of a batch-first ``(P, R)`` table.
-    The per-level half of :meth:`BaseGenome._gather_slots`: two ops (flatten the table,
-    gather) once the index table of :func:`_slot_index` exists — the index already carries
-    the window block shape, so nothing is reshaped back — plus one fill ``select`` when the
-    caller asks for one.
+    The per-level half of :meth:`BaseGenome._gather_slots`: exactly two ops (flatten the
+    table, gather) once the index table of :func:`_slot_index` exists — the index already
+    carries the window block shape, so nothing is reshaped back.
+    There is **no fill**: a statically dead slot is clamped to an in-range row of its own
+    individual by :func:`_slot_index`/``_column_index`` and keeps that row's value, which no
+    consumer reads — the caller's per-slot liveness mask (``_StepStatics.present`` ANDed with
+    the ``x == x`` test) excludes it and the aggregation neutral-fills every dead slot before
+    reducing. Writing ``NaN`` into the dead slots instead would cost one ``(P, N, K)``
+    ``select`` per unrolled level for values nobody observes.
     Args:
         x: ``(P, R)`` source table (node values, or a reshaped attribute payload).
         flat_index: ``(P, *block)`` gather index into the flattened table, from
             :func:`_slot_index`.
-        present: ``(P, *block) bool`` liveness mask from :func:`_slot_index` (a broadcastable
-            ``(P, *block[:-1], 1)`` mask is accepted too, so an attribute gather needs no
-            explicit widening op).
-        fill: Value written where the slot is absent, or ``None`` to leave the gathered value
-            in place. Both production callers pass ``NaN``: an *attribute* gather needs it so
-            the gene's ``prepare`` sees a clean "absent row" sentinel, and a *value* gather
-            needs it so the caller's liveness predicate is one ``x == x`` comparison — the
-            slots the fill overwrites are exactly the ones the schedule marked dead, and a
-            ``NaN`` there reduces to "not live" without a second mask. A rank-0 tensor is used
-            verbatim instead of a Python float (which would materialise its own ``constant``
-            op on every level); the value gather passes the per-pass NaN of
-            :class:`_StepStatics` for exactly that reason.
     Returns:
         ``(P, *block)`` tensor with ``x``'s dtype.
     """
-    values = evoxc.gather(
+    return evoxc.gather(
         evoxc.reshape(x, (int(x.shape[0]) * int(x.shape[1]),)), flat_index, axis=0
     )
-    if fill is not None:
-        # After the gather, so the trailing-``1`` mask of ``_column_mask`` broadcasts without
-        # an explicit widening op.
-        scalar = (
-            fill
-            if isinstance(fill, evoxc.SymbolicTensor)
-            else enp.full((), float(fill), dtype=x.dtype)
-        )
-        values = evoxc.select(present, values, scalar)
-    return values
 #: Window width up to which the sliced ``logical_or`` fold replaces the innermost-axis
 #: ``reduce_max`` of the "has at least one live slot" test.
 #:
