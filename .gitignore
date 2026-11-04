@@ -70,7 +70,7 @@ profile_default/
 ipython_config.py
 
 # pyenv
-.python-version
+# `.python-version` is tracked on purpose: it pins the uv-managed interpreter.
 
 # celery beat schedule file
 celerybeat-schedule
