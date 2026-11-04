@@ -69,7 +69,9 @@ Sort: stable ascending `argsort` plus the reversal permutation `n - 1 - arange(n
 Spawn (rank mode): `n = sum(valid)`, `rank_score = n - arange(S)`, `denominator = max((n+1)*n/2, 1)`, `target = floor(rank_score/denominator * pop_size)`.
 Spawn (fitness mode): `f' = f_live - min_live(f_live) + 1`, `rate = f' / sum_live(f')`, `target = floor(rate * pop_size)`; the `-inf` best fitness of a freshly created slot is `nan_to_num`-ed to weight `0`.
 Spawn (both modes): `damped = member_count + (target - member_count) * spawn_number_change_rate`, floored at `min_species_size`, dead/NaN slots forced to `0.0`, cast to int32, then the residual added to the **first live slot** by one `scatter` so `sum(spawn) == pop_size` exactly.
-Parent pairing: members ranked by fitness descending, `survive_size = clamp(floor(survival_threshold * member_count), 1, min(member_count, pop_size))`, one `randint(key, (S, 2, P), 0, survive[:, None, None])` draw for father and mother, `flat_gather` of the ranking, winner decided in species space (ties to the father, `>=`), elite slots (`idx_in_block < genome_elitism`) then pinned to their species' best member.
+Parent pairing: members ranked by fitness descending, `survive_size = clamp(floor(survival_threshold * member_count), 1, min(member_count, pop_size))`, one `randint(key, (S, 2, P), 0, survive[:, None, None])` draw for father and mother, `flat_gather` of the ranking, winner decided in species space (ties to the father, `>=`).
+Elite slot `k` of a block (`idx_in_block == k < genome_elitism`) pins **both** parents to that block's own `k`-th ranked member, gathered per block (`min(arange(P), live_members - 1)` as the rank index, `live_members` = the block's finite-fitness member count) — the legacy elementwise pin, so the top `genome_elitism` members survive unmutated as *distinct* individuals rather than as copies of the champion.
+The `live_members - 1` clamp is what keeps an elite on the species' own members: a sanitised `-inf` genome ranks last, so an unclamped rank could hand an elite a non-member row or a broken genome.
 Block flattening: with exclusive prefix `E` of `spawn`, `loc(p)` is the **last** `i` with `spawn[i] > 0 and E[i] <= p` (reversed `argmax` of the mask) and `idx_in_block(p) = p - E[loc(p)]`; parents are one `gather` at `flat = loc * P + idx_in_block` into the row-major `(S, P)` pair arrays.
 Speciation, scan 1 (centre reservation): per live slot `i`, `d_i` is the `(P,)` row `distance(centre_i, pop)` — computed behind one `cond` per iteration when the table is sparse, and on the dense path read by `gather` from the rows `distance_fn.matrix` measured *before* the scan (see `## Distance Rows`) —, `closest = argmin(select(unassigned, d_i, +inf))`, then assign `idx2species[closest] = species_keys[i]`, re-elect `pop[closest]` as the centre and set its distance to `0`; a dead slot or an empty unassigned set writes nothing.
 Speciation, scan 2 (member assignment): a live slot assigns every genome with `d < compatibility_threshold` and `(unassigned | d < current distance)`; a dead slot with anything still unassigned creates a species keyed `next_species_key` seeded by the first unassigned genome, then assigns the same way; an iteration with nothing to do writes nothing.
@@ -79,6 +81,26 @@ Scan 1 still carries the centre tables (it re-elects centres for live slots), so
 Both scans close over their graph-time constants (`I_INF`, `0`, `0.0`, `iota_i32(pop_size)`, the compatibility threshold and the gated false-branch zero row) instead of rebuilding them per iteration — one `constant` op each at the top level instead of one per slot.
 Speciation post-pass: leftovers adopt the last species key, slots created this generation get `best_fitness = -inf` / `last_improved = generation`, and `member_count` is one masked compare-sum over `(S, P)`.
 Body sizes: scan-1 body 55 traced ops, scan-2 body 221 traced ops with a 7-value `while` carry.
+
+## Search Quality (XOR3d / XOR, measured)
+Config: `DefaultGenome(num_inputs=3 (XOR3d) / 2 (XOR), num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, `XOR3d()` / `XOR()`, `backend="numpy"`, `fitness_target=-1e-9`, 150 generations, `Pipeline.setup` + a manual `step` loop.
+Parent pairing must hand each elite slot a **different** top member, not `genome_elitism` copies of the champion: with the champ cloned into both elite slots the population never split into compatibility basins at small pops (1 live species every generation) and the search sat at the `-0.25` constant-0.5 plateau of a sigmoid read-out for a non-linearly-separable task.
+Measured with the elementwise pin (this tree) against the clone-the-champion pin (same tree, kernel patched in a host harness), 3 seeds, 150 generations:
+
+| case | live species (before → after) | final best (before → after) | first gen ≥ target (after) |
+| --- | --- | --- | --- |
+| XOR3d P=100 seed 42 | 1 → 2 at gen 4, peak 5 | −0.250000 → −0.250000 (still −0.250000 at 500 gens) | never |
+| XOR3d P=100 seed 43 | 1 → 2 at gen 12, peak 12 | −0.250000 → −0.244246 (−0.141682 at 500 gens) | never |
+| XOR3d P=100 seed 44 | 1 → 1 | −0.250000 → **−0.183160** | never |
+| XOR3d P=500 seed 42 | 1 → 2 at gen 150, peak 19 | −0.250000 → **−0.000009** | gen 50 (−0.047614) |
+| XOR P=100 seed 42 | 1 → 2 at gen 5, peak 4 | plateau → **−0.000027** | gen 89 (−0.077552) |
+| XOR P=500 seed 42 | 1 → 12 at gen 150, peak 20 | plateau → **−0.000016** | gen 35 (−0.112053) |
+
+`benchmarks/legacy_jax` on the same config splits into 2 species at gen 3, 4 at gens 12–25 and 7 by gen 17, so the post-fix species counts sit in the legacy range and the pre-fix single basin did not.
+The `-0.25` value is the exact optimum of "predict 0.5 everywhere" (mse 0.25) and the plateau is not distance-gated: the population's max pairwise compatibility distance already reaches 2.4–2.5 with median 0.44–0.9, overlapping the legacy distribution (legacy gen-15 100×100 matrix: median 1.57, max 2.79), so no threshold change can open a basin the population is already outside of.
+P=100 XOR3d seed 42 remains at exactly −0.250000 for 500 generations while 99/100 genomes carry 1–3 hidden nodes (mean 1.77 at gen 15) and mean real connections fall to ~2 — the escape needs the genome's structural-mutation chain (below), not more species.
+Known residual, genome-owned: `DefaultMutation` applies at most one structural op per genome per generation (first-hit-wins), where the legacy chain could apply several independent ones; with a single survivor prefix (`survival_threshold=0.01` floors `survive_size` to 1 until a species passes 100 members) the champion's lineage is the only variation source in small species.
+Raising the survivor floor to `min(2, member_count)` on top of the elementwise pin was measured and rejected: it does not move P=100 XOR3d (seeds 42/43/44 all still exactly −0.250000) and it departs from the legacy `max(1, floor(thr · members))` formula, so the floor stays as it is.
 
 ## Distance Rows (one digest per generation; one population-shaped call per centre)
 Both phases need one `(P,)` compatibility row per species slot, and the same population is measured `2 · species_size` times, so `NEAT.tell` digests it once: `genome.prepare_distance(state, pop)` sorts each gene family of the population into a `DistanceDigest` (batch `P` on every population-indexed leaf) and `DistanceRows` turns centres into rows against it without re-sorting the population.
@@ -196,7 +218,7 @@ Breeding is the second hot spot and is 67 % `genome.execute_mutation` / 21 % `ge
 Measured: swapping `single_payload` to a batch-1 payload (dropping the `repeat_leading` tile) keeps the bit-identity oracle green at `P=100` and breaks it at generation 1 of `P=500` and `P=1000` — 20 mismatching arrays (the four centre tables, `idx2species`, `member_count`, `species_keys`).
 The tile is therefore load-bearing, not a workaround: it selects the row-wise merge, the only route that matches an out-of-range key against itself instead of dropping it (genome-side hazard, reported upward); `matrix`'s scan tiles one centre per iteration, so the copy is per row, not per table.
 `test/unit/algorithm/test_spawn.py` encodes the brief's `loc(p) = #{i : spawn[i] > 0 and E[i] <= p} - 1`; that count is wrong for a live zero-spawn species in the middle of the table, so the oracle needs the "last qualifying block" form to agree with `block_layout` (cross-node item, `test/` is not writable from here).
-The whole suite is green on this tree: `pytest` reports 551 passed / 0 failed (with the `bench`/`iree` extras) and `pytest -m parity` 53 passed, so `test/unit/algorithm` and `test/integration/` (the `Pipeline.auto_run` batch-first best-genome contract) both pass, and `test/backends` proves the `iree` portability claim above.
+The whole suite is green on this tree: `pytest -o addopts="" test/unit test/integration` reports 599 passed / 0 failed (with the `bench`/`iree` extras), `test/parity` 53 passed and `test/release_gate_no_jax.py` 4 passed, so `test/unit/algorithm` and `test/integration/` (the `Pipeline.auto_run` batch-first best-genome contract) both pass, and `test/backends` proves the `iree` portability claim above.
 This node is additionally verified by driving `Pipeline` end-to-end on the numpy backend with the real `DefaultGenome`/`XOR` (pop 8/100/300/301/500/1000, `rank` and `fitness` spawn modes, `max_stagnation` kills, `OriginConn`'s `historical_marker` branch, `pop_batch_size` chunking, `RecurrentGenome`, XOR3d) plus bit-identical repeat runs.
 `_new_gene_keys` is per-individual by contract (see `## Gene Keys & Padding`), so the genome must not assume keys are globally unique across the population.
 
@@ -207,7 +229,7 @@ No `.at[]`, no `cumsum` on the compute path (prefix sums are triangular `dot`), 
 Shapes are static: `P`, `S`, `max_nodes`, `max_conns` are fixed at build time; a change forces a rebuild by the pipeline.
 Errors: configuration validation raises `common.errors.TensorNEATError` with a named message; trace/shape/backend errors propagate unchanged and are never re-wrapped or silently fallen back.
 State keys touched: `randkey`, `pop_size`, `pop`, `generation`, `species`, plus the genome/problem keys documented above — nothing else.
-Files stay under 1000 lines: `_kernels.py` (992) the graph helpers, `neat.py` (966) the population cycle, `species.py` (950) the species algebra, `_distance.py` (306) the digest-backed rows, `_validation.py` (128) the host validators.
+Files stay at the ~1000-line ceiling: `_kernels.py` (1004) the graph helpers, `neat.py` (971) the population cycle, `species.py` (953) the species algebra, `_distance.py` (306) the digest-backed rows, `_validation.py` (128) the host validators.
 
 ## Known Risks
 `evoxc.random.randint` needs a symbolic `high` that stays ≥ 1 at runtime — guaranteed by `max(survive_size, 1)`, which also removes the legacy NaN case.
