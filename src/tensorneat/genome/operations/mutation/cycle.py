@@ -89,9 +89,9 @@ def _row_of(
         A padding node key is nudged past ``I_INF`` inside the composite, so an ``I_INF`` query
         — an absent edge endpoint — can never match a padding row and the caller needs no
         separate padding mask.  The ``int64`` composite is ``key << bits | low`` with
-        ``2 ** (bits - 1) > N + Q - 1``, so two entries of the same key lie at most
-        ``N + Q - 1`` apart in the low field while two entries of different keys lie at least
-        a whole period apart: the hit test is one range test on the difference.
+        ``2 ** (bits - 1) > N + Q - 1``, so the low field of every entry stays below one
+        period and the shift discards exactly the low field: two entries carry the same key
+        exactly when their shifted keys are equal.
 
         The node at or after each sorted position is found by its rank, i.e. the node count
         strictly before that position; the rank is read off an inclusive suffix count of the
@@ -104,7 +104,6 @@ def _row_of(
     bits = (total - 1).bit_length() + 1
     low_base = 1 << bits
     c_shift = _static_wide(np.asarray(bits))
-    c_radius = _static_wide(np.asarray(low_base >> 1))
     c_mask = _static_constant(np.asarray(low_base - 1))
     c_query = _static_constant(np.asarray(query_count))
     # A padding row is nudged to I_INF + 1, a key no query can hold, so it never matches.
@@ -153,7 +152,7 @@ def _row_of(
     # position.  A rank of ``node_count`` means no node follows, and clamping it to the last
     # row is exact: that only happens when every node sorts before the query, i.e. the query's
     # key exceeds every node key, so the read-back node carries a *different* key and the hit
-    # test below rejects it (two different keys are a whole period apart, ``> radius``).
+    # test below rejects it (the read-back node carries a different key).
     # Clamping is one ``minimum``; a trailing sentinel row would need its own constant, a
     # broadcast and a ``concatenate``.
     rank = evoxc.minimum(
@@ -168,20 +167,29 @@ def _row_of(
     )
     pick = enp.reshape(evoxc.add(rank, offsets), (pop_size * total,))
     node_at_rank = enp.reshape(evoxc.gather(flat_nodes, pick, axis=0), (pop_size, total))
-    hit = evoxc.less(evoxc.abs(evoxc.subtract(ordered, node_at_rank)), c_radius)
+    # Two entries carry the same key exactly when their composites agree above the low
+    # field, so the hit test is one ``equal`` of the shifted keys: same op count as the
+    # range test it replaces and no ``int64`` difference, ``abs`` and radius constant.
+    hit = evoxc.equal(
+        evoxc.bitwise_right_shift(ordered, c_shift),
+        evoxc.bitwise_right_shift(node_at_rank, c_shift),
+    )
     rows = evoxc.subtract(
         evoxc.bitwise_and(evoxc.cast(node_at_rank, evoxc.int32), c_mask), c_query
     )
     # Scatter the answers back into query order: a hit writes its row, a miss writes -1 into
     # the same cell, and every node position writes the trailing dump column.
     answer = evoxc.select(hit, rows, _static_constant(np.asarray(-1)))
-    width = query_count + 1
+    # The low field is already a per-individual cell number in ``[0, total)`` (a node's is
+    # ``query_count + row``, a query's its own index), so the store is a plain ``total``-wide
+    # row and the answers land in the query half without a clamp.
+    width = total
     store = _static_constant(np.arange(0, pop_size * width, width).reshape(pop_size, 1))
     written = evoxc.scatter(
         enp.reshape(
             fill((pop_size, width), 0, dtype=evoxc.int32), (pop_size * width,)
         ),
-        enp.reshape(evoxc.add(evoxc.minimum(low, c_query), store), (pop_size * total,)),
+        enp.reshape(evoxc.add(low, store), (pop_size * total,)),
         enp.reshape(answer, (pop_size * total,)),
         axis=0,
     )
@@ -281,16 +289,15 @@ def closes_cycle(
     src_flat = evoxc.select(
         enp.reshape(edge_valid, (edge_positions,)), src_flat, dump_flat
     )
-    # Seed the frontier at the destination: a one-hot row plus one appended dump column.
-    seeded = evoxc.logical_and(
-        evoxc.equal(
-            enp.reshape(enp.arange(0, node_count, dtype=evoxc.int32), (1, node_count)),
-            dst_row,
-        ),
-        dst_hit,
-    )
-    frontier = enp.reshape(
-        evoxc.pad(seeded, ((0, 0), (0, 1))), (pop_size * width,)
+    # Seed the frontier at the destination: one indexed write per individual into a
+    # cleared flat frontier, so the seed pays for the one cell it sets rather than for a
+    # ``(P, N)`` row comparison plus a pad.  Every individual writes its own cell, so the
+    # write order inside the ``scatter`` is unobservable, and a miss writes ``False``.
+    frontier = evoxc.scatter(
+        fill((pop_size * width,), False, dtype=evoxc.bool_),
+        enp.reshape(evoxc.add(dst_row, offsets), (pop_size,)),
+        enp.reshape(dst_hit, (pop_size,)),
+        axis=0,
     )
     def cond(carried):
         """Continue while the frontier gained a node."""
