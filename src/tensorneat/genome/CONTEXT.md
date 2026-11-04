@@ -161,6 +161,7 @@ The attribute term is a reduced sum over the aligned rows; `measure_distance` is
 | `Pipeline.step` end-to-end | — | 169–179 ms median | 282–289 ms median |
 | `Pipeline.build_seconds` | — | 0.33 s | 0.41 s |
 | legacy JAX baseline (ms/gen) | 51 | 109 | 157 |
+The `execute_mutation` row's op count includes the 16 heritability-exemption ops, while its wall times are the four-stage kernel's: the exemption is not separable from the box drift, and the end-to-end step ratio against the pre-exemption tree is flat (0.978 / 1.028 / 0.976 over three interleaved pairs).
 
 The `forward` row is a P-row batch; on the pipeline's tiled `4P` batch the same 98-op graph measures **3.5 / 12.9 / 24.9–26.5 ms** at P=100/500/1000 (interleaved same-session A/B against the commit before the dead-slot fill removal: 3.9→3.5, 14.3–16.0→12.9, 27.7–28.5→24.9–26.5 ms, −9…−20 %, bit-identical on the 4P and P forward outputs, the recurrent 4P output and ten seed-42 generation hashes).
 `execute_crossover`'s A/B on the same protocol: 6.2→5.3 ms at pop 500 and 12.1–12.4→10.2–10.3 ms at pop 1000 (−14…−17 %), bit-identical children and generation hashes; the kernel is now `argsort`- and `gene/blocks.py::crossover_attrs`-bound (see `./operations/crossover/CONTEXT.md`).
