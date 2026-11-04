@@ -20,7 +20,7 @@ The library keeps its research identity (GECCO 2024 Best Paper, arXiv 2404.01817
 ## Environment (uv)
 `uv` is the supported environment manager: `uv lock` then `uv sync` (add `--extra bench` for the parity oracle, `--extra iree`/`--extra compilers` for compiled backends, `--extra docs` for Sphinx), `uv run pytest`, `uv run python examples/func_fit/xor.py`.
 `requires-python = ">=3.11"`; `.python-version` pins 3.12; `uv.lock` is committed and covers all 59 packages of the resolved set.
-`evoxc` is resolved by `[tool.uv.sources]` from git tag `v0.1.1` because PyPI only ships 0.1.0, which predates the frontend work that makes a build 0.32 s instead of 1.55 s; the metadata floor stays `evoxc >= 0.1.0` so a plain pip install still resolves.
+`evoxc` is resolved by `[tool.uv.sources]` from git tag `v0.1.1` because PyPI only ships 0.1.0, which predates the frontend work that makes a build 0.32 s instead of 1.55 s; the metadata floor is `evoxc >= 0.1.1`, which PyPI cannot satisfy, so a plain `pip install tensorneat` fails and the README's git-pinned `evoxc` plus `pip install --no-deps` recipe is the supported pip path.
 ## Backends
 `backend=` is forwarded verbatim to `evoxc.build`; `compile_options` is expanded into its `**options`.
 `"numpy"` is the default, the fastest leg on CPU today, and the only one with no optional dependency.
