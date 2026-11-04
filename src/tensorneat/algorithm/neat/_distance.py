@@ -63,7 +63,23 @@ one call per centre in isolation at ``P = 500`` (66.6 vs 75.4 ms for twenty
 rows), but *slower* end to end: the wider batches materialise ``block`` times
 bigger temporaries, which costs more than the dispatch it saves (block of 4:
 266 ms at ``P = 500`` against 231 ms for one centre per call, and 472 vs 383 ms
-at ``P = 1000``).
+at ``P = 1000``).  Running the ``matrix`` rows inside a dedicated ``scan``
+instead of at the top level is bit-identical and restores the base tree's peak
+RSS and build (260.9 MiB / 0.35 s vs 539.0 MiB / 0.69 s at ``P = 500``) but
+loses the whole wall win, ending at parity with the pre-change tree (247.6-279.8
+ms against 261.9-270.9), so the top-level table stays.
+
+Peak memory
+-----------
+``matrix`` builds ``S`` top-level kernel calls, and ``evoxc``'s numpy interpreter
+keeps every SSA result of a block in that block's environment until the graph
+returns, so all ``S`` kernels' ``(pop_size, 2 * max_conns, ...)`` intermediates
+stay resident for the rest of the generation: 261 -> 539 MiB at ``P = 500``,
+431 -> 976 MiB at ``P = 1000``, and +0.34 s of one-off build (a loop body is
+traced once, a static loop traces ``S`` copies of the kernel).
+That is the price of keeping the kernel out of the reservation ``while``
+region, and it is measured, not incidental: any future hoist has to report peak
+RSS and build next to its wall time.
 """
 
 from __future__ import annotations
@@ -287,7 +303,10 @@ class DistanceRows:
             the batch width the digest was prepared with.  Concatenating rows of
             single calls keeps every transient at one population instead of
             ``K`` of them; the static row loop is trace-time only and costs no
-            graph op.
+            graph op.  The rows themselves are measured at the *top level* of
+            the generation graph, so their intermediates stay resident -- see
+            `Peak memory` in the module docstring before moving this into a
+            loop.
         """
         count = int(centres[0].shape[0])
         rows = [

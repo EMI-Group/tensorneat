@@ -923,6 +923,14 @@ def speciate(
     # reads its own row with a ``gather``, which keeps the compatibility kernel
     # out of the ``while`` body.  The rows are the same floats; the gated path
     # keeps its lazy per-slot ``cond`` untouched.
+    #
+    # Memory price of that hoist: the numpy interpreter keeps every SSA result of
+    # a block alive until the block returns, so these ``species_size`` kernels
+    # hold all their ``(pop_size, 2 * max_conns, ...)`` intermediates for the
+    # rest of the generation -- 261 -> 539 MiB peak RSS at pop 500 and 0.35 ->
+    # 0.69 s of build.  Measuring them inside a dedicated fixed-length ``scan``
+    # restores the baseline footprint but gives the whole wall win back (parity
+    # with the pre-change tree), so the top-level table is the kept trade.
     rows1 = None if gate else distance_fn.matrix(state, centre_payload)
 
     carry, _ = evoxc.scan(reserve, carry, iota_i32(species_size))
