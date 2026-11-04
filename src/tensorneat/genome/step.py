@@ -448,4 +448,3 @@ class NodeStepMixin:
             exists, markers, fill(tuple(markers.shape), 0, dtype=markers.dtype)
         )
         return evoxc.cast(enp.max(safe, axis=-1), evoxc.int32)
-
