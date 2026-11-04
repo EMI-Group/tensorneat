@@ -94,25 +94,6 @@ def _constant_int32(values: Sequence[int]) -> evoxc.SymbolicTensor:
     return evoxc.constant(evoxc.from_numpy(array))
 
 
-def _row_slice(table: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
-    """Read one static column of a ``(P, M)`` traced table as a ``(P,)`` vector.
-
-    A slice-then-reshape instead of ``table[:, index]``: ``evoxc``'s reverse-mode rule for an
-    axis-dropping integer index has no usable cotangent shape, and the same idiom is used by
-    the gene attribute readers.
-
-    Args:
-        table: ``(P, M)`` traced tensor.
-        index: Static column index in ``[0, M)``.
-
-    Returns:
-        ``(P,)``-shaped view of column ``index``.
-    """
-    pop_size = int(table.shape[0])
-    sliced = table[(slice(None), slice(index, index + 1))]
-    return evoxc.reshape(sliced, (pop_size,))
-
-
 class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
     """Configuration and compute contract of one NEAT genome family.
 
