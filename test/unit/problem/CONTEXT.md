@@ -70,7 +70,7 @@ Pendulum and MountainCar have no `reset_scale` knob and no NaN census: NaN logit
 Nothing imports `tensorneat`, `support` or `evoxc` at module scope: `../conftest.py` prepends `src/`, `benchmarks/legacy_jax` and `test/` to `sys.path` at collection time, so every input is a `scope="module"` fixture that imports inside its body.
 Those imports are plain statements — the suite must never convert a broken or regressed module into a skip, so a green run here really executed every kernel it claims to.
 Every graph runs through `support.runner` only, through the fixtures in `conftest.py`, never a module-scope import.
-Shapes stay small (`pop <= 8`, `max_step <= 50`, `S <= 8`) and the backend is always `"numpy"`; no `jax`/`torch`, no network, no GPU, no display.
+Shapes stay small (`pop <= 8`, `S <= 8`; horizons `max_step <= 50` for CartPole/func-fit, `<= 200` for Pendulum, and `999` only for MountainCar at population 1) and the backend is always `"numpy"`; no `jax`/`torch`, no network, no GPU, no display.
 
 ## Constraints
 A test may not edit `../../../src`, `../../../benchmarks` or `pyproject.toml`; a defect or a doc conflict found here goes into the report to the parent.
