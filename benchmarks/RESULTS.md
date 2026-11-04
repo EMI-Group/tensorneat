@@ -1,8 +1,8 @@
 # TensorNEAT benchmark — evoxc rewrite vs frozen JAX baseline
 
-> **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
-> `benchmarks/results/authoritative.json` at 2026-11-04T19:01:27+00:00. It must not be hand-edited:
-> rerun the CLI instead, or the numbers below stop matching the recorded evidence.
+> **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from `benchmarks/results/authoritative.json` at 2026-11-04T19:01:27+00:00.
+> Re-rendered from that same JSON at 2026-11-04T19:39:35+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> It must not be hand-edited: rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 ## Headline: old vs new
 
@@ -173,7 +173,7 @@ By population size:
 - pop 500: **mixed** — new wins 1 of 3 comparable run(s) — speed-up range 0.16x–1.83x.
 - pop 1000: **mixed** — new wins 1 of 2 comparable run(s) — speed-up range 0.85x–2.88x.
 
-**Where the new side wins:** the evoxc graph is edge-proportional and depth-parallel — work scales with the real connections and the network depth instead of `max_nodes × max_nodes` padding — and on the numpy reference interpreter that useful work amortises its per-op Python-loop dispatch, while XLA's compiled whole-generation program carries more fixed overhead than it saves at small populations and low edge counts.
+**Where the new side wins:** the evoxc graph's *compute* is edge-proportional and depth-parallel — the forward pass walks the real connections and the network depth instead of evaluating `max_nodes × max_nodes` padded pairs — and on the numpy reference interpreter that useful work amortises its per-op Python-loop dispatch, while XLA's compiled whole-generation program carries more fixed overhead than it saves at small populations and low edge counts.
 
 **Where the new side loses:** at the populations and edge counts above, the same per-op Python-loop dispatch is no longer amortised by edge-proportional work, while the old side's XLA program fuses the whole generation into compiled kernels and pays that dispatch once.
 
@@ -190,7 +190,7 @@ By population size:
 Worst case: `custom_pagie_p500` at 5.36x (4577.1 vs 853.3 MiB old, +3724 MiB).
 The new side's peak grows with the population in the XOR family (114.9 → 241.3 → 392.2 MiB at pop 100, 500, 1000), while the old row moves only from 676.7 to 720.7 MiB.
 
-Mechanism, as far as these runs support one: the old side's floor is the JAX/XLA runtime itself (182.2–182.3 MiB right after import); the new side starts from 73.8–73.9 MiB. Beyond those floors the new peak tracks the population while the old peak stays close to its runtime floor, so the working set the numpy interpreter materialises per generation is what grows with `pop_size × max_nodes × max_conns`; these runs do not attribute that growth to a single dominant term.
+Mechanism, as far as these runs support one: the old side's floor is the JAX/XLA runtime itself (182.2–182.3 MiB right after import); the new side starts from 73.8–73.9 MiB. Beyond those floors the new peak tracks the population while the old peak stays close to its runtime floor, so the footprint is the other axis from the compute claim above — the numpy interpreter materialises padded `pop_size × max_nodes × max_conns` tensors every generation, and it is that tensor geometry, not the live edge count, that the peak follows; these runs do not attribute that growth to a single dominant term.
 
 This section is written from the same `speedup` values as the headline and old-vs-new tables; it does not assume the new side is the winner. A rerun that changes those numbers changes this text with them.
 
@@ -200,7 +200,7 @@ Where the new side lands relative to the declared contract:
 - Contract at pop 500 (`xor_p500`): 109.00 ms/gen declared; measured old 295.33 ms/gen (2.71x declared); measured new 161.73 ms/gen (1.48x declared, i.e. the new side is slower than the contract here).
 - Contract at pop 1000 (`xor_p1000`): 157.00 ms/gen declared; measured old 807.30 ms/gen (5.14x declared); measured new 279.92 ms/gen (1.78x declared, i.e. the new side is slower than the contract here).
 
-The declared contract (51/109/157 ms/gen at pop 100/500/1000) was measured on a 1-thread-bound box; this run used `--threads 0`, so the comparison to the contract is informational and the measured old row on this box is what the verdict uses.
+The declared contract (51/109/157 ms/gen at pop 100/500/1000) is the recorded reference baseline (`reference_ms_per_generation` in `benchmarks/cases.py`, copied into every run record), not a number this box reproduces: `--threads 0` measured 38.99/295.33/807.30 ms/gen on the old side and `--threads 1` measured 35.79/127.71/252.06 ms/gen on the old side (`benchmarks/results/authoritative.json`, `benchmarks/results/threads1.json`). This run used `--threads 0`, so the comparison to the contract is informational and the measured old row on this box is what the verdict uses.
 
 ## Quality curves
 
@@ -314,10 +314,14 @@ Percent columns are generation `round(fraction × N)` of the N recorded generati
 | xor_p500 | 500 | 109.00 | 295.33 | 2.71x |
 | xor_p1000 | 1000 | 157.00 | 807.30 | 5.14x |
 
-The performance contract in `../CONTEXT.md` declares legacy CPU numbers measured on a
-1-thread-bound box (51 ms/gen at pop 100, 109 ms/gen at pop 500, 157 ms/gen at pop 1000).
-The generator prints those next to the old row measured on this box; the verdict uses the
-measured row.
+The performance contract in `../CONTEXT.md` declares the legacy CPU reference
+baseline (51 ms/gen at pop 100, 109 ms/gen at pop 500, 157 ms/gen at pop 1000),
+recorded as `reference_ms_per_generation` in `cases.py` and copied into every run
+record. It is a reference figure, not a reading of this box: the declared numbers
+reproduce at neither thread setting here, so the generator prints them next to the
+old row measured in the same run and the verdict uses that measured row. The
+win/lose section quotes the measured readings at both thread settings whenever it
+has comparable pairs.
 
 ## What is not compared
 

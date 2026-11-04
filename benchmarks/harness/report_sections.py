@@ -11,6 +11,7 @@ Imports are stdlib plus ``harness.protocol`` (verdict rules) and ``harness.repor
 
 from __future__ import annotations
 
+import json
 import shlex
 from pathlib import Path
 
@@ -367,6 +368,72 @@ def _contract_pairs(pairs: list[dict]) -> list[dict]:
     return list(chosen.values())
 
 
+_REFERENCE_RECORDS = ((0, "authoritative.json"), (1, "threads1.json"))
+"""The two committed thread records and the ``--threads`` setting each one measured."""
+
+_XOR_REFERENCE_CASES = ("xor_p100", "xor_p500", "xor_p1000")
+"""The cases the declared 51/109/157 ms/gen baseline is keyed by."""
+
+
+def _recorded_old_xor_ms(name: str) -> str | None:
+    """The old side's XOR medians in ``results/<name>``, or ``None`` when unreadable.
+
+    Read from the committed record rather than hard-coded, so the contract sentence quotes
+    what this box actually measured at each thread setting. Absent or partial records make
+    the caller omit the numbers instead of guessing them.
+    """
+    path = Path(__file__).resolve().parents[1] / "results" / name
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    medians: dict[str, float] = {}
+    for record in document.get("aggregated") or []:
+        if record.get("impl") != "old":
+            continue
+        value = number(record.get("ms_per_generation"))
+        if value is not None:
+            medians[text(record.get("case"), "")] = value
+    values = [medians.get(case) for case in _XOR_REFERENCE_CASES]
+    if any(value is None for value in values):
+        return None
+    return "/".join(ms(value) for value in values)
+
+
+def _contract_baseline_text() -> str:
+    """What the declared 51/109/157 ms/gen baseline is, and what this box measured instead.
+
+    The declared figures are the recorded reference baseline carried by ``cases.py`` /
+    ``reference_ms_per_generation`` in every run record — not a reading of this box, which
+    matches neither thread setting. The numbers of both thread settings are quoted from the
+    committed records when they are readable, so the sentence is a measurement and not a
+    claim about which box the contract was taken on.
+    """
+    text_value = (
+        "The declared contract (51/109/157 ms/gen at pop 100/500/1000) is the recorded "
+        "reference baseline (`reference_ms_per_generation` in `benchmarks/cases.py`, copied "
+        "into every run record), not a number this box reproduces"
+    )
+    readings = [
+        (setting, _recorded_old_xor_ms(name))
+        for setting, name in _REFERENCE_RECORDS
+    ]
+    readings = [(setting, values) for setting, values in readings if values]
+    if not readings:
+        return text_value + " under either thread setting."
+    measured = " and ".join(
+        f"`--threads {setting}` measured {values} ms/gen on the old side"
+        for setting, values in readings
+    )
+    kept = {setting for setting, _ in readings}
+    sources = ", ".join(
+        f"`benchmarks/results/{name}`"
+        for setting, name in _REFERENCE_RECORDS
+        if setting in kept
+    )
+    return f"{text_value}: {measured} ({sources})."
+
+
 def _contract_lines(pairs: list[dict], info: dict, doc: dict) -> list[str]:
     """Where the measured new side lands relative to each case's declared contract row."""
     threads = plain(protocol_meta(doc).get("threads"))
@@ -398,10 +465,9 @@ def _contract_lines(pairs: list[dict], info: dict, doc: dict) -> list[str]:
         lines.extend(
             [
                 "",
-                "The declared contract (51/109/157 ms/gen at pop 100/500/1000) was measured "
-                "on a 1-thread-bound box; this run "
-                f"used `--threads {threads}`, so the comparison to the contract is "
-                "informational and the measured old row on this box is what the verdict uses.",
+                f"{_contract_baseline_text()} This run used `--threads {threads}`, so the "
+                "comparison to the contract is informational and the measured old row on this "
+                "box is what the verdict uses.",
             ]
         )
     return lines
@@ -420,9 +486,10 @@ def _memory_lines(doc: dict) -> list[str]:
     the repeats) and the aggregated ``rss_after_import_mb`` floor. The mechanism sentence is
     added last and states only what those numbers show: the old side starts from a large
     runtime floor, the new peak moves with the population while the old peak stays near its
-    floor, and the working set the numpy interpreter materialises per generation is what
-    scales with ``pop_size × max_nodes × max_conns`` — the dominant term is not attributable
-    from these runs, so no arithmetic beyond that is claimed.
+    floor, and the footprint follows the padded tensor geometry
+    (``pop_size × max_nodes × max_conns``) the numpy interpreter materialises per generation —
+    a different axis from the edge-proportional forward pass, and the dominant term is not
+    attributable from these runs, so no arithmetic beyond that is claimed.
     """
     info = _case_info(doc)
     old_by_case = _old_by_case(doc)
@@ -527,9 +594,10 @@ def _memory_lines(doc: dict) -> list[str]:
     lines.append(
         "Mechanism, as far as these runs support one:"
         + floor
-        + f" {growth}, so the working set the numpy interpreter materialises per generation "
-        "is what grows with `pop_size × max_nodes × max_conns`; these runs do not attribute "
-        "that growth to a single dominant term."
+        + f" {growth}, so the footprint is the other axis from the compute claim above — the "
+        "numpy interpreter materialises padded `pop_size × max_nodes × max_conns` tensors "
+        "every generation, and it is that tensor geometry, not the live edge count, that the "
+        "peak follows; these runs do not attribute that growth to a single dominant term."
     )
     return lines
 
@@ -569,12 +637,12 @@ def winlose_section(doc: dict) -> str:
 
     if wins:
         lines.append(
-            "**Where the new side wins:** the evoxc graph is edge-proportional and "
-            "depth-parallel — work scales with the real connections and the network depth "
-            "instead of `max_nodes × max_nodes` padding — and on the numpy reference "
-            "interpreter that useful work amortises its per-op Python-loop dispatch, while "
-            "XLA's compiled whole-generation program carries more fixed overhead than it saves "
-            "at small populations and low edge counts."
+            "**Where the new side wins:** the evoxc graph's *compute* is edge-proportional "
+            "and depth-parallel — the forward pass walks the real connections and the network "
+            "depth instead of evaluating `max_nodes × max_nodes` padded pairs — and on the "
+            "numpy reference interpreter that useful work amortises its per-op Python-loop "
+            "dispatch, while XLA's compiled whole-generation program carries more fixed "
+            "overhead than it saves at small populations and low edge counts."
         )
         lines.append("")
     if losses:
