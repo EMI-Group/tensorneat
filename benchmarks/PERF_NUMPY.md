@@ -159,7 +159,10 @@ seed ⇒ same evolution), so that verdict is unchanged by this pass.
 Protocol: same box, `backend="numpy"`, harness seeds 42/43/44 (repeat `r` uses `seed + r`),
 `--generations 150 --warmup 3 --repeats 3`. `after` = the case-scoped run on HEAD `90d97b4`, record
 `benchmarks/results/fix_after.json` (a git-ignored scratch record, rendered to `$TMPDIR/fix_after.md`,
-so the committed `RESULTS.md` was never rewritten). `before` = the committed `benchmarks/results/authoritative.json` (measured at `ebeaf1f8`, the commit its own environment fingerprint stores, and rendered into `RESULTS.md`, which is committed at `ce5bb88`; same protocol, same box family). Both sides of the old-vs-new column come from the same pass-2 run.
+so the committed `RESULTS.md` was never rewritten). `before` = the committed
+`benchmarks/results/authoritative.json` (measured at `ebeaf1f8`, the commit its own environment
+fingerprint stores; rendered into `RESULTS.md`, which is committed at `ce5bb88`; same protocol, same
+box family). Both sides of the old-vs-new column come from the same pass-2 run.
 
 ### Headline
 
