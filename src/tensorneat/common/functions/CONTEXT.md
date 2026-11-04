@@ -117,7 +117,7 @@ With both canonical option lists at `K = 4` (P = 500 / 1000): 12.2 → 10.3 ms a
 `sum` + `mean` in one option list: 4.7 → 4.5 ms at P = 1000 (`K = 4`), the whole difference being the shared `total()` and the shared count.
 Build (cached per shape by the Pipeline, not per generation): 5–6 ms for the one-option level graph, ~45 ms for the canonical one.
 One whole `DefaultGenome.forward` (pop 500 on the tiled `4P` batch, 3 levels, build excluded): 13.9 → 10.3 ms; at pop 1000, 26.5 → 19.4 ms.
-End-to-end `Pipeline.step` (XOR, `DefaultGenome`, `NEAT`, `max_nodes=50`, `max_conns=100`, `species_size=20`, build excluded, `benchmarks/backend_measure.py` 3 warmup + 20 timed generations, one fresh process per cell): 44.8 → 41.7 ms at pop 100, 196.5 → 185.4 ms at pop 500, 338.8 → 326.7 ms at pop 1000 (−4 % to −7 %).
+End-to-end `Pipeline.step` (XOR, `DefaultGenome`, `NEAT`, `max_nodes=50`, `max_conns=100`, `species_size=20`, build excluded, `benchmarks/backend_measure.py`, 3 warmup + 14-18 timed generations, **interleaved base/new cells in alternating fresh processes**, median of 3 rounds): pop 500 185.4 → 181.9 ms median (mean 184.4 → 178.4), pop 1000 339.6 → 326.2 ms median (mean 338.7 → 325.1), peak RSS unchanged at ~455 / ~810 MiB. That is −2 to −4 % per generation, the bound being that this phase is only ~7 % of a generation.
 The forward pass is only ~7 % of a generation at pop 500, so this node's ceiling is small: the rest is schedule derivation, mutation/crossover, speciation and selection — not this node.
 
 Remaining hot spots inside this node, in order:
