@@ -782,9 +782,12 @@ class SpeciesController(StatefulBaseClass):
                space* draws, before elite pinning, so it is unaffected by which
                population slot ends up owning the pair.
             4. Elite pinning: for ``idx_in_block < genome_elitism`` both parents
-               are replaced by the owning species' best member
-               (``ranking[:, 0]``), so the crossover of an elite slot is the
-               identity.
+               are replaced by the owning species' ``idx_in_block``-th ranked
+               member, clamped at ``member_count - 1`` -- the legacy elementwise
+               pin, so the block's top ``genome_elitism`` *distinct* members
+               survive unmutated (rather than ``genome_elitism`` copies of the
+               single best member); the crossover of an elite slot is therefore
+               the identity.
             5. Block flattening: ``loc`` and ``idx_in_block`` from
                :meth:`_block_layout` give one gather index
                ``flat = loc * pop_size + idx_in_block`` into the row-major
