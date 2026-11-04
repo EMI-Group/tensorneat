@@ -19,13 +19,18 @@ Contract shared by all kernels in this module:
   ``where=`` nor ``initial=``, so each kernel first rewrites the masked-out
   slots to its neutral element (``0`` for sum/maxabs, ``1`` for product,
   ``-inf`` for max, ``+inf`` for min) with ``evoxc.select`` and then reduces.
-* **The ``K`` axis is folded, not reduced.** ``K`` is a static, so every
+* **The ``K`` axis is folded, not reduced -- up to ``_FOLD_MAX_WIDTH``.** For
+  ``K <= _FOLD_MAX_WIDTH`` (128) ``K`` is a static, so every
   ``reduce_*``-over-``-1`` here is emitted as a fixed-length chain of
   ``(P, N)``/``(P, N, 1)`` slices and elementwise ops (see :func:`_sum_last`
   and :func:`_fold_last`); ``np.sum(..., axis=-1)`` on the reference backend is
   the single most expensive op of a forward pass at the canonical window
-  width. The folds reproduce the reference backend's summation order bit for
-  bit, so the swap changes no value.
+  width, and the folds reproduce the reference backend's summation order bit
+  for bit. A **wider** window falls back to the backend ``reduce_*`` itself,
+  because numpy's ``pairwise_sum`` only uses the 8-accumulator branch the fold
+  reproduces while ``n <= PW_BLOCKSIZE (128)`` and halves recursively above
+  it; the reduce is then identical by construction. The choice is a trace-time
+  ``if`` on a static shape, never a data-dependent branch.
 * **Empty input is the caller's problem.** With ``K >= 1`` an all-``False``
   mask column yields the neutral element (``0``, ``1``, ``-inf``, ``+inf``),
   except :func:`mean`, whose ``maximum(count, 1.0)`` floor already gives
@@ -60,6 +65,11 @@ import evoxc
 import evoxc.numpy as enp
 
 from ..tools import flat_gather
+
+
+#: numpy's ``pairwise_sum`` uses its 8-accumulator branch only up to
+#: ``PW_BLOCKSIZE``; a wider window falls back to the backend reduce.
+_FOLD_MAX_WIDTH = 128
 
 
 def _planes(x):
@@ -114,6 +124,14 @@ def _sum_last(x, zero):
     so the same sum is emitted as ``K`` strided slice ops plus ``K - 1``
     ``(P, N, 1)`` adds (~0.4 ms for the same tensor).
 
+    **Wide windows are not folded.** The recipe below reproduces numpy's
+    ``pairwise_sum`` only while ``n <= PW_BLOCKSIZE (128)``; above that numpy
+    halves the range recursively and the fold's association order diverges, so
+    a window wider than :data:`_FOLD_MAX_WIDTH` returns
+    ``evoxc.reduce_sum(x, axes=-1)`` (which *is* that reduction) instead. The
+    guard is a trace-time ``if`` on the static window width, never ``cond``,
+    and it never runs at the canonical widths (``K`` = 4 / 8).
+
     **The association order is numpy's, on purpose.** ``float32`` addition is
     not associative, so a fold only reproduces ``np.sum`` if it pairs the terms
     the way numpy's ``pairwise_sum`` does:
@@ -122,15 +140,19 @@ def _sum_last(x, zero):
       (numpy's small-``n`` branch is ``res = 0.; res += a[i]``). The ``+0.0``
       start is load-bearing for one case only: a column of ``-0.0`` sums to
       ``+0.0``, and starting the fold at the first plane would keep ``-0.0``.
-    * ``K >= 8`` -- eight partial accumulators (``r[j]`` over ``j``, ``j + 8``,
-      ...), combined as ``((r0+r1)+(r2+r3)) + ((r4+r5)+(r6+r7))``, then the
+    * ``8 <= K <= 128`` -- eight partial accumulators (``r[j]`` over ``j``,
+      ``j + 8``, ...), combined as
+      ``((r0+r1)+(r2+r3)) + ((r4+r5)+(r6+r7))``, then the
       ``K % 8`` tail accumulated sequentially.
 
     Verified bit for bit against ``np.sum`` (``view(uint32)`` equality, so
-    signed zeros and ``NaN`` payloads count) for ``K = 1..33`` on random,
-    ``+-0.0``, ``NaN`` and ``+-inf`` data. Both branches cost ``K`` slices and
-    ``K - 1`` adds plus the ``+0.0`` start and one closing ``reshape``.
+    signed zeros and ``NaN`` payloads count) for ``K`` = 1, 2, 3, 7, 8, 9, 15,
+    16, 17, 31, 32, 64, 96, 127, 128, 129, 130, 200, 256, 300 on random,
+    ``+-0.0``, ``NaN`` and ``+-inf`` data. A folded width costs ``K`` slices
+    and ``K - 1`` adds plus the ``+0.0`` start and one closing ``reshape``.
     """
+    if int(x.shape[2]) > _FOLD_MAX_WIDTH:
+        return evoxc.reduce_sum(x, axes=-1)
     planes = _planes(x)
     width = len(planes)
     # ``+0.0 + a[0]`` is numpy's first accumulation and is the only place the
@@ -158,7 +180,7 @@ def _sum_last(x, zero):
     return evoxc.reshape(acc, (int(x.shape[0]), int(x.shape[1])))
 
 
-def _fold_last(x, binary, identity):
+def _fold_last(x, binary, identity, reduce_op):
     """``reduce_*`` over the last axis of ``(P, N, K)`` as a left fold.
 
     Parameters
@@ -170,6 +192,10 @@ def _fold_last(x, binary, identity):
         product, :func:`evoxc.maximum` / :func:`evoxc.minimum` for max / min.
     identity : ``() float32``
         The op's neutral element, the value the accumulation starts from.
+    reduce_op : Callable
+        The matching backend reduction, used for a window wider than
+        :data:`_FOLD_MAX_WIDTH`: :func:`evoxc.reduce_prod`,
+        :func:`evoxc.reduce_max`, :func:`evoxc.reduce_min`.
 
     Returns
     -------
@@ -183,12 +209,21 @@ def _fold_last(x, binary, identity):
     backend: ``np.prod`` / ``np.max`` / ``np.min`` accumulate left to right at
     every width, so a left fold starting at the neutral element is the whole
     recipe (verified bit for bit against ``np.prod`` / ``np.max`` / ``np.min``
-    for ``K = 1..17`` on ``+-0.0``, ``NaN`` and ``+-inf`` data). Starting at
+    for ``K`` = 1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 64, 96, 127, 128, 129,
+    130, 200, 256, 300 on ``+-0.0``, ``NaN`` and ``+-inf`` data). Starting at
     the neutral element is exact for all three: ``1.0 * -0.0`` is ``-0.0``,
     and ``maximum(-inf, a)`` / ``minimum(+inf, a)`` are ``a`` -- ``NaN``
     included, which is why the padding and the identity can share one
     constant.
+
+    A window wider than :data:`_FOLD_MAX_WIDTH` returns
+    ``reduce_op(x, axes=-1)`` instead: the fold is one op per plane, so a wide
+    window would emit thousands of unrolled ops for no accuracy gain, and the
+    backend reduce is the same arithmetic at any width. The guard is a
+    trace-time ``if`` on the static window width, never ``cond``.
     """
+    if int(x.shape[2]) > _FOLD_MAX_WIDTH:
+        return reduce_op(x, axes=-1)
     planes = _planes(x)
     acc = binary(identity, planes[0])
     for plane in planes[1:]:
@@ -305,9 +340,11 @@ class _Window:
         :func:`sum` returns it as is and :func:`mean` divides it by
         :meth:`count`, so one reduction of the window serves both options of a
         dispatch instead of one each. It is emitted as the static ``K``-plane
-        fold of :func:`_sum_last` -- numpy's ``axis=-1`` sum is the most
-        expensive op of a forward-pass level, and the fold reproduces its
-        result bit for bit.
+        fold of :func:`_sum_last` for ``K <= _FOLD_MAX_WIDTH`` -- numpy's
+        ``axis=-1`` sum is the most expensive op of a forward-pass level, and
+        the fold reproduces its result bit for bit -- and as the backend
+        ``reduce_sum`` above that width, where numpy's own association order
+        changes.
         """
         if self._total is None:
             self._total = _sum_last(self.padded(0.0), self.scalar(0.0))
@@ -323,9 +360,10 @@ class _Window:
 
         Notes
         -----
-        Folded like :meth:`total`. The summands are exact integers (``0.0`` /
+        Folded like :meth:`total` (and falling back to ``reduce_sum`` above
+        :data:`_FOLD_MAX_WIDTH`). The summands are exact integers (``0.0`` /
         ``1.0``, ``K`` far below ``2**24``), so every association order gives
-        the same bit pattern and the fold is byte-identical by construction.
+        the same bit pattern and either path is byte-identical by construction.
         """
         if self._count is None:
             self._count = _sum_last(
@@ -373,7 +411,9 @@ sum.zero_on_empty = True
 
 def _product_body(window: _Window):
     """Body of :func:`product` (see its docstring for the contract)."""
-    return _fold_last(window.padded(1.0), evoxc.multiply, window.scalar(1.0))
+    return _fold_last(
+        window.padded(1.0), evoxc.multiply, window.scalar(1.0), evoxc.reduce_prod
+    )
 
 
 def product(z, mask):
@@ -409,7 +449,9 @@ product.zero_on_empty = False
 def _max_body(window: _Window):
     """Body of :func:`max` (see its docstring for the contract)."""
     neutral = window.scalar(float("-inf"))
-    return _fold_last(window.padded(float("-inf")), evoxc.maximum, neutral)
+    return _fold_last(
+        window.padded(float("-inf")), evoxc.maximum, neutral, evoxc.reduce_max
+    )
 
 
 def max(z, mask):
@@ -446,7 +488,9 @@ max.zero_on_empty = False
 def _min_body(window: _Window):
     """Body of :func:`min` (see its docstring for the contract)."""
     neutral = window.scalar(float("inf"))
-    return _fold_last(window.padded(float("inf")), evoxc.minimum, neutral)
+    return _fold_last(
+        window.padded(float("inf")), evoxc.minimum, neutral, evoxc.reduce_min
+    )
 
 
 def min(z, mask):
