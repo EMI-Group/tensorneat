@@ -218,7 +218,7 @@ Breeding is the second hot spot and is 67 % `genome.execute_mutation` / 21 % `ge
 Measured: swapping `single_payload` to a batch-1 payload (dropping the `repeat_leading` tile) keeps the bit-identity oracle green at `P=100` and breaks it at generation 1 of `P=500` and `P=1000` — 20 mismatching arrays (the four centre tables, `idx2species`, `member_count`, `species_keys`).
 The tile is therefore load-bearing, not a workaround: it selects the row-wise merge, the only route that matches an out-of-range key against itself instead of dropping it (genome-side hazard, reported upward); `matrix`'s scan tiles one centre per iteration, so the copy is per row, not per table.
 `test/unit/algorithm/test_spawn.py` encodes the brief's `loc(p) = #{i : spawn[i] > 0 and E[i] <= p} - 1`; that count is wrong for a live zero-spawn species in the middle of the table, so the oracle needs the "last qualifying block" form to agree with `block_layout` (cross-node item, `test/` is not writable from here).
-The whole suite is green on this tree: `pytest` reports 551 passed / 0 failed (with the `bench`/`iree` extras) and `pytest -m parity` 53 passed, so `test/unit/algorithm` and `test/integration/` (the `Pipeline.auto_run` batch-first best-genome contract) both pass, and `test/backends` proves the `iree` portability claim above.
+The whole suite is green on this tree: `pytest -o addopts="" test/unit test/integration` reports 599 passed / 0 failed (with the `bench`/`iree` extras), `test/parity` 53 passed and `test/release_gate_no_jax.py` 4 passed, so `test/unit/algorithm` and `test/integration/` (the `Pipeline.auto_run` batch-first best-genome contract) both pass, and `test/backends` proves the `iree` portability claim above.
 This node is additionally verified by driving `Pipeline` end-to-end on the numpy backend with the real `DefaultGenome`/`XOR` (pop 8/100/300/301/500/1000, `rank` and `fitness` spawn modes, `max_stagnation` kills, `OriginConn`'s `historical_marker` branch, `pop_batch_size` chunking, `RecurrentGenome`, XOR3d) plus bit-identical repeat runs.
 `_new_gene_keys` is per-individual by contract (see `## Gene Keys & Padding`), so the genome must not assume keys are globally unique across the population.
 
@@ -229,7 +229,7 @@ No `.at[]`, no `cumsum` on the compute path (prefix sums are triangular `dot`), 
 Shapes are static: `P`, `S`, `max_nodes`, `max_conns` are fixed at build time; a change forces a rebuild by the pipeline.
 Errors: configuration validation raises `common.errors.TensorNEATError` with a named message; trace/shape/backend errors propagate unchanged and are never re-wrapped or silently fallen back.
 State keys touched: `randkey`, `pop_size`, `pop`, `generation`, `species`, plus the genome/problem keys documented above — nothing else.
-Files stay under 1000 lines: `_kernels.py` (992) the graph helpers, `neat.py` (966) the population cycle, `species.py` (950) the species algebra, `_distance.py` (306) the digest-backed rows, `_validation.py` (128) the host validators.
+Files stay at the ~1000-line ceiling: `_kernels.py` (1004) the graph helpers, `neat.py` (971) the population cycle, `species.py` (953) the species algebra, `_distance.py` (306) the digest-backed rows, `_validation.py` (128) the host validators.
 
 ## Known Risks
 `evoxc.random.randint` needs a symbolic `high` that stays ≥ 1 at runtime — guaranteed by `max(survive_size, 1)`, which also removes the legacy NaN case.
