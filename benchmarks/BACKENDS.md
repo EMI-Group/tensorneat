@@ -1,6 +1,6 @@
 # The `iree` backend: it runs, and it is slower than numpy here
 
-**Verdict: `backend="iree"` now compiles and runs TensorNEAT end to end — every gate that used to kill it in `Pipeline.setup()` is gone — but on this box it is 4.8× (pop 100), 24× (pop 500) and 23× (pop 1000) slower per generation than the numpy reference interpreter, and the gap grows with population.**
+**Verdict: `backend="iree"` now compiles and runs TensorNEAT end to end — every gate that used to kill it in `Pipeline.setup()` is gone — but on this box it is 5.0× (pop 100), 24.2× (pop 500) and 23.4× (pop 1000) slower per generation than the numpy reference interpreter, and the gap grows with population.**
 Every shipped problem family runs on it (`XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `RecurrentGenome`, `HyperNEAT`); each takes one 8–11 s `iree-compile` per static shape.
 `xla` is not available here: the evoxc xla adapter needs a PJRT C API plugin `.so` (`EVOXC_PJRT_PLUGIN`, unset on this box) and nothing provides one. `tvm` was not attempted.
 The CPU performance contract therefore stays on the numpy backend (`RESULTS.md`, unchanged by this report).
