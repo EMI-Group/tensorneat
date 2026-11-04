@@ -118,5 +118,5 @@ There is no pytest suite in this node (`test/` is a sibling, read-only); its ver
 | `./BACKENDS.md` | Measured compiled-backend evidence: `iree` now runs end-to-end and is 5–24× slower per generation than numpy here (numbers, protocol, the four gates and their source fixes, remaining export deferrals); `xla` needs a PJRT plugin that is absent. |
 | `./backend_measure.py` | Standalone one-configuration-per-process measurement (`setup_s`, `build_s`, 3 warmup + 20 timed generations → ms/gen, peak RSS); the protocol behind `./BACKENDS.md`. |
 | `./THREADS.md` | Generated report of the committed `--threads 1` sensitivity run of the XOR family (`results/threads1.json`); referenced by the report only when present next to it. |
-| `./iree.md` | Generated report of the IREE attempt (`results/iree.json`): 8/8 cases `error` in `Pipeline.setup`, verdict `INCOMPLETE`. |
+| `./iree.md` | Historical generated report of the pre-fix IREE attempt (`results/iree.json`): 8/8 cases `error` in `Pipeline.setup`, verdict `INCOMPLETE`; superseded by `./BACKENDS.md`, the current measured `iree` evidence — its historical label comes from `--report-note` at render time, so re-render it with that flag and never re-measure the record. |
 | `../test/parity` | Numerical-fidelity suite using `./legacy_jax` as the oracle (sibling — read-only, escalate writes to parent). |
