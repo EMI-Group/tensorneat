@@ -565,41 +565,6 @@ def prepare_family(
     )
 
 
-def _centre_positions(
-    order: evoxc.SymbolicTensor, pop_size: int, count: int
-) -> evoxc.SymbolicTensor:
-    """Sort positions of the centre's own gene columns, read out of the merged permutation.
-
-    Args:
-        order: ``(P, 2M + 1) int32`` permutation the first ``argsort`` returned.
-        pop_size: Static population size ``P``.
-        count: Static gene-axis length ``M``.
-
-    Returns:
-        ``(P, M) int32`` sorted position of each centre gene.
-
-    Notes:
-        ``order[i]`` is the merged index that sorts to position ``i``, so sorting the
-        permutation itself is its inverse: ``inverse[j]`` is the sorted position of merged
-        index ``j``.  Centre genes occupy merged columns ``count..2 * count - 1``, so the
-        inverse is sliced there.
-        The un-permuted inverse is cut **before** it is cast: a cast is a per-element op, so
-        casting the ``M`` centre columns instead of all ``2M + 1`` merged columns is the same
-        value (a cast commutes with a slice — it is elementwise and order-preserving) at the
-        same op count, with one narrower ``int32`` pass per family per call.
-        The ``int32`` result is deliberate: dropping the cast makes three index blocks
-        ``int64`` and measured ~10 % more milliseconds (see the Notes of
-        :func:`measure_alignment`).
-        ``order`` is a permutation, so stability cannot change the inverse; it is only the
-        cheaper sort on the reference interpreter.
-    """
-    inverse = evoxc.argsort(order, axis=-1, stable=True)
-    return evoxc.cast(
-        evoxc.slice(inverse, (0, count), (pop_size, count)),
-        evoxc.int32,
-    )
-
-
 def measure_alignment(
     gene,
     keys: evoxc.SymbolicTensor,
@@ -731,7 +696,11 @@ def measure_alignment(
     # of the centre gene that sits there (centre genes occupy merged columns ``count..2*count-1``).
     # ``order`` is a permutation, so stability cannot change the inverse; it is only the
     # cheaper sort on the reference interpreter (see the Notes).
-    position = _centre_positions(order, pop_size, count)
+    position = evoxc.slice(
+        evoxc.cast(evoxc.argsort(order, axis=-1, stable=True), evoxc.int32),
+        (0, count),
+        (pop_size, count),
+    )
     offsets = statics.offsets
     # The trailing column is the merged block's maximum, so no centre gene sits at the last
     # position and ``position + 1 <= 2M`` holds for every one of them: the flat base is one
