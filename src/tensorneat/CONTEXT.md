@@ -65,7 +65,7 @@ Exactly one `evoxc.random.split` happens at the pipeline boundary per generation
 ## Checkpoint Layout (`is_save=True`, written by `setup`/`auto_run`)
 `config.txt` — `json.dumps(show_config(), indent=4)`.
 `log.txt` — header `Generation,Max,Min,Mean,Std,Cost Time`, then one row per generation.
-`genomes/<generation>.npz` and `genomes/best_genome.npz` — `node_keys`, `node_attrs`, `conn_keys`, `conn_attrs` and `fitness`, one individual per file (no population axis), so `np.load` round-trips to a payload `show` accepts and re-scores to its recorded fitness.
+`genomes/<generation>.npz` and `genomes/best_genome.npz` — `node_keys`, `node_attrs`, `conn_keys`, `conn_attrs` and `fitness`, one individual per file: the batch-first payload flattened (no population axis), so `np.load` round-trips to a payload `show` accepts and re-scores to its recorded fitness.
 `best_genome.npz` is omitted when no generation produced a finite fitness; a bare `step` loop writes no files (`auto_run`/`_analyse` is the writer).
 
 ## Measured Cost
