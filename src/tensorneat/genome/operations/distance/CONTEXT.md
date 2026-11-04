@@ -107,7 +107,8 @@ This is safe rather than lucky because none of these sorts has a *meaningful* ti
 Stability also *pins* tie order to input order and matches a compiled backend's count-mode `argsort`, so the reference interpreter and a compiled backend agree on ties as well as on values.
 
 ## Cost law of this node (how to spend an op budget here)
-The reference interpreter charges a roughly fixed **~13 µs per executed IR op**, almost independent of element count, so op count is the metric and wall clock only a sanity check; `constant`, `reshape` and `arange` are each one full op, and `evoxc` never deduplicates constants.
+The reference interpreter charges a roughly fixed **~13 µs per executed IR op** on rank-0/small operands and **0.065–0.10 ms per narrow `(P, M)` pass** at pop 500 (numpy's own work there is 2–5 µs), so op count is the budget for narrow passes and element width is the budget for the wide `(P, 2M + 1)` passes, which is why a merge call is ~94 ops ≈ 5.3 ms on the current box.
+`constant`, `reshape` and `arange` are each one full op, and `evoxc` never deduplicates constants.
 A per-call body runs `2 * species_size = 40` times per generation, so **anything that does not depend on the centre belongs in `prepare`**: every rank-0 scalar, every per-individual flat index block and every flat view of a population block travels in `FamilyDigest.statics` (`MeasureStatics` + `AttrStatics`, built by `layout.build_statics`/`build_attr_statics`) instead of being rebuilt per call.
 Ops inside a region pay per trip, so the rule is doubly binding for anything the generation traces once and runs many times.
 The rejected alternative — a private `ConstantPool` and per-call `enp.arange`/`batch_offsets` inside `measure` — costs 536 rank-0 constant ops plus 160 `batch_offsets` and 160 attribute-index ops per generation, ~20 % of this node's bucket.
