@@ -129,7 +129,7 @@ The attribute term is a reduced sum over the aligned rows; `measure_distance` is
 |---|---|---|---|
 | `transform` (`acyclic=True`) | 280 / 3.1 ms | 280 / 6.7 ms | 280 / 10.5 ms |
 | `forward` (tiled `4P` batch) | 113 / 1.8 ms | 113 / 4.5 ms | 113 / 7.7 ms |
-| `execute_mutation` (`DefaultMutation`) | 431 / 5.3 ms | 431 / 13.1 ms | 431 / 23.4 ms |
+| `execute_mutation` (`DefaultMutation`) | 438 / 5.2 ms | 438 / 11.4 ms | 438 / 20.4 ms |
 | `execute_crossover` | 145 / 1.9 ms | 145 / 5.9 ms | 145 / 12.1 ms |
 | `prepare_distance` (both families) | — | 167 / 2.77 ms | 167 / 4.45 ms |
 | `measure_distance`, tiled centre = the shipped call site (merge) | — | 98 / 2.91 ms | 98 / 5.20 ms |
