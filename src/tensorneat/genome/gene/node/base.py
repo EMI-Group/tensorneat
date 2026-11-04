@@ -581,10 +581,10 @@ class BaseNode(BaseGene):
             attr_row: ``(attr_width,)`` float32 attribute columns of the same gene.
 
         Returns:
-            Mapping such as ``{"idx": 3, "bias": 0.25, "aggregation": 0,
-            "activation": 0}``; the family override replaces the raw ids with the
-            registered function names (``{"idx": 3, "bias": 0.25, "agg": "sum",
-            "act": "sigmoid"}``).
+            Mapping such as
+            ``{"idx": 3, "bias": 0.25, "aggregation": 0, "activation": 0}``; the family
+            override replaces the raw ids with the registered function names, e.g.
+            ``{"idx": 3, "bias": 0.25, "agg": "sum", "act": "sigmoid"}``.
         """
         return super().to_dict(state, key_row, attr_row)
 

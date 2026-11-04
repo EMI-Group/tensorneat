@@ -7,12 +7,18 @@ from tensorneat import Pipeline, algorithm, genome, problem
 from tensorneat.common import ACT
 
 if __name__ == "__main__":
-    # Demo budget: a real run uses pop_size in the thousands and a few hundred generations.
+    # Demo budget: pop 300 for at most 200 generations (it reaches the fitness
+    # target around generation 110); a real run uses pop_size in the thousands
+    # and a few hundred generations.
     pipeline = Pipeline(
         algorithm=algorithm.NEAT(
             pop_size=300,
             species_size=10,
-            survival_threshold=0.01,
+            # 0.01 keeps a single parent per species, which on 3-input parity
+            # stays stuck on the linear optimum (loss 0.25) for hundreds of
+            # generations; 0.3 breeds from several parents per species and the
+            # search climbs out of it within the demo budget
+            survival_threshold=0.3,
             genome=genome.RecurrentGenome(
                 num_inputs=3,
                 num_outputs=1,
@@ -29,12 +35,12 @@ if __name__ == "__main__":
         ),
         problem=problem.XOR3d(),
         seed=42,
-        generation_limit=40,
+        generation_limit=200,
         # fitness is maximised: this target is "error below 1e-4"
         fitness_target=-1e-4,
     )
 
-    # initialize the state; this is where the evoxc graphs are built
+    # initialize the host state; the evoxc graphs are built on the first step
     state = pipeline.setup()
     # run until the fitness target is reached or the generation limit hits
     state, best = pipeline.auto_run(state)

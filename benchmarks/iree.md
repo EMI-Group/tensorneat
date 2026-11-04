@@ -2,10 +2,10 @@
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
 > `benchmarks/results/iree.json` at 2026-11-02T07:29:26+00:00. It must not be hand-edited:
-> Re-rendered from that same JSON at 2026-11-02T07:43:30+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-04T07:48:56+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
-*Every case errors in `Pipeline.setup` before generation 0; see `BACKENDS.md` for the failure signature and the minimal reproducer. The measured CPU contract is `RESULTS.md` (numpy reference backend).*
+*Historical pre-fix record, superseded by `BACKENDS.md` — the current measured `iree` evidence, where the backend lowers, compiles and runs every shipped case. Every case below errored in `Pipeline.setup` before generation 0, so no row here is current. The measured CPU contract is `RESULTS.md` (numpy reference backend).*
 
 ## Headline: old vs new
 
@@ -192,7 +192,7 @@ measured row.
 ## What is not compared
 
 - **Same workload, not the same search.** The sides use different PRNGs (JAX `PRNGKey` vs evoxc splitmix64), so one seed identifies the same *workload*, not the same trajectory or a bitwise-equal population. Numerical fidelity is `test/parity/`'s job: it compares kernels against `benchmarks/legacy_jax`, and `pytest test/parity --collect-only -q` collects 53 tests on this box.
-- **No accelerator row exists.** The contract is CPU and the only measured backend is the numpy reference interpreter; an `iree`/`xla`/`tvm` row would be informational and is never part of the old-vs-new verdict. `benchmarks/BACKENDS.md` records the measured attempt: `iree` cannot lower a single TensorNEAT case (it dies in `Pipeline.setup` before generation 0), so there is no accelerator number to report.
+- **No accelerator row in this report.** The old-vs-new verdict is CPU-only and numpy-only by protocol, so the matrix here is the numpy reference interpreter; an `iree`/`xla`/`tvm` row is informational and never enters the verdict. The compiled leg is measured separately in `benchmarks/BACKENDS.md`: `iree` lowers, compiles and runs every shipped case, and that file carries the measured per-generation comparison with numpy — an accelerator row exists, it simply stays outside this verdict.
 - **CartPole has no old-side row.** The frozen library's RL problems need gym/brax/mujoco, so `cartpole_p100` is new-only and marked `n/a` for old.
 - **Import time, visualization and code generation are not timed.** Only `rss_after_import_mb` is recorded for the import phase; `Pipeline.show`, network drawing and sympy codegen sit outside every timed region.
 - **No trajectory equality is expected.** The two sides evolve different populations from the same workload seed; parity of kernels (not of search) is what `test/parity/` verifies.

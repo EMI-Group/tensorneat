@@ -71,9 +71,13 @@ DEFAULT_REPORT_NOTE = ""
 """Default note under the banner: none, so an unflagged render is byte-for-byte the old one."""
 
 PARITY_TEST_COUNT = 53
-"""Collected parity tests on this box, measured 2026-11-02 with
-``pytest test/parity --collect-only -q`` (18 convert + 5 distance + 13 fitness + 12 forward
-+ 5 grad). The report reads ``meta.parity_tests`` first so a future CLI can override it."""
+"""Fallback collected parity-test count, measured 2026-11-04 with
+``pytest test/parity --collect-only -q`` across the five files that collect (18 convert
++ 5 distance + 13 fitness + 12 forward + 5 grad).
+A record may override it with ``meta.parity_tests``; this constant is only the fallback and is
+documentation of a measured count, not a derived value — it is refreshed by hand whenever
+``test/parity`` changes, because a re-render must never spawn pytest."""
+
 
 
 # --- Environment --------------------------------------------------------------------------
@@ -746,15 +750,16 @@ def _not_compared_section(doc: dict, companions: dict | None = None) -> str:
     """The explicit non-comparisons, including the measured parity-test count."""
     count = _parity_count(doc)
     accelerators = [
-        "- **No accelerator row exists.** The contract is CPU and the only measured backend is "
-        "the numpy reference interpreter; an `iree`/`xla`/`tvm` row would be informational and "
-        "is never part of the old-vs-new verdict."
+        "- **No accelerator row in this report.** The old-vs-new verdict is CPU-only and "
+        "numpy-only by protocol, so the matrix here is the numpy reference interpreter; an "
+        "`iree`/`xla`/`tvm` row is informational and never enters the verdict."
     ]
     if (companions or {}).get("backends"):
         accelerators.append(
-            " `benchmarks/BACKENDS.md` records the measured attempt: `iree` cannot lower a "
-            "single TensorNEAT case (it dies in `Pipeline.setup` before generation 0), so there "
-            "is no accelerator number to report."
+            " The compiled leg is measured separately in `benchmarks/BACKENDS.md`: `iree` "
+            "lowers, compiles and runs every shipped case, and that file carries the measured "
+            "per-generation comparison with numpy — an accelerator row exists, it simply stays "
+            "outside this verdict."
         )
     return "\n".join(
         [

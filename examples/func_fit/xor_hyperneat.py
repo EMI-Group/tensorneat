@@ -37,6 +37,7 @@ if __name__ == "__main__":
         fitness_target=-1e-4,
     )
 
+    # initialize the host state; the evoxc graphs are built on the first step
     state = pipeline.setup()
     state, best = pipeline.auto_run(state)
     pipeline.show(state, best)

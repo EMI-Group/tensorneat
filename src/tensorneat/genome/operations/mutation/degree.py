@@ -8,6 +8,7 @@ actually has, so a caller (a soak harness, a regression test, an interactive deb
 session) can assert the invariant on the payload the pipeline is about to evaluate.
 
 It is **diagnostic only**:
+
 - :meth:`~.base.BaseMutation.mutate_structure` never calls it, and it must stay out of the
   hot path — its ``(P, N, E)`` equality intermediate is much larger than any op the
   operators emit, so wiring it into a generation would cost real time for a quantity the

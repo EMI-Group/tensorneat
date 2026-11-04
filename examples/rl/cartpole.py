@@ -4,12 +4,18 @@ Run with::
 
     python examples/rl/cartpole.py
 
-Backend note: the rollout is a fixed-horizon scan, so evaluation cost grows
-linearly with ``max_step`` and the numpy reference interpreter is slow at the
-default ``max_step=500`` (roughly 180 ms per evaluation at a population of
-100). For real runs prefer ``backend="iree"`` (or ``"xla"``) with the full
-horizon; this example keeps ``backend="numpy"`` and a reduced ``max_step`` so
-it finishes in seconds without any optional extra installed.
+Backend note: the rollout is a fixed-horizon loop, so evaluation cost grows
+linearly with ``max_step``. On this CPU the numpy reference interpreter spends
+roughly 0.9 s per generation at ``pop_size=100`` with the default
+``max_step=500`` (measured), and about 0.45 s per generation for the budget
+below (``pop_size=200``, ``max_step=200``). This script therefore keeps
+``backend="numpy"`` and a reduced ``max_step`` so it finishes in seconds without
+any optional extra installed; a compiled backend pays a one-off compile per
+static shape and, on CPU, is measured to be no faster than numpy for this
+workload, so reach for it for memory, not for speed.
+
+With ``seed=42`` the run below reaches ``fitness_target=200`` -- a full
+200-step episode -- after a couple of generations.
 """
 
 from tensorneat import Pipeline, algorithm, genome, problem
@@ -44,7 +50,7 @@ neat = algorithm.NEAT(
 # ceiling: the problem raises TensorNEATError if fitness_target > max_step.
 cartpole = problem.CartPole(max_step=200, repeat_times=1, fitness_target=200)
 
-# Small budget: a generation costs seconds on the reference backend.
+# Small budget: about half a second per generation on the reference backend.
 pipeline = Pipeline(
     algorithm=neat,
     problem=cartpole,
@@ -55,6 +61,11 @@ pipeline = Pipeline(
 )
 
 if __name__ == "__main__":
+    # Host-only: seeds the RNG key, registers backend/compile options, and
+    # builds the initial population and the task tables. No graph is traced.
     state = pipeline.setup()
+    # The evoxc graph is built by the first step() inside auto_run -- one-off
+    # per static shape, then cached for every generation (it prints
+    # "compile finished, cost time: ...s" once, before the generation log).
     state, best = pipeline.auto_run(state)
     pipeline.show(state, best)
