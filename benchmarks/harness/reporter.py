@@ -746,15 +746,16 @@ def _not_compared_section(doc: dict, companions: dict | None = None) -> str:
     """The explicit non-comparisons, including the measured parity-test count."""
     count = _parity_count(doc)
     accelerators = [
-        "- **No accelerator row exists.** The contract is CPU and the only measured backend is "
-        "the numpy reference interpreter; an `iree`/`xla`/`tvm` row would be informational and "
-        "is never part of the old-vs-new verdict."
+        "- **No accelerator row in this report.** The old-vs-new verdict is CPU-only and "
+        "numpy-only by protocol, so the matrix here is the numpy reference interpreter; an "
+        "`iree`/`xla`/`tvm` row is informational and never enters the verdict."
     ]
     if (companions or {}).get("backends"):
         accelerators.append(
-            " `benchmarks/BACKENDS.md` records the measured attempt: `iree` cannot lower a "
-            "single TensorNEAT case (it dies in `Pipeline.setup` before generation 0), so there "
-            "is no accelerator number to report."
+            " The compiled leg is measured separately in `benchmarks/BACKENDS.md`: `iree` "
+            "lowers, compiles and runs every shipped case, and that file carries the measured "
+            "per-generation comparison with numpy — an accelerator row exists, it simply stays "
+            "outside this verdict."
         )
     return "\n".join(
         [

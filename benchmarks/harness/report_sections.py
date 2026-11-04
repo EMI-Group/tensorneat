@@ -747,7 +747,7 @@ def reproduce_section(doc: dict, companions: dict | None = None) -> str:
     if "iree" not in backends:
         lines.append(
             _variant(f"--impl new --backend iree --cases xor_p500 {flags}".rstrip())
-            + "   # informational; errors cleanly when the IREE runtime is absent"
+            + "   # informational; needs the evoxc[iree] extra, and its numbers never enter the verdict"
         )
     lines.extend(
         [
