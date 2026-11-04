@@ -184,5 +184,5 @@ Kernels are additionally verified by building each one through `evoxc.build` on 
 | --- | --- |
 | `./__init__.py` | Package surface only: re-exports `BaseAlgorithm`, `NEAT`, `HyperNEAT`, `HyperNEATFeedForward` and lists them in `__all__`. |
 | `./base.py` | `BaseAlgorithm` batch-first protocol: `setup(state=None)`/`ask`/`transform`/`forward`/`tell`/`show_details` plus `num_inputs`/`num_outputs`/`pop_size`. |
-| `./neat` | `NEAT` population cycle (ask/tell, elite handling, `pop_batch_size` scan batching), `SpeciesController` + `SpeciesState`, the `_kernels.py` graph helpers, the `_distance.py` digest-backed distance rows (`DistanceRows`, dense `matrix` table) and the `_validation.py` host validators. |
+| `./neat` | `NEAT` population cycle (ask/tell, elite handling, `pop_batch_size` scan batching), `SpeciesController` + `SpeciesState`, the `_kernels.py` graph helpers, the `_distance.py` digest-backed distance rows (`DistanceRows`, dense `matrix` table), the `_keys.py` bounded structural-key allocator and the `_validation.py` host validators. |
 | `./hyperneat` | `HyperNEAT` / `HyperNEATFeedForward` batch CPPN→substrate decode (`SubstrateSchedule` payload wrapper), the `genes.py` `HyperNEATNode`/`HyperNEATConn` kernels, and the `./hyperneat/substrate` package of host-only coordinate geometry (`DefaultSubstrate`/`FullSubstrate`/`MLPSubstrate`). |
