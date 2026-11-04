@@ -17,28 +17,10 @@ import evoxc
 import evoxc.numpy as enp
 
 from ..base import BaseProblem, finalize_fitness, static_batch_size
+from ...common import to_numpy
 from ...common.errors import TensorNEATError
 
 __all__ = ["FuncFit"]
-
-
-def _host_array(value: Any) -> np.ndarray:
-    """Return a host numpy view of one graph result.
-
-    ``show`` runs outside a trace, so the values it prints come back from
-    ``evoxc.evaluate`` as ``evoxc.Tensor`` leaves; a plain numpy value is
-    accepted unchanged so the helper also serves a host-only schedule.
-
-    Args:
-        value: An ``evoxc.Tensor`` or anything ``np.asarray`` accepts.
-
-    Returns:
-        A numpy array holding the same values.
-    """
-    numpy_view = getattr(value, "numpy", None)
-    if callable(numpy_view):
-        return np.asarray(numpy_view())
-    return np.asarray(value)
 
 
 class FuncFit(BaseProblem):
@@ -314,8 +296,8 @@ class FuncFit(BaseProblem):
             return self._predict_and_loss(act_fn, pop_size)
 
         pred, loss = evoxc.evaluate(kernel, *leaves)
-        pred = _host_array(pred)
-        loss = _host_array(loss)
+        pred = to_numpy(pred)
+        loss = to_numpy(loss)
         inputs = np.asarray(self.inputs, dtype=np.float32)
         targets = np.asarray(self.targets, dtype=np.float32)
         for individual in range(pred.shape[0]):
