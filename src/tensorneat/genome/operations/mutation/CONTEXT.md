@@ -126,9 +126,10 @@ Per-stage traced ops at pop 500 (each row = that probability `1.0`, the other th
 | delete-node only | 163 | +67 |
 | add-conn only (includes the 121-op cycle predicate) | 326 | +230 |
 | delete-conn only | 144 | +48 |
-| defaults `0.1/0.1/0.2/0.2` | **578** | = 96 + 137 + 67 + 230 + 48 exactly |
+| defaults `0.1/0.1/0.2/0.2` | **594** | = 578 (96 + 137 + 67 + 230 + 48) + 16 exemption ops |
 
 The increments are exactly additive, so the four stages cost their own ops and nothing is shared across them.
+The heritability exemption adds **+16 traced ops** (578 → 594: four key-table `not_equal`s, three column folds, two `reshape`s and two `select`s, plus the cleared-row `not_equal`), billed in the add-node stage that already holds those index blocks; end to end it is cost-neutral (interleaved `Pipeline.step` ratios 0.978 / 1.028 / 0.976 against the pre-exemption tree, XOR pop 500 seed 42).
 The baseline's scaffold was 127 ops dearer (a plan for all four operations regardless of configuration) with far smaller per-stage increments (36 / 13 / 155 / 5), i.e. this kernel trades a shared merged plan for four independent contexts and writes.
 
 Per-file op ledger at pop 500 for the **578-op four-stage kernel without the exemption** (`execute_mutation`, recursive over `regions`; `op.location` is the *creation* site, so a shared helper's ops count under the file that emits them): `cycle.py` 121 + `base.py` 118 + `arrays.py` 117 + `plan.py` 83 + `blocks.py` 69 (gene-side, not this node) + `default.py` 63 + `window.py` 6 + 1 unattributed = 578, against 121 / 70 / 57 / 41 / 69 / 63 / 10 / 1 = 432 before.
