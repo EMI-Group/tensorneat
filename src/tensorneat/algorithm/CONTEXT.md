@@ -153,6 +153,8 @@ Peak RSS is not a dense-path penalty any more: 240.5 MiB at pop 500 and 391.6 Mi
 `NEAT.setup` runs one `genome.initialize` graph on the host — it must be called outside any trace, and it advances `randkey` once, so the pipeline's per-generation key budget is unaffected.
 The XOR3d pop-100 plateau is seed-dependent in both this tree and the frozen baseline (see `## Search Quality`), and no knob in this subtree lifts it: `survival_threshold` 0.1/0.5 and a `min(2, members)` survivor floor only change which seeds escape, so the legacy count formula stays.
 The one measured lever left for pop 100 is genome-side: the mutation chain applies at most one structural change per individual per generation while the frozen tree's four independent operations give 16.7 % of individuals two or more.
+The distance rows still tile a batch-1 centre to `pop_size` rows before `measure_distance`, which takes the row-wise merge route; with every gene key now inside `[0, genome.key_span)` the genome's dense single-centre route is reachable, and passing the batch-1 centre there is worth ~480 executed ops and ~50 ms per generation at pop 500 (~120 ms at pop 1000) for bit-identical results.
+The structural-key allocator's fallback builds a `(pop_size, key_span + 1)` occupancy table every generation although fewer than 6 % of rows ever need it, which is the whole reason the allocator costs +4 / +8 / +33 ms at pop 100 / 500 / 1000.
 Crossover is live only for species with more than `1 / survival_threshold` members (200 at the example `0.01`): below that the survivor prefix is a single genome and every non-elite child is a mutated copy of it.
 
 ## Known Risks (evoxc)
