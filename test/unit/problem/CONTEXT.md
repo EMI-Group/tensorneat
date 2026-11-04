@@ -40,6 +40,13 @@ Degenerate schedules (leaves that disagree about `P`, rank-0 leaves, an empty sc
 A constant policy survives exactly 9 steps from rest in *both* directions (the dynamics are symmetric under `(x, theta, force) -> (-x, -theta, -force)`), so the `repeat_times` layout test cannot distinguish rows by direction: `_split_row_policy` uses rows that push constantly (9) and rows that balance the pole for the full horizon (20 at `max_step = 20`).
 `B = P * repeat_times` depends only on the product, so `P = 4, R = 1` and `P = 2, R = 2` draw the same four initial states from the same key — that identity pins the individual-major `(P, R)` layout without any analytic return value.
 
+## Recovering `obs0` for Pendulum and MountainCar
+Neither environment has a `reset_scale` knob, so there is no configuration that pins its initial state, and the draw still has to come from `evoxc.random`.
+`_reset_observations(run_in_graph, evoxc, env, batch, key_seed)` retraces the environment's own `_reset` in a one-op graph with the key rebuilt from the integer `key_seed` inside the trace, and takes the host result — the same `run_evaluate` rebuilds the identical key, so the oracle is fed exactly the states the graph starts from.
+That is why the agreement is bit-exact in float32: the oracle runs the documented dynamics on the same numbers, in the same order.
+A state-dependent policy needs the oracle to see the state it acted on, so the rollouts return `(total, states)` and the policy is evaluated per step from `states[:, t]`, mirroring what `act_fn` sees inside the loop.
+Both environment oracles are written for batch 1 (`(1, 2)` observations, `(1, 1)` logits); `P > 1` cases assert relations (layout, determinism, divergence, bounds) rather than absolute values
+
 ## Behaviour this suite pins (gotchas worth knowing before editing it)
 `mape` divides by the target: a non-zero prediction on a zero target is `+inf` loss, while a *zero* prediction on a zero target is `0/0 = NaN`; both reach `-inf` fitness through different arithmetic, and each is asserted separately.
 CartPole demotes NaN logits to `-inf` fitness through the explicit `evoxc.isnan` guard (`_nan_rows` → `_any_repeat` → select NaN before `finalize_fitness`), while the decision site still reads NaN as "push left"; one poisoned repeat demotes the whole individual.
