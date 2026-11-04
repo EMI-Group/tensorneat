@@ -56,7 +56,7 @@ Two families: function fitting (`func_fit/`, dataset known at construction) and 
 
 - `RLEnv._evaluate_once` uses `jax.lax.while_loop` (cond `~done & (count < max_step)`), not `lax.scan`; episode recording pre-fills arrays with `NaN` so unfinished steps stay distinguishable.
 - Pytree observation spaces are unsupported in `MujocoEnv`: any obs dict lacking a `"state"` key raises `ImportError` (raised) from `env_step`/`env_reset`.
-- `record_episode` is a private argument of `_evaluate_once`, not a constructor flag; the `record_episode=True` examples in `test/test_record_episode.*` use an older `problem.rl_env` import path and no longer match this API.
+- `record_episode` is a private argument of `_evaluate_once`, not a public constructor flag.
 - `BraxEnv.show` / `MujocoEnv.show` pass the same un-split `randkey` into every `jit_step` call, so stochastic envs see identical randomness per step.
 - `CustomFuncFit.generate_dataset` uses the global `np.random` (not a JAX key), so its dataset is only reproducible because `Pipeline.__init__` calls `np.random.seed(self.seed)`.
 - `XOR`/`XOR3d` return NumPy arrays from `inputs`/`targets`, which works because they are closed-over constants under `vmap`/`jit`.

@@ -2,9 +2,10 @@
 
 > **Hand-maintained record** of one focused performance pass on the `numpy` reference interpreter.
 > `RESULTS.md` remains the *generated* old-vs-new harness report (rendered from
-> `results/authoritative.json`); its new-side rows predate this pass and are stale until the harness is
-> re-run. This file holds the measured before/after pair of *this* pass, taken in one session with the
-> box staggered between the two trees so drift cancels.
+> `results/authoritative.json`); the committed report was regenerated after this pass (2026-11-04T19:01Z,
+> git `ebeaf1f`) and its new-side XOR rows agree with the `after` column below within this box's
+> documented drift. This file keeps the measured before/after pair of *this* pass, taken in one session
+> with the box staggered between the two trees so drift cancels.
 
 ## Headline
 
@@ -77,13 +78,15 @@ the 1 360 older notes claimed.
 
 ## Value identity
 
-`test/parity/` compares every kernel against `benchmarks/legacy_jax` bit-for-bit (53 passed).
+`test/parity/` compares every kernel against `benchmarks/legacy_jax` within the suite's documented
+`rtol`/`atol` tolerances (53 passed).
 Independently, 3 generations of the full pipeline at pop 500 and pop 1000 hash identically to
 `a697531` over all four payload arrays, the `(P,)` fitness and the returned `State`
-(`fitness_history`, `SpeciesState` leaves, `randkey`, `generation`). Full suite: **551 passed,
-0 failed, 0 skipped** (baseline at `a697531` with the same extras: 540 passed, 1 skipped; the 8 new
-tests are `test/unit/genome/test_distance_digest.py`, and the 3 `test/backends` IREE tests now pass
-because the `evoxc[iree]` extra is installed and the blocker below is fixed).
+(`fitness_history`, `SpeciesState` leaves, `randkey`, `generation`). Full suite: **659 passed,
+0 failed, 0 skipped** with `uv sync --all-extras` and `uv run pytest -o addopts="" -q` (66.5 s on this
+run; `test/unit` 578, `test/parity` 53, `test/integration` 21, `test/backends` 3, release gate 4).
+The counts need the optional extras: `test/parity` needs the `bench` extra (`jax`) and `test/backends`
+needs `evoxc[iree]` (without it those three tests skip rather than fail).
 
 ## IREE stayed compilable (and one regression was caught and fixed)
 
@@ -126,21 +129,22 @@ committed `RESULTS.md` is untouched):
 | xor_p500 | 321.37 | 157.16 | 2.04× | PASS | 722.5 / 240.9 MiB |
 | xor_p1000 | 830.10 | 271.70 | 3.06× | PASS | 706.3 / 391.9 MiB |
 
-Read this as *internal* evidence only: this environment resolves `jax 0.10.2`, while the committed
-`RESULTS.md` was measured with `jax 0.12.0.1`, whose old-side rows are much faster (157 / 246.76 ms at
-p500 / p1000). The contract verdict must therefore be re-rendered by the harness on the same JAX
-version as the record it replaces; this file does not claim a contract PASS.
-The `xor_p1000` quality row fails against the JAX side, which is a search-trajectory difference, not a
-kernel one: the two sides use different PRNGs, and the new tree is bit-identical to `a697531` (same
-seed ⇒ same evolution), so that verdict is unchanged by this pass.
+Read this as *internal* evidence only: this table uses 50 generations and 2 repeats, while the
+committed `RESULTS.md` uses 150 generations and 3 repeats. The regenerated report (2026-11-04T19:01Z,
+git `ebeaf1f`, jax 0.10.2) measures old 38.99 / 295.33 / 807.30 ms/gen and new 36.44 / 161.73 / 279.92
+ms/gen, in the same range as this table; its new-side XOR rows agree with the `after` column above
+within box drift. This file still does not claim a contract PASS.
+The same-session run's `xor_p1000` quality row failed against the JAX side, which is a search-trajectory
+difference, not a kernel one: the two sides use different PRNGs, and the new tree is bit-identical to
+`a697531` (same seed ⇒ same evolution), so that verdict is unchanged by this pass.
 
 ## Caveats
 
 - The box drifts ±30 % between sessions; every comparison above is *within* one session, alternating
   the two trees, and the median is the load-bearing statistic (the pop-1000 mean is skewed by one slow
   generation and is reported for completeness).
-- The contract verdict against the frozen JAX baseline still has to be re-rendered by
-  `run_benchmark.py` (it is generated evidence); this file states the before/after pair of the pass,
-  not a re-verdict.
+- The contract verdict is still owned by the generated report; this file states the before/after pair
+  of the pass, not a re-verdict. The committed `RESULTS.md` postdates the pass and its new-side rows
+  agree with the `after` column within the documented box drift.
 - Build time is one-off per shape signature and improved on every cell, but a `T=50`-step build now
   traces the distance kernel inside a scan body instead of 20 times, which is why it fell.
