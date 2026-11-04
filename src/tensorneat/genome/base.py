@@ -662,9 +662,15 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
             edge-proportional, never ``max_nodes**2`` per node.
 
         Raises:
-            TensorNEATError: If the arguments match none of the accepted spellings.
+            TensorNEATError: If the arguments match none of the accepted spellings, or if a
+                selected array is not batch-first — ``node_keys`` must be ``(P, max_nodes)``,
+                ``conn_keys`` ``(P, max_conns, key_width)``, all leading dimensions equal, and
+                (four-array spelling) the attribute arrays led by the same population size.
+                A bare per-individual row is the common defect: it has no population axis, so
+                the error says so instead of letting the shape unpack raise ``ValueError``.
         """
         node_keys, conn_keys = self._schedule_inputs(arrays)
+        self._check_schedule_shapes(arrays, node_keys, conn_keys)
         pop_size, max_nodes = (int(size) for size in node_keys.shape)
         conn_in = self.conn_gene.key_column(conn_keys, "input_index")
         conn_out = self.conn_gene.key_column(conn_keys, "output_index")
@@ -705,6 +711,82 @@ class BaseGenome(BaseGenomeHost, StatefulBaseClass):
             "transform takes a GenomeTensors payload, (node_keys, conn_keys), or the four "
             f"payload arrays; got {len(arrays)} argument(s)"
         )
+
+    @staticmethod
+    def _check_schedule_shapes(arrays: tuple, node_keys: Any, conn_keys: Any) -> None:
+        """Validate the rank and population alignment of a schedule call's arrays.
+
+        ``transform`` is the batch-first entry point of the genome, and a caller that slices
+        one individual out of a payload hands it a bare row (``node_keys (N,)``,
+        ``conn_keys (E, key_width)``).  Without this check the population unpack inside
+        ``transform`` raises a raw ``ValueError`` from the shape tuple instead of the
+        documented configuration error.  Only ``.shape`` is read — a tuple of ints both on a
+        traced ``evoxc.SymbolicTensor`` and on a host array — so the check costs no traced op
+        and no host conversion, and it runs identically inside a trace (where the exception
+        propagates out of ``build``) and on host data.
+
+        The static sizes are deliberately **not** compared with ``self.max_nodes``/
+        ``self.max_conns``: a genome may be handed a payload built for a differently
+        configured one (that is what the Pipeline's shape signature is for), and only the
+        *internal* agreement of one call is a contract.
+
+        Args:
+            arrays: The positional arguments of ``transform``, used to locate the attribute
+                arrays and to name their offsets in the four-array spelling.
+            node_keys: The selected ``(P, max_nodes) int32`` node keys.
+            conn_keys: The selected ``(P, max_conns, key_width) int32`` connection keys.
+
+        Raises:
+            TensorNEATError: If either key array has the wrong rank (a rank-1 ``node_keys`` or
+                rank-2 ``conn_keys`` is reported as a per-individual row that needs a leading
+                population axis), if the two disagree on the population size, or if an
+                attribute array's leading dimension is not that population size.
+        """
+        node_shape = tuple(int(size) for size in node_keys.shape)
+        conn_shape = tuple(int(size) for size in conn_keys.shape)
+        row_hint = (
+            " This is a per-individual row, not a batch: it needs a leading population axis "
+            "(e.g. payload[None] / node_keys[None, :]). Pipeline.auto_run returns a "
+            "(1, ...) batch, so keep that axis when slicing one individual out."
+        )
+        if len(node_shape) != 2:
+            raise TensorNEATError(
+                "transform expects node_keys of shape (P, max_nodes) with the population on "
+                f"axis 0, got shape {node_shape}."
+                + (row_hint if len(node_shape) == 1 else "")
+            )
+        if len(conn_shape) != 3:
+            raise TensorNEATError(
+                "transform expects conn_keys of shape (P, max_conns, key_width) with the "
+                f"population on axis 0, got shape {conn_shape}."
+                + (row_hint if len(conn_shape) == 2 else "")
+            )
+        if conn_shape[0] != node_shape[0]:
+            raise TensorNEATError(
+                "transform got node_keys and conn_keys of different population sizes: "
+                f"node_keys has shape {node_shape} and conn_keys has shape {conn_shape}"
+            )
+        if len(arrays) == 1 and isinstance(arrays[0], GenomeTensors):
+            attributes = [
+                (f"payload field {name}", tensor)
+                for name, tensor in zip(arrays[0].field_names, arrays[0])
+                if name in ("node_attrs", "conn_attrs")
+            ]
+        elif len(arrays) == 4:
+            attributes = [
+                (f"argument {offset} ({name})", arrays[offset])
+                for offset, name in ((1, "node_attrs"), (3, "conn_attrs"))
+            ]
+        else:
+            attributes = []
+        for label, tensor in attributes:
+            shape = tuple(int(size) for size in tensor.shape)
+            if not shape or shape[0] != node_shape[0]:
+                raise TensorNEATError(
+                    "transform expects the attribute arrays to lead with the population size "
+                    f"of node_keys ({node_shape[0]}), but {label} has shape {shape} "
+                    f"(node_keys has shape {node_shape})"
+                )
 
     def forward(
         self,
