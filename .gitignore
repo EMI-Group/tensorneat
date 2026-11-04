@@ -123,6 +123,3 @@ examples/interpret_visualize/network.svg
 .ai/
 .cursor/
 experiment/
-
-# Benchmark baseline data
-test/benchmark_baseline/
