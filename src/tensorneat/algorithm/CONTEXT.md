@@ -129,7 +129,7 @@ Data-dependent `while_loop` trip counts work on numpy and iree/llvm-cpu but not 
 `cumsum` does not export on compiler backends, hence prefix sums are triangular matmuls.
 `evoxc.constant` warns above 1 MiB, which bounds how large a substrate coordinate table may be before it must become an explicit pipeline input.
 `evoxc` has no `io_callback`/print op, so all logging stays in `show_details` on the host side.
-`DistanceRows`' tiling is a real copy (`broadcast_to` + `reshape`), so one population-shaped row materialises `pop_size` copies of its centre across every digest leaf; `matrix` is a static row loop (trace-time only, no graph op) whose top-level kernels keep their transients alive for the generation (see `## Measured Cost`), and the memo keeps one tiled digest per width alive for the rest of the trace.
+`DistanceRows`' tiling is a real copy (`broadcast_to` + `reshape`), so one population-shaped row materialises `pop_size` copies of that centre across every digest leaf — inside `matrix`'s scan this happens once per iteration and is released with the region; `matrix` itself is a fixed-length `evoxc.scan` over the `species_size` centre rows, which is what bounds its live set to one centre (see `## Measured Cost`).
 
 ## Constraints
 No `jax` / `torch` / `numpy.random` import anywhere in this subtree; `import tensorneat` must stay free of them (release gate).
