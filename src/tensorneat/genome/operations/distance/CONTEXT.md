@@ -136,7 +136,7 @@ A generation's op total is not a constant: it moves with the number of species s
 End-to-end, same-session A/B at `benchmarks/backend_measure.py --backend numpy --generations 20 --warmup 3`: `Pipeline.step` median **183.2 → 177.8 ms** at pop 500 (mean 186.4 → 179.8) and **435.6 → 410.3 ms** at pop 1000 (mean 428.8 → 420.0), i.e. −3 % and −6 %, which is what 41 calls × the per-call saving predicts (0.13 ms / 0.6 ms).
 The `measure` route is therefore the node's dominant cost *and* its owned budget: 41 calls × 2.6 ms (pop 500) is ~59 % of a 178 ms generation, against `prepare`'s one-off 2.6 ms.
 Baked constant bytes of the `prepare` + `measure(batch 1)` graph at pop 1000: 223 788 B total, largest single constant 90 008 B (a `key_span`-scaled `(width + 1,) int32` dense table); pop 100 187 788 B, pop 500 203 788 B.
-`measure` itself adds four rank-0 constants; every other byte is a table or a seed built once in `prepare`.
+`measure` itself emits **zero** `constant` ops (every scalar and table it needs travels in the digest's statics); `prepare` emits 50 of its 164 ops as `constant`s, once per generation.
 
 ### Where the remaining ops are, and why this is near the floor
 The two `argsort`s (4 ops of a family's merge) are the wall-clock hot spot but not an op-count one; see `## Rejected` for the substitutions and their measurements.
