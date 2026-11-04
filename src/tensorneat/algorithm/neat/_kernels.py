@@ -596,21 +596,21 @@ def speciate(
       skipped iteration reads a zero row, which its own write mask (``claim`` in
       scan 1, ``take`` in scan 2) discards, so the substitution is bit-identical:
       no reader ever consumes the row of a slot that is not allowed to write.
-    * **Dense table** (``gate`` false): every row is measured *before* the
-      scan, in blocks of :data:`._distance.CENTRES_PER_BLOCK` centre rows against
-      the same block-wide population tiling (``distance_fn.matrix_blocks``), and
-      each iteration reads its own row with a ``gather``.  Above ``GATED_ROWS``
-      the species table is full, so a skipped slot's ``if`` region would cost
-      more than the row it skips (see ``GATED_ROWS``), and grouping four centres
-      per kernel call amortises the interpreter's per-call overhead.  The rows
-      are exactly the ones the gated path would measure: scan 1's is the
-      pre-scan carry row ``slot`` (no earlier iteration can rewrite it -- every
-      ``scatter`` writes index ``slot`` and each slot is visited once) and scan
-      2's is its selected centre, ``pop[seed]`` for a creating slot and the
-      post-scan-1 carry row otherwise.  This form needs a callable with
-      ``matrix_blocks`` (:class:`._distance.DistanceRows`); any other callable
-      raises ``TensorNEATError`` instead of falling back to the slow shape, and
-      the gated path keeps accepting an arbitrary callable.
+    * **Dense table** (``gate`` false): scan 1's whole centre table is measured
+      *before* the scan through ``distance_fn.matrix`` -- one population-shaped
+      call per centre row -- and each iteration reads its own row with a
+      ``gather``.  Above ``GATED_ROWS`` the species table is full, so a skipped
+      slot's ``if`` region would cost more than the row it skips (see
+      ``GATED_ROWS``), while measuring the rows up front keeps the compatibility
+      kernel out of the ``while`` body entirely.  Scan 1's rows are the ones the
+      gated path would read: slot ``i``'s centre is the carry row ``i``, and no
+      earlier iteration can rewrite it (every ``scatter`` writes index ``slot``
+      and each slot is visited once).  Scan 2 still measures its selected centre
+      per iteration (``pop[seed]`` for a creating slot, the post-scan-1 carry row
+      otherwise), because a creating slot's centre is data-dependent.
+      This form needs a callable with ``matrix`` (:class:`._distance.DistanceRows`);
+      any other callable raises ``TensorNEATError`` instead of falling back to the
+      slower shape, and the gated path keeps accepting an arbitrary callable.
 
     ``gate`` is a static Python ``bool``, so exactly one of the two paths is
     traced.  Bit-identity holds across the two paths by construction -- both
@@ -635,16 +635,15 @@ def speciate(
     )
     population_fields = tuple(population)
     centre_payload = payload_like(population, *centre_fields)
-    # The dense path measures whole blocks of centre rows *outside* the scans;
-    # that is the digest-backed table form, so the callable must provide it
-    # (see ``_distance.DistanceRows``).  Raised here, never silently downgraded
-    # to the per-iteration shape the dense path exists to avoid.
-    if not gate and not hasattr(distance_fn, "matrix_blocks"):
+    # The dense path measures whole centre rows *outside* the scans, so the
+    # callable must expose the by-name table form; raised here rather than
+    # silently falling back to the per-iteration shape this path avoids.
+    if not gate and not hasattr(distance_fn, "matrix"):
         raise TensorNEATError(
             "speciate: the dense distance table (species_size * pop_size > "
-            f"{GATED_ROWS}) needs a digest-backed distance_fn with matrix_blocks, "
-            f"got {type(distance_fn).__name__}; only the lazy gated path accepts "
-            "an arbitrary callable"
+            f"{GATED_ROWS}) needs a digest-backed distance_fn with a matrix "
+            f"method, got {type(distance_fn).__name__}; only the lazy gated path "
+            "accepts an arbitrary callable"
         )
 
     def single_payload(rows):
@@ -902,13 +901,14 @@ def speciate(
 
     # Scan 1's centre for slot ``i`` is the carry row ``i``, and no earlier
     # iteration can rewrite it (every ``scatter`` in ``reserve`` writes index
-    # ``slot`` and each slot is visited exactly once), so the pre-scan centre
+    # ``slot``, and each slot is visited exactly once), so the pre-scan centre
     # table already holds exactly the centre every iteration reads.  The dense
-    # path measures that whole table in blocks of centres before the scan
-    # instead of one population-shaped call per iteration: the rows are the same
-    # floats (the kernel is row-independent), but four populations share one
-    # dispatch.  The gated path keeps its lazy per-slot ``cond`` untouched.
-    rows1 = None if gate else distance_fn.matrix_blocks(state, centre_payload)
+    # path measures that whole table before the scan -- one population-shaped
+    # call per centre, the kernel's row-independent shape -- and each iteration
+    # reads its own row with a ``gather``, which keeps the compatibility kernel
+    # out of the ``while`` body.  The rows are the same floats; the gated path
+    # keeps its lazy per-slot ``cond`` untouched.
+    rows1 = None if gate else distance_fn.matrix(state, centre_payload)
 
     carry, _ = evoxc.scan(reserve, carry, iota_i32(species_size))
     carry, created = evoxc.scan(assign_members, carry, iota_i32(species_size))
