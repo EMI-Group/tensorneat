@@ -45,7 +45,7 @@ Neither environment has a `reset_scale` knob, so there is no configuration that 
 `_reset_observations(run_in_graph, evoxc, env, batch, key_seed)` retraces the environment's own `_reset` in a one-op graph with the key rebuilt from the integer `key_seed` inside the trace, and takes the host result — the same `run_evaluate` rebuilds the identical key, so the oracle is fed exactly the states the graph starts from.
 That is why the agreement is bit-exact in float32: the oracle runs the documented dynamics on the same numbers, in the same order.
 A state-dependent policy needs the oracle to see the state it acted on, so the rollouts return `(total, states)` and the policy is evaluated per step from `states[:, t]`, mirroring what `act_fn` sees inside the loop.
-Both environment oracles are written for batch 1 (`(1, 2)` observations, `(1, 1)` logits); `P > 1` cases assert relations (layout, determinism, divergence, bounds) rather than absolute values
+Both environment oracles are written for batch 1 (`(1, 2)` observations, `(1, 1)` logits); `P > 1` cases assert relations (layout, determinism, divergence, bounds) rather than absolute values.
 
 ## Behaviour this suite pins (gotchas worth knowing before editing it)
 `mape` divides by the target: a non-zero prediction on a zero target is `+inf` loss, while a *zero* prediction on a zero target is `0/0 = NaN`; both reach `-inf` fitness through different arithmetic, and each is asserted separately.
