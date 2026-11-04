@@ -249,7 +249,7 @@ The sparse/dense switch, the block size and the `cond` placement are all static 
 Recipe, cheap and per-op: monkeypatch `evoxc.build` to also keep `evoxc.trace(fn, *specs)` for every graph TensorNEAT builds, then walk `graph.module.functions[*].region.blocks` recursively (`op.regions` included, skipping the result-less `return` op) and classify each op with `evoxc.backends.stablehlo.ops.status(op.name)`; for `scatter` additionally check the operand rank and `op.attributes["axis"]` against the rank-1/rank-2 rule. `op.location` gives the exact `file:line` of an offender, so a regression is attributable without reading diffs.
 Finish with `evoxc.lower(graph, backend="iree")`, which fails fast on the first unsupported op and does not need a working end-to-end backend.
 The three rewritten primitives were also lowered, compiled and **run** on iree (`prefix_sum_exclusive`, `block_layout`, `scatter_row`, plus a `scan` that writes its table each step): every output is numpy-identical except a float32 scan-accumulated sum, which differs by ~3e-05 because iree reassociates the reduction — the written table itself is bit-identical.
-Bit-identity evidence for the rewrite on numpy: `fitness_history`, the four payload arrays, all ten `SpeciesState` leaves, `randkey` and `generation` dumped per generation and compared with `tobytes()` equality against the pre-change tree at pop 100 (4 generations, gated) and pop 500 (2) in both spawn modes and at pop 1000 (2, dense path) — 144/72/72 arrays, zero mismatches. Degenerate shapes smoke-tested on both trees: `species_size` 1, 2, 3, 8.
+The same oracle runs in both spawn modes, and degenerate shapes are smoke-tested on both trees: `species_size` 1, 2, 3, 8.
 
 ## Routing Table
 | Path | Responsibility |
