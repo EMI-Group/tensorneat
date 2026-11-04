@@ -28,10 +28,12 @@ The library keeps its research identity (GECCO 2024 Best Paper, arXiv 2404.01817
 `"xla"` requires a user-supplied PJRT C API plugin (unavailable on this box) and `"tvm"` is untested.
 A backend that cannot run a kernel raises; nothing ever silently falls back to another backend.
 ## Performance
-`benchmarks/RESULTS.md` is the generated old-vs-new report and its verdict is **FAIL** (timing and quality): the numpy interpreter beats the frozen JAX baseline on XOR (1.15×/1.68×/2.79× faster at pop 100/500/1000) but loses on XOR3d (0.61×/0.59×/0.88× of the old speed) and Pagie (0.17×), and four cases also miss the quality tolerance; node-for-node the rewrite is a portability/dependency trade with a mixed CPU-speed record, not a uniform speed-up.
+`benchmarks/RESULTS.md` is the generated old-vs-new report; its committed verdict is **FAIL** (timing and quality) and was rendered from a record that predates the tiled-evaluate and rollout-hoist fixes below, so only a harness re-run changes it.
+Measured on one box at the committed protocol (3 repeats, 150 generations, medians, `benchmarks/PERF_NUMPY.md`), the current tree is 1.96× the old speed on XOR at pop 500, 0.61× on XOR3d at pop 500, 0.65× on Pagie (833.8 vs 539.2 ms/gen) and 275 ms/gen on CartPole at pop 100; node-for-node the rewrite is a portability/dependency trade with a mixed CPU-speed record, not a uniform speed-up.
+Two structural defects were found and fixed, both bit-identical: a tiled func-fit evaluate fanned the schedule and payload to `P*S` rows and re-derived every per-pass static at `P*S` rows although all of it is sample-invariant (statics now derive at `P` rows and expand, and a batch wider than `EVAL_CHUNK_ROWS` is evaluated in row groups), and the RL rollout re-derived the genome-forward prelude on each of its `max_step` queries (a prepared-forward pair now derives it once per generation, cutting CartPole from 42 549 to 31 604 dispatches/generation).
 The rewrite's wins are real and recorded: no JAX/torch runtime dependency, one explicit persistent graph per shape, ~5× lower build latency, lower memory on the compiled leg, and numpy/iree/xla/tvm behind one `backend=` argument.
-`benchmarks/PERF_NUMPY.md` records the numpy op-count pass that cut a generation by 39 % (pop 500) and 45 % (pop 1000) with bit-identical results; its committed before/after pair is the reference for further work.
-Remaining lever, measured and out of scope so far: the padded gene geometry (`max_nodes`/`max_conns` multiply every per-pair op) and `evoxc`'s interpreter per-op overhead (~63 % of a generation).
+`benchmarks/PERF_NUMPY.md` records both numpy performance passes with their before/after pairs and reproduce commands; those measured pairs are the reference for further work.
+Remaining levers, measured: the padded gene geometry (`max_nodes`/`max_conns` multiply every per-pair op — Pagie would gain 2.7× at 20/40, but that is a workload change, not a fix), `evoxc`'s interpreter per-op overhead (~58–63 % of a generation) together with its retention of every SSA result until the block returns (why peak RSS tracks the tiled batch width), and the speciation scans in `tell` (~9–11 % of a generation).
 ## Constraints
 - `import tensorneat` must never import `jax`, `torch`, `brax`, `gymnax` or `mujoco` (a release-gate test enforces this); compiled backends are pulled in only by `evoxc.build(backend=...)`.
 - All computation lives inside `@evoxc.defn` graphs or helpers called during an active trace; there is no eager mode — host code only orchestrates build/run/log.
@@ -40,7 +42,7 @@ Remaining lever, measured and out of scope so far: the padded gene geometry (`ma
 - Control flow (`scan`/`cond`/`while_loop`) appears only at the outermost layer of a kernel, and `vmap` is never applied over control flow — batch dimensions are written explicitly instead.
 - `State` is an immutable host container for configuration, `evoxc` RNG keys and tensors; all randomness flows through `evoxc.random` stateless keys, so a `(seed, config, shape)` triple reproduces a run.
 - NaN padding semantics of the pre-rewrite library are preserved (unconnected node value = `NaN`, `NaN` fitness = `-inf`), because `test/parity/` compares against the frozen implementation.
-- Files stay under ~1000 lines; `common/tensorization.py` is the one documented exception (one cohesive schedule derivation).
+- Files stay under ~1000 lines; a directory's CONTEXT.md names any justified exception (currently `common/tensorization.py`, one cohesive schedule derivation, and the genome forward/prepared-pass test matrix).
 - No silent error swallowing: configuration errors raise `tensorneat.common.errors.TensorNEATError`; trace/shape/backend errors propagate from `evoxc` unchanged.
 - Dropped on purpose: the Brax/Gymnax/mujoco-playground RL environments required JAX; `problem.rl` ships three simulator-free evoxc-native replacements instead — `CartPole` (discrete), `Pendulum` (continuous torque), `MountainCarContinuous` (continuous force, one-time goal bonus).
 ## Test Strategy
@@ -51,7 +53,7 @@ Remaining lever, measured and out of scope so far: the padded gene geometry (`ma
 |---|---|
 | `./src/tensorneat` | The package: pipeline (the single compile site), host payload helpers, genome/algorithm/problem/common subtrees. |
 | `./test` | Pytest suites: unit, parity vs the frozen legacy library, integration, compiled backends, release gates. |
-| `./benchmarks` | Old-vs-new harness + frozen JAX oracle; `RESULTS.md`/`THREADS.md`/`iree.md` are generated, `BACKENDS.md` is hand-written, `PERF_NUMPY.md` is the hand-measured op-count pass. |
+| `./benchmarks` | Old-vs-new harness + frozen JAX oracle; `RESULTS.md`/`THREADS.md`/`iree.md` are generated, `BACKENDS.md` is hand-written, `PERF_NUMPY.md` holds the hand-measured performance passes (op-count pass, tiled-evaluate and rollout-hoist pass). |
 | `./examples` | Runnable scripts per problem family; six of twelve cross their fitness target inside the shipped demo budget (all twelve exit 0). |
 | `./docs` | Sphinx configuration, autodoc stubs (one per public module) and the built-site rules. |
 | `./tutorials` | `quickstart.ipynb` for the current API (`legacy_jax/` keeps the pre-rewrite notebooks, concepts only). |
