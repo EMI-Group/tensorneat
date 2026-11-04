@@ -130,6 +130,18 @@ Dispatch budget per generation: 1 `prepare_distance` + `2 · species_size` popul
 `genome.execute_mutation` is 1 359 of breed's 2 014 IR ops (67 %), `genome.execute_crossover` 432 (21 %), this subtree's `update_species` 189 (9 %) and `neat.py` 29 (1.4 %), so breed is genome-kernel bound.
 Against the declared legacy JAX baseline the cycle is ~0.83x / ~1.5–1.65x / ~1.9–2.0x at pop 100 / 500 / 1000.
 
+## Cost of the Bounded Key Allocator (interleaved A/B, same protocol)
+`xor pop 100` / `xor3d pop 500` / `xor3d pop 1000`, three rounds each, the pre-change tree (`de943ca`, unbounded `max_node_key + 1 + slot`) against this one, one process per cell and the trees alternating so box drift cancels; a cell shows its per-round medians (and means).
+
+| cell | pre-change `step` ms | bounded allocator `step` ms | delta | peak RSS |
+| --- | --- | --- | --- | --- |
+| xor p100 | 40.2 / 39.5 (41.8 / 41.7) | 44.1 / 44.5 (44.3 / 44.2) | +10 % | 114.4 → 114.8 MiB |
+| xor3d p500 | 184.3 / 187.1 / 186.5 (187.2 / 188.5 / 186.9) | 200.3 / 192.7 / 195.3 (200.5 / 193.8 / 196.9) | +4–8 % | 264.9 → 266.0 MiB |
+| xor3d p1000 | 313.3 / 316.8 / 319.0 (314.7 / 317.2 / 321.5) | 368.0 / 350.1 / 359.7 (365.6 / 351.1 / 356.5) | +12–14 % | 440.3 → 442.5 MiB |
+
+The allocation is 35 traced ops (the generation graph 2 173 → 2 193 at pop 100 and 2 185 → 2 205 at pop 500, no new `while`/`if` region), but the interpreter charges element work too, and the cost sits in the fallback's `(pop_size, key_span + 1)` occupancy table: at pop 1000 a table-only policy measures 338 ms against 354 ms for the full allocator and 322 ms for the pre-change monotone rule on the same tree, so the free-key table, not the spread, is the bulk of the delta.
+Build time is unchanged (0.27 / 0.33 / 0.42 s) and no key work leaves the graph.
+
 ## Known Issues
 The repo-level performance contract is still missed, by ~0.83x / ~1.5–1.65x / ~1.9–2.0x at pop 100 / 500 / 1000 (see `## Measured Cost`).
 From pop ≈ 300 upward `speciate` is the dominant term of `tell` and it is per-pair bound: the pair count `2 · species_size · pop_size` is irreducible (each phase needs its own genuinely different centres, and a created species takes the first unassigned genome as its centre, so its row depends on every earlier assignment), and `DefaultDistance`'s `find_homologous` still sorts `2·M` key rows per pair, so the same population genome is re-sorted once per centre — a genome-side centre-side prepare/sorted-row reuse is the next real lever and lies outside this subtree.
