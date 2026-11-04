@@ -1,6 +1,7 @@
 # The `iree` backend: it runs, and it is slower than numpy here
 
 **Verdict: `backend="iree"` now compiles and runs TensorNEAT end to end — every gate that used to kill it in `Pipeline.setup()` is gone — but on this box it is 4.8× (pop 100), 24× (pop 500) and 23× (pop 1000) slower per generation than the numpy reference interpreter, and the gap grows with population.**
+Every shipped problem family runs on it (`XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `RecurrentGenome`, `HyperNEAT`); each takes one 8–11 s `iree-compile` per static shape.
 `xla` is not available here: the evoxc xla adapter needs a PJRT C API plugin `.so` (`EVOXC_PJRT_PLUGIN`, unset on this box) and nothing provides one. `tvm` was not attempted.
 The CPU performance contract therefore stays on the numpy backend (`RESULTS.md`, unchanged by this report).
 
@@ -25,19 +26,19 @@ That failure was real and is now fixed at its source in `src/` (section "The fou
 
 ## What runs today
 
-| backend | install | XOR (`setup` + `step` + `auto_run`) | XOR3d | compile needed |
-|---|---|---|---|---|
-| `numpy` | always available | yes | yes | 1.6–1.7 s per graph set (the evoxc interpreter build) |
-| `iree` (llvm-cpu) | `pip install "evoxc[iree]"` | **yes** | yes (same graphs) | 9.3–10.9 s per generation graph, one-off per static shape |
-| `xla` | plugin `.so` required | no | no | not reached: `the xla adapter requires a PJRT C API plugin library (.so exporting GetPjRtApi) and none was found` |
-| `tvm` | extra | not attempted | — | — |
+| backend | install | what runs | compile needed |
+|---|---|---|---|
+| `numpy` | always available | everything | 1.6–2.0 s per graph set (the evoxc interpreter build) |
+| `iree` (llvm-cpu) | `pip install "evoxc[iree]"` | `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `RecurrentGenome`, `HyperNEAT` — one full generation each, verified | 8.1–10.9 s per generation graph, one-off per static shape |
+| `xla` | plugin `.so` required | nothing | not reached: `the xla adapter requires a PJRT C API plugin library (.so exporting GetPjRtApi) and none was found` |
+| `tvm` | extra | not attempted | — |
 
 Correctness across backends (same seed 42, XOR, `DefaultGenome`, this machine):
 the final `max fitness` is bit-identical at pop 100 (`-0.19304290413856506` numpy vs `-0.19304291903972626` iree, Δ = 1.5e-08) and pop 500 (identical to all printed digits, `-0.15205243229866028`);
 at pop 1000 the two trajectories separate at `1e-08`-scale and land on `-0.151799` vs `-0.143853`, which is float-reassociation drift in iree's reductions, not a semantic difference (int32 key payloads compare equal; float attribute arrays agree to ≤ 2.4e-07 ≈ 1–2 ulp).
 `test/backends/test_iree_pipeline.py` pins exactly this: int/key payloads `array_equal`, floats within a documented tolerance.
 
-## The four gates, in the order they fired
+## The five gates, in the order they fired
 
 Each gate below was reproduced verbatim on this machine, then removed **at its source in `src/`**, never by editing evoxc (`/root/evoxc` is a read-only foreign repo; the installed `evoxc` 0.1.0 was left untouched).
 The offending op's location is `op.location` in the traced evoxc IR, which is why the errors name a TensorNEAT `file:line`.
@@ -104,8 +105,21 @@ Operand sharing, widths, i32-vs-i64 indices, `while`/`if` regions, `sort`, and t
 Fix, in the shared helper's caller (`src/tensorneat/common/tensorization.py::incoming_table`, `_window_pair`): the two payloads that shared one index block (`in_conn`, `in_src`) now go into **one** `(P, 2*(N*K+1))` buffer written by **one** scatter, with the second half's cells offset by one window span and its dropped writes routed to its own dump column.
 The resulting rule is now documented in `common/tools.py` and `common/CONTEXT.md`: **one prepared index block feeds exactly one scatter** — merge payloads into a wider buffer instead.
 
-## Measured: numpy vs iree
+### Gate 5 — a negative `concatenate` axis (HyperNEAT only, `iree-compile` reject)
 
+```
+<stdin>:1543:13: error: 'stablehlo.concatenate' op attribute 'dimension' failed to satisfy constraint:
+64-bit signless integer attribute whose value is non-negative
+    %1524 = "stablehlo.concatenate"(%1462, %1523) {dimension = -1 : i64} : (tensor<160x3xf32>, tensor<160x1xf32>) -> tensor<160x4xf32>
+```
+
+evoxc forwards the frontend axis **verbatim** as `stablehlo.concatenate`'s `dimension`, and StableHLO requires it non-negative, so the `axis=-1` spelling — perfectly legal at the frontend and in numpy — only fails once a compiled backend sees it.
+Reached only by the HyperNEAT path (the plain NEAT graphs never wrote a negative axis), so it was invisible until the compiled run got that far.
+Fix: write the explicit non-negative last axis in graph code — `hyperneat.py` (bias column, attribute stack, connection-key marker columns) and `genome/gene/base.py::_key_array` (`axis=len(shape)`).
+Rule: **axes in graph ops are non-negative static integers**; the sweep found no other negative `concatenate` axis in `src/`.
+End-to-end after the fix: `HyperNEAT(FullSubstrate(4/3/1), activate_time=3)` + `XOR3d`, seed 42, `backend="iree"` → one 10.4 s compile, then 35.8/36.4 ms per step, keys and NaN masks bit-identical to numpy, weights within 2.4e-07, same `randkey`.
+
+## Measured: numpy vs iree
 Protocol: `benchmarks/backend_measure.py` (new), one `(case, backend, pop)` per **fresh process** (peak RSS is a process high-water mark).
 `Pipeline.setup()` wall time is reported as `setup_s` (host-only plus NEAT's small operator graph); the expensive generation graph compiles on the **first** `step()`, reported as `build_s` (`Pipeline.build_seconds`, the `evoxc.build` alone) and `first_step_s` (build + one run). The build is charged to no generation.
 Then **3 untimed warmup** generations and **20 timed** generations; ms/generation is wall clock per `step()` including host materialisation. One run each, seed 42, XOR, `DefaultGenome(2→1, max_nodes=12, max_conns=24)`, `species_size=20`.
@@ -136,12 +150,12 @@ Per-generation cost is dominated by the graph's dense `gather`/`argsort`/`scatte
 
 - `pip install "evoxc[iree]"` (pulls `iree-base-compiler` + `iree-base-runtime`); then `Pipeline(..., backend="iree")` just works for the shipped problems.
 - **Compile is one-off per static shape**: population, `max_nodes`, `max_conns` are baked into the graph, so a shape change re-compiles (~10 s here). `Pipeline` caches the executable per shape.
-- **Kernel rules the exporter and iree impose** (all enforced by construction in `src/` today, and documented in `src/tensorneat/common/CONTEXT.md`, `src/tensorneat/algorithm/neat/CONTEXT.md` and `src/tensorneat/genome/operations/CONTEXT.md`):
+- **Kernel rules the exporter and iree impose** (all enforced by construction in `src/` today, and documented in `src/tensorneat/common/CONTEXT.md`, `src/tensorneat/algorithm/neat/CONTEXT.md`, `src/tensorneat/algorithm/hyperneat/CONTEXT.md`, `src/tensorneat/genome/CONTEXT.md` and `src/tensorneat/genome/operations/CONTEXT.md`):
   1. `scatter` must be rank-1 `axis=0` or a rank-2 row/column write — no rank ≥ 3 operand.
   2. One prepared index block feeds exactly one `scatter` (gate 4).
   3. No unsigned dtype anywhere in a graph: use same-width signed carriers, plus an explicit sign flip wherever unsigned *order* is required.
   4. No v1-deferred op: `cumsum`, `cumprod`, `tril`, `triu`, `flip`, `erf`, `gelu`, `where`, `scan`, `convolution`, `runtime_call`, `external_call`, collectives other than the mapped ones, and the `sparse_*` family. Use a static constant, a `gather` with a static index vector, or a log2-doubling fold instead.
-  5. Static dims only; `select`/`gather` (single axis)/`sort`/`argsort`/`where`-free masks/`cond`/`while_loop`/static-bound slices/`rng_bit_generator` all export.
+  5. Static dims only, **non-negative axes only**, and `select`/`gather` (single axis)/`sort`/`argsort`/`where`-free masks/`cond`/`while_loop`/static-bound slices/`rng_bit_generator` all export.
 - **Activation functions**: no `ACT` entry needs `erf`/`gelu` (the set is `scaled_sigmoid`, `sigmoid`, `scaled_tanh`, `tanh`, `sin`, `relu`, `lelu`, `identity`, `inv`, `log`, `exp`, `abs`); a *user-supplied* activation that calls `evoxc.erf`/`evoxc.gelu` would still die at export with `op 'erf' ... is not supported in v1`.
 - `opt_level="O2"`/`"O3"` fail inside `iree-compile` for this graph size (stack allocation limit). Leave the default or use `O0`/`O1`.
 - Do not expect an iree speed-up: on this CPU, numpy is 5–24× faster per generation. iree's only measured advantage is ~30–50 % lower peak RSS.
