@@ -1,9 +1,9 @@
 # The `iree` backend: it runs, and it is slower than numpy here
 
 **Verdict: `backend="iree"` now compiles and runs TensorNEAT end to end — every gate that used to kill it in `Pipeline.setup()` is gone — but on this box it is 9.3× (pop 100), 93.9× (pop 500) and 102.7× (pop 1000) slower per generation than the numpy reference interpreter; the gap jumps between pop 100 and pop 500 and then flattens rather than scaling with population.**
-The problem classes exercised on iree are `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum` and `MountainCarContinuous`, plus the `RecurrentGenome` and `HyperNEAT` paths: each has run at least one full generation here, and this pass re-ran `CartPole`, `Pendulum` and `MountainCarContinuous` (configurations and outputs under "Measured: numpy vs iree").
+The problem classes exercised on iree are `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum` and `MountainCarContinuous`, plus the `RecurrentGenome` and `HyperNEAT` paths: this pass re-ran every one of them for at least one full generation (configurations and outputs under "Measured: numpy vs iree").
 `CartPole` postdates the historical `iree.md`, whose `cartpole_p100 / iree` row is an `error` from the pre-fix record that file labels as historical.
-Each run pays one 7.5–10.4 s `iree-compile` per static shape.
+Each run pays one 7.0–10.4 s `iree-compile` per static shape.
 `xla` is not available here: the evoxc xla adapter needs a PJRT C API plugin `.so` (`EVOXC_PJRT_PLUGIN`, unset on this box) and nothing provides one. `tvm` was not attempted.
 The CPU performance contract therefore stays on the numpy backend (`RESULTS.md`, unchanged by this report).
 
@@ -31,7 +31,7 @@ That failure was real and is now fixed at its source in `src/` (section "The fiv
 | backend | install | what runs | compile needed |
 |---|---|---|---|
 | `numpy` | always available | everything | 0.26–0.40 s per generation graph (the evoxc interpreter build) |
-| `iree` (llvm-cpu) | `pip install "evoxc[iree]"` | `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum`, `MountainCarContinuous`, `RecurrentGenome`, `HyperNEAT` — one full generation each, verified (see the coverage note above) | 7.5–10.4 s per generation graph, one-off per static shape |
+| `iree` (llvm-cpu) | `pip install "evoxc[iree]"` | `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum`, `MountainCarContinuous`, `RecurrentGenome`, `HyperNEAT` — one full generation each, verified (see the coverage note above) | 7.0–10.4 s per generation graph, one-off per static shape |
 | `xla` | plugin `.so` required | nothing | not reached: `the xla adapter requires a PJRT C API plugin library (.so exporting GetPjRtApi) and none was found` |
 | `tvm` | extra | not attempted | — |
 
@@ -139,13 +139,17 @@ Measured 2026-11-04, 19:36–19:55 UTC, on the box in the environment table; the
 | xor | 1000 | numpy | — | 0.016 | 0.403 | 300.789 | **291.021** | 274.574 / 426.174 | 3.325 | 391.63 | −0.151799 |
 | xor | 1000 | iree | default | 0.982 | 8.765 | 30036.253 | **29890.517** | 29519.491 / 31254.606 | 0.033 | 223.81 | −0.143853 |
 
-Coverage smoke for the RL problem classes (one full generation each, `generation_limit=1`, `pop_size=20`, `species_size=4`, `survival_threshold=0.1`, seed 42, one fresh process per class; command in "Reproduce"):
+Coverage smoke for the problem classes and network paths beyond the XOR timing rows (one full generation each, `generation_limit=1`, `pop_size=20`, `species_size=4`, `survival_threshold=0.1`, seed 42, one fresh process per row; command in "Reproduce"):
 
-| problem | config | build (s) | one generation |
+| problem / path | config | build (s) | one generation |
 |---|---|---|---|
+| `XOR3d` | `DefaultGenome(3→1, 50/100)`, sigmoid read-out | 8.381 | finite, max fitness −0.284553 |
+| `CustomFuncFit` | Pagie sample, `num_samples=50`, 2→1 | 8.032 | finite, max fitness −0.045864 |
 | `CartPole` | `max_step=200`, `repeat_times=1`, 4→2 | 7.690 | finite, max fitness 56.0 |
 | `Pendulum` | `max_step=200`, 2→1 with a 6-node hidden layer | 7.507 | finite, max fitness −1062.370850 |
 | `MountainCarContinuous` | `max_step=999`, 2→1, no hidden layer | 7.517 | finite, max fitness −0.697044 |
+| `RecurrentGenome` | `activate_time=3`, 3→1, 16 node slots, `max_in_degree=16` | 7.026 | finite, max fitness −0.284553 |
+| `HyperNEAT` | `FullSubstrate(4/3/1)`, `activate_time=3` | 8.830 | finite, max fitness −0.375114 |
 
 Reading it honestly:
 
@@ -220,6 +224,49 @@ print(cls, "build_s=", round(p.build_seconds, 3), "generation=", int(to_numpy(st
       "finite=", bool(np.all(np.isfinite(fitness))), "max_fitness=", float(np.max(fitness)))
 PY
 done
+
+# coverage smoke: XOR3d, CustomFuncFit, RecurrentGenome, HyperNEAT — one generation each
+uv run python - <<'PY'
+import numpy as np
+from tensorneat import Pipeline, algorithm, genome, problem
+from tensorneat.common import ACT, to_numpy
+from tensorneat.algorithm.hyperneat import FullSubstrate, HyperNEAT
+
+def neat(genome_obj):
+    return algorithm.NEAT(pop_size=20, species_size=4, survival_threshold=0.1,
+                          genome=genome_obj)
+
+def run(name, algo, prob):
+    p = Pipeline(algorithm=algo, problem=prob, seed=42, generation_limit=1,
+                 backend="iree", is_detailed=False)
+    state = p.setup(); state, best, fitness = p.step(state)
+    fitness = to_numpy(fitness)
+    print(name, "build_s=", round(p.build_seconds, 3),
+          "generation=", int(to_numpy(state.generation)),
+          "finite=", bool(np.all(np.isfinite(fitness))),
+          "max_fitness=", float(np.max(fitness)))
+
+run("XOR3d", neat(genome.DefaultGenome(num_inputs=3, num_outputs=1,
+        max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)), problem.XOR3d())
+run("CustomFuncFit", neat(genome.DefaultGenome(num_inputs=2, num_outputs=1,
+        max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)),
+    problem.CustomFuncFit(func=lambda p: np.array(
+        [1/(1+p[0]**-4)+1/(1+p[1]**-4)], dtype=np.float32),
+        low_bounds=[-1.0, -1.0], upper_bounds=[1.0, 1.0], method="sample",
+        num_samples=50, seed=42))
+run("RecurrentGenome", neat(genome.RecurrentGenome(num_inputs=3, num_outputs=1,
+        max_nodes=16, max_in_degree=16, activate_time=3,
+        output_transform=ACT.sigmoid)), problem.XOR3d())
+run("HyperNEAT", HyperNEAT(
+        substrate=FullSubstrate(
+            input_coors=((-1, -1), (-0.33, -1), (0.33, -1), (1, -1)),
+            hidden_coors=((-1, 0), (0, 0), (1, 0)),
+            output_coors=((0, 1),)),
+        neat=neat(genome.DefaultGenome(num_inputs=4, num_outputs=1,
+            max_nodes=50, max_conns=100, output_transform=ACT.tanh)),
+        activation=ACT.tanh, activate_time=3, output_transform=ACT.sigmoid),
+    problem.XOR3d())
+PY
 ```
 
 The end-to-end backend test (`test/backends/test_iree_pipeline.py`) skips cleanly without the extra and runs a real XOR generation with it:
