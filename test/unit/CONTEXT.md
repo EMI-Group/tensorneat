@@ -51,7 +51,7 @@ Backend is always `"numpy"`; a test that needs `evoxc[iree]` is marked `requires
 A failure names the independent oracle it disagrees with, so a red test says which side of the comparison is wrong.
 
 ## Constraints
-No network, no GPU, no wall-clock or ordering dependence; `tmp_path` appears only in `./common/test_state.py`, for the `State` save/load round-trip.
+No network, no GPU, no wall-clock or ordering dependence; `tmp_path` appears only in `./common/test_state.py` (the `State` save/load round-trip) and in `./benchmarks` (a temporary git repository for the fingerprint tests).
 A test may not edit `../../src`, `../../benchmarks` or `pyproject.toml`; a discovered defect is pinned by an xfail here and reported upward.
 `../conftest.py` puts `src/`, `benchmarks/legacy_jax` and `test/` on `sys.path`; `conftest.py` here has one process-wide side effect, the import recorder, and it uses nothing outside the standard library and pytest.
 
