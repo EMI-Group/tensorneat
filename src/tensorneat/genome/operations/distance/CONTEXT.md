@@ -124,7 +124,7 @@ What is *not* hoistable is anything derived from the centre payload: `_pack`, `_
 | `measure` marginal, batch-1 centre (dense route) | 102 |
 | `execute_distance` (pair-wise, unchanged contract) | 225 |
 
-The counts are independent of `P` (measured identical at pop 100 / 500 / 1000), counted recursively over `module.functions[*].entry_block` and every `op.regions` body with terminators included; the op-nodes-only convention `test/unit/genome/test_distance_digest.py` asserts on reads 167 / 265 / 98 / 101 / 224, and its ceilings are `PREPARE_OP_CEILING = 210` / `MEASURE_OP_CEILING = 120`.
+The counts are independent of `P` (measured identical at pop 100 / 500 / 1000), counted recursively over `module.functions[*].entry_block` and every `op.regions` body with terminators included; the op-nodes-only convention `test/unit/genome/test_distance_digest.py` asserts on reads 167 / 265 / 98 / 102 / 224, and its ceilings are `PREPARE_OP_CEILING = 210` / `MEASURE_OP_CEILING = 120`.
 Source-line attribution of one merge `measure` call: `measure_alignment` 17 per family (34), aligned-attribute term ~6 per family, scalar tail ~11 per family, family add 1, `_pack`/`_tagged` 4 + 4, and **zero** per-call `constant` ops; `gene.distance` and its column reads (~31) belong to `../gene/`.
 Executed ops of one seed-42 XOR generation at pop 500 (`Pipeline.step` 6-step protocol, `species_size=20`): whole graph **8 813**, this node's bucket **3 222** — one `prepare` executed once (167) plus 40 `measure` calls at ~76 executed ops each once the gene-side ops are excluded.
 The 40 calls are 4 *traced* call sites (two per speciation phase, each inside a region that runs 10 times), so the traced body is what the multiplying op count pays.
