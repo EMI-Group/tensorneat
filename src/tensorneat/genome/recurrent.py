@@ -8,7 +8,7 @@ Everything is batch-first (population on axis 0) and the shared window reduce li
 """
 
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 import evoxc
 import numpy as np  # host-only: the ``activate_time`` validation of the constructor
@@ -26,6 +26,22 @@ from .operations import (
     DefaultMutation,
 )
 from .window import any_slot, by_samples, fill
+
+
+class _PreparedPass(NamedTuple):
+    """Loop-invariant operands of one ``RecurrentGenome`` forward pass.
+
+    :meth:`RecurrentGenome.prepare_pass` derives it once per payload; each
+    :meth:`RecurrentGenome.forward_prepared` call then runs only the per-query half, so a
+    rollout loop pays the pass prelude once instead of once per timestep.
+    """
+
+    node_attrs: evoxc.SymbolicTensor
+    statics: Any
+    update_mask: evoxc.SymbolicTensor
+    samples: int
+    pop_size: int
+    max_nodes: int
 
 
 class RecurrentGenome(BaseGenome):
@@ -136,6 +152,10 @@ class RecurrentGenome(BaseGenome):
     ) -> evoxc.SymbolicTensor:
         """Evaluate the population by ``activate_time`` synchronous ticks, unrolled.
 
+        This is :meth:`prepare_pass` followed by :meth:`forward_prepared`: a caller that
+        queries one payload many times (a rollout loop) should prepare once and call
+        :meth:`forward_prepared` per query.
+
         The exact algebra, with ``P`` the population, ``rows = P * samples`` the evaluated row
         count (a problem tiles its dataset or rollout over the population axis, so row
         ``p * samples + j`` is individual ``p``), ``N`` ``max_nodes`` and ``T``
@@ -182,19 +202,65 @@ class RecurrentGenome(BaseGenome):
                 :meth:`_sample_count`) — there is then no sample axis to expand the schedule
                 with, and the two would silently disagree about their rows.
         """
-        pop_size, max_nodes = (int(size) for size in transformed.node_exists.shape)
+        pop_size = int(transformed.node_exists.shape[0])
         samples = self._sample_count(inputs, pop_size)
-        # One NaN element broadcast to the node block (see ``..window.fill``): the materialised
-        # block would be the kernel's only population-scaled graph constant.
-        values = fill(
-            (pop_size * samples, max_nodes), float("nan"), dtype=evoxc.float32
+        prepared = self.prepare_pass(
+            state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, samples
         )
+        return self.forward_prepared(state, transformed, prepared, inputs)
+
+    def prepare_pass(
+        self,
+        state: State,
+        transformed: Transformed,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+        samples: int = 1,
+    ) -> _PreparedPass:
+        """Derive the loop-invariant operands of one forward pass.
+
+        Everything :meth:`forward` computes once — the padding-safe node attributes, the
+        ``_StepStatics`` of the value window with its node operand bundle forced here, and the
+        expanded update mask — so :meth:`forward_prepared` can run once per query on the same
+        payload.
+
+        Args:
+            state: Host configuration container.
+            transformed: Execution schedule of the same population.
+            node_keys: ``(P, N) int32`` node keys, ``I_INF`` padded.
+            node_attrs: ``(P, N, NA) float32`` node attributes, NaN padded.
+            conn_keys: ``(P, E, CK) int32`` connection keys; accepted for symmetry with
+                :meth:`forward` and unused, like there.
+            conn_attrs: ``(P, E, CA) float32`` connection attributes, NaN padded.
+            samples: Static tiling factor ``S`` of the evaluated ``P * samples`` rows.
+
+        Returns:
+            ``_PreparedPass`` for :meth:`forward_prepared`.
+
+        Raises:
+            TensorNEATError: If ``samples`` is not a positive int.
+        """
+        if (
+            isinstance(samples, bool)
+            or not isinstance(samples, (int, np.integer))
+            or int(samples) < 1
+        ):
+            raise TensorNEATError(
+                f"samples must be a positive int, got {samples!r}"
+            )
+        samples = int(samples)
+        pop_size, max_nodes = (int(size) for size in transformed.node_exists.shape)
         # Absent rows read as ``0`` instead of ``NaN`` before the tick loop, so the option
         # index columns the node gene casts to ``int32`` are never NaN (see
         # ``BaseGenome._padding_safe_attrs``). The schedule's ``P`` rows are enough: the
         # statics and the mask are expanded to the evaluated ``P * samples`` rows below.
-        node_attrs = self._padding_safe_attrs(node_attrs, node_keys)
-        hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs, samples)
+        prepared_attrs = self._padding_safe_attrs(node_attrs, node_keys)
+        statics = self._hit_conn_attrs(transformed, conn_attrs, samples)
+        # Force the node operand bundle here so it is traced in this block instead of inside
+        # the tick loop, where it would be re-evaluated on every tick.
+        statics.node_operands(self, prepared_attrs)
         # "Has at least one live incoming slot" is a boolean *any* over the window, so it is
         # the same static slice fold as the once-per-tick liveness test of the window step
         # (:func:`..window.any_slot`) instead of a count: ``count > 0`` would be an
@@ -207,21 +273,72 @@ class RecurrentGenome(BaseGenome):
             by_samples(transformed.node_exists, samples, pop_size),
             by_samples(any_slot(transformed.in_valid), samples, pop_size),
         )
+        return _PreparedPass(
+            node_attrs=prepared_attrs,
+            statics=statics,
+            update_mask=update_mask,
+            samples=samples,
+            pop_size=pop_size,
+            max_nodes=max_nodes,
+        )
+
+    def forward_prepared(
+        self,
+        state: State,
+        transformed: Transformed,
+        prepared: _PreparedPass,
+        inputs: evoxc.SymbolicTensor,
+    ) -> evoxc.SymbolicTensor:
+        """Run one forward pass from ``prepared``, the per-query half of :meth:`forward`.
+
+        Emits only the ``NaN`` values seed, the Python tick loop (input re-injection plus
+        :meth:`._node_step`) and the read-out; every loop-invariant operand comes from
+        ``prepared``.
+
+        Args:
+            state: Host configuration container.
+            transformed: Execution schedule the pass was prepared with.
+            prepared: Result of :meth:`prepare_pass` for this payload and ``samples``.
+            inputs: ``(P * samples, num_inputs) float32`` network inputs, tiled
+                individual-major over the population axis and re-injected raw on every tick.
+
+        Returns:
+            ``(P * samples, num_outputs) float32`` outputs after ``output_transform``.
+
+        Raises:
+            TensorNEATError: If ``inputs`` does not carry ``pop_size * samples`` rows, so the
+                requested batch disagrees with the prepared schedule.
+        """
+        rows = int(inputs.shape[0])
+        expected = prepared.pop_size * prepared.samples
+        if rows != expected:
+            raise TensorNEATError(
+                f"forward_prepared was asked for {rows} row(s) but prepare_pass derived the "
+                f"pass for pop_size={prepared.pop_size} x samples={prepared.samples} = "
+                f"{expected} row(s); prepare the pass with the samples of this batch"
+            )
+        # One NaN element broadcast to the node block (see ``..window.fill``): the materialised
+        # block would be the kernel's only population-scaled graph constant.
+        values = fill(
+            (rows, prepared.max_nodes), float("nan"), dtype=evoxc.float32
+        )
         for _ in range(self.activate_time):
             values = evoxc.concatenate(
                 [
                     inputs,
-                    values[(slice(None), slice(self.num_inputs, max_nodes))],
+                    values[
+                        (slice(None), slice(self.num_inputs, prepared.max_nodes))
+                    ],
                 ],
                 axis=1,
             )
             values = self._node_step(
                 state,
                 transformed,
-                node_attrs,
-                hit_conn_attrs,
+                prepared.node_attrs,
+                prepared.statics,
                 values,
-                update_mask,
+                prepared.update_mask,
             )
         return self._output_values(values, self.output_transform)
 

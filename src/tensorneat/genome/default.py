@@ -16,7 +16,7 @@ Everything is batch-first (population on axis 0); the shared window reduce lives
 
 import warnings
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 import evoxc
 import evoxc.numpy as enp
@@ -38,6 +38,23 @@ from .operations import (
 )
 from .utils import GenomeTensors
 from .window import _iinf, by_samples, fill
+
+
+class _PreparedPass(NamedTuple):
+    """Loop-invariant operands of one ``DefaultGenome`` forward pass.
+
+    :meth:`DefaultGenome.prepare_pass` derives it once per payload; each
+    :meth:`DefaultGenome.forward_prepared` call then runs only the per-query half, so a rollout
+    loop pays the pass prelude once instead of once per timestep.
+    """
+
+    node_attrs: evoxc.SymbolicTensor
+    statics: Any
+    limit: evoxc.SymbolicTensor
+    node_level: evoxc.SymbolicTensor
+    samples: int
+    pop_size: int
+    max_nodes: int
 
 
 class DefaultGenome(BaseGenome):
@@ -143,6 +160,10 @@ class DefaultGenome(BaseGenome):
     ) -> evoxc.SymbolicTensor:
         """Evaluate the population level by level, in one loop graph.
 
+        This is :meth:`prepare_pass` followed by :meth:`forward_prepared`: a caller that
+        queries one payload many times (a rollout loop) should prepare once and call
+        :meth:`forward_prepared` per query.
+
         The exact algebra, with ``P`` the population, ``rows = P * samples`` the evaluated row
         count (a problem tiles its dataset or rollout over the population axis, so row
         ``p * samples + j`` is individual ``p``), ``N`` ``max_nodes``, ``K`` the window width
@@ -203,48 +224,133 @@ class DefaultGenome(BaseGenome):
                 :meth:`_sample_count`) — there is then no sample axis to expand the schedule
                 with, and the two would silently disagree about their rows.
         """
-        pop_size, max_nodes = (int(size) for size in transformed.node_level.shape)
+        pop_size = int(transformed.node_level.shape[0])
         samples = self._sample_count(inputs, pop_size)
+        prepared = self.prepare_pass(
+            state, transformed, node_keys, node_attrs, conn_keys, conn_attrs, samples
+        )
+        return self.forward_prepared(state, transformed, prepared, inputs)
+
+    def prepare_pass(
+        self,
+        state: State,
+        transformed: Transformed,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+        samples: int = 1,
+    ) -> _PreparedPass:
+        """Derive the loop-invariant operands of one forward pass.
+
+        Everything :meth:`forward` computes once — the padding-safe node attributes, the
+        ``_StepStatics`` of the value window (with its node operand bundle forced here, so the
+        level loop never traces it), the depth bound and the expanded ``node_level`` — so
+        :meth:`forward_prepared` can run once per query on the same payload.
+
+        Args:
+            state: Host configuration container.
+            transformed: Execution schedule of the same population.
+            node_keys: ``(P, N) int32`` node keys, ``I_INF`` padded.
+            node_attrs: ``(P, N, NA) float32`` node attributes, NaN padded.
+            conn_keys: ``(P, E, CK) int32`` connection keys; accepted for symmetry with
+                :meth:`forward` and unused, like there.
+            conn_attrs: ``(P, E, CA) float32`` connection attributes, NaN padded.
+            samples: Static tiling factor ``S`` of the evaluated ``P * samples`` rows.
+
+        Returns:
+            ``_PreparedPass`` for :meth:`forward_prepared`.
+
+        Raises:
+            TensorNEATError: If ``samples`` is not a positive int.
+        """
+        if (
+            isinstance(samples, bool)
+            or not isinstance(samples, (int, np.integer))
+            or int(samples) < 1
+        ):
+            raise TensorNEATError(
+                f"samples must be a positive int, got {samples!r}"
+            )
+        samples = int(samples)
+        pop_size, max_nodes = (int(size) for size in transformed.node_level.shape)
+        # Absent rows read as ``0`` instead of ``NaN`` before the level loop: their option
+        # index columns are cast to ``int32`` by the node gene, and a ``NaN``-to-int cast is a
+        # warning (and a garbage id) even though those rows never reach ``values``.
+        prepared_attrs = self._padding_safe_attrs(node_attrs, node_keys)
+        # The statics are derived at the schedule's ``P`` rows and expanded to the evaluated
+        # ``P * samples`` rows: row ``p * samples + j`` reads the copy of individual ``p``.
+        statics = self._hit_conn_attrs(transformed, conn_attrs, samples)
+        # Force the node operand bundle here so it is traced in this block instead of inside
+        # the loop body, where the region would re-evaluate it on every iteration.
+        statics.node_operands(self, prepared_attrs)
+        return _PreparedPass(
+            node_attrs=prepared_attrs,
+            statics=statics,
+            # One level per loop iteration, bounded by the *real* depth of this batch instead
+            # of the static ``max_depth`` ceiling: it is a loop bound derived from the schedule
+            # alone, not data.
+            limit=self._depth_limit(transformed),
+            node_level=by_samples(transformed.node_level, samples, pop_size),
+            samples=samples,
+            pop_size=pop_size,
+            max_nodes=max_nodes,
+        )
+
+    def forward_prepared(
+        self,
+        state: State,
+        transformed: Transformed,
+        prepared: _PreparedPass,
+        inputs: evoxc.SymbolicTensor,
+    ) -> evoxc.SymbolicTensor:
+        """Run one forward pass from ``prepared``, the per-query half of :meth:`forward`.
+
+        Emits only the input seed, the level ``while_loop`` and the read-out; every
+        loop-invariant operand comes from ``prepared``, so repeated queries on one payload pay
+        the prelude once.
+
+        Args:
+            state: Host configuration container.
+            transformed: Execution schedule the pass was prepared with.
+            prepared: Result of :meth:`prepare_pass` for this payload and ``samples``.
+            inputs: ``(P * samples, num_inputs) float32`` network inputs, tiled
+                individual-major over the population axis.
+
+        Returns:
+            ``(P * samples, num_outputs) float32`` outputs after ``output_transform``.
+
+        Raises:
+            TensorNEATError: If ``inputs`` does not carry ``pop_size * samples`` rows, so the
+                requested batch disagrees with the prepared schedule.
+        """
+        rows = int(inputs.shape[0])
+        expected = prepared.pop_size * prepared.samples
+        if rows != expected:
+            raise TensorNEATError(
+                f"forward_prepared was asked for {rows} row(s) but prepare_pass derived the "
+                f"pass for pop_size={prepared.pop_size} x samples={prepared.samples} = "
+                f"{expected} row(s); prepare the pass with the samples of this batch"
+            )
         seed = inputs if self.input_transform is None else self.input_transform(inputs)
-        pad = max_nodes - self.num_inputs
+        pad = prepared.max_nodes - self.num_inputs
         # One NaN constant element broadcast to the node block (see ``..window.fill``): a
         # materialised ``(rows, max_nodes - num_inputs)`` NaN block is the largest graph
         # constant of this kernel at every population.
         values = (
             evoxc.concatenate(
-                [seed, fill((pop_size * samples, pad), float("nan"), dtype=evoxc.float32)],
+                [seed, fill((rows, pad), float("nan"), dtype=evoxc.float32)],
                 axis=1,
             )
             if pad
             else seed
         )
-        # Absent rows read as ``0`` instead of ``NaN`` before the level loop: their option
-        # index columns are cast to ``int32`` by the node gene, and a ``NaN``-to-int cast is a
-        # warning (and a garbage id) even though those rows never reach ``values``.
-        node_attrs = self._padding_safe_attrs(node_attrs, node_keys)
-        # The statics are derived at the schedule's ``P`` rows and expanded to the evaluated
-        # ``P * samples`` rows: row ``p * samples + j`` reads the copy of individual ``p``.
-        hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs, samples)
-        # The node gene builds its operand bundle lazily on the first step; force it here so
-        # the bundle is traced in this block instead of inside the loop body, where the
-        # region would re-evaluate it on every iteration for a loop-invariant result.
-        hit_conn_attrs.node_operands(self, node_attrs)
-        # One level per loop iteration, bounded by the *real* depth of this batch instead of
-        # the static ``max_depth`` ceiling: an evolved network is typically 2-4 levels deep,
-        # so a third of the unrolled passes used to be no-ops that still cost real time on
-        # the interpreter backend. ``limit`` is derived from the schedule alone (one
-        # ``reduce_max`` over the masked ``node_level``), so it is a loop bound, not data.
         one = enp.full((), 1, dtype=evoxc.int32)
-        # The depth bound is a *maximum* over the population, so it is the same on the
-        # sample-invariant schedule as on a tiled one and is derived before the expansion.
-        limit = self._depth_limit(transformed)
-        # Expanded once, outside the loop: every level then pays the comparison only.
-        node_level = by_samples(transformed.node_level, samples, pop_size)
 
         def cond(carry) -> evoxc.SymbolicTensor:
             """Keep iterating while the next unvisited level is still within the depth."""
             level, _values = carry
-            return evoxc.less_equal(level, limit)
+            return evoxc.less_equal(level, prepared.limit)
 
         def body(carry) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
             """Advance one level: the plain window step of :meth:`._node_step`.
@@ -257,10 +363,10 @@ class DefaultGenome(BaseGenome):
             updated = self._node_step(
                 state,
                 transformed,
-                node_attrs,
-                hit_conn_attrs,
+                prepared.node_attrs,
+                prepared.statics,
                 values,
-                evoxc.equal(node_level, level),
+                evoxc.equal(prepared.node_level, level),
             )
             return evoxc.add(level, one), updated
 

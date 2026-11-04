@@ -30,9 +30,8 @@ path).
 ``../common.errors.TensorNEATError`` (``ConfigError``) covers every configuration violation.
 
 ## Cost budget (measured, numpy backend)
-A forward pass costs about one unrolled level per network depth: measured 1.8 ms per level at `P=1000`, `max_nodes=50`, `K=2` with ~20 ops per level, i.e. ~14 ms for a depth-8 forward against the 157 ms legacy generation at the same population.
-Op count per unrolled level — not element count — is the budget: keep the window step thin, gather connection attributes once per forward pass, and never re-derive the schedule inside a level.
-Depth, tick and option loops are unrolled at trace time, so compile time grows with `max_depth`/`activate_time`/option count; single-option configurations emit no selection op at all.
+A forward pass costs about one unrolled level per network depth: measured 1.8 ms per level at `P=1000`, `max_nodes=50`, `K=2` with ~20 ops per level.
+Op count per unrolled level — not element count — is the budget: keep the window step thin, gather connection attributes once per forward pass, and never re-derive the schedule inside a level; depth, tick and option loops are unrolled at trace time, so compile time grows with `max_depth`/`activate_time`/option count, while single-option configurations emit no selection op at all.
 """
 
 from collections.abc import Callable, Sequence
@@ -521,24 +520,16 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
         """Derive the execution schedule of every individual (in-graph, no host round-trip).
 
         The only place the schedule is derived: it delegates to
-        ``..common.tensorization.derive_schedule`` with the input/output keys as ``int32``
-        in-graph constants and the six statics of this genome.  The last static is
-        ``acyclic``, derived from :attr:`network_type` (never a constructor argument): the
-        feedforward genome cannot hold a cycle because ``execute_mutation`` refuses every
-        cycle-closing edge, so ``derive_schedule`` may drop the live-cycle detection (the
-        level-only relaxation's exactness test plus the cycle-detecting fallback inside
-        ``evoxc.cond``).  A recurrent genome keeps ``acyclic=False`` and therefore keeps the
-        ``I_INF`` level of every node on or downstream of a cycle.  The consequence for a
-        feedforward genome handed a *cyclic* payload (which its own operators cannot build)
-        is a saturated level instead of ``I_INF``: such a node is then evaluated once per
-        loop trip with whatever sources are live, instead of staying ``NaN``.  The
-        composition goes through
-        ``derive_schedule.fn`` — the ``@evoxc.defn`` object itself refuses to be called
-        (``Defn`` is a graph definition, not a callable), so a graph that needs the schedule
-        inline calls the plain function, which evoxc documents as the supported way to
-        specialize it.  The derivation must stay outside any differentiated graph
-        (``argsort`` has no AD rule), which is why :meth:`grad` takes an already-derived
-        ``Transformed``.
+        ``..common.tensorization.derive_schedule.fn`` (the ``@evoxc.defn`` object itself is not
+        callable) with the input/output keys as ``int32`` in-graph constants and the six statics
+        of this genome. The last static is ``acyclic``, derived from :attr:`network_type` (never
+        a constructor argument): a feedforward genome cannot hold a cycle because
+        ``execute_mutation`` refuses every cycle-closing edge, so the live-cycle detection is
+        dropped (a *cyclic* payload, which its own operators cannot build, would then saturate
+        its levels instead of reading ``I_INF``); a recurrent genome keeps ``acyclic=False`` and
+        so keeps the ``I_INF`` level of every node on or downstream of a cycle. The derivation
+        must stay outside any differentiated graph (``argsort`` has no AD rule), which is why
+        :meth:`grad` takes an already-derived ``Transformed``.
 
         Args:
             state: Host configuration container.
@@ -617,9 +608,7 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
         propagates out of ``build``) and on host data.
 
         The static sizes are deliberately **not** compared with ``self.max_nodes``/
-        ``self.max_conns``: a genome may be handed a payload built for a differently
-        configured one (that is what the Pipeline's shape signature is for), and only the
-        *internal* agreement of one call is a contract.
+        ``self.max_conns``; only the *internal* agreement of one call is a contract.
 
         Args:
             arrays: The positional arguments of ``transform``, used to locate the attribute
@@ -709,6 +698,37 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
             "concrete genomes implement the depth- or tick-unrolled forward pass"
         )
 
+    def prepare_pass(
+        self,
+        state: State,
+        transformed: Transformed,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+        samples: int = 1,
+    ) -> Any:
+        """Derive the loop-invariant operands of one forward pass (abstract).
+
+        ``conn_keys`` is accepted for symmetry with :meth:`forward`; ``samples`` is the static
+        tiling factor of the ``P * samples`` evaluated rows.
+        """
+        raise NotImplementedError(
+            "concrete genomes derive one forward pass's loop-invariant operands"
+        )
+
+    def forward_prepared(
+        self,
+        state: State,
+        transformed: Transformed,
+        prepared: Any,
+        inputs: evoxc.SymbolicTensor,
+    ) -> evoxc.SymbolicTensor:
+        """Run one forward pass from ``prepared`` (:meth:`prepare_pass`) (abstract)."""
+        raise NotImplementedError(
+            "concrete genomes run one forward pass from a prepared pass"
+        )
+
     def grad(
         self,
         state: State,
@@ -737,12 +757,9 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
         a NaN local derivative would otherwise be NaN) and leaves live rows untouched.
 
         The differentiated pass is ``.grad.dense_forward``, not the window step of
-        :meth:`_node_step`.  evoxc 0.1.0 transposes ``gather`` with *put* semantics, so a node
-        value read by several incoming-edge slots keeps only one of their cotangents; the
-        exact path therefore aggregates with a per-individual dense weight matrix and a batched
-        ``dot``, whose transpose rule is exact.  The plain forward keeps the cheap window op
-        budget and is untouched.  :func:`.grad.build_grad` builds the graph; this method is the
-        public entry point and delegates to it.
+        :meth:`_node_step`: evoxc 0.1.0 transposes ``gather`` with *put* semantics, so the
+        exact path aggregates with a per-individual dense weight ``dot`` instead
+        (:func:`.grad.build_grad`).
 
         Args:
             state: Host configuration container.
@@ -785,7 +802,6 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
             inputs,
             loss_fn,
         )
-
 
     # ------------------------------------------------------------------- operators
     def execute_mutation(
