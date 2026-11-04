@@ -5,7 +5,10 @@ has a homologue in parent 2?* — so the answer is computed here once, as a **ra
 
 1. each gene row is reduced to one sortable integer *identity* (:func:`row_identity`) —
    for a gene with one or two ``int32`` key columns the columns are packed side by side,
-   which is injective, not merely a hash;
+   which is injective, not merely a hash.  The carrier is ``int64`` (the only 64-bit dtype
+   every backend declares) and the packed value has its sign bit flipped
+   (:func:`_order_ready`) so a *signed* sort orders it exactly like the unsigned value the
+   packing describes;
 2. the two parents' identities are concatenated and ``argsort``-ed **once**, so inside a
    group of equal identities every parent-1 row sorts before every parent-2 row;
 3. each gene's rank in that sorted order is read back as ``argsort(order)`` — the inverse
@@ -73,9 +76,14 @@ _TAG_BITS = 2
 _TAG_PARENT_2 = 1
 
 #: Number of key columns packed into the identity.  ``2 * 31`` bits plus the tag bits fill
-#: an ``uint64`` exactly, so the identity is injective over the whole legal key domain; the
+#: an ``int64`` exactly, so the identity is injective over the whole legal key domain; the
 #: columns of a wider gene are confirmed by :func:`_confirm_rows` instead.
 _PACKED_KEY_WIDTH = 2
+
+#: Largest value the ``int64`` identity carrier holds.  A flipped identity above it has to
+#: be read back as the negative two's-complement value, exactly as the traced
+#: ``bitwise_xor`` wraps it.
+_INT64_MAX = (1 << 63) - 1
 
 
 def _column(x: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
@@ -110,6 +118,36 @@ def _scalar(value: int, dtype) -> evoxc.SymbolicTensor:
         evoxc.SymbolicTensor: Rank-0 tensor inside the active trace.
     """
     return enp.full((), value, dtype=dtype)
+
+
+def _order_ready(value: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
+    """Flip the sign bit so a *signed* sort orders a packed identity like the unsigned value.
+
+    Args:
+        value (evoxc.SymbolicTensor): ``int64`` packed row identity, tag bits clear.
+
+    Returns:
+        evoxc.SymbolicTensor: The same identity with bit 63 inverted.
+
+    Notes:
+        The pack (:func:`row_identity`) is two 31-bit columns plus two tag bits, which fills
+        64 bits exactly: the top column's bits do reach the sign bit, so a *signed*
+        ``<``/``sort``/``argsort`` would order the identities differently from the unsigned
+        value the packing was designed for (and the ``I_INF``-column padding identity would
+        sort as a small number instead of the largest one).  An ``xor`` with the single sign
+        bit is a bijection, so *equality* is bit-identical — every equality site
+        (:func:`find_homologous`'s successor test, the padding test, homology itself) is
+        unaffected — while it maps unsigned order onto signed order.  It also commutes with
+        setting the low tag bit (the tag is bit 0, the flip is bit 63), so the parent-2
+        tag can be applied before or after it.
+
+        Same-width two's-complement arithmetic is bit-identical for ``add``/``or``/``shift``
+        / ``cast``, so the ``int64`` carrier computes exactly the same 64 bits an unsigned
+        carrier would; only *ordering* needs this flip.  ``-(1 << 63)`` is spelled
+        negatively because a *value* of ``1 << 63`` does not fit ``int64``; the two have the
+        same bit pattern.
+    """
+    return evoxc.bitwise_xor(value, _scalar(-(1 << 63), evoxc.int64))
 
 
 def key_rows(keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
@@ -154,17 +192,19 @@ def row_identity(keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
             family, ``I_INF`` padded.
 
     Returns:
-        evoxc.SymbolicTensor: ``(P, M)`` ``uint64`` row identities, low :data:`_TAG_BITS`
-        bits clear (they hold the parent tag, see :func:`find_homologous`).
+        evoxc.SymbolicTensor: ``(P, M)`` ``int64`` row identities, low :data:`_TAG_BITS`
+        bits clear (they hold the parent tag, see :func:`find_homologous`) and sign-flipped
+        by :func:`_order_ready` so signed order equals unsigned order.
 
     Notes:
         Packing is ``column 0 << 31 | column 1``, shifted up by :data:`_TAG_BITS`: a key is
         a non-negative ``int32`` and ``I_INF = 2**31 - 1`` is the largest value one column
         can carry, so the pack is **injective over the whole legal key domain** — pad
         sentinel included — and two distinct key prefixes can never share an identity.  The
-        fold is done in ``uint64`` because the top column's bits reach the sign bit of a
-        signed ``int64``; unsigned shifts wrap cleanly there, so the identity is
-        deterministic on every backend.
+        carrier is ``int64``, the only 64-bit dtype every backend declares, and same-width
+        two's-complement ``or``/``shift``/``cast`` produce the identical 64-bit pattern an
+        unsigned carrier would; only the *ordering* of the result differs, which is why the
+        value is sign-flipped before it is returned (see :func:`_order_ready`).
 
         Columns past :data:`_PACKED_KEY_WIDTH` do not fit one 64-bit integer, so they are
         left out of the sort key: they make the identity a *prefix* of the key tuple, and
@@ -175,7 +215,7 @@ def row_identity(keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
     """
     pop_size, count = keys.shape[0], keys.shape[1]
     width = keys.shape[2]
-    fold = evoxc.uint64
+    fold = evoxc.int64
     if width == 1:
         identity = evoxc.cast(evoxc.reshape(keys, (pop_size, count)), fold)
     else:
@@ -186,7 +226,7 @@ def row_identity(keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
                 evoxc.bitwise_left_shift(identity, shift),
                 evoxc.cast(_column(keys, index), fold),
             )
-    return evoxc.bitwise_left_shift(identity, _scalar(_TAG_BITS, fold))
+    return _order_ready(evoxc.bitwise_left_shift(identity, _scalar(_TAG_BITS, fold)))
 
 
 def _pad_identity(width: int) -> int:
@@ -201,16 +241,32 @@ def _pad_identity(width: int) -> int:
         from a real gene instead of a per-column comparison.
 
     Notes:
-        This is the host mirror of :func:`row_identity` on a plain-Python key tuple.  It has
-        to stay in step with the traced pack (same stride, same reserved tag bits), or
-        padding rows would stop being recognised; both read
-        :data:`_COLUMN_BITS`/:data:`_TAG_BITS`, so only a change of *formula* can make them
-        diverge.
+        This is the host mirror of :func:`row_identity`, **sign flip included**, because the
+        two are compared elementwise.  It has to stay in step with the traced pack (same
+        stride, same reserved tag bits, same ``_order_ready`` flip), or padding rows would
+        stop being recognised; both read :data:`_COLUMN_BITS`/:data:`_TAG_BITS` and apply
+        the same bit, so only a change of *formula* can make them diverge.
+
+        The pad identity is the largest value the pack can produce (``2**64 - 4`` for a
+        two-column key, the ``I_INF`` column pair), which read as a signed ``int64`` is
+        ``-4`` — a small number, so an unflipped signed sort would order padding rows
+        *below* every real gene, the opposite of the unsigned reading.  Flipping the same
+        sign bit :func:`row_identity` flips restores that order (``2**63 - 4`` for two
+        columns) and keeps padding above every real identity of its gene family.
+
+        For a one-column key the flip pushes the value past the carrier's ceiling
+        (:data:`_INT64_MAX`), so the result is wrapped back into ``int64`` range the way the
+        traced XOR wraps it; ordering is unaffected because every one-column identity of the
+        pack is wrapped by the same bit.
     """
     identity = I_INF
     for _ in range(1, min(width, _PACKED_KEY_WIDTH)):
         identity = (identity << _COLUMN_BITS) | I_INF
-    return identity << _TAG_BITS
+    flipped = (identity << _TAG_BITS) ^ (1 << 63)
+    # The traced ``bitwise_xor`` wraps in two's complement, so this host mirror must wrap
+    # too: a one-column pad identity lands above ``int64``'s ceiling and comes back
+    # negative, and an unwrapped value would not even fit ``enp.full(..., int64)``.
+    return flipped - (1 << 64) if flipped > _INT64_MAX else flipped
 
 
 def _gather_rows(
@@ -373,6 +429,9 @@ def find_homologous(
         rows set them), so inside a group of equal identities parent 1's row is strictly
         smaller than parent 2's and the ordering does not depend on the sort being stable —
         which is what lets the sort run unstable, 4x faster on the reference interpreter.
+        The ``int64`` identities are already sign-flipped by :func:`row_identity`, so this
+        ``argsort`` orders them exactly as the packed unsigned values would; without that
+        flip the top key column's bits would reorder the group here.
 
         The successor's identity is therefore tested against *own identity with parent 2's
         tag set*: an equal answer means the successor is a parent-2 row holding exactly this
@@ -390,7 +449,7 @@ def find_homologous(
     """
     pop_size, count = keys1.shape[0], keys1.shape[1]
     width = keys1.shape[2]
-    tag = _scalar(_TAG_PARENT_2, evoxc.uint64)
+    tag = _scalar(_TAG_PARENT_2, evoxc.int64)
     identity1 = row_identity(keys1)
     identity2 = evoxc.bitwise_or(row_identity(keys2), tag)
     merged = evoxc.concatenate((identity1, identity2), axis=1)
@@ -416,7 +475,7 @@ def find_homologous(
         matched = evoxc.logical_and(matched, _confirm_rows(keys1, keys2, rows, matched))
     present = evoxc.logical_and(
         matched,
-        evoxc.not_equal(identity1, _scalar(_pad_identity(width), evoxc.uint64)),
+        evoxc.not_equal(identity1, _scalar(_pad_identity(width), evoxc.int64)),
     )
     return evoxc.select(present, rows, _scalar(I_INF, evoxc.int32))
 
