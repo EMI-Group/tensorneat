@@ -10,9 +10,12 @@ the same population payload would be re-sorted ``2 * species_size`` times.
 The two-phase API removes that: :meth:`BaseDistance.prepare` sorts each gene family of the
 population once per generation into a :class:`~.digest.DistanceDigest`, and
 :meth:`BaseDistance.measure` merges one centre genome against that digest per call, producing
-the very same numbers as :meth:`BaseDistance.__call__` (bit-identical: both routes share
-:meth:`~.default.DefaultDistance.distance_from_rows`, so the aligned attribute gather, the
-attribute term and the scalar formula are literally the same code).
+the very same numbers as :meth:`BaseDistance.__call__`.
+Both routes are bit-identical because they end in the same tail,
+:meth:`~.default.DefaultDistance.distance_from_alignment` — the aligned attribute gather, the
+attribute term and the scalar formula are literally the same code — while
+``distance_from_rows`` is only that hook's row-table spelling and the row-wise digest route
+never touches it.
 """
 
 from typing import TYPE_CHECKING
@@ -342,6 +345,7 @@ class BaseDistance(StatefulBaseClass):
         digest_attrs: evoxc.SymbolicTensor,
         digest_count: evoxc.SymbolicTensor,
         digest_key_cols: evoxc.SymbolicTensor,
+        statics,
     ) -> evoxc.SymbolicTensor:
         """Compatibility distance of one gene family against a population digest.
 
@@ -357,6 +361,9 @@ class BaseDistance(StatefulBaseClass):
             digest_key_cols (evoxc.SymbolicTensor): ``(P, M, K) int32`` population key columns
                 in the digest's gene order — the exact-match oracle for a gene whose key
                 width exceeds the number of columns the composite folds.
+            statics (MeasureStatics): The family's per-generation scaffolding from the digest —
+                the rank-0 scalars and the two flat index blocks, so this call traces neither a
+                ``constant`` nor an ``arange`` of its own.
 
         Returns:
             evoxc.SymbolicTensor: ``(P,) float32`` distances of this gene family, disjoint /
@@ -367,8 +374,11 @@ class BaseDistance(StatefulBaseClass):
             per call, no population re-sort); everything after it is
             :meth:`distance_from_alignment`, the very tail ``gene_distance`` runs — which is
             what makes the two routes bit-identical rather than merely close.
-            A standalone call, so it starts its own constant pool; :meth:`measure` shares one
-            pool across both families and across every call of a generation.
+            A standalone call, so it starts its own constant pool, but it does not build its
+            own statics: the caller must already hold this family's ``MeasureStatics`` from
+            :func:`~.digest.prepare_family` (i.e. the digest-time scaffolding of
+            :meth:`prepare`), which is why the in-graph call sites go through :meth:`measure`,
+            where one pool and the two families' statics are shared.
         """
         return self._measure_family(
             ConstantPool(),
@@ -380,6 +390,7 @@ class BaseDistance(StatefulBaseClass):
             digest_attrs,
             digest_count,
             digest_key_cols,
+            statics,
         )
 
     def _measure_family(

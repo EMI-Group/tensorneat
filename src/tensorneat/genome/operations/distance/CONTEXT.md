@@ -235,8 +235,6 @@ Fusing two merges is therefore element-dearer at every `P`; the merge can only b
 The two `## Known Issues` micro-candidates (slice the `int64` inverse permutation before casting it; hoist `_key_row_matches`' flat attribute view into the statics) are together ~2 % of a call — real but below a 5 % bar, and the first of them saves one wide `int32` pass per family per call.
 
 ## Known Issues
-`BaseDistance.gene_measure` (`base.py:335-383`) calls `_measure_family` without its required `statics` argument, so that standalone entry raises `TypeError`; nothing in `src/` or `test/` calls it (the live route is `measure` → `_measure_family`, `base.py:279-303`).
-The `base.py` module docstring (`base.py:13-15`) still claims both routes share `distance_from_rows`; the row-wise digest route ends in `DefaultDistance.distance_from_alignment` and never touches that adapter.
 `measure_alignment` casts the inverse permutation over all `2M + 1` columns (`digest.py:699-703`) although the slice keeps only the `M` centre columns: slicing the `int64` inverse first and casting second is value-identical at the same op count and removes one `(P, 2M + 1)` `int32` pass per family per call.
 `_key_row_matches` reshapes `digest_key_cols` to its flat view per call (`digest.py:828`), which is centre-independent and could travel in the family's `MeasureStatics` (marker-column genes only, 1 op/call).
 
