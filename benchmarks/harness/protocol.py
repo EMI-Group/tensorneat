@@ -304,8 +304,14 @@ def _memory_mb() -> float | None:
         return None
 
 
-def _git(*arguments: str, root: Path = REPO_ROOT) -> str | None:
-    """Run one ``git`` command in the checkout; ``None`` when git or the repo is unavailable."""
+def _git(*arguments: str, root: Path = REPO_ROOT, strip: bool = True) -> str | None:
+    """Run one ``git`` command in the checkout; ``None`` when git or the repo is unavailable.
+
+    ``strip`` must be off for ``git status --porcelain -z`` output: the status field is two
+    characters wide and a worktree-only change starts with a space (``" M path"``), so
+    stripping the output eats the first character of the XY field and shifts every path by
+    one — that is exactly how a modified-but-unstaged file used to read as clean.
+    """
     try:
         completed = subprocess.run(
             ["git", *arguments],
@@ -318,15 +324,51 @@ def _git(*arguments: str, root: Path = REPO_ROOT) -> str | None:
         return None
     if completed.returncode != 0:
         return None
-    return completed.stdout.strip()
+    return completed.stdout.strip() if strip else completed.stdout
 
 
 def _porcelain_path(entry: str) -> str:
-    """The path named by one ``git status --porcelain`` line (rename -> its new name)."""
-    payload = entry[3:] if len(entry) > 3 else entry.strip()
-    if " -> " in payload:  # "R  old -> new"
+    """The path named by one ``git status --porcelain`` record (rename -> its new name).
+
+    Git's short/porcelain v1 format is ``XY PATH``: ``X`` is the index status, ``Y`` the
+    worktree status, and one space separates the two-character field from the path, so the
+    path always starts at offset 3 — ``" M path"`` (unstaged change), ``"M  path"`` (staged),
+    ``"?? path"`` (untracked), ``"R  old -> new"`` (rename, here parsed from the line form).
+    The record must be passed verbatim; a record whose leading space was stripped no longer
+    has a two-character status field and cannot be parsed by offset.
+    """
+    if len(entry) <= 3:
+        return ""
+    payload = entry[3:]
+    if " -> " in payload:  # "R  old -> new" (the -z form reports the new name first)
         payload = payload.split(" -> ", 1)[1]
-    return payload.strip().strip('"')
+    if len(payload) >= 2 and payload.startswith('"') and payload.endswith('"'):
+        return payload[1:-1]  # line format quotes a path with special characters; -z never does
+    return payload
+
+
+def _porcelain_paths(output: str) -> list[str]:
+    """The paths named by ``git status --porcelain -z`` output.
+
+    ``-z`` terminates every field with NUL instead of a newline and never quotes a path, so
+    a record is ``XY PATH`` verbatim and a rename/copy record is followed by its **own**
+    NUL field holding the source path (new name first) — that extra field is consumed here
+    and never parsed as a record of its own.
+    """
+    fields = output.split("\0")
+    paths: list[str] = []
+    index = 0
+    while index < len(fields):
+        record = fields[index]
+        index += 1
+        if not record.strip():
+            continue
+        path = _porcelain_path(record)
+        if path:
+            paths.append(path)
+        if (record[0] in "RC" or record[1] in "RC") and index < len(fields):
+            index += 1  # the rename/copy source follows in its own field
+    return paths
 
 
 def _in_code_scope(path: str) -> bool:
@@ -360,14 +402,12 @@ def git_report(root: Path = REPO_ROOT) -> dict:
     commit = _git("rev-parse", "HEAD", root=root)
     if commit is None:
         return {"git_commit": None, "git_dirty": None, "git_dirty_paths": []}
-    status = _git("status", "--porcelain", "--", *GIT_DIRTY_PATHS, root=root)
+    status = _git(
+        "status", "--porcelain", "-z", "--", *GIT_DIRTY_PATHS, root=root, strip=False
+    )
     if status is None:
         return {"git_commit": commit, "git_dirty": None, "git_dirty_paths": []}
-    paths = [
-        path
-        for path in (_porcelain_path(entry) for entry in status.splitlines() if entry.strip())
-        if path and _in_code_scope(path)
-    ]
+    paths = [path for path in _porcelain_paths(status) if path and _in_code_scope(path)]
     return {
         "git_commit": commit,
         "git_dirty": bool(paths),

@@ -6,9 +6,9 @@ Each assertion compares against something independent of the implementation unde
 This directory is the whole content of the default gate; `./parity` (legacy JAX oracle) and `./integration` (whole `Pipeline`) are the two suites that go beyond it.
 
 ## Counts
-`./common` 155 passed, `./genome` 100, `./algorithm` 144, `./problem` 62 — 461 passed and 0 xfailed in the subdirectories, plus `./test_version.py` (2) at this node's root.
+`./common` 155 passed, `./genome` 100, `./algorithm` 144, `./problem` 62, `./benchmarks` 16 — 477 passed and 0 xfailed in the subdirectories, plus `./test_version.py` (2) at this node's root.
 `./genome` dominates the wall clock at ~52 s (one traced executable per graph), `./algorithm` takes ~28 s, `./common` ~12 s and `./problem` ~4 s.
-Everything in this node is green: there is no xfail and no skip.
+Everything in this node is green: there is no xfail and no skip (the `./benchmarks` fingerprint tests skip only on a box without a `git` binary).
 
 ## How to run
 `python -m pytest test/unit -m "not parity and not slow"` (or plain `pytest` from the repo root) — numpy backend, no optional dependency, ~95 s.
@@ -20,6 +20,7 @@ Everything in this node is green: there is no xfail and no skip.
 `./genome` — gene payloads, forward/recurrent/grad kernels, mutation/crossover/distance invariants, host-only introspection.
 `./algorithm` — NEAT `tell` algebra: speciation, stagnation, spawn allocation, parent selection.
 `./problem` — func-fit losses (`mse`/`rmse`/`mae`/`mape`) and the CartPole rollout.
+`./benchmarks` — the benchmark harness fingerprint (`git_report`, porcelain parsing) on a real temporary git repository.
 `./test_version.py` — the package's `__version__` metadata and its `PackageNotFoundError` fallback.
 Every directory here carries `__init__.py` (pytest's prepend import mode names a module by basename, so un-namespaced directories collide with `./parity`/`./integration`).
 
@@ -61,6 +62,7 @@ A test may not edit `../../src`, `../../benchmarks` or `pyproject.toml`; a disco
 | `./genome` | payload layout, forward/recurrent/grad kernels, mutation/crossover/distance invariants, host introspection. |
 | `./algorithm` | NEAT `tell` algebra: speciation, stagnation, spawn allocation, parent selection. |
 | `./problem` | func-fit losses (`mse`/`rmse`/`mae`/`mape`) and the CartPole rollout. |
+| `./benchmarks` | harness fingerprint: `git_report`/porcelain parsing against a real temporary git repository. |
 | `./test_version.py` | `tensorneat.__version__` against the distribution metadata, plus the `PackageNotFoundError` fallback. |
 | `./conftest.py` | session baseline + import recorder: the per-test optional-framework guard. |
 | `../support` | shared runner, hand-built payloads and numpy oracles used by every suite here. |

@@ -44,7 +44,7 @@ Remaining lever, measured and out of scope so far: the padded gene geometry (`ma
 - No silent error swallowing: configuration errors raise `tensorneat.common.errors.TensorNEATError`; trace/shape/backend errors propagate from `evoxc` unchanged.
 - Dropped on purpose: the Brax/Gymnax/mujoco-playground RL environments required JAX; `problem.rl.CartPole` is the evoxc-native replacement.
 ## Test Strategy
-`uv run pytest` from the repo root (`testpaths = ["test"]` in `pyproject.toml`); `test/` mirrors the source tree and the current full run is 551 passed / 0 failed.
+`uv run pytest` from the repo root (`testpaths = ["test"]` in `pyproject.toml`); `test/` mirrors the source tree and the current full run is 564 passed / 1 skipped (the `iree` backend test) with `uv sync --extra bench`, 0 failed.
 `test/unit/` runs on the numpy backend with no optional dependency; `test/parity/` needs `--extra bench` and compares kernels bit-for-bit against `benchmarks/legacy_jax` (53 tests); `test/integration/` evolves XOR, asserts determinism per seed, rebuild-on-shape-change and checkpoint round-trips; `test/backends/` runs a real `iree` generation and skips when the extra is absent; `test/release_gate_no_jax.py` enforces the import hygiene.
 ## Routing Table
 | Path | Responsibility |

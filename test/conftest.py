@@ -7,7 +7,9 @@ Two jobs, both host-side and dependency-free:
    ``benchmarks/legacy_jax/``, so the suite runs from a plain checkout without
    installing the package. Both directories are prepended to ``sys.path``
    only when they exist and only when they are not already present, which
-   keeps the setup idempotent under ``pytest-xdist``/nested runs.
+   keeps the setup idempotent under ``pytest-xdist``/nested runs. The checkout
+   root is appended (never prepended) so ``test/unit/benchmarks`` can import
+   the harness under test as ``benchmarks.harness.protocol``.
 
 2. **Configuration.** Markers that ``pyproject.toml`` does not declare
    (``requires_iree``) are registered here, and
@@ -51,6 +53,12 @@ def _prepend(path: Path) -> None:
 
 for _path in (SRC_DIR, LEGACY_DIR, TEST_DIR):
     _prepend(_path)
+
+#: The checkout root is *appended*, not prepended: ``test/unit/benchmarks`` imports the
+#: harness under test as ``benchmarks.harness.protocol``, and appending keeps the source and
+#: test trees above it on the path.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
 
 
 def pytest_configure(config: pytest.Config) -> None:
