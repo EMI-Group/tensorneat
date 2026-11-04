@@ -93,6 +93,13 @@ class Transformed(NamedTuple):
     #: (P,) int32 — number of valid edges dropped because their in-group rank reached K.
     edge_overflow: Any
 
+    #: Leaves a tiled forward pass reads, and therefore the only ones repeated/sliced
+    #: along the population axis when a problem tiles the evaluate batch
+    #: (``host_payload._map_fanout``).  A genome that starts reading another field must
+    #: add it here: an unread field is fanned un-fanned, so a missing entry surfaces as a
+    #: shape error inside the trace, never as silently wrong numbers.
+    FANOUT_FIELDS = ("in_conn", "in_src", "in_valid", "node_level", "node_exists")
+
     @property
     def level(self) -> Any:
         """Compatibility alias of :attr:`node_level` (numpy oracle and pre-rewrite host callers)."""
