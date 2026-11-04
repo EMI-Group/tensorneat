@@ -15,14 +15,22 @@ output_transform=ACT.sigmoid)`, seed 42, `backend="numpy"`, build excluded):
 | cell | before mean / median (ms) | after mean / median (ms) | median change | peak RSS before → after | build before → after |
 | --- | --- | --- | --- | --- | --- |
 | xor p100 | 44.18 / 43.47 | **40.05 / 38.58** | −11 % | 118.2 → 114.4 MiB | 0.288 → 0.255 s |
-| xor p500 | 256.41 / 268.39 | **161.37 / 159.90** | **−40 %** | 260.8 → **240.5** MiB | 0.351 → 0.314 s |
-| xor p1000 | 408.28 / 342.21 | **280.26 / 270.08** | **−21 %** | 431.6 → **391.5** MiB | 0.435 → 0.399 s |
+| xor p500 (3 interleaved rounds) | 258.7 / 262.5 · 192.2 / 191.8 · 259.4 / 262.8 | **162.8 / 160.3 · 161.2 / 159.5 · 158.6 / 156.8** | **−39 %** (median of rounds) | 260.8 → **240.5** MiB | 0.342 → 0.319 s |
+| xor p1000 (3 interleaved rounds) | 509.9 / 526.8 · 473.8 / 484.1 · 492.3 / 504.2 | **321.2 / 282.9 · 294.6 / 277.2 · 289.1 / 272.7** | **−45 %** (median of rounds) | 431.3 → **391.7** MiB | 0.424 → 0.395 s |
 | xor3d p500 | 289.17 / 290.04 | **177.70 / 176.98** | **−39 %** | 291.3 → **264.7** MiB | 0.335 → 0.320 s |
 
-Executed IR ops per generation (dispatch calls counted on the interpreter): **10 767 → 8 150** at
-both populations (−24 %). Peak RSS *fell* while wall time fell: the winning restructuring moved the
-speciation distance table back inside a single `evoxc.scan` (one centre per iteration) after first
-measuring it as 20 hoisted top-level calls.
+The three interleaved rounds are the honest form: the base median itself drifts between 191.8 and
+262.8 ms at pop 500 depending on what else the shared box is doing, and the new side stays inside
+156.8–162.8 ms across all of them, so even the most conservative pairing is −17 % at pop 500 and
+−43 % at pop 1000, while the median-of-rounds pairing is −39 % / −45 %.
+
+Executed IR ops per generation (dispatch calls counted on the interpreter): **10 767 → 8 336** at
+pop 500 and **8 340** at pop 1000 (−23 %). Note the op count is not monotone with wall time in the
+last step: the `common/functions/agg.py` fold *added* 16 executed ops and made `forward` 26 % faster,
+so op count is a leading indicator, never a proxy — validate every change end to end.
+Peak RSS *fell* while wall time fell: the winning restructuring moved the speciation distance table
+back inside a single `evoxc.scan` (one centre per iteration) after first measuring it as 20 hoisted
+top-level calls.
 
 `before` = commit `a697531`; `after` = the tree carrying this file. Both cells per row were run in the
 same session, alternating trees, one fresh process per cell.
@@ -72,9 +80,22 @@ the 1 360 older notes claimed.
 `test/parity/` compares every kernel against `benchmarks/legacy_jax` bit-for-bit (53 passed).
 Independently, 3 generations of the full pipeline at pop 500 and pop 1000 hash identically to
 `a697531` over all four payload arrays, the `(P,)` fitness and the returned `State`
-(`fitness_history`, `SpeciesState` leaves, `randkey`, `generation`). Full suite: **548 passed,
-1 skipped, 0 failed** (the skip is the `requires_iree` case; baseline at `a697531` is 540 passed,
-1 skipped, and the 8 new tests are `test/unit/genome/test_distance_digest.py`).
+(`fitness_history`, `SpeciesState` leaves, `randkey`, `generation`). Full suite: **551 passed,
+0 failed, 0 skipped** (baseline at `a697531` with the same extras: 540 passed, 1 skipped; the 8 new
+tests are `test/unit/genome/test_distance_digest.py`, and the 3 `test/backends` IREE tests now pass
+because the `evoxc[iree]` extra is installed and the blocker below is fixed).
+
+## IREE stayed compilable (and one regression was caught and fixed)
+
+The compiled-backend portability gate is `pytest test/backends` (one XOR generation end to end on
+`iree` 3.11 llvm-cpu against numpy), not a StableHLO export audit and not a per-kernel `lower`:
+`iree-compile` SIGSEGVs (`Error code: -11`) on the mutation rewrite's frontier seed, and neither a
+clean export nor a successful standalone compile of `closes_cycle` or `execute_mutation` reproduced
+it — only the assembled generation graph did. `genome/operations/mutation/cycle.py` seeded a
+`while_loop`-carried value with a **boolean `scatter`**; the same scatter inside the loop body is
+fine. The seed is now a one-hot `equal`/`logical_and` (2 traced ops cheaper, bit-identical), and
+`pytest test/backends` passes 3/3 plus a real `backend_measure.py --backend iree --pop 100` run.
+Rule: **never seed a `while`-carried value with a `scatter`; the only IREE gate is the backend test.**
 
 ## How to reproduce
 
