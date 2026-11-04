@@ -47,6 +47,7 @@ Sentinel contract (shared with :mod:`~tensorneat.common.tensorization`):
   in the same array.
 * ``NaN`` in a **float** array means "absent row" (``isnan(x[:, 0])``) or
   "not computed yet".
+
 Mutation scope: :func:`mutate_float` and :func:`mutate_int` are the standalone
 public mutation kernels of this module (exported by ``common.__init__``).
 The genome attribute-mutation path is
