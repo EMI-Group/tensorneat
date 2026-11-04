@@ -219,7 +219,7 @@ A hand-built graph for this check must pass **every payload leaf as `evoxc.Tenso
 ## Routing Table
 | Path | Responsibility |
 |---|---|
-| `./gene/` | `BaseGene` attr-table machinery, the option mask/dispatch helpers (`option_masks`, `select_cascade`) plus node/conn gene families; `./gene/blocks.py` (543) holds the block-shaped attribute operators (`new_random_attrs`, `mutate_attrs`, `crossover_attrs`, `static_row`, `column`). |
+| `./gene/` | `BaseGene` attr-table machinery, the option mask/dispatch helpers (`option_masks`, `select_cascade`) plus node/conn gene families; `./gene/blocks.py` (873) holds the block-shaped attribute operators (`new_random_attrs`, `mutate_attrs`, `crossover_attrs`, `static_row`, `column`). |
 | `./gene/node/` | `BaseNode`, `DefaultNode`, `BiasNode`, `OriginNode`: key/attr layout, `NodeOperands` (per-pass option masks, shared rank-0 zero, `needs_has_valid`), `combine`, activation choice, identity/zero attrs, width-aware `column_of`. |
 | `./gene/conn/` | `BaseConn`, `DefaultConn`, `OriginConn`: per-edge message (a bare `multiply` on pre-sanitised values), `ConnOperands`, optional `historical_marker` (homology across genomes is the allocator's responsibility). |
 | `./operations/` | Batched mutation / crossover / distance contracts, the shared packed-identity alignment, and the in-degree invariant. |
