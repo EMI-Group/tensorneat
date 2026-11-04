@@ -9,7 +9,7 @@ The layer's own work is one population digest plus `2 · ceil(species_size / 4)`
 
 ## Layout (five files, each under 1000 lines)
 `species.py` — `SpeciesState` plus `SpeciesController`: the documented, traced-facing methods and the species algebra, each delegating its tensor body to `_kernels.py`.
-`_kernels.py` — plain graph helpers (no `@evoxc.defn`, no state): spawn allocation, block layout, parent pairing, membership, sort/prefix-sum primitives, the export-safe write/constant primitives (`scatter_row`, `static_i32`/`static_f32`, `reversed_index`), `gated` (the static lazy-row gate) and the two speciation scans.
+`_kernels.py` — plain graph helpers (no `@evoxc.defn`, no state): spawn allocation, block layout, parent pairing, membership, sort/prefix-sum primitives, the export-safe write/constant primitives (`scatter_row`, `first_centre_table`, `static_i32`/`static_f32`, `reversed_index`), `gated` (the static lazy-row gate) and the two speciation scans.
 `_distance.py` — `DistanceRows` (the digest-backed, population-shaped `distance_fn` `speciate` consumes) and the `repeat_leading` tiling primitive.
 `_validation.py` — host-side configuration validators shared with `neat.py` (`positive_int`, `non_negative_int`, `unit_interval`, `positive_float`), each raising `TensorNEATError` with the parameter name.
 `neat.py` — `_sanitize_fitness` and `NEAT`: setup, ask/transform/forward, the `tell` algebra, `_batched` chunking, host-side `show_details`.
@@ -30,7 +30,7 @@ Private members: `_sanitize_fitness` and `_finite_bound` (module functions), `_s
 `update_species(state, fitness) -> (state, winner (P,), loser (P,), elite_mask (P,))`; it owns the generation's first `evoxc.random.split` and stores the advanced key back into `state.randkey`.
 `speciate(state, distance_fn, pop=None) -> State`; `distance_fn` is any callable `(state, centre_payload, pop) -> (P,)` or, for a centre payload of `species_size` rows, `(S, P)` — `_distance.DistanceRows` provides both forms; the population comes from `pop`, else from the `"pop"` state entry, else from the four split payload entries, else `TensorNEATError`.
 Private: `_species_fitness`, `_stagnation`, `_cal_spawn_numbers_by_rank`, `_cal_spawn_numbers_by_fitness`, `_pair_parents(species_state, selection_key, spawn_number, fitness)`, `_block_layout(spawn_number) -> (loc, idx_in_block)`, `_membership`, static `_population(state, pop=None)`, static `_gather_species(species_state, order)`, static `_sort_desc_legacy(x, axis=-1)`, static `_prefix_sum_exclusive(values)`.
-Module helper `_first_centre_table(species_size, row, fill, dtype)` (plain function, `species.py`) builds a generation-0 centre table as `concatenate([reshape(row, (1,) + row.shape), constant fill block])`.
+`_kernels.first_centre_table(species_size, row, fill, dtype)` (imported by `species.py` as `_first_centre_table`) builds a generation-0 centre table as `concatenate([reshape(row, (1,) + row.shape), constant fill block])`.
 Module constant `SPAWN_MODES = ("rank", "fitness")`.
 
 `DistanceRows(genome, digest, population, pop_size)` — `_distance.py`, created per generation inside `NEAT.tell`:
@@ -103,7 +103,7 @@ The v1 exporter accepts only the spellings below — a new kernel has to pick on
 - No `tril`/`triu`, no `flip`, no `cumsum`, no `iota` — deferred/unmapped in v1.
   Static tables are baked as graph constants with `static_i32`/`static_f32` (one `constant` op each, bit-identical because the entries are exact index/`0`/`1` values): the gate matrix of `prefix_sum_exclusive` is `static_f32(np.tril(np.ones((S, S)), -1))`, and the reversal of `block_layout` is `gather(x, reversed_index(S), axis=0)`.
 - Supported and in use: `gather` (single axis, static indices), `argsort`, `select`, `concatenate`, `constant`, `reshape`, `dot`, `argmax`/`argmin`, the `random_*` family, and `while`/`if` regions.
-- A table whose rows are all written anyway is not a scatter: the generation-0 centre tables are `concatenate([reshape(row, (1,) + row.shape), constant fill block])` (`_first_centre_table` in `species.py`), which also exports at rank 3.
+- A table whose rows are all written anyway is not a scatter: the generation-0 centre tables are `concatenate([reshape(row, (1,) + row.shape), constant fill block])` (`_kernels.first_centre_table`, used by `SpeciesController.setup`), which also exports at rank 3.
 - `scan` stacks its per-step *outputs* along a new leading axis, so returning a whole `(S, …)` table from a scan body becomes a rank-4 scatter inside the desugared `while`; both speciation scans therefore return only their small per-step value (`assign` in scan 1, `create` in scan 2).
 - Unsigned integer dtypes (`uint32`/`uint64`) are outside iree's declared dtype set — a graph is expected to use `int32`/`int64` only (the sibling `genome`/`common` nodes own their remaining occurrences).
 The numpy reference interpreter accepts every rank, so a violation is invisible until `evoxc.lower(graph, backend="iree")`; the audit in `## Test Strategy` is part of verification, not an optional extra.

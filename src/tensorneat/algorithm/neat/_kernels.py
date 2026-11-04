@@ -202,6 +202,35 @@ def scatter_row(table: Any, slot: Any, update: Any) -> Any:
     return evoxc.reshape(written, shape)
 
 
+def first_centre_table(species_size: int, row: Any, fill: Any, dtype: Any) -> Any:
+    """``(S,) + row.shape`` centre table whose row ``0`` is ``row``, rest ``fill``.
+
+    Generation 0 has exactly one live species, whose centre is the first
+    individual, so every trailing row is the genome's own dead-slot padding
+    (``0`` for the integer key arrays, ``NaN`` for the float attribute arrays).
+
+    Written as a ``concatenate`` of the reshaped first row with a constant fill
+    block rather than as a row ``scatter``: every row is written here, so there
+    is nothing to mask, and the StableHLO v1 exporter rejects a ``scatter`` on a
+    rank-3 operand along axis 0 (the ``(S, N, NA)``/``(S, E, CA)`` tables) while
+    a ``concatenate`` exports at every rank.
+
+    Args:
+        species_size (int): Static species slots ``S`` (``>= 1``).
+        row: One individual's gene array, rank ``1`` (``node_keys``) or ``2``
+            (attributes / conn keys), without a species axis.
+        fill: Padding value for the dead rows.
+        dtype: Static dtype of the table (``evoxc.int32`` or ``evoxc.float32``).
+
+    Returns:
+        ``(S,) + row.shape`` tensor, row ``0`` equal to ``row``.
+    """
+    head = evoxc.reshape(row, (1,) + tuple(row.shape))
+    if species_size == 1:
+        return head
+    tail = enp.full((species_size - 1,) + tuple(row.shape), fill, dtype=dtype)
+    return enp.concatenate([head, tail], 0)
+
 def membership(species_keys: Any, idx2species: Any) -> Any:
     """``(S, P)`` mask ``member[i, p] = idx2species[p] == species_keys[i]``.
 
