@@ -242,8 +242,9 @@ Every cut is value-identical (`tobytes()` against `execute_distance`, the ten-ge
 Nothing else in `measure` is hoistable: the body already emits no `constant` op and every centre-independent table lives in `MeasureStatics`/`AttrStatics`; the one exception is `_key_row_matches`' flat view of `digest_key_cols`, worth one op per call for marker-column genes only (`OriginConn`) and nothing for the shipped `DefaultConn`, and hoisting it needs a new `MeasureStatics` field, i.e. a digest-leaf change.
 
 ## Known Issues
-`measure_alignment` casts the inverse permutation over all `2M + 1` columns (`digest.py:699-703`) although the slice keeps only the `M` centre columns: slicing the `int64` inverse first and casting second is value-identical at the same op count and removes one `(P, 2M + 1)` `int32` pass per family per call.
-`_key_row_matches` reshapes `digest_key_cols` to its flat view per call (`digest.py:828`), which is centre-independent and could travel in the family's `MeasureStatics` (marker-column genes only, 1 op/call).
+No open correctness or contract issue in this node: `measure`/`prepare` are bit-identical to `execute_distance` on every payload (live pipeline payloads with keys outside `[0, key_span)` included), the generation graph's StableHLO export carries no deferred op, no unsigned dtype and only permitted `scatter` forms, and the three shipped suites are green.
+The only measured-but-declined opportunities are the value-identical op diet and the `_key_row_matches` hoist recorded in `## Rejected`; both are below the 3 % bar, so no part of the per-call body is unaccounted for.
+The route, not the kernel, holds this node's remaining cost: the live call site tiles each species centre to `pop_size` rows, so all ~40 `measure` calls per generation take the sort-bound merge instead of the sort-free dense route (`## Dense versus merge at the live call site`, `## Cross-node needs`).
 
 ## Cross-node needs (measured here, owned elsewhere)
 `algorithm/neat/_distance.py` (`DistanceRows`, 188 generation ops) and `genome/base.py::prepare_distance/measure_distance` should thread **one `ConstantPool` per generation** into `prepare`/`measure`; the pool already accepts it, and the ~163 constants the distance files still emit per generation would collapse to the handful of distinct values (~150 ops).
