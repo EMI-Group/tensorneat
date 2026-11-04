@@ -35,10 +35,10 @@ def _column_view(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTens
     """Read one static column of the last axis, keeping the width-1 axis.
 
     ``tensor[..., index:index + 1]`` spelled explicitly (evoxc's static indexing
-    rejects ``Ellipsis``/``None``): one ``slice`` view, no ``reshape``. A kernel that
-    reads every column of one block can broadcast on that ``(..., 1)`` axis and pay a
-    single trailing ``reshape`` instead of one per read (:meth:`BaseGene.distance`
-    does).
+    rejects ``Ellipsis``/``None``): one ``slice`` view, no ``reshape``. A width-1 view
+    feeds an elementwise op directly, so a per-column kernel pays one ``slice`` per
+    column and a single trailing ``reshape`` that drops the width axis
+    (:meth:`BaseGene.distance` is written that way).
 
     Args:
         tensor: Any traced tensor whose last axis is the gene column axis.
@@ -63,9 +63,9 @@ def column(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
     differentiable, which is what ``Genome.grad`` needs for every gene attribute.
 
     The read is :func:`_column_view` (one ``slice`` view) plus the trailing
-    ``reshape``; a kernel reading every column of one block should use
-    :func:`_column_view` and reshape once at the end, which is where the block form
-    of :meth:`BaseGene.distance` wins its ops back.
+    ``reshape``; a kernel that wants the bare column for an elementwise op uses
+    :func:`_column_view` and pays one trailing ``reshape`` at the end, which is how
+    :meth:`BaseGene.distance` accumulates its rows.
 
     Two ops is the floor this ``evoxc`` offers, and it is a cheap floor -- measured on
     the reference interpreter, not assumed. ``x[..., i]`` (an ``int`` index) lowers to
@@ -732,31 +732,30 @@ class BaseGene(StatefulBaseClass):
     ) -> evoxc.SymbolicTensor:
         """Attribute part of the compatibility distance between two aligned genes.
 
-        Sums over the attribute axis: ``|delta|`` for float specs and ``!=`` for int
-        specs, so a changed option index contributes exactly 1.
+        Sums over the attribute axis, left to right in ``attr_specs`` order (the float32
+        summation order is observable): ``|delta|`` for a float spec and ``!=`` for an int
+        spec, so a changed option index contributes exactly 1.
 
-        One block ``subtract`` is shared by the two float columns and every float
-        column is read as a width-1 *view* (:func:`_column_view`: one ``slice``, no
-        ``reshape``), so an attribute table with only float columns costs one
-        ``subtract`` plus one ``slice`` per column and one trailing ``reshape`` that
-        drops the width axis.
-        Measured on the reference interpreter (pop 500 payload at generation 5, one
-        fresh process per run): the node gene on ``(500, 50, 4)`` costs 17 ops /
-        0.235 ms against 27 ops / 0.300 ms for the old per-read-:func:`column` form,
-        and the conn gene on ``(500, 100, 1)`` 4 ops / 0.065 ms against 6 ops /
-        0.073 ms; end to end the executed ops attributed to the ``genome/gene``
-        source bucket drop from ~1450 to ~970 per ``Pipeline.step``.
-        The fully blocked form (``subtract`` + ``abs`` + indicator over the whole
-        ``(*shape, attr_width)`` block, one static kind mask, one ``select``, one
-        last-axis ``reduce_sum``) is 9 ops but 0.73 ms per call -- 3x the wall clock
-        of this form -- and neither a block ``abs`` (1 op fewer) nor a blocked
-        indicator for a contiguous int run (2 ops fewer) helped (0.250 / 0.328 ms), so
-        the per-column views stay.
-        An option-index column still compares the parents directly (two ``slice``
-        views plus ``not_equal`` and ``cast``), one op more than the difference form,
-        because ``inf - inf`` is NaN while ``not_equal(inf, inf)`` is False: the
-        difference form is value-identical only for finite values and NaN padding,
-        and this kernel must be exact for every input.
+        Every term is computed on **one attribute column at a time**, because what this
+        kernel pays for is the strided read of a column inside a ``(*shape, A)`` block, not
+        the number of traced ops. A float column is one ``subtract`` of the two columns'
+        width-1 views plus ``abs``, which leaves both operands of the following ``add``
+        contiguous; an int column is one ``not_equal`` of the two views, and its bool result
+        is added **as a bool** -- ``evoxc.add`` promotes ``bool`` to ``float32`` exactly
+        (0/1 are representable, so the promoted sum is bit-identical to adding an explicit
+        ``cast``) and saves that cast op. The int column uses ``not_equal`` and not
+        ``|delta|`` because ``inf - inf`` is NaN while ``not_equal(inf, inf)`` is False:
+        this kernel must be exact for every input.
+        Measured on the reference interpreter (payload at generation 5, one fresh process
+        per pop): the node gene on ``(500, 50, 4)`` 545 -> 437 us and on ``(1000, 50, 4)``
+        943 -> 772 us; the conn gene on ``(500, 100, 1)`` 156 -> 149 us, where a lone
+        attribute column is its own width-1 view and needs no slice at all.
+        The alternatives measured worse: one ``subtract`` over the whole block plus a
+        per-column ``abs`` of its strided views (1.24x, the form that trades strided reads
+        for a wide pass), one ``abs`` over the whole block plus two slices (1.22x), a
+        contiguous same-kind run compared as one block (1.5x), and a fully blocked
+        ``select`` + last-axis ``reduce_sum`` (3x: an innermost-axis reduce is 10-20x an
+        ordinary op regardless of how few ops it takes).
 
         Args:
             state: Host configuration container.
@@ -768,23 +767,30 @@ class BaseGene(StatefulBaseClass):
             attribute column has no attribute distance at all, so every pair is
             ``0`` there (its compatibility distance is structural only).
         """
+        shape = tuple(attrs1.shape[:-1])
         if not self.attr_specs:  # no column to compare: the attribute distance is 0
-            return enp.zeros(tuple(attrs1.shape[:-1]), dtype=evoxc.float32)
-        delta = evoxc.subtract(attrs1, attrs2)
+            return enp.zeros(shape, dtype=evoxc.float32)
+        if len(self.attr_specs) == 1:
+            # A one-column table *is* its own width-1 view: no slice, no accumulation.
+            if self.attr_specs[0].kind == "float":
+                total = evoxc.abs(evoxc.subtract(attrs1, attrs2))
+            else:
+                total = evoxc.cast(evoxc.not_equal(attrs1, attrs2), evoxc.float32)
+            return evoxc.reshape(total, shape)
         total = None
-        # Left-to-right over ``attr_specs``: the float32 summation order is observable.
         for index, spec in enumerate(self.attr_specs):
             if spec.kind == "float":
-                term = evoxc.abs(_column_view(delta, index))
-            else:
-                term = evoxc.cast(
-                    evoxc.not_equal(
-                        _column_view(attrs1, index), _column_view(attrs2, index)
-                    ),
-                    evoxc.float32,
+                term = evoxc.abs(
+                    evoxc.subtract(_column_view(attrs1, index), _column_view(attrs2, index))
                 )
+            else:
+                term = evoxc.not_equal(
+                    _column_view(attrs1, index), _column_view(attrs2, index)
+                )
+                if total is None:  # the accumulator must start as float32, never bool
+                    term = evoxc.cast(term, evoxc.float32)
             total = term if total is None else evoxc.add(total, term)
-        return evoxc.reshape(total, tuple(attrs1.shape[:-1]))
+        return evoxc.reshape(total, shape)
 
     def hash(self, keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
         """Hash gene key rows for fast key alignment in crossover/distance.
