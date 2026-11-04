@@ -221,8 +221,8 @@ def node_keys_for_split(
     *by key* and charges non-homologous keys to the disjoint term, so a compact
     lowest-free policy inflates node homology across the population and
     collapses speciation (measured on XOR3d, pop 500: final best ``-0.25`` with
-    a peak of 3 species, against ``-8.74e-06`` with a peak of 19-20 species for
-    the spread).
+    a peak of 3 species, against ``-8.76e-06``, the ``-0.05`` target met at
+    generation 73, with a peak of 19-20 species for the spread).
 
     The window is only ``key_span - max_nodes`` keys wide -- ``max_conns`` at
     the default span -- so with ``pop_size`` above that width the wrapped
