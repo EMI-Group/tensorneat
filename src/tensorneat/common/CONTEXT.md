@@ -256,6 +256,22 @@ That off-by-`I` slice is legacy-identical (`benchmarks/legacy_jax/tensorneat_leg
 - `evoxc.slice(x, start, lengths)` takes per-axis tuples; `evoxc.reshape`/`transpose` are the only structural ops needed here.
 - An `@evoxc.defn` object is not callable: call `.fn` for a plain function (the tests bind `.fn` with `functools.partial`), or `evoxc.build` the `Defn` itself.
 
+## Scatter portability on `backend="iree"` (measured, IREE 3.11.0)
+**One index value feeds exactly one scatter.** That is the whole rule; everything below is why.
+`evoxc`'s StableHLO writer emits a flat write (`tools.flat_scatter_prepared`, `tools.masked_flat_scatter`) as a rank-1 axis-0 *scalar-window* scatter: operand `tensor<Rxi32>`, indices `tensor<nx1xi64>` (`convert` from the int32 block, then the range-normalize `compare`/`add`/`select`), updates `tensor<nxi32>`, `#stablehlo.scatter<update_window_dims = [], inserted_window_dims = [0], scatter_dims_to_operand_dims = [0], index_vector_dim = 1>`.
+IREE lowers that to `iree_linalg_ext.scatter dimension_map = [0]` whose `ins` wants the index tensor **collapsed to rank 1** (`tensor<nxi32>`), and it performs the collapse inside `iree-stablehlo-to-iree-input` as an `unrealized_conversion_cast` rather than a `tensor.collapse_shape`.
+When the same index SSA value (an explicitly shared block *or* two expressions IREE's CSE merges) is consumed by a **second** scatter, that materialization stays live and the pass aborts: `failed to legalize unresolved materialization from ('tensor<nx1xi32>') to ('tensor<nxi32>') that remained live after conversion`, reported at the source location of the second scatter.
+The emitted form itself is fine — a single scatter with the same shapes compiles in ~0.25 s at any size — so this is contextual, not a bad op spelling.
+Alternatives tried and rejected: the rank-2 axis-0 *row* form (operand `(R, 1)`, indices `(n, 1)`, `update_window_dims = [1]`) fails identically; the shape of the operand, the width, i32-vs-i64 indices and the presence of `while`/`if` regions or `sort` are irrelevant (bisected by deleting ops from the failing module — removing *either* of the two shared-index scatters makes the whole 7 164-line module compile, and so does giving one of them a distinct index expression).
+Consequences for this node: `incoming_table` writes `in_conn` and `in_src` through **one** scatter over a doubled `(P, 2*(N*K+1))` buffer (`tensorization._window_pair`); a new caller that wants several payloads in the same cells must do the same, never `flat_scatter_prepared` twice with one block.
+Other nodes' call sites that reuse one block for two scatters carry the same defect and need the same merge.
+Reproduction loop (seconds per iteration, no pipeline rebuild):
+1. monkeypatch `evoxc.build` with `g = evoxc.trace(fn, *specs); text = evoxc.lower(g, backend="iree").text()` and also call the original so the run continues;
+2. `iree.compiler.compile_str(text, target_backends=["llvm-cpu"], input_type="stablehlo")` — a failure reproduces from the text alone, and `str(exc)` carries the `iree-compile` diagnostics;
+3. to attribute a failure to an op, delete ops from the dumped module (replace each result with a fresh `func.func` argument of the same type) and recompile: a module that still fails is still a reproducer.
+Minimal reproducer (two scatters, one block): `P, R, N = 4, 68, 32`; `block = tools.prepare_flat_index(x, idx, trusted=True)`; `tools.flat_scatter_prepared(x, block, u1)` **and** `tools.flat_scatter_prepared(x, block, u2)` → `failed to legalize unresolved materialization from ('tensor<128x1xi64>') to ('tensor<128x1xi32>')`; with only the first call it compiles.
+End-to-end on this box (`DefaultGenome(num_inputs=2, num_outputs=1, ..., output_transform=ACT.sigmoid)` + `NEAT` + `XOR`, seed 42): pop 4 / species 2 / `max_nodes=4` / `max_conns=8` compiles the step graph in 7.4 s and pop 100 / species 10 / `max_nodes=12` / `max_conns=24` in 8.4 s; `setup` (its own ask graph) compiles in ~0.9 s; three generations of both configs reproduce the numpy backend bit-for-bit.
+
 ## Constraints
 - No `jax`/`torch`/`numpy.random` in graph code; randomness is `evoxc.random` stateless keys (`key(seed)`, `split`, `randint(key, shape, low, high)`, `uniform`, `normal`, `permutation`).
 - Files ≤ ~1000 lines; shared math lives here, never duplicated in `genome`/`algorithm`.
