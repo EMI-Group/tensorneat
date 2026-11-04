@@ -83,6 +83,7 @@ Suite output must be deterministic — a flaky test is a bug in the test, not a 
 | `./unit` | numpy-backend kernel/invariant suites, mirroring `../src/tensorneat/`. |
 | `./parity` | kernel equality vs the frozen legacy JAX library (marker `parity`). |
 | `./integration` | whole-`Pipeline` runs, determinism, rebuild, checkpointing (marker `slow`). |
+| `./backends` | compiled-backend (`iree`) end-to-end XOR run plus numpy/iree agreement; marker `requires_iree`, in no gate (`./backends/CONTEXT.md`). |
 | `./support` | shared runner, hand-built payloads and numpy oracles for the suites above. |
 | `./release_gate_no_jax.py` | import-hygiene gate on `tensorneat` (module file, collected by the conftest hook). |
 | `../src/tensorneat` | code under test — read-only, escalate changes to the parent. |
