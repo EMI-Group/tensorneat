@@ -24,8 +24,9 @@ which is exactly what ``argmax`` of the old match returned.
 
 The loop is a monotone set-growth relaxation on a **flat** frontier with one trailing dump
 column (``scatter`` is set-only, so a refused edge writes the dump instead of clearing a real
-node).  Growth is bounded by the node count, so termination is guaranteed by the set becoming
-stable — the static ``step < max_nodes`` term is a second, cheap cap.
+node).  The frontier only ever gains bits and the node count bounds it, so the set stabilises
+within ``max_nodes + 1`` hops: the "still growing" flag alone terminates the loop, with no
+iteration counter to carry (and no hop cap to fall back on).
 """
 
 import numpy as np
@@ -149,24 +150,22 @@ def _row_of(
     if narrow:
         remaining = evoxc.cast(remaining, evoxc.int32)
     # ``node_count - remaining`` is therefore the rank of the first node at or after the
-    # position; a trailing sentinel column keeps that index in range when no node follows (its
-    # key is I_INF + 1, so it never passes the hit test).
-    rank = evoxc.subtract(_static_constant(np.asarray(node_count)), remaining)
-    # One sentinel *element*, broadcast down the column: the value is static data with no
-    # per-individual content, so a materialised ``(P, 1)`` int64 column would only be a
-    # graph constant proportional to ``P``.
-    sorted_nodes = enp.concatenate(
-        [
-            evoxc.sort(node_enc, axis=1),
-            enp.broadcast_to(
-                _static_wide(np.asarray((I_INF + 1) << bits)), (pop_size, 1)
-            ),
-        ],
-        axis=1,
+    # position.  A rank of ``node_count`` means no node follows, and clamping it to the last
+    # row is exact: that only happens when every node sorts before the query, i.e. the query's
+    # key exceeds every node key, so the read-back node carries a *different* key and the hit
+    # test below rejects it (two different keys are a whole period apart, ``> radius``).
+    # Clamping is one ``minimum``; a trailing sentinel row would need its own constant, a
+    # broadcast and a ``concatenate``.
+    rank = evoxc.minimum(
+        evoxc.subtract(_static_constant(np.asarray(node_count)), remaining),
+        _static_constant(np.asarray(node_count - 1)),
     )
-    stride = node_count + 1
-    flat_nodes = enp.reshape(sorted_nodes, (pop_size * stride,))
-    offsets = _static_constant(np.arange(0, pop_size * stride, stride).reshape(pop_size, 1))
+    flat_nodes = enp.reshape(
+        evoxc.sort(node_enc, axis=1), (pop_size * node_count,)
+    )
+    offsets = _static_constant(
+        np.arange(0, pop_size * node_count, node_count).reshape(pop_size, 1)
+    )
     pick = enp.reshape(evoxc.add(rank, offsets), (pop_size * total,))
     node_at_rank = enp.reshape(evoxc.gather(flat_nodes, pick, axis=0), (pop_size, total))
     hit = evoxc.less(evoxc.abs(evoxc.subtract(ordered, node_at_rank)), c_radius)
@@ -225,10 +224,11 @@ def closes_cycle(
     Notes:
         Both endpoints of every existing edge plus both endpoints of the candidate edge are
         resolved in one :func:`_row_of` merge, so the whole predicate pays that join once.
-        One ``while_loop`` then carries the flat frontier, the iteration counter and the
-        "still growing" flag; its body is four ``O(P*E)`` ops (gather, ``and``, ``select``,
-        ``scatter``) plus the two-op growth test, and it runs once per real hop.  The batch
-        axis is written explicitly — no ``vmap`` over the region.
+        One ``while_loop`` then carries the flat frontier and the "still growing" flag; its
+        body is three ``O(P*E)`` ops (gather, ``select``, ``scatter``) plus the one-op growth
+        test, and it runs once per real hop.  The absent-endpoint term is folded into the
+        gather's index once, outside the region, instead of into a per-hop ``logical_and``.
+        The batch axis is written explicitly — no ``vmap`` over the region.
     """
     pop_size, node_count = node_keys.shape
     edge_count = conn_keys.shape[1]
@@ -274,8 +274,14 @@ def closes_cycle(
         ),
         (edge_positions,),
     )
-    valid_flat = enp.reshape(edge_valid, (edge_positions,))
-    # Seed the frontier at the destination: a one-hot row, then a zero dump column.
+    # An edge with an absent endpoint resolves to a row the hit test rejected; redirecting it
+    # to the dump column *once* here folds the ``valid`` term into the hop's gather (the dump
+    # column is never written, so it always reads ``False``) and saves one ``O(P*E)`` boolean
+    # op on every hop.  ``select`` is loop-invariant, the ``logical_and`` it replaces was not.
+    src_flat = evoxc.select(
+        enp.reshape(edge_valid, (edge_positions,)), src_flat, dump_flat
+    )
+    # Seed the frontier at the destination: a one-hot row plus one appended dump column.
     seeded = evoxc.logical_and(
         evoxc.equal(
             enp.reshape(enp.arange(0, node_count, dtype=evoxc.int32), (1, node_count)),
@@ -284,42 +290,26 @@ def closes_cycle(
         dst_hit,
     )
     frontier = enp.reshape(
-        enp.concatenate(
-            [seeded, fill((pop_size, 1), False, dtype=evoxc.bool_)], axis=1
-        ),
-        (pop_size * width,),
+        evoxc.pad(seeded, ((0, 0), (0, 1))), (pop_size * width,)
     )
-    limit = _static_constant(np.asarray(node_count, dtype=np.int32))
-    one = _static_constant(np.asarray(1, dtype=np.int32))
-
     def cond(carried):
-        """Continue while the frontier gained a node and the hop cap is not reached."""
-        step, _frontier, growing = carried
-        return evoxc.logical_and(growing, evoxc.less(step, limit))
+        """Continue while the frontier gained a node."""
+        _frontier, growing = carried
+        return growing
 
     def body(carried):
         """One hop: every edge whose source is reached marks its destination."""
-        step, frontier, _growing = carried
-        live = evoxc.logical_and(
-            evoxc.gather(frontier, src_flat, axis=0), valid_flat
-        )
+        frontier, _growing = carried
+        live = evoxc.gather(frontier, src_flat, axis=0)
         grown = evoxc.scatter(
             frontier, evoxc.select(live, dst_flat, dump_flat), live, axis=0
         )
-        return (
-            evoxc.add(step, one),
-            grown,
-            evoxc.reduce_max(evoxc.not_equal(grown, frontier), axes=0),
-        )
+        return grown, evoxc.reduce_max(evoxc.not_equal(grown, frontier), axes=0)
 
-    _, frontier, _ = evoxc.while_loop(
+    frontier, _ = evoxc.while_loop(
         cond,
         body,
-        (
-            enp.zeros((), dtype=evoxc.int32),
-            frontier,
-            enp.full((), True, dtype=evoxc.bool_),
-        ),
+        (frontier, enp.full((), True, dtype=evoxc.bool_)),
     )
     # Read the frontier at the candidate source's slot: flat index = row offset + column.
     src_slot = enp.reshape(evoxc.add(src_row, offsets), (pop_size,))
