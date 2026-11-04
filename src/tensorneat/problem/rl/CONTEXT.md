@@ -106,6 +106,7 @@ Op-count attribution of one `cartpole_p100` generation: 27,802 ops (88 %) execut
 Comparability: `xor_p100` is 3,922 ops / ≈37 ms because one generation runs **one** population forward pass at `P*S=400` rows, while CartPole runs **200** sequential forward passes of ~80 ops each plus 54 dynamics ops per step — the ~10× is the 200 policy queries, not a per-gene or per-connection blow-up.
 
 Pipeline level (`pop_batch_size` unset, one generation per `step`, numpy backend, CPython 3.12): `step` median, the same `step` with `problem.evaluate` monkeypatched to zeros, the difference (the evaluate share) and this node's rollout share of it.
+Every `step` row below predates the prepared-query hoist (they measure a generation whose prelude is re-derived per timestep), so the CartPole rows are ≈1.25× their current value; the committed-protocol after numbers are in the paragraph above.
 
 | env | pop | max_step | R | step ms | no-evaluate ms | evaluate share ms | rollout share of it | build s |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
