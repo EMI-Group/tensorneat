@@ -21,10 +21,13 @@ generation; only the cycle-detecting fallback of :func:`node_levels` can reach
 
 ``evoxc`` constraints that shape this module: no ``cumsum`` (a StableHLO export
 deferral, hence the ``cc`` counting trick), no scatter-with-reduce, no batched
-``take_along_axis`` (hence flat indexing), no ``where`` (``evoxc.select``), and
-out-of-range indices raise instead of clamping — every table index is sanitized
-*and* masked. Everything here is in-graph: no host round-trip, no ``.numpy()``
-and no Python ``if`` on a traced value (only on statics).
+``take_along_axis`` (hence flat indexing), no ``where`` (``evoxc.select``), no
+unsigned dtype anywhere in the graph (iree's declared set is signed integers,
+floats and bool only, so a range test is two signed comparisons — see
+:func:`_key_indices`), and out-of-range indices raise instead of clamping —
+every table index is sanitized *and* masked. Everything here is in-graph: no
+host round-trip, no ``.numpy()`` and no Python ``if`` on a traced value (only on
+statics).
 """
 
 from typing import Any, NamedTuple
@@ -173,12 +176,21 @@ def _key_indices(keys: Any, key_span: int) -> tuple:
     ``NaN``/``I_INF`` keys and keys outside ``[0, key_span)`` map to ``0`` before the
     gather (evoxc raises on out-of-range indices) and report ``False`` in the mask,
     so the caller never reads a sanitized cell by accident.
+
+    The integer branch is the two-comparison range test ``0 <= key < key_span`` in
+    the key's own **signed** dtype, the same shape as the float branch below. The
+    one-comparison alternative — ``cast(keys, uint32) < key_span``, where a negative
+    key becomes huge — is not portable: ``uint32`` arithmetic cannot be executed by
+    the iree backend (its declared dtype set is signed integers, floats and bool
+    only), so no graph this package builds may contain it. Two signed comparisons
+    are bit-identical to that trick on numpy (a negative key fails ``>= 0``, a
+    padding ``I_INF`` fails ``< key_span``) and cost one extra elementwise op.
     """
     zero = enp.zeros(tuple(keys.shape), dtype=keys.dtype)
     if keys.dtype.kind in ("i", "u"):
-        in_range = enp.less(
-            evoxc.cast(keys, evoxc.uint32),
-            _scalar_constant(key_span, evoxc.uint32),
+        in_range = enp.logical_and(
+            enp.greater_equal(keys, zero),
+            enp.less(keys, _scalar_constant(key_span, keys.dtype)),
         )
         return evoxc.cast(evoxc.select(in_range, keys, zero), evoxc.int32), in_range
     in_range = enp.logical_and(
