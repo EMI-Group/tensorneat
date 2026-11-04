@@ -111,7 +111,7 @@ Every graph this node contributes must survive `evoxc`'s StableHLO v1 exporter: 
 The v1 exporter accepts only the spellings below — a new kernel has to pick one of them:
 - `scatter`: rank-1 `axis=0`, or a rank-2 row/column write (`axis` 0 or 1); any wider operand raises `BackendError` naming the rank.
   A per-slot table write goes through `_kernels.scatter_row(table, slot, update)`: it flattens the trailing axes into one row length `R`, writes exactly the cells of a rank-2 `axis=0` row scatter and reshapes back (a rank-2 table short-circuits to a plain `evoxc.scatter`).
-  Both speciation scans and their four payload writes use it; `keys_ext` (rank-1) and the `node_keys (S, N)` table stay on plain `evoxc.scatter`.
+  Both speciation scans use it for their `(S, N)`/`(S, N, NA)`/`(S, E, CK)`/`(S, E, CA)` table writes — scan 1 currently writes the four centre rows, and scan 2 no longer does (it writes the rank-1 `seed_table`/`created_mask` with plain `evoxc.scatter` and the created rows are rebuilt with `gather`+`select` after the scan); `keys_ext` (rank-1) and the `node_keys (S, N)` table stay on plain `evoxc.scatter`.
 - No `tril`/`triu`, no `flip`, no `cumsum`, no `iota` — deferred/unmapped in v1.
   Static tables are baked as graph constants with `static_i32`/`static_f32` (one `constant` op each, bit-identical because the entries are exact index/`0`/`1` values): the gate matrix of `prefix_sum_exclusive` is `static_f32(np.tril(np.ones((S, S)), -1))`, and the reversal of `block_layout` is `gather(x, reversed_index(S), axis=0)`.
 - Supported and in use: `gather` (single axis, static indices), `argsort`, `select`, `concatenate`, `constant`, `reshape`, `dot`, `argmax`/`argmin`, the `random_*` family, and `while`/`if` regions.
