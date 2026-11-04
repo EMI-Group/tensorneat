@@ -2,7 +2,7 @@
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from
 > `benchmarks/results/iree.json` at 2026-11-02T07:29:26+00:00. It must not be hand-edited:
-> Re-rendered from that same JSON at 2026-11-04T07:23:00+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-04T07:25:30+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *Historical pre-fix record, superseded by `BACKENDS.md` — the current measured `iree` evidence, where the backend lowers, compiles and runs every shipped case. Every case below errored in `Pipeline.setup` before generation 0, so no row here is current. The measured CPU contract is `RESULTS.md` (numpy reference backend).*
@@ -201,7 +201,7 @@ measured row.
 
 ```bash
 # regenerate the committed report: the literal command of this run
-python benchmarks/run_benchmark.py --impl new --backend iree --cases all --generations 2 --warmup 1 --repeats 1 --json benchmarks/results/iree.json --out benchmarks/iree.md --report-title 'TensorNEAT benchmark — IREE backend attempt (llvm-cpu)' --report-note Every case errors in '`Pipeline.setup`' before generation '0;' see '`BACKENDS.md`' for the failure signature and the minimal reproducer. The measured CPU contract is '`RESULTS.md`' '(numpy' reference 'backend).'
+python benchmarks/run_benchmark.py --impl new --backend iree --cases all --generations 2 --warmup 1 --repeats 1 --json benchmarks/results/iree.json --out benchmarks/iree.md --report-title 'TensorNEAT benchmark — IREE backend attempt (llvm-cpu)' --report-note 'Every case errors in `Pipeline.setup` before generation 0; see `BACKENDS.md` for the failure signature and the minimal reproducer. The measured CPU contract is `RESULTS.md` (numpy reference backend).'
 
 # full matrix, both implementations on the primary backend
 python benchmarks/run_benchmark.py --impl both --backend iree --cases all --generations 2 --warmup 1 --repeats 1 --threads 0
