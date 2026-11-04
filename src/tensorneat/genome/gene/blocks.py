@@ -33,8 +33,9 @@ Behaviour is unchanged; what is hoisted is only the *shape* of the computation:
   and every entry keeps an independent sample.
 * An ``"int"`` column (an option index) is uniform over ``range(len(options))`` on
   creation and on a ``replace_rate`` hit, and never receives Gaussian noise.
-* ``NaN`` (an absent gene row) is restored by a final ``isnan`` select, so mutation
-  never revives padding and never reorders it.
+* ``NaN`` (an absent gene row) is never written: the re-draw branch's mask is
+  restricted to the live (non-``NaN``) entries, so mutation neither revives padding
+  nor reorders it, and no attribute-block pass is spent restoring it afterwards.
 
 Degenerate specs are simplified statically, which is exact rather than approximate:
 a zero ``mutate_rate``/``replace_rate`` removes its branch (a probability-0 branch
@@ -257,10 +258,11 @@ def _parameter_table(
 ) -> evoxc.SymbolicTensor:
     """Materialise a per-column parameter table at the full block shape.
 
-    Per-column parameters (mutation cutoffs, clip bounds) differ only along the
-    attribute axis, but a *broadcast* ``(1, ..., 1, attr_width)`` operand is several
-    times slower to consume in the reference interpreter than a materialised block,
-    so the table is expanded once as a graph constant.
+    Per-column parameters (the clip bounds; the mutation cutoffs compare per column
+    instead, see :func:`_mask_block`) differ only along the attribute axis, but a
+    *broadcast* ``(1, ..., 1, attr_width)`` operand is several times slower to consume
+    in the reference interpreter than a materialised block, so the table is expanded
+    once as a graph constant.
     The values are host constants, hence ``evoxc.constant``.
 
     When every column shares the same value (the only possibility for a single-column
@@ -300,6 +302,45 @@ def _assemble(
     if width == 1:
         return columns[0]
     return evoxc.concatenate(list(columns), axis=len(columns[0].shape) - 1)
+
+
+def _mask_block(
+    columns: Sequence[evoxc.SymbolicTensor],
+    cutoffs: Sequence[float],
+    scalars: "_ScalarPool",
+) -> evoxc.SymbolicTensor:
+    """Select the entries whose gate falls below their own column's cutoff.
+
+    One ``less`` per attribute column against a **rank-0** pooled cutoff, then one
+    join of the mask columns -- rather than one join of the gates plus a single
+    ``less`` against a ``(*batch, attr_width)`` cutoff table. Both forms compare each
+    gate against the same ``float32`` constant (the table stores ``float32(cutoff)``,
+    exactly the pooled scalar's value), so every mask entry is bit-identical.
+
+    The per-column form is the one that pays: in the reference interpreter a
+    comparison whose second operand is a stride-0 broadcast of a rank-0 constant is
+    3-4x slower per element than the same comparison against a bare rank-0 scalar
+    (measured inside the ``execute_mutation`` graph at ``(500, 50, 4)``: 0.068 ms per
+    op against the broadcast table versus 0.010 ms per column against the scalar),
+    which more than covers the extra joins, and it bakes no ``(*batch, attr_width)``
+    graph constant.
+
+    Args:
+        columns: One ``(*batch_shape, 1)`` gate per attribute column, in column order.
+        cutoffs: One probability cutoff per attribute column, same order.
+        scalars: The pass's rank-0 constant pool.
+
+    Returns:
+        ``(*batch_shape, attr_width)`` bool mask; a single-column family's mask is
+        its own column, so no join op is traced for it.
+    """
+    masks = [
+        evoxc.less(column, scalars.f32(cutoff))
+        for column, cutoff in zip(columns, cutoffs)
+    ]
+    if len(masks) == 1:
+        return masks[0]
+    return evoxc.concatenate(masks, axis=len(masks[0].shape) - 1)
 
 
 def _resolved(
@@ -649,18 +690,19 @@ def mutate_attrs(
     Per column: add ``N(0, mutate_power)`` noise with probability ``mutate_rate``
     (float only), then with probability ``replace_rate`` re-draw from the init
     distribution (float) or uniformly from ``options`` (int); floats are clipped
-    into their bounds. The three branches are selected by one ``U[0, 1)`` gate
-    block against two per-column cutoff tables, so the same two ``select`` ops serve
-    every column, and a ``NaN`` entry (absent gene row) is restored by the final
-    ``isnan`` select -- mutation never revives padding.
+    into their bounds. The gate is drawn per column, so each column's mask is one
+    rank-0 comparison (:func:`_mask_block`) and the two ``select`` ops that resolve
+    the branches cover the whole attribute block; an absent gene row (``NaN``) is
+    never written, because the re-draw mask is folded together with the liveness
+    mask -- mutation never revives padding.
 
     Two of the three branches are dropped statically when no column can reach them:
     a cutoff that is not positive is never above ``U[0, 1)`` (so the branch's mask is
-    all-``False`` and the ``select`` it feeds is the identity), and the ``isnan``
-    guard only protects the re-drawn branch, because a perturbed entry is ``NaN + x``
-    -- still ``NaN``. The draws are unchanged either way: the key split is fixed by
-    ``attr_width`` and a column whose gate or candidate cannot be observed traces no
-    draw, exactly like the full form.
+    all-``False`` and the ``select`` it feeds is the identity), and the liveness mask
+    only protects the re-drawn branch, because a perturbed entry is ``NaN + x``
+    -- still ``NaN``, and the clip propagates ``NaN``. The draws are unchanged either
+    way: the key split is fixed by ``attr_width`` and a column whose gate or candidate
+    cannot be observed traces no draw, exactly like the full form.
 
     Args:
         key: Rank-0 ``evoxc.random`` key for the whole batch.
@@ -760,11 +802,19 @@ def mutate_attrs(
             # Nothing on this column can change, so the gate is not drawn (the draw
             # would never be consulted) and a constant stands in for it.
             gates.append(pool.column(0.0))
-    gate = _assemble(gates, width)
     mutated = attrs
     if any(replace_live):
+        # The absent-row guard is folded into the re-draw mask instead of a
+        # trailing ``select(isnan(attrs), attrs, mutated)``: a padded row is then
+        # never written, which is the same value as restoring it afterwards, and
+        # it costs one ``logical_and`` on the mask instead of a full attribute
+        # block pass. Only this branch can revive a NaN row -- a perturbed entry
+        # is ``NaN + x``, which stays NaN, and every other entry is ``attrs``.
         mutated = evoxc.select(
-            evoxc.less(gate, _parameter_table(replace_cutoff, shape, scalars)),
+            evoxc.logical_and(
+                _mask_block(gates, replace_cutoff, scalars),
+                evoxc.equal(attrs, attrs),
+            ),
             _assemble(_resolved(replacements, pool), width),
             attrs,
         )
@@ -773,16 +823,11 @@ def mutate_attrs(
             if noises[index] is None and replacements[index] is not None:
                 noises[index] = replacements[index]
         mutated = evoxc.select(
-            evoxc.less(gate, _parameter_table(perturb_cutoff, shape, scalars)),
+            _mask_block(gates, perturb_cutoff, scalars),
             evoxc.add(attrs, _assemble(_resolved(noises, pool), width)),
             mutated,
         )
-    mutated = _clip_block(mutated, specs, scalars)
-    if any(replace_live):
-        # Only the re-drawn branch can revive a NaN row: a perturbed entry is
-        # ``NaN + x``, which stays NaN, and every other entry is ``attrs`` itself.
-        mutated = evoxc.select(evoxc.isnan(attrs), attrs, mutated)
-    return mutated
+    return _clip_block(mutated, specs, scalars)
 
 
 def crossover_attrs(
