@@ -43,6 +43,14 @@ Every number comes from one worker run of one `(case, impl, backend, repeat)` tu
 - Accelerator numbers: the contract is CPU; `--backend iree|xla|tvm` rows are informational.
 - Import time and visualization/codegen cost (only `rss_after_import_mb` is recorded).
 - CartPole against the legacy side: the pre-rewrite library has no evoxc CartPole (its RL problems are gym/brax/mujoco based and need extra dependencies), so that case is new-only and marked `n/a` for old.
+## Cross-implementation Config Parity (xor3d quality gap)
+`Case.build` feeds one config dict to both stacks, so every value a case *sets* is identical; the xor3d `-0.25` plateau comes entirely from defaults the case dict leaves unset.
+Genuine drift in class defaults (old -> new), both in `genome/gene/conn/default.py`: weight `mutate_rate` 0.2 -> 0.8, weight `replace_rate` 0.015 -> 0.1, weight clip `[-5, 5]` -> unclipped; the new `GeneAttr` class default (0.2/0.015) still matches the legacy numbers, only `DefaultConn` overrides them (NEAT-python values).
+New-only structural caps with no legacy equivalent: `DefaultGenome.max_in_degree = max(initial in-degree, 4)` (4 for XOR3d's 3 inputs; the legacy genome has no per-node in-degree cap) and `max_depth = 16`.
+Identical on both sides: hidden activation `ACT.sigmoid` (single-element option list), `init_hidden_layers=()` (a fresh genome is the fully connected input->output network, 3 edges for XOR3d), structural rates 0.2/0.2/0.1/0.1, bias/response defaults and `[-5, 5]` bounds, crossover, distance (1.0/0.4, normalised by max gene count), every NEAT knob (species_size is a count of species *slots* in both, compatibility_threshold 2.0, genome_elitism 2, species_elitism 2, max_stagnation 15, spawn_number_change_rate 0.5), and the seed plumbing (one key per side from the same `seed + repeat`; the PRNGs differ by design).
+`survival_threshold=0.01` selects the top-ranked member on both sides in practice: the new side clamps `floor(threshold * members)` to >= 1, the legacy side floors it to 0 and divides 0/0 into a NaN probability vector (JAX `choice` then yields index 0).
+The mutation kernel form also differs (legacy draws one uniform and bands mutate/replace mutually exclusively; the rewrite applies them independently), negligible at equal rates but it compounds the rate drift above.
+`-0.25` is the trivial plateau (`sigmoid(0)=0.5` -> mse 0.25) and is where the legacy side also sits for its first ~75 generations of xor3d_p100, so a pop-100 gap is a slower escape from a shared plateau, not a different starting point.
 ## Verdict Rules
 - timing PASS when `new_ms_per_generation <= old_ms_per_generation` for every case both sides ran (speed-up >= 1.00x).
 - quality PASS when `new_final_best >= old_final_best - max(QUALITY_TOLERANCE_REL * |old_final_best|, QUALITY_ABS_TOL)` for every such case, with `QUALITY_TOLERANCE_REL = 0.10` and `QUALITY_ABS_TOL = 1e-3` owned by `harness/protocol.py`.
