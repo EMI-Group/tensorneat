@@ -116,12 +116,12 @@ What is *not* hoistable is anything derived from the centre payload: `_pack`, `_
 
 ## Cost (measured, numpy reference backend, seed-42 XOR population after 5 generations, build excluded, one fresh process per pop)
 
-| kernel | ops |
-|---|---|
-| `prepare` (both families: dense fields, `oor`, both statics bundles) | 167 |
-| `prepare` + `measure` (batch-`P` centre, merge) | 266 |
-| `measure` marginal, merge route (the tiled centre the pipeline sends) | 98 |
-| `measure` marginal, batch-1 centre (dense route) | 102 |
+| kernel | ops | ms/call, pop 500 | ms/call, pop 1000 |
+|---|---|---|---|
+| `prepare` (both families: dense fields, `oor`, both statics bundles) | 163 | 2.63 | 4.13 |
+| `prepare` + `measure` (batch-`P` centre, merge) | 257 | 5.19 | 8.56 |
+| `measure` marginal, merge route (the tiled centre the pipeline sends) | 94 | 2.56–2.62 | 4.33–4.43 |
+| `measure` marginal, batch-1 centre (dense route) | 102 | 1.38 | 2.03 |
 | `execute_distance` (pair-wise, unchanged contract) | 225 |
 
 The counts are independent of `P` (measured identical at pop 100 / 500 / 1000), counted recursively over `module.functions[*].entry_block` and every `op.regions` body with terminators included; the op-nodes-only convention `test/unit/genome/test_distance_digest.py` asserts on reads 167 / 265 / 98 / 102 / 224, and its ceilings are `PREPARE_OP_CEILING = 210` / `MEASURE_OP_CEILING = 120`.
