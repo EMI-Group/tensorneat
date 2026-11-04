@@ -56,8 +56,7 @@ from typing import TYPE_CHECKING, NamedTuple
 import evoxc
 import evoxc.numpy as enp
 from .consts import ConstantPool
-from .digest import _FOLDED_KEYS, _column, dense_rows, dense_width
-from .layout import reorder
+from .layout import _FOLDED_KEYS, _column, dense_rows, dense_width, reorder
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...base import BaseGenome
     from .base import BaseDistance
@@ -75,8 +74,8 @@ def enabled(gene, genome: "BaseGenome") -> bool:
         bool: ``True`` when the family's centre tables fit :data:`_DENSE_MAX_BYTES` and the
         table width stays inside the ``int32`` index range.
     Notes:
-        The tables are one cell wider than :func:`~.digest.dense_width` (the never-owned padding
-        cell), which the byte estimate includes.
+        The tables are one cell wider than :func:`~.layout.dense_width` (the never-owned
+        padding cell), which the byte estimate includes.
     """
     width = dense_width(gene, int(genome.key_span)) + 1
     if width > (1 << 31) - 1:  # the dense index is an int32 gather/scatter index
