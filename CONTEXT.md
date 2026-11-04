@@ -24,7 +24,7 @@ The library keeps its research identity (GECCO 2024 Best Paper, arXiv 2404.01817
 ## Backends
 `backend=` is forwarded verbatim to `evoxc.build`; `compile_options` is expanded into its `**options`.
 `"numpy"` is the default, the fastest leg on CPU today, and the only one with no optional dependency.
-`"iree"` lowers, compiles and runs every shipped problem family on llvm-cpu, agrees with numpy numerically, and is 5–24× slower per generation here at 9–11 s of compile per static shape (`benchmarks/BACKENDS.md`).
+`"iree"` lowers, compiles and runs every shipped problem family on llvm-cpu, agrees with numpy numerically, and is 5–24× slower per generation here at 8–11 s of compile per static shape (`benchmarks/BACKENDS.md`).
 `"xla"` requires a user-supplied PJRT C API plugin (unavailable on this box) and `"tvm"` is untested.
 A backend that cannot run a kernel raises; nothing ever silently falls back to another backend.
 ## Performance
