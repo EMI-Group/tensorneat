@@ -784,3 +784,52 @@ def test_in_domain_configuration_is_accepted(problem):
     assert problem.CartPole().fitness_target is None
     assert cartpole.input_shape == (4,)
     assert cartpole.output_shape == (2,)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        pytest.param(
+            {"max_step": 1.5},
+            "CartPole: max_step must be an int, got 1.5",
+            id="non_int_names_type_and_value",
+        ),
+        pytest.param(
+            {"max_step": True},
+            "CartPole: max_step must be an int, got True",
+            id="bool_is_not_a_valid_int",
+        ),
+        pytest.param(
+            {"max_step": 0},
+            "CartPole: max_step must be positive, got 0",
+            id="non_positive_int_names_the_value",
+        ),
+        pytest.param(
+            {"gravity": 0.0},
+            "CartPole: gravity must be positive, got 0.0",
+            id="non_positive_float_names_the_value",
+        ),
+        pytest.param(
+            {"x_threshold": -0.1},
+            "CartPole: x_threshold must be non-negative, got -0.1",
+            id="negative_float_names_the_value",
+        ),
+    ],
+)
+def test_configuration_errors_keep_the_exact_owner_prefixed_message(
+    problem, common, kwargs, message
+):
+    """Invariant: each rejected knob raises ``<Owner>: <name> must be ...`` verbatim.
+
+    Oracle: the constructor's ``Raises:`` clause plus the shared messages of
+    ``problem.rl._common`` -- the three validators live once in that module, so
+    the only thing ``CartPole`` still owns is the ``CartPole:`` owner prefix and
+    the per-knob wording. The comparison is exact because the pinned text is the
+    visible half of the shared helper's contract: a drifted prefix, a swapped
+    knob name or a ``got`` value formatted differently would all be silent
+    otherwise. ``True`` is in the list because it is an ``int`` in Python but
+    never a meaningful horizon.
+    """
+    with pytest.raises(common.TensorNEATError) as excinfo:
+        problem.CartPole(**kwargs)
+    assert str(excinfo.value) == message

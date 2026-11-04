@@ -9,6 +9,13 @@ import evoxc.numpy as enp
 
 from ..base import BaseProblem, finalize_fitness, static_batch_size
 from ...common.errors import TensorNEATError
+from ._common import (
+    require_non_negative,
+    require_positive,
+    require_positive_int,
+    returns_of,
+    to_numpy,
+)
 
 __all__ = ["CartPole"]
 
@@ -68,24 +75,6 @@ class _CartPoleConstants(NamedTuple):
     nan: Any
     one_step: Any
     horizon: Any
-
-
-def _to_numpy(value: Any) -> np.ndarray:
-    """Return a host numpy view of a concrete ``evoxc`` tensor or an array.
-
-    Host-side helper for ``show`` only: a concrete ``evoxc.Tensor`` exposes its
-    data through ``numpy()`` (zero-copy for the numpy-backed reference
-    backend), while everything else is coerced with ``np.asarray``.
-
-    Args:
-        value: An ``evoxc.Tensor``, a numpy array, or a numpy scalar.
-
-    Returns:
-        A numpy array (or 0-d array) holding the same values.
-    """
-    if isinstance(value, evoxc.Tensor):
-        return value.numpy()
-    return np.asarray(value)
 
 
 class CartPole(BaseProblem):
@@ -165,19 +154,25 @@ class CartPole(BaseProblem):
                 or ``x_threshold``/``reset_scale`` is negative.
             TensorNEATError: If ``fitness_target`` is greater than ``max_step``.
         """
-        self.max_step = self._require_positive_int("max_step", max_step)
-        self.repeat_times = self._require_positive_int("repeat_times", repeat_times)
-        self.gravity = self._require_positive("gravity", gravity)
-        self.masscart = self._require_positive("masscart", masscart)
-        self.masspole = self._require_positive("masspole", masspole)
-        self.length = self._require_positive("length", length)
-        self.force_mag = self._require_positive("force_mag", force_mag)
-        self.dt = self._require_positive("dt", dt)
-        self.x_threshold = self._require_non_negative("x_threshold", x_threshold)
-        self.theta_threshold = self._require_positive(
-            "theta_threshold", theta_threshold
+        self.max_step = require_positive_int("CartPole", "max_step", max_step)
+        self.repeat_times = require_positive_int(
+            "CartPole", "repeat_times", repeat_times
         )
-        self.reset_scale = self._require_non_negative("reset_scale", reset_scale)
+        self.gravity = require_positive("CartPole", "gravity", gravity)
+        self.masscart = require_positive("CartPole", "masscart", masscart)
+        self.masspole = require_positive("CartPole", "masspole", masspole)
+        self.length = require_positive("CartPole", "length", length)
+        self.force_mag = require_positive("CartPole", "force_mag", force_mag)
+        self.dt = require_positive("CartPole", "dt", dt)
+        self.x_threshold = require_non_negative(
+            "CartPole", "x_threshold", x_threshold
+        )
+        self.theta_threshold = require_positive(
+            "CartPole", "theta_threshold", theta_threshold
+        )
+        self.reset_scale = require_non_negative(
+            "CartPole", "reset_scale", reset_scale
+        )
         if fitness_target is not None:
             target = float(fitness_target)
             if target > self.max_step:
@@ -273,7 +268,7 @@ class CartPole(BaseProblem):
         pop_size = static_batch_size(transformed)
         total, _ = self._rollout(keys, act_fn, pop_size)
         return finalize_fitness(
-            enp.mean(self._returns_of(total, pop_size), axis=1)
+            enp.mean(returns_of(total, pop_size, self.repeat_times), axis=1)
         )
 
     def show(
@@ -318,8 +313,8 @@ class CartPole(BaseProblem):
 
         executable = evoxc.build(report, key_spec)
         returns, final_obs = evoxc.run(executable, key)
-        returns = _to_numpy(returns)
-        final_obs = _to_numpy(final_obs)
+        returns = to_numpy(returns)
+        final_obs = to_numpy(final_obs)
         for repeat in range(self.repeat_times):
             survived = int(round(float(returns[repeat])))
             x, x_dot, theta, theta_dot = (float(value) for value in final_obs[repeat])
@@ -459,22 +454,6 @@ class CartPole(BaseProblem):
             return (obs, alive, total, index + consts.one_step)
 
         return step
-
-    def _returns_of(self, total: Any, pop_size: int) -> Any:
-        """Group per-episode returns into one row of ``repeat_times`` per individual.
-
-        The episodes are individual-major, so reshaping ``(B,)`` to
-        ``(P, R)`` puts repeat ``r`` of individual ``p`` at ``[p, r]``.
-
-        Args:
-            total: Per-episode returns of shape ``(B,)``.
-            pop_size: Population size ``P``.
-
-        Returns:
-            ``(P, R)`` returns; ``evaluate`` means over axis 1, ``show`` reads
-            row 0 of the ``P = 1`` case.
-        """
-        return enp.reshape(total, (pop_size, self.repeat_times))
 
     def _constants(self) -> _CartPoleConstants:
         """Bundle the physics constants as float32 graph scalars.
@@ -652,63 +631,3 @@ class CartPole(BaseProblem):
         """
         return evoxc.isnan(enp.sum(logits, axis=1))
 
-    @staticmethod
-    def _require_positive_int(name: str, value: Any) -> int:
-        """Validate a strictly positive integer configuration value.
-
-        Args:
-            name: Configuration name, used in the error message.
-            value: The value to validate; a Python or numpy integer.
-
-        Returns:
-            The value as a Python ``int``.
-
-        Raises:
-            TensorNEATError: If ``value`` is not an ``int`` or is not positive.
-        """
-        if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
-            raise TensorNEATError(f"CartPole: {name} must be an int, got {value!r}")
-        value = int(value)
-        if value <= 0:
-            raise TensorNEATError(f"CartPole: {name} must be positive, got {value}")
-        return value
-
-    @staticmethod
-    def _require_positive(name: str, value: Any) -> float:
-        """Validate a strictly positive scalar configuration value.
-
-        Args:
-            name: Configuration name, used in the error message.
-            value: The value to validate.
-
-        Returns:
-            The value as a Python ``float``.
-
-        Raises:
-            TensorNEATError: If ``value`` is not positive.
-        """
-        number = float(value)
-        if not number > 0.0:
-            raise TensorNEATError(f"CartPole: {name} must be positive, got {number}")
-        return number
-
-    @staticmethod
-    def _require_non_negative(name: str, value: Any) -> float:
-        """Validate a non-negative scalar configuration value.
-
-        Args:
-            name: Configuration name, used in the error message.
-            value: The value to validate.
-
-        Returns:
-            The value as a Python ``float``.
-
-        Raises:
-            TensorNEATError: If ``value`` is negative.
-        """
-        number = float(value)
-        if number < 0.0:
-            raise TensorNEATError(
-                f"CartPole: {name} must be non-negative, got {number}"
-            )
-        return number
