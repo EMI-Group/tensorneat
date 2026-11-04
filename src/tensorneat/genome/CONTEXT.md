@@ -140,7 +140,7 @@ The attribute term is a reduced sum over the aligned rows; `measure_distance` is
 | `measure_distance`, tiled centre = the shipped call site (merge) | — | 94 / 2.7 ms | 94 / 5.2 ms |
 | `measure_distance`, batch-1 centre (dense single-centre route) | — | 106 / 1.4–1.6 ms | 106 / 2.0–2.3 ms |
 | `execute_distance` (pairwise) | — | 202 / — | — |
-| `Pipeline.step` end-to-end | — | ~171 ms median | ~287–290 ms median |
+| `Pipeline.step` end-to-end | — | 164–166 ms median | 275–291 ms median |
 | `Pipeline.build_seconds` | — | 0.33 s | 0.41 s |
 | legacy JAX baseline (ms/gen) | 51 | 109 | 157 |
 
