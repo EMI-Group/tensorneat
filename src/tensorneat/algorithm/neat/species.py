@@ -65,6 +65,7 @@ from ._kernels import (
     POP_KEY,
     SPLIT_POP_KEYS,
     const as _const,
+    first_centre_table as _first_centre_table,
     nan as _nan,
     neg_inf as _neg_inf,
     scalar_f32 as _scalar_f32,
@@ -72,8 +73,6 @@ from ._kernels import (
 
 #: Allocation modes accepted by ``species_number_calculate_by``.
 SPAWN_MODES = ("rank", "fitness")
-
-
 
 
 @dataclass(frozen=True)
@@ -287,33 +286,17 @@ class SpeciesController(StatefulBaseClass):
                 last_improved=evoxc.scatter(dead, 0, _const(0.0)),
                 member_count=evoxc.scatter(dead, 0, _const(float(self.pop_size))),
                 idx2species=enp.zeros((self.pop_size,), dtype=evoxc.float32),
-                center_node_keys=evoxc.scatter(
-                    enp.zeros((species_size,) + tuple(node_keys.shape), dtype=evoxc.int32),
-                    0,
-                    node_keys,
+                center_node_keys=_first_centre_table(
+                    species_size, node_keys, 0, evoxc.int32
                 ),
-                center_node_attrs=evoxc.scatter(
-                    enp.full(
-                        (species_size,) + tuple(node_attrs.shape),
-                        float("nan"),
-                        dtype=evoxc.float32,
-                    ),
-                    0,
-                    node_attrs,
+                center_node_attrs=_first_centre_table(
+                    species_size, node_attrs, float("nan"), evoxc.float32
                 ),
-                center_conn_keys=evoxc.scatter(
-                    enp.zeros((species_size,) + tuple(conn_keys.shape), dtype=evoxc.int32),
-                    0,
-                    conn_keys,
+                center_conn_keys=_first_centre_table(
+                    species_size, conn_keys, 0, evoxc.int32
                 ),
-                center_conn_attrs=evoxc.scatter(
-                    enp.full(
-                        (species_size,) + tuple(conn_attrs.shape),
-                        float("nan"),
-                        dtype=evoxc.float32,
-                    ),
-                    0,
-                    conn_attrs,
+                center_conn_attrs=_first_centre_table(
+                    species_size, conn_attrs, float("nan"), evoxc.float32
                 ),
                 next_species_key=_const(1.0),
             )

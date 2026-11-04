@@ -9,7 +9,7 @@ The layer's own work is one population digest plus `2 · ceil(species_size / 4)`
 
 ## Layout (five files, each under 1000 lines)
 `species.py` — `SpeciesState` plus `SpeciesController`: the documented, traced-facing methods and the species algebra, each delegating its tensor body to `_kernels.py`.
-`_kernels.py` — plain graph helpers (no `@evoxc.defn`, no state): spawn allocation, block layout, parent pairing, membership, sort/prefix-sum primitives, `gated` (the static lazy-row gate) and the two speciation scans.
+`_kernels.py` — plain graph helpers (no `@evoxc.defn`, no state): spawn allocation, block layout, parent pairing, membership, sort/prefix-sum primitives, the export-safe write/constant primitives (`scatter_row`, `first_centre_table`, `static_i32`/`static_f32`, `reversed_index`), `gated` (the static lazy-row gate) and the two speciation scans.
 `_distance.py` — `DistanceRows` (the digest-backed, population-shaped `distance_fn` `speciate` consumes) and the `repeat_leading` tiling primitive.
 `_validation.py` — host-side configuration validators shared with `neat.py` (`positive_int`, `non_negative_int`, `unit_interval`, `positive_float`), each raising `TensorNEATError` with the parameter name.
 `neat.py` — `_sanitize_fitness` and `NEAT`: setup, ask/transform/forward, the `tell` algebra, `_batched` chunking, host-side `show_details`.
@@ -30,6 +30,7 @@ Private members: `_sanitize_fitness` and `_finite_bound` (module functions), `_s
 `update_species(state, fitness) -> (state, winner (P,), loser (P,), elite_mask (P,))`; it owns the generation's first `evoxc.random.split` and stores the advanced key back into `state.randkey`.
 `speciate(state, distance_fn, pop=None) -> State`; `distance_fn` is any callable `(state, centre_payload, pop) -> (P,)` or, for a centre payload of `species_size` rows, `(S, P)` — `_distance.DistanceRows` provides both forms; the population comes from `pop`, else from the `"pop"` state entry, else from the four split payload entries, else `TensorNEATError`.
 Private: `_species_fitness`, `_stagnation`, `_cal_spawn_numbers_by_rank`, `_cal_spawn_numbers_by_fitness`, `_pair_parents(species_state, selection_key, spawn_number, fitness)`, `_block_layout(spawn_number) -> (loc, idx_in_block)`, `_membership`, static `_population(state, pop=None)`, static `_gather_species(species_state, order)`, static `_sort_desc_legacy(x, axis=-1)`, static `_prefix_sum_exclusive(values)`.
+`_kernels.first_centre_table(species_size, row, fill, dtype)` (imported by `species.py` as `_first_centre_table`) builds a generation-0 centre table as `concatenate([reshape(row, (1,) + row.shape), constant fill block])`.
 Module constant `SPAWN_MODES = ("rank", "fitness")`.
 
 `DistanceRows(genome, digest, population, pop_size)` — `_distance.py`, created per generation inside `NEAT.tell`:
@@ -89,9 +90,23 @@ Dispatch budget per generation: `1` `prepare_distance` + `2 · species_size` pop
 
 ## Scan Patterns (why fixed-length scans are exact)
 `evoxc` de-sugars `scan` into `while` + `gather`/`scatter`, so a trip count must be static and the carry must keep identical dtypes and shapes: both speciation phases are `scan(f, carry, enp.arange(species_size))` with per-slot masks, never a data-dependent `while_loop`.
-The legacy early-exit conditions survive as masks, and because every write is mask-then-single-`scatter` the extra iterations are provably no-ops.
+The legacy early-exit conditions survive as masks, and because every write is mask-then-single-`scatter` (`scatter_row` for the rank-3 gene tables) the extra iterations are provably no-ops.
 Carries are kept narrow and packed (`idx2species` and the running distance as two `(P,)` arrays; the species keys plus `next_species_key` as one `(S+1,)` array) because wide `select`-bearing carries are a known iree codegen hazard.
 No random draw happens inside a scan body — keys never travel through a carry.
+
+## StableHLO Export Rules (binding for every kernel here)
+Every graph this node contributes must survive `evoxc`'s StableHLO v1 exporter: `backend=` is forwarded verbatim by the pipeline, so `"iree"`/`"tvm"`/`"xla"` users lower these kernels and a rejected op is a hard `evoxc.BackendError`, never a fallback.
+The v1 exporter accepts only the spellings below — a new kernel has to pick one of them:
+- `scatter`: rank-1 `axis=0`, or a rank-2 row/column write (`axis` 0 or 1); any wider operand raises `BackendError` naming the rank.
+  A per-slot table write goes through `_kernels.scatter_row(table, slot, update)`: it flattens the trailing axes into one row length `R`, writes exactly the cells of a rank-2 `axis=0` row scatter and reshapes back (a rank-2 table short-circuits to a plain `evoxc.scatter`).
+  Both speciation scans and their four payload writes use it; `keys_ext` (rank-1) and the `node_keys (S, N)` table stay on plain `evoxc.scatter`.
+- No `tril`/`triu`, no `flip`, no `cumsum`, no `iota` — deferred/unmapped in v1.
+  Static tables are baked as graph constants with `static_i32`/`static_f32` (one `constant` op each, bit-identical because the entries are exact index/`0`/`1` values): the gate matrix of `prefix_sum_exclusive` is `static_f32(np.tril(np.ones((S, S)), -1))`, and the reversal of `block_layout` is `gather(x, reversed_index(S), axis=0)`.
+- Supported and in use: `gather` (single axis, static indices), `argsort`, `select`, `concatenate`, `constant`, `reshape`, `dot`, `argmax`/`argmin`, the `random_*` family, and `while`/`if` regions.
+- A table whose rows are all written anyway is not a scatter: the generation-0 centre tables are `concatenate([reshape(row, (1,) + row.shape), constant fill block])` (`_kernels.first_centre_table`, used by `SpeciesController.setup`), which also exports at rank 3.
+- `scan` stacks its per-step *outputs* along a new leading axis, so returning a whole `(S, …)` table from a scan body becomes a rank-4 scatter inside the desugared `while`; both speciation scans therefore return only their small per-step value (`assign` in scan 1, `create` in scan 2).
+- Unsigned integer dtypes (`uint32`/`uint64`) are outside iree's declared dtype set — a graph is expected to use `int32`/`int64` only (the sibling `genome`/`common` nodes own their remaining occurrences).
+The numpy reference interpreter accepts every rank, so a violation is invisible until `evoxc.lower(graph, backend="iree")`; the audit in `## Test Strategy` is part of verification, not an optional extra.
 
 ## Gene Keys & Padding
 `max_node_key(state, node_keys)` and `max_conn_marker(state, conn_keys)` return one maximum **per individual** (`(P,) int32`, `0` for an individual with no real row), so `_new_gene_keys` builds a per-individual base: `new_node_keys = base + arange(1, P + 1)` and `new_conn_markers = reshape(base_marker, (P, 1)) + arange(1, 3P + 1).reshape(P, 3)` when `conn_gene.uses_historical_marker`, else zeros.
@@ -149,6 +164,8 @@ Timed as separate executables: `update_species` 1.31 / 1.83 / 2.23 ms and `_crea
 `tell` increments `generation` through `_as_scalar_f32`, which emits the `cast`/`reshape` only when the static dtype/rank need one, so the 0-d `float32` counter costs one `add` and no no-op op.
 
 ## Known Issues
+This node contributes **no** deferred op and no rank>=3 `scatter` to a generation graph: an audit of the full `Pipeline` graphs (`setup` plus one `step`, pop 100 and pop 1000, i.e. both the gated and the dense speciation path) reports 0 unsupported ops, and the `setup` graph lowers with `evoxc.lower(graph, backend="iree")`.
+The `step` graph still does not lower, on foreign nodes only: `cumsum` at `genome/operations/mutation/cycle.py:121`, and `uint32`/`uint64` arithmetic at `common/tensorization.py:179-180`, `genome/operations/distance/digest.py:469/475/476`, `genome/operations/alignment.py:112/180-187/236-237/396/408-419` and the `uint32` constant `common/tools.py:159` (iree's declared dtype set is float16/32/64, int8/16/32/64, bool — no unsigned).
 The repo-level performance contract is still missed, now by ~1.2x / ~3.1x / ~3.9x at `P=100 / 500 / 1000` (58.9 / 335.2 / 608.1 ms against 51 / 109 / 157), and this subtree is at its own floor: `speciate` is 40 000 pairs at 9.7 µs each at `P=1000` (388 ms), and every grouping of those pairs measured within ±10 % of that (one call per centre 13.0 µs/pair, whole-table call 13.8).
 The pair count `2 · species_size · pop_size` is irreducible under NEAT's assignment semantics: each phase needs its own genuinely different centres and a created species takes the first unassigned genome as its centre, so its row depends on every earlier assignment.
 The per-pair cost is genome-owned: one `measure_distance` call is ~309 traced ops over `(rows, 2 · max_conns)`-wide gene arrays, and the padded `max_conns`/`max_nodes` axes are what multiply it — shrinking the statics from 50/100 to 10/16 cuts the whole `Pipeline.step` 3.3x at `P=1000` (593.6 → 178.3 ms) with identical semantics. `DefaultDistance`'s homologue merge also sorts `2·M` key rows per pair, so the same population genome is re-sorted once per centre; an edge-proportional or centre-prepared distance kernel in `genome/operations/distance` is the next real lever and lies outside this node.
@@ -166,7 +183,7 @@ This node is additionally verified by driving `Pipeline` end-to-end on the numpy
 ## Constraints
 No `jax`/`torch`/`numpy.random` import; `import tensorneat` must stay free of them (release gate). `numpy` appears only as `numpy.finfo(dtype).max` in `_finite_bound`, a host-side scalar read.
 No branching, `bool()`, `len()` or host reads on traced values — static Python `if`/`for` over constructor configuration is fine and unrolls at trace time.
-No `.at[]`, no `cumsum` on the compute path (prefix sums are triangular `dot`), no `where=`/`initial=`/`any`/`all`/`take`/`searchsorted`/`repeat`, no `vmap` over anything region-bearing, no `fori_loop`/`switch`.
+No `.at[]`, no `cumsum` on the compute path (prefix sums are triangular `dot`), no `tril`/`triu`/`flip`/`iota`, no rank>=3 `scatter` (use `scatter_row` or a static constant — see `## StableHLO Export Rules`), no `where=`/`initial=`/`any`/`all`/`take`/`searchsorted`/`repeat`, no `vmap` over anything region-bearing, no `fori_loop`/`switch`.
 Shapes are static: `P`, `S`, `max_nodes`, `max_conns` are fixed at build time; a change forces a rebuild by the pipeline.
 Errors: configuration validation raises `common.errors.TensorNEATError` with a named message; trace/shape/backend errors propagate unchanged and are never re-wrapped or silently fallen back.
 State keys touched: `randkey`, `pop_size`, `pop`, `generation`, `species`, plus the genome/problem keys documented above — nothing else.
@@ -186,6 +203,12 @@ Tests live in the sibling `test/` tree (read-only from here): `test/unit/algorit
 Every kernel here must be a pure function of `(state, key)`: no dict-order dependence, no host RNG, no float→int conversion without an explicit mask.
 Distance rows are verified by whole-run bit-identity: a `npz` dump of `fitness_history`, the four payload arrays, all ten `SpeciesState` leaves, `randkey` and `generation` per generation, compared with `tobytes()` equality (padding NaNs make `np.array_equal` report self-vs-self differences) against the pre-change tree at pop 100 (6 generations, gated path), pop 500 (4) and pop 1000 (3, dense path) — `common.tools.to_numpy` first, because hashing an `evoxc.Tensor` directly hashes the object pointer rather than the data.
 The sparse/dense switch, the block size and the `cond` placement are all static trace-time choices, so a shape or gate regression shows up as a build error in `test/release_gate_no_jax.py`'s two-generation XOR run rather than as a silent numerical drift.
+
+## Export Audit (how the StableHLO rules are verified)
+Recipe, cheap and per-op: monkeypatch `evoxc.build` to also keep `evoxc.trace(fn, *specs)` for every graph TensorNEAT builds, then walk `graph.module.functions[*].region.blocks` recursively (`op.regions` included, skipping the result-less `return` op) and classify each op with `evoxc.backends.stablehlo.ops.status(op.name)`; for `scatter` additionally check the operand rank and `op.attributes["axis"]` against the rank-1/rank-2 rule. `op.location` gives the exact `file:line` of an offender, so a regression is attributable without reading diffs.
+Finish with `evoxc.lower(graph, backend="iree")`, which fails fast on the first unsupported op and does not need a working end-to-end backend.
+The three rewritten primitives were also lowered, compiled and **run** on iree (`prefix_sum_exclusive`, `block_layout`, `scatter_row`, plus a `scan` that writes its table each step): every output is numpy-identical except a float32 scan-accumulated sum, which differs by ~3e-05 because iree reassociates the reduction — the written table itself is bit-identical.
+Bit-identity evidence for the rewrite on numpy: `fitness_history`, the four payload arrays, all ten `SpeciesState` leaves, `randkey` and `generation` dumped per generation and compared with `tobytes()` equality against the pre-change tree at pop 100 (4 generations, gated) and pop 500 (2) in both spawn modes and at pop 1000 (2, dense path) — 144/72/72 arrays, zero mismatches. Degenerate shapes smoke-tested on both trees: `species_size` 1, 2, 3, 8.
 
 ## Routing Table
 | Path | Responsibility |
