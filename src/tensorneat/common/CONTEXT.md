@@ -104,16 +104,13 @@ Rejected levers (measured; do not re-derive):
 - **A `-2**30` sentinel instead of the `select(greater(best, -1), best + 1, -1)` guard**: an unsettled predecessor would settle its child at `0`; caught by the field-by-field diff.
 - **A trusted, guard-free index block everywhere** (the escape test is what makes the backend *raise* instead of reading a neighbouring row): only offered as an opt-in `trusted=True` and only used where the index range is provably inside the table.
 
-### The derivation tail is trimmed (landed; ~3 % of `transform`)
-Four dead-op removals outside `node_levels` took `derive_schedule` from **356 to 339 executed ops** and the whole `transform` from **6.66 to 6.47 ms** (median of interleaved rounds of 15 `evoxc.run`, build excluded, pop 500 / XOR / seed 42; the box drifts, so the ~0.97 ratio is the result).
-The `Transformed` fields compared equal on the real pipeline population and on a synthetic cyclic population (absent rows, unmatched keys, in-degree > `K`, both key spellings, `acyclic` both ways).
-
-- `evoxc.cast` is emitted **even when source and target dtype agree**, so `_key_indices` skips it for canonical `int32` keys (5 ops).
-- `_slot_of` does not pass `present` to `prepare_flat_index`: `_key_indices` has already replaced every out-of-range key by `0`, so that redirect `select` was a no-op (4 ops).
-- `edge_valid` is `max(src, dst) < max_nodes` — a slot is `I_INF` or in `[0, N)` — instead of two `not_equal`s and a `logical_and` (2 ops).
-- `incoming_table` leaves a garbage cell on a row that does not land in the window; `_window_pair` redirects every `keep == False` write to its dump slot before the index is formed, so the two `select`s that sanitised those cells were dead (2 ops).
-
-End-to-end the win sits inside the generation-to-generation noise (`transform` is ~4 % of `Pipeline.step`), so the `transform` ratio, not ms/generation, is the measurement.
+### The derivation tail is at its op floor (a 17-op trim is rejected; do not re-derive)
+A trim to 339 executed ops (from 356: `_key_indices` drops the dtype-identical `cast` and uses a 0-d zero, `edge_valid` becomes `max(src, dst) < max_nodes`, `_slot_of` drops an already-redundant `present` redirect, `incoming_table` stops sanitising the cells `_window_pair` dumps) is **rejected**: it is value- and work-identical yet costs a third of a generation.
+Measured (XOR, seed 42, fresh process, 8-10 timed generations, 2-3 interleaved rounds): `Pipeline.step` 317-323 ms with the trim reverted vs 428-442 ms with it, i.e. **+34 % at pop 1000** and ~+5 % at pop 500, so the effect is non-linear in `P`.
+It is not a data or layout change: the `Transformed` fields are bit-identical with the same dtypes, shapes and contiguity; per-step runtime op counts differ by exactly the 17 removed ops; operand/result dtype signatures are identical; peak RSS is the same (~805 MB); `derive_schedule` alone is *faster* (10.4 vs 10.9 ms).
+It is not attributable to one hunk: reverting any single one of the four alone still measures 431-448 ms; only restoring the whole derivation returns 317-323 ms.
+That leaves a whole-graph execution effect inside the numpy interpreter (the step graph's op/constant mix, not any value this module produces), which no local edit here can control.
+**Reasoning rule: executed-op count is not a proxy for time at this level.** A trim that is value-identical and measurably faster on `transform` in isolation (6.66 -> 6.47 ms) can still cost 34 % of a generation once inlined into the step graph; measure `Pipeline.step` end-to-end at pop 1000 in fresh interleaved processes before landing a "free" removal.
 
 ### `node_levels` is at its op floor (re-measured; do not re-derive)
 Where the time goes at the real window: on a real feed-forward XOR population (seed 42, generation 7, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100)`, `NEAT(pop_size=500, species_size=20)`, so `(P, N, K) = (500, 50, 4)` and depth ≈ 4), `node_levels(acyclic=True)` is 2.79–3.15 ms of a 6.9–7.2 ms `derive_schedule` (the box drifts; the ratio is the result, ~40–45 %).
