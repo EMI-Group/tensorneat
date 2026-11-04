@@ -37,7 +37,7 @@ from .operations import (
     DefaultMutation,
 )
 from .utils import GenomeTensors
-from .window import _iinf, fill
+from .window import _iinf, by_samples, fill
 
 
 class DefaultGenome(BaseGenome):
@@ -143,30 +143,35 @@ class DefaultGenome(BaseGenome):
     ) -> evoxc.SymbolicTensor:
         """Evaluate the population level by level, in one loop graph.
 
-        The exact algebra, with ``P`` the population, ``N`` ``max_nodes``, ``K`` the window
-        width and ``D`` ``max_depth``:
+        The exact algebra, with ``P`` the population, ``rows = P * samples`` the evaluated row
+        count (a problem tiles its dataset or rollout over the population axis, so row
+        ``p * samples + j`` is individual ``p``), ``N`` ``max_nodes``, ``K`` the window width
+        and ``D`` ``max_depth``:
 
-        1. ``values = full((P, N), NaN)`` with ``input_transform(inputs)`` written into the
+        1. ``values = full((rows, N), NaN)`` with ``input_transform(inputs)`` written into the
            input rows (``0..num_inputs-1``) — only those rows hold a number. The seed is
-           assembled as ``concatenate([seed, NaN (P, N - num_inputs)], axis=1)``: one op that
-           leaves every other row at the ``NaN`` padding value, instead of a ``(P, N)`` mask.
-        2. ``hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs)`` **once**: edge
-           attributes are constant during a forward pass, so the per-slot gather is hoisted out
-           of the loop. The attribute rows of absent nodes are rewritten to ``0`` in the same
-           one-off step (``self._padding_safe_attrs``): the node gene casts its option-index
-           columns to ``int32``, and those rows are never read back into ``values``.
+           assembled as ``concatenate([seed, NaN (rows, N - num_inputs)], axis=1)``: one op
+           that leaves every other row at the ``NaN`` padding value, instead of a
+           ``(rows, N)`` mask.
+        2. ``hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs, samples)``
+           **once**: edge attributes are constant during a forward pass, so the per-slot gather
+           is hoisted out of the loop, derived at the schedule's ``P`` rows and expanded to the
+           evaluated ones (the schedule's numbers are sample-invariant). The attribute rows of
+           absent nodes are rewritten to ``0`` in the same one-off step
+           (``self._padding_safe_attrs``): the node gene casts its option-index columns to
+           ``int32``, and those rows are never read back into ``values``.
         3. ``limit = self._depth_limit(transformed)`` — the deepest reachable level of this
            batch, clamped to ``[1, max_depth]`` — then
            ``evoxc.while_loop(cond, body, (1, values))`` walks ``level = 1 .. limit`` with
            ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs, values,
-           update_mask=(transformed.node_level == level))``. The two further terms the
-           pre-rewrite formulation ANDed in are both implied: ``node_exists`` because the
-           schedule stores ``I_INF`` in ``node_level`` on every absent (and every unreachable)
-           row, and the static ``reduce_sum(in_valid, axis=-1) > 0`` because a row with no
-           incoming slot has no *live* slot either. The dynamic "at least one *live* slot" term
-           is ANDed in inside ``_node_step``, so a node whose sources are all NaN keeps NaN and
-           its descendants lose their only live source: the legacy NaN poisoning, reproduced
-           exactly.
+           update_mask=(node_level == level))``, ``node_level`` expanded once outside the loop.
+           The two further terms the pre-rewrite formulation ANDed in are both implied:
+           ``node_exists`` because the schedule stores ``I_INF`` in ``node_level`` on every
+           absent (and every unreachable) row, and the static ``reduce_sum(in_valid, axis=-1)
+           > 0`` because a row with no incoming slot has no *live* slot either. The dynamic
+           "at least one *live* slot" term is ANDed in inside ``_node_step``, so a node whose
+           sources are all NaN keeps NaN and its descendants lose their only live source: the
+           legacy NaN poisoning, reproduced exactly.
         4. ``return self._output_values(values, self.output_transform)`` — rows
            ``max_nodes-num_outputs..max_nodes-1``, then ``output_transform``.
 
@@ -187,20 +192,28 @@ class DefaultGenome(BaseGenome):
             node_attrs: ``(P, N, NA) float32`` node attributes, NaN padded.
             conn_keys: ``(P, E, CK) int32`` connection keys, ``I_INF`` padded.
             conn_attrs: ``(P, E, CA) float32`` connection attributes, NaN padded.
-            inputs: ``(P, num_inputs) float32`` network inputs.
+            inputs: ``(P * samples, num_inputs) float32`` network inputs, tiled
+                individual-major over the population axis.
 
         Returns:
-            ``(P, num_outputs) float32`` outputs after ``output_transform``.
+            ``(P * samples, num_outputs) float32`` outputs after ``output_transform``.
+
+        Raises:
+            TensorNEATError: If the batch is not a positive multiple of ``P`` (see
+                :meth:`_sample_count`) — there is then no sample axis to expand the schedule
+                with, and the two would silently disagree about their rows.
         """
         pop_size, max_nodes = (int(size) for size in transformed.node_level.shape)
+        samples = self._sample_count(inputs, pop_size)
         seed = inputs if self.input_transform is None else self.input_transform(inputs)
         pad = max_nodes - self.num_inputs
         # One NaN constant element broadcast to the node block (see ``..window.fill``): a
-        # materialised ``(P, max_nodes - num_inputs)`` NaN block is the largest graph
+        # materialised ``(rows, max_nodes - num_inputs)`` NaN block is the largest graph
         # constant of this kernel at every population.
         values = (
             evoxc.concatenate(
-                [seed, fill((pop_size, pad), float("nan"), dtype=evoxc.float32)], axis=1
+                [seed, fill((pop_size * samples, pad), float("nan"), dtype=evoxc.float32)],
+                axis=1,
             )
             if pad
             else seed
@@ -209,7 +222,9 @@ class DefaultGenome(BaseGenome):
         # index columns are cast to ``int32`` by the node gene, and a ``NaN``-to-int cast is a
         # warning (and a garbage id) even though those rows never reach ``values``.
         node_attrs = self._padding_safe_attrs(node_attrs, node_keys)
-        hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs)
+        # The statics are derived at the schedule's ``P`` rows and expanded to the evaluated
+        # ``P * samples`` rows: row ``p * samples + j`` reads the copy of individual ``p``.
+        hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs, samples)
         # The node gene builds its operand bundle lazily on the first step; force it here so
         # the bundle is traced in this block instead of inside the loop body, where the
         # region would re-evaluate it on every iteration for a loop-invariant result.
@@ -220,7 +235,11 @@ class DefaultGenome(BaseGenome):
         # the interpreter backend. ``limit`` is derived from the schedule alone (one
         # ``reduce_max`` over the masked ``node_level``), so it is a loop bound, not data.
         one = enp.full((), 1, dtype=evoxc.int32)
+        # The depth bound is a *maximum* over the population, so it is the same on the
+        # sample-invariant schedule as on a tiled one and is derived before the expansion.
         limit = self._depth_limit(transformed)
+        # Expanded once, outside the loop: every level then pays the comparison only.
+        node_level = by_samples(transformed.node_level, samples, pop_size)
 
         def cond(carry) -> evoxc.SymbolicTensor:
             """Keep iterating while the next unvisited level is still within the depth."""
@@ -241,7 +260,7 @@ class DefaultGenome(BaseGenome):
                 node_attrs,
                 hit_conn_attrs,
                 values,
-                evoxc.equal(transformed.node_level, level),
+                evoxc.equal(node_level, level),
             )
             return evoxc.add(level, one), updated
 

@@ -1,12 +1,16 @@
-"""Host-side helpers over a gene payload: config rendering, batch tiling, arity checks.
+"""Host-side helpers over a gene payload: config rendering, batch chunking, arity checks.
 
 Everything here is host-only Python, but some of it runs *inside* an ``evoxc``
 trace: :func:`_jsonable` and friends render configuration values for ``config.txt``;
-the tiling helpers -- :func:`_map_fanout`, :func:`_repeat_batch`, :func:`_slice_batch`
-and :func:`_run_network` -- are the body of the ``act_fn`` the pipeline hands a
-problem, i.e. plain Python that emits ops into the trace that calls it and fans a
-batch-first payload only along the leaves a forward pass reads;
-:func:`_one_individual` normalises a payload to its four batch-first arrays.
+the tiling helpers -- :func:`_slice_batch` and :func:`_run_network` -- are the body of
+the ``act_fn`` the pipeline hands a problem, i.e. plain Python that emits ops into the
+trace that calls it and walks a batch-first payload only along the leaves a forward
+pass reads; :func:`_one_individual` normalises a payload to its four batch-first arrays.
+
+The tiled batch itself is *not* built here: a problem hands the network ``P * S`` rows
+while the schedule and the payload stay at ``P``, and the genome expands the difference
+internally (:func:`tensorneat.genome.window.by_samples`), because every operand a forward
+derives is sample-invariant.
 """
 
 from __future__ import annotations
@@ -14,7 +18,6 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 import evoxc
-import evoxc.numpy as enp
 import numpy as np
 
 from .common import State, TensorNEATError, to_numpy
@@ -25,9 +28,7 @@ __all__ = [
     "_config_value",
     "_declared_shape",
     "_jsonable",
-    "_map_fanout",
     "_one_individual",
-    "_repeat_batch",
     "_run_network",
     "_schedule_overflow",
     "_slice_batch",
@@ -113,59 +114,16 @@ def _schedule_overflow(schedule: Any) -> Any:
     return overflow
 
 
-def _map_fanout(tree: Any, leaf_map: Callable[[Any], Any]) -> Any:
-    """Apply ``leaf_map`` to the leaves a forward pass reads; every other leaf passes through.
-
-    A tiled evaluate batch is only ever consulted through the leaves a genome's
-    ``forward`` reads, so the population axis is fanned on exactly those leaves and
-    the rest keep their ``P`` rows -- that is what makes a tiled forward cheap
-    without touching a single number.  The read set is declared by the type that
-    owns the data (``FANOUT_FIELDS`` on ``Transformed``, ``GenomeTensors`` and
-    ``SubstrateSchedule``), so a genome that starts reading another leaf adds it
-    there instead of editing this walker; a tree type that declares nothing is
-    walked in full, and a declared field that is itself declared is fanned
-    recursively.
-    """
-    fields = getattr(type(tree), "FANOUT_FIELDS", None)
-    if fields is None:
-        return evoxc.tree_map(leaf_map, tree)
-    return tree._replace(
-        **{name: _map_fanout(getattr(tree, name), leaf_map) for name in fields}
-    )
-
-
-def _repeat_batch(tree: Any, factor: int, pop_size: int) -> Any:
-    """Repeat the batch-first leaves a forward pass reads ``factor`` times along axis 0.
-
-    A problem tiles its batch over the population axis, so the schedule and the
-    payload must be repeated to ``P * factor`` rows in the flat order
-    ``p * factor + s`` (individual slowest) that the tiling uses.  Only the leaves
-    a forward pass reads are repeated (:func:`_map_fanout`); leaves without the
-    population axis (a shared key or order table) pass through.
-    """
-    if factor == 1:
-        return tree
-
-    def expand(leaf: Any) -> Any:
-        """Repeat one leaf along a new sample axis, if it carries the population."""
-        shape = getattr(leaf, "shape", None)
-        if not shape or int(shape[0]) != pop_size:
-            return leaf
-        trailing = tuple(int(size) for size in shape[1:])
-        widened = enp.reshape(leaf, (pop_size, 1) + trailing)
-        repeated = enp.broadcast_to(widened, (pop_size, factor) + trailing)
-        return enp.reshape(repeated, (pop_size * factor,) + trailing)
-
-    return _map_fanout(tree, expand)
-
-
 def _slice_batch(tree: Any, start: int, stop: int, pop_size: int) -> Any:
-    """Slice the leaves a forward pass reads to the individuals ``[start, stop)``.
+    """Slice a batch-first tree to the individuals ``[start, stop)``.
 
-    The static half of the chunked evaluate pass in :func:`_run_network`: the same
-    leaf walk as :func:`_repeat_batch`, so a leaf carrying the population axis is
-    sliced and a leaf shared by the whole population (which has no such axis) comes
-    through untouched.  The bounds are static ints, so the slice is one graph op.
+    The static half of the chunked evaluate pass in :func:`_run_network`: a leaf
+    carrying the population axis is sliced and a leaf shared by the whole population
+    (a static ordering or key table, which has no such axis) comes through untouched.
+    The bounds are static ints, so the slice is one graph op per leaf.  The walk is
+    whole-tree rather than a declared read set because the slice is a *view* of an
+    operand the caller already holds -- unlike a repeat, it neither derives nor copies
+    anything a forward does not read.
     """
 
     def take(leaf: Any) -> Any:
@@ -175,7 +133,7 @@ def _slice_batch(tree: Any, start: int, stop: int, pop_size: int) -> Any:
             return leaf
         return leaf[start:stop]
 
-    return _map_fanout(tree, take)
+    return evoxc.tree_map(take, tree)
 
 
 def _run_network(
@@ -187,24 +145,22 @@ def _run_network(
 ) -> Any:
     """Evaluate a population on a tiled batch (the body of every ``act_fn``).
 
-    ``transformed``/``payload`` arrive batch-first over ``P``; ``inputs`` is
-    ``(P * S, *input_shape)``, so both are repeated ``S`` times before the
-    ``forward`` adapter (:meth:`Pipeline._forward_adapter`) runs them.
+    ``transformed``/``payload`` arrive batch-first over ``P`` and stay there;
+    ``inputs`` is ``(P * S, *input_shape)``.  The ``forward`` adapter
+    (:meth:`Pipeline._forward_adapter`) is handed both at their native ``P`` rows and
+    the tiled inputs as they arrive: the genome derives the sample count from the two
+    static shapes and expands its own sample-invariant operands, so no repeat is
+    emitted here and nothing has to be kept in step with a ``forward``'s read set.
 
-    Two regroupings keep a wide tiling cheap, and neither changes a number:
-
-    * Only the leaves a forward pass reads are repeated (:func:`_map_fanout`), so
-      the unread part of the schedule and ``conn_keys`` stay at ``P`` rows instead
-      of being copied to ``P * S`` rows nobody reads.
-    * A tiled block wider than :data:`EVAL_CHUNK_ROWS` rows is evaluated in groups
-      of individuals whose own block fits that budget, and the group outputs are
-      concatenated in row order.  This is bit-identical because every op of a
-      ``forward`` is row-local -- ``gather`` / ``multiply`` / a reduce over the
-      window axis / ``select`` / the elementwise ``output_transform`` -- and because
-      the one population-wide quantity, the level ``while_loop``'s depth bound, is a
-      *maximum*: a group's maximum never exceeds the global one and does bound each
-      of its own rows, so the only level a row can miss is one beyond the static
-      ``max_depth``, exactly as in the unchunked pass.
+    The one regrouping that remains is a chunk budget: a tiled block wider than
+    :data:`EVAL_CHUNK_ROWS` rows is evaluated in groups of individuals whose own block
+    fits that budget, and the group outputs are concatenated in row order.  This is
+    bit-identical because every op of a ``forward`` is row-local -- ``gather`` /
+    ``multiply`` / a reduce over the window axis / ``select`` / the elementwise
+    ``output_transform`` -- and because the one population-wide quantity, the level
+    ``while_loop``'s depth bound, is a *maximum*: a group's maximum never exceeds the
+    global one and does bound each of its own rows, so the only level a row can miss is
+    one beyond the static ``max_depth``, exactly as in the unchunked pass.
 
     The groups are a Python loop, so every group's entry-block intermediates stay
     alive until the generation returns; that is the interpreter's per-block live
@@ -230,26 +186,18 @@ def _run_network(
         else max(1, EVAL_CHUNK_ROWS // factor)
     )
     if chunk >= row_count:
-        return forward(
-            state,
-            _repeat_batch(transformed, factor, row_count),
-            inputs,
-            _repeat_batch(payload, factor, row_count),
-        )
+        return forward(state, transformed, inputs, payload)
     outputs = []
     for start in range(0, row_count, chunk):
         stop = min(start + chunk, row_count)
-        count = stop - start
         # Individual ``p`` owns the tiled rows ``p * factor .. (p + 1) * factor - 1``
         # (individual-major), so the group's rows are one contiguous block of ``inputs``.
         outputs.append(
             forward(
                 state,
-                _repeat_batch(
-                    _slice_batch(transformed, start, stop, row_count), factor, count
-                ),
+                _slice_batch(transformed, start, stop, row_count),
                 inputs[start * factor : stop * factor],
-                _repeat_batch(_slice_batch(payload, start, stop, row_count), factor, count),
+                _slice_batch(payload, start, stop, row_count),
             )
         )
     return evoxc.concatenate(outputs, axis=0)

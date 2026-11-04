@@ -49,13 +49,6 @@ class GenomeTensors(NamedTuple):
     conn_keys: evoxc.SymbolicTensor
     conn_attrs: evoxc.SymbolicTensor
 
-    #: Leaves a tiled forward pass reads, and therefore the only ones repeated/sliced
-    #: along the population axis when a problem tiles the evaluate batch
-    #: (``host_payload._map_fanout``): ``conn_keys`` is a ``forward`` parameter no genome
-    #: reads.  A genome that starts reading another field must add it here: an unread
-    #: field is fanned un-fanned, so a missing entry surfaces as a shape error inside the
-    #: trace, never as silently wrong numbers.
-    FANOUT_FIELDS = ("node_keys", "node_attrs", "conn_attrs")
 
     @property
     def field_names(self) -> tuple[str, ...]:

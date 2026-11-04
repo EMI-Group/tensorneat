@@ -29,6 +29,7 @@ from .window import (
     _iinf,
     _slot_index,
     any_slot,
+    by_samples,
     fill,
 )
 
@@ -47,12 +48,19 @@ class _StepStatics:
     This is a plain trace-local Python object, never a graph input or output: it holds
     ``evoxc`` tensors of the trace that created it and is not part of any pytree.
 
+    The two genomes read every one of these at the *evaluated* row count, which a problem's
+    tiling makes ``P * samples``; all of them except ``flat_index`` are derived at the
+    schedule's own ``P`` rows and expanded with :func:`..window.by_samples`, because tiled row
+    ``p * samples + j`` is a copy of individual ``p`` (see :meth:`BaseGenome._hit_conn_attrs`).
+
     Attributes:
-        conn: ``ConnOperands`` of the gathered ``(P, N, K, CA)`` edge attributes, with the
-            NaN of the padding rows cleaned.
-        flat_index: ``(P * N * K,) int32`` flat gather index of the node-value window.
-        present: ``(P, N, K) bool`` liveness of each window slot.
-        output_rows: ``(P, N) bool``, True on the rows read out as network outputs.
+        conn: ``ConnOperands`` of the gathered edge attributes, with the NaN of the padding
+            rows cleaned, at the evaluated row count.
+        flat_index: ``(rows, N, K) int32`` flat gather index of the node-value window.
+        present: ``(rows, N, K) bool`` liveness of each window slot.
+        output_rows: ``(rows, N) bool``, True on the rows read out as network outputs.
+        samples: Static tiling factor ``S`` of the evaluated batch (``1`` for a direct call).
+        mask: The ``(P, N) bool`` output-row mask the prepared ``node`` was built against.
         node_attrs: The attribute tensor the prepared ``node`` was built from, so a second
             forward pass cannot silently reuse it.
         node: ``NodeOperands`` of ``node_attrs``; ``None`` until the first step.
@@ -63,6 +71,8 @@ class _StepStatics:
         "flat_index",
         "present",
         "output_rows",
+        "samples",
+        "mask",
         "node_attrs",
         "node",
     )
@@ -73,19 +83,26 @@ class _StepStatics:
         flat_index: evoxc.SymbolicTensor,
         present: evoxc.SymbolicTensor,
         output_rows: evoxc.SymbolicTensor,
+        samples: int = 1,
     ):
         """Store the tensors derived once by :meth:`BaseGenome._hit_conn_attrs`.
 
         Args:
-            conn: ``ConnOperands`` of the gathered connection attributes.
-            flat_index: Flat gather index of the node-value window.
-            present: Liveness mask of the same slots.
+            conn: ``ConnOperands`` of the gathered connection attributes, ``P`` rows.
+            flat_index: Flat gather index of the node-value window, already tiled.
+            present: Liveness mask of the same slots, already tiled.
             output_rows: ``(P, N) bool`` output-row mask.
+            samples: Static tiling factor of the evaluated batch.
         """
-        self.conn = conn
+        pop_size = int(output_rows.shape[0])
+        self.conn = evoxc.tree_map(
+            lambda leaf: by_samples(leaf, samples, pop_size), conn
+        )
         self.flat_index = flat_index
         self.present = present
-        self.output_rows = output_rows
+        self.output_rows = by_samples(output_rows, samples, pop_size)
+        self.samples = samples
+        self.mask = output_rows
         self.node_attrs = None
         self.node = None
 
@@ -94,13 +111,18 @@ class _StepStatics:
     ) -> Any:
         """Prepared node attributes of this forward pass, built on the first step.
 
+        The bundle is prepared at the ``P`` rows ``node_attrs`` arrives with and then expanded
+        to the evaluated row count: a column read, an option-id cast and an option mask are all
+        row-local, so tiled row ``p * samples + j`` reads the copy of individual ``p`` and the
+        level/tick loop still receives exactly the operands it used to prepare for itself.
+
         Args:
             genome: The genome whose node gene reads the attributes.
             node_attrs: ``(P, N, NA) float32`` node attributes of this pass — the same
                 tensor on every step, because attributes never change during a pass.
 
         Returns:
-            The ``NodeOperands`` bundle of ``node_attrs``.
+            The ``NodeOperands`` bundle of ``node_attrs``, at the evaluated row count.
 
         Raises:
             TensorNEATError: If a step is handed a different attribute tensor than the one
@@ -108,7 +130,11 @@ class _StepStatics:
         """
         if self.node is None:
             self.node_attrs = node_attrs
-            self.node = genome.node_gene.prepare(node_attrs, self.output_rows)
+            pop_size = int(node_attrs.shape[0])
+            prepared = genome.node_gene.prepare(node_attrs, self.mask)
+            self.node = evoxc.tree_map(
+                lambda leaf: by_samples(leaf, self.samples, pop_size), prepared
+            )
         elif self.node_attrs is not node_attrs:
             raise TensorNEATError(
                 "_node_step received different node attributes than the ones these step "
@@ -172,6 +198,38 @@ class NodeStepMixin:
 
     # ---------------------------------------------------------------- shared kernel
     @staticmethod
+    def _sample_count(inputs: evoxc.SymbolicTensor, pop_size: int) -> int:
+        """How many tiled samples each individual carries in this forward pass.
+
+        A problem tiles its dataset or rollout batch over the population axis in
+        *individual-major* order, so a ``forward`` can be asked for ``P * S`` rows while the
+        schedule and the payload stay at ``P``. The ratio is static (both shapes are), which is
+        what lets the caller expand a ``P``-row derivation to the evaluated rows and leave the
+        level/tick loop's algebra untouched.
+
+        Args:
+            inputs: ``(batch, *input_shape)`` network inputs of this pass.
+            pop_size: Static population ``P`` of the schedule and the payload.
+
+        Returns:
+            The static sample count ``S = batch // P``, at least ``1``.
+
+        Raises:
+            TensorNEATError: If the batch is not a positive multiple of ``P`` -- a batch that
+                does not repeat whole individuals has no sample axis to expand, so the
+                schedule and the inputs would silently disagree about their rows.
+        """
+        batch = int(inputs.shape[0])
+        samples, remainder = divmod(batch, pop_size)
+        if remainder or samples < 1:
+            raise TensorNEATError(
+                f"the network was asked for a batch of {batch} row(s), which is not a "
+                f"positive multiple of the population {pop_size}; a tiled dataset must be "
+                "individual-major over the population axis"
+            )
+        return samples
+
+    @staticmethod
     def _gather_slots(
         x: evoxc.SymbolicTensor,
         idx: evoxc.SymbolicTensor,
@@ -198,7 +256,10 @@ class NodeStepMixin:
         flat_index, _ = _slot_index(idx, mask, int(x.shape[1]))
         return _gather_prepared(x, flat_index)
     def _hit_conn_attrs(
-        self, transformed: Transformed, conn_attrs: evoxc.SymbolicTensor
+        self,
+        transformed: Transformed,
+        conn_attrs: evoxc.SymbolicTensor,
+        samples: int = 1,
     ) -> _StepStatics:
         """Build the loop-invariant operands of one forward pass (called once per pass).
 
@@ -207,11 +268,18 @@ class NodeStepMixin:
         and handed to :meth:`_node_step` in a :class:`_StepStatics`. That is what keeps the
         per-level cost at the window arithmetic alone.
 
+        Everything but the flat index is derived at the schedule's own ``P`` rows and expanded
+        to the evaluated ``P * samples`` rows by :class:`_StepStatics`: a problem tiles its
+        dataset over the population axis, so those rows repeat the same individual and
+        re-deriving the operand at each of them would multiply the pass's element traffic by
+        ``samples`` for identical numbers.
+
         Args:
             transformed: Schedule whose ``in_conn`` is the ``(P, N, K) int32`` connection
                 **row** index of each slot, and whose ``in_src``/``in_valid`` are the source
                 index and liveness of the same slots.
             conn_attrs: ``(P, E, CA) float32`` connection attributes, NaN padded.
+            samples: Static tiling factor ``S`` of the batch this pass evaluates.
 
         Returns:
             :class:`_StepStatics` of this population: the gathered edge attributes (a dead
@@ -238,9 +306,11 @@ class NodeStepMixin:
             hit = enp.zeros((pop_size, max_nodes, window, 0), dtype=evoxc.float32)
         return _StepStatics(
             self.conn_gene.prepare(hit),
-            *_slot_index(transformed.in_src, transformed.in_valid, max_nodes),
+            *_slot_index(transformed.in_src, transformed.in_valid, max_nodes, samples),
             self._output_row_mask(pop_size, max_nodes),
+            samples,
         )
+
     def _node_step(
         self,
         state: State,
@@ -254,7 +324,9 @@ class NodeStepMixin:
 
         Written here once; ``default.py`` (per depth level) and ``recurrent.py`` (per tick)
         call it with their own ``update_mask`` and must not duplicate it.  With ``P`` the
-        population, ``N`` ``max_nodes`` and ``K`` the window width, and ``statics`` the
+        evaluated row count (the population, or ``P * samples`` when a problem tiles its
+        dataset over the population axis -- ``statics`` is expanded to that width), ``N``
+        ``max_nodes`` and ``K`` the window width, and ``statics`` the
         :class:`_StepStatics` of this pass:
 
         1. ``xv = gather(values, statics.flat_index)`` -> ``(P, N, K)`` source values per
@@ -292,10 +364,12 @@ class NodeStepMixin:
             state: Host configuration container (read-only during a trace).
             transformed: Execution schedule of the population; it must be the one whose
                 fields ``statics`` was derived from (its ``in_src`` shape gives the window).
-            node_attrs: ``(P, N, NA) float32`` node attributes, NaN padded.
+            node_attrs: ``(P, N, NA) float32`` node attributes, NaN padded -- the schedule's
+                own ``P`` rows, the one argument that is not tiled (the node operands are
+                prepared there and expanded).
             hit_conn_attrs: The :class:`_StepStatics` of :meth:`_hit_conn_attrs` for this
-                forward pass.
-            values: ``(P, N) float32`` current node values, NaN where not yet computed.
+                forward pass, already at the evaluated row count.
+            values: ``(rows, N) float32`` current node values, NaN where not yet computed.
             update_mask: ``(P, N) bool`` caller gate — for the feedforward genome the plain
                 ``node_level == level`` comparison (the schedule already stores ``I_INF`` on
                 every absent row, so a separate ``node_exists`` term is redundant), for the

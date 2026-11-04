@@ -88,10 +88,46 @@ def _i32(value: int) -> evoxc.SymbolicTensor:
     return enp.full((), int(value), dtype=evoxc.int32)
 
 
+def by_samples(
+    x: evoxc.SymbolicTensor, samples: int, pop_size: int
+) -> evoxc.SymbolicTensor:
+    """Repeat a batch-first tensor ``samples`` times along a new sample axis, ``p * samples + j``.
+    A problem tiles its dataset or rollout over the population axis, so tiled row
+    ``p * samples + j`` is the copy of individual ``p``. Everything a forward pass derives from
+    the schedule or the payload (the gathered edge attributes, the prepared node columns, the
+    liveness mask, the flat gather index) is therefore identical across those rows, and a
+    ``P``-row derivation re-expanded here costs one copy per operand instead of being
+    re-derived at ``P * samples`` rows. The copies are the exact values the tiled kernel used
+    to derive for itself, so the level loop stays bit-identical rather than merely equivalent.
+    The one operand that cannot be derived this way is the flat gather index, which has to
+    carry the tiled row offset: :func:`_slot_index` expands the *clamped* index and adds the
+    ``P * samples``-row offset table afterwards.
+    ``samples == 1`` (a direct caller such as ``Pipeline.show`` or a unit test) and a tensor
+    without the population axis (a shared ordering table, a rank-0 constant) pass through
+    unchanged, so neither pays for an op it does not need.
+    Args:
+        x: Batch-first tensor whose axis 0 is the population, or any tensor without it.
+        samples: Static sample count ``S`` the batch was tiled with.
+        pop_size: Static population ``P`` of ``x``.
+    Returns:
+        ``(P * samples, *x.shape[1:])`` in the flat order ``p * samples + j``, or ``x``.
+    """
+    if samples == 1:
+        return x
+    shape = getattr(x, "shape", None)
+    if not shape or int(shape[0]) != pop_size:
+        return x
+    trailing = tuple(int(size) for size in shape[1:])
+    widened = enp.reshape(x, (pop_size, 1) + trailing)
+    repeated = enp.broadcast_to(widened, (pop_size, samples) + trailing)
+    return enp.reshape(repeated, (pop_size * samples,) + trailing)
+
+
 def _slot_index(
     idx: evoxc.SymbolicTensor,
     mask: evoxc.SymbolicTensor,
     row_len: int,
+    samples: int = 1,
 ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
     """Flatten one window index table to a block-shaped gather index plus a liveness mask.
     ``evoxc.gather`` follows ``np.take`` semantics and splices the *whole* index shape into the
@@ -101,6 +137,11 @@ def _slot_index(
     Both results depend only on the schedule (``idx`` and ``mask``) and on the static
     ``row_len``, so :meth:`BaseGenome._hit_conn_attrs` derives them once per forward pass and
     every unrolled level reuses them instead of re-deriving them.
+    ``samples`` is the static tiling factor of a problem-tiled batch: the clamp runs at the
+    schedule's own ``P`` rows and only its result is expanded (:func:`by_samples`), while the
+    offset table is baked for the ``P * samples`` tiled rows -- the index is the one operand
+    whose value genuinely depends on the tiled row, so it keeps one ``add`` at that width
+    instead of a clamp and a reshape-back per row group.
     Two facts make this two traced ops (:func:`evoxc.minimum` and one ``add``) instead of the
     four a mask-and-redirect form needs:
     * the liveness mask *is* ``mask``: the schedule guarantees ``in_src`` is ``I_INF`` at
@@ -118,6 +159,8 @@ def _slot_index(
             (or a masked-out position) means "no slot".
         mask: ``(P, *block) bool`` liveness of each slot; returned as the ``present`` mask.
         row_len: ``R``, the source table's second-axis length.
+        samples: Static tiling factor ``S`` of the batch the index is used in.
+
     Returns:
         ``(flat_index, present)``: the ``(P, *block)`` gather index into the flattened
         ``(P * R,)`` table, with every absent slot clamped to row ``R - 1`` of its own
@@ -126,9 +169,12 @@ def _slot_index(
     """
     pop_size = int(idx.shape[0])
     block = tuple(int(size) for size in idx.shape[1:])
+    rows = pop_size * samples
     in_range = evoxc.minimum(idx, _i32(row_len - 1))
-    flat = evoxc.add(in_range, _row_offsets(pop_size, row_len, len(block)))
-    return evoxc.reshape(flat, (pop_size, *block)), mask
+    flat = evoxc.add(
+        by_samples(in_range, samples, pop_size), _row_offsets(rows, row_len, len(block))
+    )
+    return evoxc.reshape(flat, (rows, *block)), by_samples(mask, samples, pop_size)
 
 
 def _row_offsets(pop_size: int, row_len: int, block_rank: int) -> evoxc.SymbolicTensor:
@@ -139,7 +185,8 @@ def _row_offsets(pop_size: int, row_len: int, block_rank: int) -> evoxc.Symbolic
     (three fewer traced ops per window index, and one constant instead of two).
 
     Args:
-        pop_size: ``P``, the population size.
+        pop_size: ``P``, the number of rows the flattened table holds — the population, or
+            the tiled ``P * samples`` rows of a problem-tiled batch.
         row_len: ``R``, the source table's second-axis length.
         block_rank: Rank of the window block the offsets must broadcast over.
 

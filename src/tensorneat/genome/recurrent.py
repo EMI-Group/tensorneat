@@ -25,7 +25,7 @@ from .operations import (
     DefaultDistance,
     DefaultMutation,
 )
-from .window import any_slot, fill
+from .window import any_slot, by_samples, fill
 
 
 class RecurrentGenome(BaseGenome):
@@ -136,14 +136,16 @@ class RecurrentGenome(BaseGenome):
     ) -> evoxc.SymbolicTensor:
         """Evaluate the population by ``activate_time`` synchronous ticks, unrolled.
 
-        The exact algebra, with ``P`` the population, ``N`` ``max_nodes`` and ``T``
+        The exact algebra, with ``P`` the population, ``rows = P * samples`` the evaluated row
+        count (a problem tiles its dataset or rollout over the population axis, so row
+        ``p * samples + j`` is individual ``p``), ``N`` ``max_nodes`` and ``T``
         ``activate_time``:
 
-        1. ``values = full((P, N), NaN)``; ``hit_conn_attrs = self._hit_conn_attrs(transformed,
-           conn_attrs)`` once, since edge attributes are constant over the ticks, and the
-           attribute rows of absent nodes are rewritten to ``0`` in the same one-off step
-           (``self._padding_safe_attrs``) so the node gene's ``int32`` option-index cast never
-           sees a ``NaN``.
+        1. ``values = full((rows, N), NaN)``; ``hit_conn_attrs =
+           self._hit_conn_attrs(transformed, conn_attrs, samples)`` once, since edge attributes
+           are constant over the ticks, and the attribute rows of absent nodes are rewritten to
+           ``0`` in the same one-off step (``self._padding_safe_attrs``) so the node gene's
+           ``int32`` option-index cast never sees a ``NaN``.
         2. ``for _ in range(self.activate_time)`` (a Python loop, unrolled at trace time):
            re-inject the raw ``inputs`` into the input rows, then
            ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs, values,
@@ -169,27 +171,41 @@ class RecurrentGenome(BaseGenome):
             node_attrs: ``(P, N, NA) float32`` node attributes, NaN padded.
             conn_keys: ``(P, E, CK) int32`` connection keys, ``I_INF`` padded.
             conn_attrs: ``(P, E, CA) float32`` connection attributes, NaN padded.
-            inputs: ``(P, num_inputs) float32`` network inputs, re-injected raw on every tick.
+            inputs: ``(P * samples, num_inputs) float32`` network inputs, tiled
+                individual-major over the population axis and re-injected raw on every tick.
 
         Returns:
-            ``(P, num_outputs) float32`` outputs after ``output_transform``.
+            ``(P * samples, num_outputs) float32`` outputs after ``output_transform``.
+
+        Raises:
+            TensorNEATError: If the batch is not a positive multiple of ``P`` (see
+                :meth:`_sample_count`) — there is then no sample axis to expand the schedule
+                with, and the two would silently disagree about their rows.
         """
         pop_size, max_nodes = (int(size) for size in transformed.node_exists.shape)
-        # One NaN element broadcast to ``(P, N)`` (see ``..window.fill``): the materialised
+        samples = self._sample_count(inputs, pop_size)
+        # One NaN element broadcast to the node block (see ``..window.fill``): the materialised
         # block would be the kernel's only population-scaled graph constant.
-        values = fill((pop_size, max_nodes), float("nan"), dtype=evoxc.float32)
+        values = fill(
+            (pop_size * samples, max_nodes), float("nan"), dtype=evoxc.float32
+        )
         # Absent rows read as ``0`` instead of ``NaN`` before the tick loop, so the option
         # index columns the node gene casts to ``int32`` are never NaN (see
-        # ``BaseGenome._padding_safe_attrs``).
+        # ``BaseGenome._padding_safe_attrs``). The schedule's ``P`` rows are enough: the
+        # statics and the mask are expanded to the evaluated ``P * samples`` rows below.
         node_attrs = self._padding_safe_attrs(node_attrs, node_keys)
-        hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs)
+        hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs, samples)
         # "Has at least one live incoming slot" is a boolean *any* over the window, so it is
         # the same static slice fold as the once-per-tick liveness test of the window step
         # (:func:`..window.any_slot`) instead of a count: ``count > 0`` would be an
-        # innermost-axis ``reduce_sum`` over the whole ``(P, N, K)`` block, the most expensive
-        # op shape on the reference backend, for a predicate that costs ``2K`` cheap ops.
+        # innermost-axis ``reduce_sum`` over the whole ``(rows, N, K)`` block, the most
+        # expensive op shape on the reference backend, for a predicate that costs ``2K`` cheap
+        # ops. Both terms are folded at ``P`` rows and expanded afterwards, which is the same
+        # boolean per tiled row (the tiling repeats an individual, and an *any* over the
+        # window is row-local).
         update_mask = evoxc.logical_and(
-            transformed.node_exists, any_slot(transformed.in_valid)
+            by_samples(transformed.node_exists, samples, pop_size),
+            by_samples(any_slot(transformed.in_valid), samples, pop_size),
         )
         for _ in range(self.activate_time):
             values = evoxc.concatenate(

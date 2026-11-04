@@ -100,14 +100,6 @@ class SubstrateSchedule(NamedTuple):
     conn_keys: Any
     conn_attrs: Any
 
-    #: Leaves a tiled forward pass reads, and therefore the only ones repeated/sliced
-    #: along the population axis when a problem tiles the evaluate batch
-    #: (``host_payload._map_fanout``); ``schedule`` is fanned with its own field set and
-    #: ``conn_keys`` is a ``forward`` parameter no genome reads.  A genome that starts
-    #: reading another field must add it here: an unread field is fanned un-fanned, so a
-    #: missing entry surfaces as a shape error inside the trace, never as silently wrong
-    #: numbers.
-    FANOUT_FIELDS = ("schedule", "node_keys", "node_attrs", "conn_attrs")
 
     @property
     def level(self) -> Any:

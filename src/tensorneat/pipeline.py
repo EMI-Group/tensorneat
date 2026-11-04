@@ -34,9 +34,10 @@ rebuilds the genome -- and a lossy schedule is never used.
 
 Tiled batches: a problem tiles its dataset (``P * S`` rows) or its episodes
 (``P * R`` rows) over the population axis, while the genome kernels are
-batch-first over ``P``.  The ``act_fn`` this module hands the problem therefore
-repeats the schedule and the payload ``S`` times with
-:func:`~tensorneat.host_payload._repeat_batch`, individual-major as the problem tiles.
+batch-first over ``P``.  The ``act_fn`` this module hands the problem passes the
+schedule and the payload on at ``P`` rows and the tiled inputs as they arrive; the
+genome expands its sample-invariant operands itself
+(:func:`~tensorneat.genome.window.by_samples`), individual-major as the problem tiles.
 
 A "best genome" is **batch-first**: the selected individual is a one-individual
 batch (``node_keys (1, max_nodes)``, ``conn_keys (1, max_conns, key_width)``,
@@ -132,7 +133,6 @@ from .host_payload import (
     _declared_shape,
     _jsonable,
     _one_individual,
-    _repeat_batch,
     _run_network,
     _schedule_overflow,
 )
@@ -145,7 +145,7 @@ __all__ = ["Pipeline"]
 _RUNTIME_KEYS: tuple[str, ...] = ("pop", "generation", "species", "randkey")
 
 
-# The host payload helpers (``_repeat_batch``, ``_one_individual``, ...) live in
+# The host payload helpers (``_run_network``, ``_one_individual``, ...) live in
 # :mod:`tensorneat.host_payload` and are imported above.
 
 # --------------------------------------------------------------------------- #
