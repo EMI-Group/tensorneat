@@ -14,6 +14,10 @@ Rationale: evoxc has **no bitcast op** (`cast` is numeric only), so a mixed-dtyp
 Consequences: an absent row is `keys == I_INF` in the key arrays and `isnan` in the attribute arrays; int-valued genes (activation/aggregation option positions) live in the float attribute columns, stay integral-valued, and are cast with `cast(..., int32)` before use; in-graph gene identity uses the **key columns** with `equal`, never a hash of the row (see Known Gaps).
 `tensorization.derive_schedule` accepts **either** spelling for its key arguments: `int32` with `I_INF` padding (canonical — what the payload and every kernel pass) or `float32` with `NaN` padding (the pre-rewrite/parity spelling `test/support/oracle.py` still uses).
 That dispatch is a trace-time `if` on a static dtype, never a runtime branch: `present = keys != I_INF` for integer keys, `present = isfinite(keys) & (keys < KEY_MAX)` for float keys.
+**Graph dtypes are signed only**: no `uint8/uint16/uint32/uint64` may appear in any operand, result or constant of a graph this package builds, because the iree backend's declared set is float16/32/64, int8/16/32/64 and bool — an unsigned value lowers nowhere but the numpy interpreter.
+Use a same-width **signed** carrier instead, and where *unsigned order* genuinely matters (wrap-around comparisons, modular hashing) flip the sign explicitly rather than casting to an unsigned dtype.
+`tools.hash_rows` is the one deliberate exception: it is numpy host code, never traced.
+Consequence for range tests: `key ∈ [0, key_span)` is two signed comparisons in the key's own dtype (`greater_equal(keys, 0)` and `less(keys, key_span)`), which is bit-identical on numpy to the older `cast(keys, uint32) < key_span` trick and costs one op more.
 
 ## Execution schedule contract (`Transformed`)
 `tensorization.derive_schedule(...)` is one `@evoxc.defn` graph; its output is a host-visible pytree of arrays only (**no Python statics inside** — every static fact is implied by a shape or a dtype).
