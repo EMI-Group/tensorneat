@@ -87,7 +87,7 @@ A feedforward genome's add-conn can close a cycle, so that branch keeps the pred
 ## Measured cost (numpy reference interpreter, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100)`, build excluded, one warmup + median of 7, RNG key created inside the trace)
 | kernel | pop | traced ops | ms |
 | --- | --- | --- | --- |
-| `DefaultMutation` `execute_mutation` | 100 / 500 / 1000 | **431** | — / 11.80 / 21.25 |
+| `DefaultMutation` `execute_mutation` | 100 / 500 / 1000 | **431** | 5.3 / 11.8 / 21.3 |
 | `RecurrentGenome` + `DefaultMutation` (cycle elided) | 1000 | **301** | 14.86 |
 | `RecurrentMutation` `execute_mutation` (`p_recur=0.1`) | 1000 | **469** | 25.03 |
 | `RecurrentMutation` `execute_mutation` (`p_recur=0.0`, cycle elided) | 1000 | **330** | 17.25 |
