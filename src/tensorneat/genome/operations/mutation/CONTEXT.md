@@ -109,8 +109,8 @@ Traced ops are counted recursively over `module.functions[*].entry_block` and ev
 
 | kernel / cell | pop | traced ops (before → now) | median ms before → now | ratio (6 interleaved pairs) |
 | --- | --- | --- | --- | --- |
-| `execute_mutation` | 500 | 432 → **578** | 19.85 → 23.11 | **1.16×** (1.11–1.20) |
-| `execute_mutation` | 1000 | 432 → **578** | 37.37 → 30.67 | **0.82×** (0.78–0.99) |
+| `execute_mutation` | 500 | 432 → 578 → **594** | 19.85 → 23.11 | **1.16×** (1.11–1.20) |
+| `execute_mutation` | 1000 | 432 → 578 → **594** | 37.37 → 30.67 | **0.82×** (0.78–0.99) |
 
 The reference baseline is `git archive de943ca` with its `src` first on `PYTHONPATH` (asserted via `tensorneat.__file__`).
 Every pair is one baseline process followed by one this-tree process, alternating, six pairs per population; per-pair ratios are load-bearing, absolute milliseconds drift with the box load (this box is shared and was 2+ cores busy).
