@@ -42,7 +42,7 @@ at pop 1000 the two trajectories separate at `1e-08`-scale and land on `-0.15179
 
 ## The five gates, in the order they fired
 
-Each gate below was reproduced verbatim on this machine, then removed **at its source in `src/`**, never by editing evoxc (`/root/evoxc` is a read-only foreign repo; the installed `evoxc` 0.1.0 was left untouched).
+Each gate below was reproduced verbatim on this machine, then removed **at its source in `src/`**, never by editing evoxc (the `evoxc` checkout used for the investigation is a read-only foreign repo; the installed `evoxc` 0.1.0 was left untouched).
 The offending op's location is `op.location` in the traced evoxc IR, which is why the errors name a TensorNEAT `file:line`.
 
 ### Gate 1 — rank-3 `scatter` (15 sites, export-time)

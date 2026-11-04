@@ -291,7 +291,7 @@ Caveats, both verified on 2026-11-04:
 
 ## Examples
 
-All scripts use the public API only and print a per-generation log. Wall times below are from this box (`uv run` startup included, ~1 s).
+The ten pipeline scripts use the public API only and print a per-generation log; the two `interpret_visualize` scripts are host-only introspection and import `evoxc` directly for that. Wall times below are from this box (`uv run` startup included, ~1 s).
 
 | script | what it demonstrates | command | verified |
 |---|---|---|---|
@@ -355,7 +355,7 @@ $ uv run pytest -o addopts="" -q
 | `test/unit/` | 578 | none | kernels against numpy oracles: schedule derivation, forward/NaN rules, mutation/crossover invariants, speciation bookkeeping, distance, `grad` vs finite differences, ACT/AGG tables, CartPole vs a host Euler rollout |
 | `test/parity/` | 53 | `--extra bench` | the same kernels on identical payloads against `benchmarks/legacy_jax` (rtol 1e-5 forward, 1e-4 gradients), marker `parity` |
 | `test/integration/` | 21 | none | whole-pipeline XOR evolution, per-seed determinism, rebuild on shape change, checkpoint round-trip, `show(state, best)`, marker `slow` |
-| `test/backends/` | 3 | `--extra iree` | `backend="iree"` end to end and its agreement with numpy, marker `requires_iree` (in no gate) |
+| `test/backends/` | 3 | `--extra iree` | `backend="iree"` end to end and its agreement with numpy, marker `requires_iree` (optional CI `iree` job; not part of the numpy gate) |
 | `test/release_gate_no_jax.py` | 4 | none | `import tensorneat` leaves `jax`, `jaxlib`, `torch`, `brax`, `gymnax`, `mujoco` out of `sys.modules` — even under an import hook that raises for them — and a tiny XOR run still evolves |
 
 ## Citation
