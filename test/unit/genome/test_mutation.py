@@ -32,7 +32,7 @@ Oracles used here (never the kernel itself)
 * ``support.payloads``' padding convention (``I_INF`` for keys, ``NaN`` for
   attributes), which every operator must leave intact;
 * a Python reachability walk over the returned edge set, so "is the graph still
-  acyclic?" does not consult the ``check_cycles`` predicate under test.
+  acyclic?" does not consult the ``closes_cycle`` predicate under test.
 
 Gotchas this module encodes
 ---------------------------
@@ -42,10 +42,11 @@ Gotchas this module encodes
   the payload's, not the topology's.
 * ``node_add`` consumes **two** connection rows (the identity edge and the copy
   edge) plus one node row, so it must be refused when only one connection row is
-  free. ``first_free_row`` returning ``I_INF`` is the signal, and the operator is
-  documented to gate the result with ``select`` — writing garbage into a padded
-  row is the failure mode the tests look for.
-* ``delete_node`` must never remove an input or output row; those are the
+  free. The free-row pick (``first_row`` over the free-row mask) reporting no hit
+  is the signal, and the operator is documented to gate the result with
+  ``select`` — writing garbage into a padded row is the failure mode the tests
+  look for.
+* ``node_delete`` must never remove an input or output row; those are the
   genome's external interface and the row/key invariant depends on them. A
   mutation that deleted one would still pass a "count decreased" assertion, so
   the test checks the surviving key set explicitly.
@@ -242,8 +243,8 @@ def _indegree(edges) -> dict:
 def _has_cycle(edges) -> bool:
     """True when the directed graph of ``(source, target)`` pairs contains a cycle.
 
-    A plain Python colouring DFS — deliberately not ``genome.check_cycles``, which
-    is part of the code under test.
+    A plain Python colouring DFS — deliberately not ``closes_cycle``, which is
+    part of the code under test.
     """
     adjacency: dict = {}
     for source, target in edges:
@@ -864,7 +865,7 @@ def test_add_connection_never_closes_a_cycle_in_a_feedforward_genome(
 ):
     """Invariant: a feedforward genome never gains an edge that closes a cycle.
 
-    Oracle: the genome's own ``check_cycles`` predicate is *not* used as the oracle
+    Oracle: the genome's own ``closes_cycle`` predicate is *not* used as the oracle
     (it is part of the code under test); the test recomputes reachability in Python
     on the returned topology — after the mutation, the directed graph must still be
     acyclic. On the dense chain every backward edge would close a cycle, so any
@@ -975,8 +976,8 @@ def test_delete_node_never_removes_an_input_or_output_row(genome, payloads, run_
     Oracle: the surviving key set of the input and output rows — ``0..num_inputs-1``
     and ``max_nodes-num_outputs..max_nodes-1`` must still be present and unchanged —
     plus "no connection row references the deleted key any more" (the
-    ``delete_conns_by_key`` contract, which is data-dependent because a node may
-    have any number of edges). On ``payloads.isolated_payload`` the only hidden row
+    ``DeleteNodePlan.drop`` detach mask, which is data-dependent because a node
+    may have any number of edges). On ``payloads.isolated_payload`` the only hidden row
     has no edges, so the delete must clear it and change no connection row at all.
     """
     sentinel = payloads.I_INF
