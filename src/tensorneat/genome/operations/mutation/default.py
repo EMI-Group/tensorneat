@@ -38,7 +38,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 
 def _fetch_two(
-    key: evoxc.SymbolicTensor, masks: evoxc.SymbolicTensor
+    key: evoxc.SymbolicTensor,
+    masks: evoxc.SymbolicTensor,
+    low: "evoxc.SymbolicTensor | None" = None,
+    high: "evoxc.SymbolicTensor | None" = None,
 ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
     """Draw one uniformly chosen ``True`` entry per row of a ``(P, k, L)`` mask block.
 
@@ -50,6 +53,9 @@ def _fetch_two(
     Args:
         key: Rank-0 ``evoxc.random`` key; the whole batch and every choice come from it.
         masks: ``(P, k, L) bool`` eligibility masks.
+        low: Optional rank-0 ``float32`` lower bound (``0.0`` when omitted) — the stage's
+            shared bound tensor, which draws bit-identically to the Python float.
+        high: Optional rank-0 ``float32`` upper bound (``1.0`` when omitted).
 
     Returns:
         ``(chosen, all_hit)``: ``(P, k) int32`` chosen column indices (``0`` where a slice has
@@ -57,7 +63,11 @@ def _fetch_two(
         entry" — ``any`` over each slice's candidates, folded with ``all`` over the slices.
     """
     draw = evoxc.random.uniform(
-        key, tuple(masks.shape), 0.0, 1.0, dtype=evoxc.float32
+        key,
+        tuple(masks.shape),
+        0.0 if low is None else low,
+        1.0 if high is None else high,
+        dtype=evoxc.float32,
     )
     weights = evoxc.multiply(draw, evoxc.cast(masks, evoxc.float32))
     chosen = evoxc.cast(evoxc.argmax(weights, axis=2), evoxc.int32)
@@ -177,7 +187,10 @@ class DefaultMutation(BaseMutation):
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome providing the identity attribute factory.
             key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this operation's draw.
-            context (EditContext): Shared masks, constants and flat index blocks of the stage.
+            context (EditContext): Shared masks, constants and flat index blocks of the
+                stage; the base's stage wrapper also carries the shared ``uniform_low``
+                / ``uniform_high`` rank-0 bounds every draw in this stage passes to
+                ``evoxc.random.uniform``.
             node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
             conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
             conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` connection attributes;
@@ -190,7 +203,11 @@ class DefaultMutation(BaseMutation):
         """
         pop_size = node_keys.shape[0]
         delete_row, has_connection = masked_random_row(
-            key, context.present_conn_float, context.present_conn_any
+            key,
+            context.present_conn_float,
+            context.present_conn_any,
+            context.uniform_low,
+            context.uniform_high,
         )
         delete_column = enp.reshape(delete_row, (pop_size, 1, 1))
         key_row = take_block_at(
@@ -282,7 +299,10 @@ class DefaultMutation(BaseMutation):
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome providing the input/output row ranges.
             key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this operation's draw.
-            context (EditContext): Shared masks, constants and flat index blocks of the stage.
+            context (EditContext): Shared masks, constants and flat index blocks of the
+                stage; the base's stage wrapper also carries the shared ``uniform_low``
+                / ``uniform_high`` rank-0 bounds every draw in this stage passes to
+                ``evoxc.random.uniform``.
             node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
             conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
             gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected
@@ -292,7 +312,9 @@ class DefaultMutation(BaseMutation):
             DeleteNodePlan: the row to clear and the (already gated) detach mask.
         """
         pop_size = node_keys.shape[0]
-        node_row, has_node = random_row(key, context.deletable_node)
+        node_row, has_node = random_row(
+            key, context.deletable_node, context.uniform_low, context.uniform_high
+        )
         target = evoxc.gather(
             context.node_flat,
             evoxc.add(context.node_offsets, enp.reshape(node_row, (pop_size, 1))),
@@ -332,7 +354,10 @@ class DefaultMutation(BaseMutation):
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome providing ``max_in_degree`` and ``network_type``.
             key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this operation's draws.
-            context (EditContext): Shared masks, constants and flat index blocks of the stage.
+            context (EditContext): Shared masks, constants and flat index blocks of the
+                stage; the base's stage wrapper also carries the shared ``uniform_low``
+                / ``uniform_high`` rank-0 bounds every draw in this stage passes to
+                ``evoxc.random.uniform``.
             node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys (``I_INF`` padded).
             conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
             new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated connection keys.
@@ -343,7 +368,12 @@ class DefaultMutation(BaseMutation):
         """
         pop_size = node_keys.shape[0]
         candidates = enp.stack([context.present_node, context.targetable_node], axis=1)
-        chosen, all_hit = _fetch_two(key, candidates)
+        chosen, all_hit = _fetch_two(
+            key,
+            candidates,
+            context.uniform_low,
+            context.uniform_high,
+        )
         # Both endpoints in one gather: the chosen columns index the node table per
         # individual, so the two keys and their ``(P, 1)`` comparison columns come out of a
         # single flat gather of the stacked row indices.
@@ -395,7 +425,10 @@ class DefaultMutation(BaseMutation):
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome owning the connection gene.
             key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this operation's draw.
-            context (EditContext): Shared masks, constants and flat index blocks of the stage.
+            context (EditContext): Shared masks, constants and flat index blocks of the
+                stage; the base's stage wrapper also carries the shared ``uniform_low``
+                / ``uniform_high`` rank-0 bounds every draw in this stage passes to
+                ``evoxc.random.uniform``.
             conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
             gate (evoxc.SymbolicTensor): ``(P,) bool`` "this individual selected
                 delete-conn".
@@ -404,7 +437,11 @@ class DefaultMutation(BaseMutation):
             DeleteConnPlan: the row to clear; ``ok`` is false when there is none.
         """
         conn_row, has_connection = masked_random_row(
-            key, context.present_conn_float, context.present_conn_any
+            key,
+            context.present_conn_float,
+            context.present_conn_any,
+            context.uniform_low,
+            context.uniform_high,
         )
         return DeleteConnPlan(evoxc.logical_and(gate, has_connection), conn_row)
 
