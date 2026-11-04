@@ -896,13 +896,18 @@ class Pipeline(StatefulBaseClass):
         its ``show`` report -- because it rebuilds ``payload`` with
         ``evoxc.constant`` and re-derives the schedule there; a concrete tensor
         captured in a closure would raise ``evoxc.TraceError`` instead.
+
+        ``payload`` is taken **as given**, i.e. already batch-first at its own
+        population size: :meth:`show` hands it the one individual
+        ``host_payload._one_individual`` normalised, and ``_analyse`` hands it the
+        whole population the diagnostics hook is documented to receive.  It is
+        therefore not passed through ``_one_individual``, whose contract is
+        exactly one individual.
         """
         config = self._static_config(state)
         algorithm = self.algorithm
         forward = self._forward_adapter()
-        arrays = tuple(
-            np.ascontiguousarray(to_numpy(field)) for field in _one_individual(payload)
-        )
+        arrays = tuple(np.ascontiguousarray(to_numpy(field)) for field in payload)
 
         def act_fn(inputs: Any) -> Any:
             """Run the baked genome over one batch of inputs."""
@@ -933,8 +938,12 @@ class Pipeline(StatefulBaseClass):
             None; the report comes from the problem's ``show`` (stdout).
 
         Raises:
-            TensorNEATError: If ``best`` is not a four-array genome payload, or
-                its arrays disagree about the population axis.
+            TensorNEATError: If ``best`` is missing (``None``, e.g. the
+                ``best_genome`` of a run that produced no finite fitness), is not
+                a four-array genome payload, carries more than one individual, or
+                its arrays disagree about the population axis.  Pass the
+                one-individual batch ``(1, max_nodes)`` that ``auto_run(state)``
+                reports, or a bare row.
 
         Notes:
             Host-side only. The schedule is derived once for the report (so a

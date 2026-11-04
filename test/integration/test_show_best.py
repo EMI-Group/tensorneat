@@ -41,14 +41,24 @@ The three assertions and their oracles
   is the pipeline's own contract: a failing diagnostics hook is *printed* as
   ``<label> failed (...); continuing the run`` rather than raised, so the run
   must finish, print ``Generation: 1,`` and print no such line.
+* **A missing payload is a ``TensorNEATError``, not a ``TypeError``.**
+  ``auto_run`` documents ``best_genome`` as a payload *or* ``None`` when no
+  generation produced a finite fitness, so ``show(state, None)`` is a real caller
+  mistake that must be reported in the package's own error type, naming the two
+  accepted spellings and pointing at ``auto_run(state)``/``best_genome``. The
+  same test then reports a legitimate payload, because a guard that rejected the
+  good argument too would "fix" the crash by removing the feature.
 
 Budgets (measured, never asserted)
 ----------------------------------
-Every test is ``pop_size=16`` × ``generation_limit=1`` with
+Every evolving test is ``pop_size=16`` × ``generation_limit=1`` with
 ``fitness_target=1.0`` (unreachable: ``XOR`` fitness is ``-mse <= 0``), so exactly
 one generation is consumed and no convergence is claimed.
 Two ``auto_run`` calls are made in total (one per module-level case), each of
 which compiles once; the third case reuses a fresh pipeline of the same shapes.
+The missing-payload case runs no generation at all: it calls ``setup()`` and
+reports the *initial* population's first individual, so it pays only the one-off
+schedule build every ``show`` pays.
 No test reads a clock (``test/CONTEXT.md``: a flaky timing test is a bug in the
 test).
 
@@ -279,6 +289,73 @@ def test_the_batch_first_spelling_is_what_show_accepts(
         "show() must accept the bare per-individual rows as the same individual "
         "and print the same report; batch-first printed "
         f"{batched_report!r}, bare rows printed {bare_report!r}"
+    )
+
+
+def test_a_missing_payload_is_rejected_and_a_valid_one_still_prints(
+    tiny_pipeline, tn, capsys
+):
+    """Invariant: ``show(state, None)`` raises ``TensorNEATError``; a real payload still reports.
+
+    Oracle: ``Pipeline.auto_run`` documents ``best_genome`` as a one-individual
+    batch **or** ``None`` (a run where no generation produced a finite fitness),
+    so ``None`` is a documented value a caller can hand to ``show`` by accident.
+    The package's own error type and an actionable message are the contract: the
+    accepted spellings ``(1, max_nodes)``/``(max_nodes,)`` plus the documented
+    source of a legitimate argument (``auto_run(state)``'s ``best_genome``). The
+    problem's report shape -- four ``input:`` rows for ``XOR``'s four samples plus
+    one ``loss:`` line -- is the oracle for the valid call.
+
+    Assertion: ``show(state, None)`` raises ``tn.common.TensorNEATError`` (a bare
+    ``TypeError`` from ``list(None)`` fails the type check), its message contains
+    both spellings and ``auto_run``/``best_genome``, and nothing is printed
+    before the raise. Then ``show`` on the initial population's first individual
+    -- a bare per-individual payload, the other documented spelling -- prints the
+    full four-sample report, so the guard rejects only the missing argument.
+
+    Notes:
+        No generation is run: ``setup()`` is the whole setup path here, so this
+        case adds no evolution compile; the payload is ``state.pop`` at
+        ``P = pop_size``, sliced to one individual with the package's own
+        ``common.to_numpy`` (``evoxc.Tensor`` has no ``__array__``). The values in
+        the report are the initial random genome's, so only the counts are
+        asserted.
+
+    Owner: ``pipeline.Pipeline.show``, ``host_payload._one_individual``.
+    """
+    pipeline = tiny_pipeline(**ONE_GENERATION)
+    state = pipeline.setup()
+    capsys.readouterr()  # setup prints nothing, but a report would be caught below
+
+    with pytest.raises(tn.common.TensorNEATError) as excinfo:
+        pipeline.show(state, None)
+
+    message = str(excinfo.value)
+    for token in ("(1, max_nodes)", "(max_nodes,)", "auto_run", "best_genome"):
+        assert token in message, (
+            "a missing payload must be reported with an actionable message: it "
+            f"has to name {token!r} so the caller knows what to pass; message was "
+            f"{message!r}"
+        )
+    assert capsys.readouterr().out == "", (
+        "a rejected show call must not print part of a report for a genome it "
+        "does not have"
+    )
+
+    bare = tuple(tn.common.to_numpy(field)[0] for field in state.pop)
+    assert pipeline.show(state, bare) is None, (
+        "a valid bare per-individual payload must still be reported and return "
+        "None"
+    )
+    report = capsys.readouterr().out
+
+    assert len(_report_lines(report, "input:")) == XOR_SAMPLES, (
+        f"the report of the accepted payload must cover all {XOR_SAMPLES} XOR "
+        f"samples, got {report!r}"
+    )
+    assert len(_report_lines(report, "loss:")) == 1, (
+        f"the accepted payload must be reported with exactly one `loss:` line, "
+        f"got {report!r}"
     )
 
 

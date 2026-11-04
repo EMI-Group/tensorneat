@@ -6,12 +6,12 @@ Each assertion compares against something independent of the implementation unde
 This directory is the whole content of the default gate; `./parity` (legacy JAX oracle) and `./integration` (whole `Pipeline`) are the two suites that go beyond it.
 
 ## Counts
-`./common` 155 passed, `./genome` 108, `./algorithm` 144, `./problem` 133, `./benchmarks` 16 — 556 passed and 0 xfailed in the subdirectories, plus `./test_version.py` (2) at this node's root.
+`./common` 155 passed, `./genome` 108, `./algorithm` 144, `./problem` 133, `./benchmarks` 16 — 556 passed and 0 xfailed in the subdirectories, plus `./test_version.py` (2) and `./test_host_payload.py` (11) at this node's root: 569 collected.
 `./genome` dominates the wall clock (one traced executable per graph), then `./problem`, `./algorithm`, `./benchmarks` and `./common`.
 Everything in this node is green: there is no xfail and no skip (the `./benchmarks` fingerprint tests skip only on a box without a `git` binary).
 
 ## How to run
-`python -m pytest test/unit -m "not parity and not slow"` (or plain `pytest` from the repo root) — numpy backend, no optional dependency, ~19 s (542 passed).
+`python -m pytest test/unit -m "not parity and not slow"` (or plain `pytest` from the repo root) — numpy backend, no optional dependency, ~19 s (569 passed).
 `pytest test/unit/<sub> -k <expr>` narrows the same gate while keeping the leak guard active.
 `test/unit/genome` and `test/unit/problem` are also comfortable alone (`~9 s` / `~5 s`, against `~4 s` for `./algorithm`); no module here needs a network, a GPU or parallelism.
 
@@ -22,6 +22,7 @@ Everything in this node is green: there is no xfail and no skip (the `./benchmar
 `./problem` — func-fit losses (`mse`/`rmse`/`mae`/`mape`), the `problem` protocol, and all three RL environments: CartPole, plus Pendulum and MountainCar with an in-file host-numpy oracle each; the RL suites pin pre-transition cost ordering, Pendulum's clip-before-integrate and floor-mod angle wrap, MountainCar's one-time goal bonus under the pre-step alive mask and its idle optimum of exactly `0.0`, individual-major `(P, R)` averaging and NaN poison by arithmetic.
 `./benchmarks` — the benchmark harness fingerprint (`git_report`, porcelain parsing) on a real temporary git repository.
 `./test_version.py` — the package's `__version__` metadata and its `PackageNotFoundError` fallback.
+`./test_host_payload.py` — the `host_payload._one_individual` contract `Pipeline.show` depends on: the one-individual batch passes through, the bare per-individual rows are promoted to it, a `P > 1` payload and a missing (`None`) payload are `common.TensorNEATError` naming both accepted spellings, and every pre-existing malformed-input message (arity, rank-0, impossible rank, population-axis disagreement) is unchanged.
 Every directory here carries `__init__.py` (pytest's prepend import mode names a module by basename, so un-namespaced directories collide with `./parity`/`./integration`).
 
 ## Oracles
@@ -65,6 +66,7 @@ A test may not edit `../../src`, `../../benchmarks` or `pyproject.toml`; a disco
 | `./problem` | func-fit losses (`mse`/`rmse`/`mae`/`mape`), the `problem` protocol, and the CartPole / Pendulum / MountainCar rollouts against host-numpy oracles (Pendulum's and MountainCar's live in their own modules). |
 | `./benchmarks` | harness fingerprint: `git_report`/porcelain parsing against a real temporary git repository. |
 | `./test_version.py` | `tensorneat.__version__` against the distribution metadata, plus the `PackageNotFoundError` fallback. |
+| `./test_host_payload.py` | `host_payload._one_individual`: one-individual batch vs bare rows, the `P > 1` and `None` rejections naming both spellings, and the unchanged malformed-input messages. |
 | `./conftest.py` | session baseline + import recorder: the per-test optional-framework guard. |
 | `../support` | shared runner, hand-built payloads and numpy oracles used by every suite here. |
 | `../release_gate_no_jax.py` | import-hygiene gate on the package in a clean subprocess (test root, not this node). |

@@ -180,13 +180,24 @@ def _one_individual(payload: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray, n
         one shared population axis ``P`` (``P = 1`` for bare input).
 
     Raises:
-        TensorNEATError: If the payload is not four non-scalar arrays, if a field
-            is written with a rank the payload cannot have (``node_keys`` above
-            rank 2, ``conn_keys`` outside rank 2-3, an attribute array whose rank
-            does not match the key array's spelling), or if the four arrays
-            disagree about the population axis.  A population is never reshaped
-            down to one individual.
+        TensorNEATError: If the payload is missing (``None``), is not four
+            non-scalar arrays, is a batch of more than one individual
+            (``node_keys.shape[0] > 1`` -- this helper normalises *one* genome),
+            if a field is written with a rank the payload cannot have
+            (``node_keys`` above rank 2, ``conn_keys`` outside rank 2-3, an
+            attribute array whose rank does not match the key array's spelling),
+            or if the four arrays disagree about the population axis.  A
+            population is never reshaped down to one individual.
     """
+    if payload is None:
+        raise TensorNEATError(
+            "no genome payload was given (got None); pass a one-individual batch "
+            "(1, max_nodes) -- the spelling of state.pop/best_genome at P = 1, "
+            "e.g. the `best` that `auto_run(state)` returns -- or the bare "
+            "per-individual rows a checkpoint stores: (max_nodes,), "
+            "(max_nodes, attr_width), (max_conns, key_width), "
+            "(max_conns, attr_width)"
+        )
     fields = list(payload)
     if len(fields) != 4:
         raise TensorNEATError(
@@ -248,6 +259,22 @@ def _one_individual(payload: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray, n
             )
 
     if batched:
+        # The batch is the *one-individual* batch: a whole population (P > 1) is
+        # a usage error, reported here instead of by the population-axis check
+        # below, whose message would blame an axis disagreement that does not
+        # exist.
+        population = int(node_keys.shape[0])
+        if population != 1:
+            raise TensorNEATError(
+                f"the payload holds {population} individuals (node_keys shape "
+                f"{node_keys.shape}); this helper normalises one genome, so pass "
+                "a one-individual batch (1, max_nodes) -- node_keys "
+                "(1, max_nodes), node_attrs (1, max_nodes, attr_width), conn_keys "
+                "(1, max_conns, key_width), conn_attrs (1, max_conns, "
+                "attr_width), i.e. state.pop/best_genome at P = 1 -- or the bare "
+                "per-individual rows (max_nodes,), (max_nodes, attr_width), "
+                "(max_conns, key_width), (max_conns, attr_width)"
+            )
         leaders = {name: int(array.shape[0]) for name, array in zip(_PAYLOAD_NAMES, arrays)}
         if len(set(leaders.values())) != 1:
             raise TensorNEATError(
