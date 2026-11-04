@@ -33,6 +33,7 @@ The rules with their evidence live in `src/tensorneat/common/CONTEXT.md`, `src/t
 
 ## Performance Contract
 The rewrite must be at least as fast as the frozen JAX baseline on CPU (pop 100/500/1000, XOR and XOR3d), and the measurement must live in `benchmarks/RESULTS.md` (numbers + how to reproduce).
+That contract is measured on the `numpy` reference backend; the `iree` compiled leg was measured separately (see `benchmarks/BACKENDS.md`) and does not meet it, so it is not part of the verdict.
 Legacy measured on this machine (JAX 0.12 CPU, 1 thread-bound box): 51 ms/gen at pop 100, 109 ms/gen at pop 500, 157 ms/gen at pop 1000.
 The winning structural idea is *edge-proportional, depth-parallel* evaluation: work scales with real connections and network depth, not with `max_nodes × max_nodes` padding waste.
 
