@@ -74,7 +74,7 @@ The centre is *never* prepared: `measure` packs the centre's key rows itself (`_
 One pool belongs to **one trace**: a `SymbolicTensor` belongs to one builder, so a pool must never be module-global or cached across `evoxc.build` calls; every entry point starts a private pool when the caller passes none.
 Reusing a pooled tensor as several operands is legal and is exactly what collapses the duplicates: the distance files dropped from 503 `constant` ops per generation to 163.
 The pool carries **signed dtypes only** — no unsigned helper exists, and none may be added (see `## Constraints`).
-The remaining constants are `int32` sort/index sentinels (`I_INF`, `1`, `merged_width - 1`, `_KEY_BASE`, the dump slot), so the next lever is a pool threaded from the generation entry (`algorithm/neat/_distance.py`), worth ~150 ops per generation and not reachable from this node.
+The remaining constants are `int32` sort/index sentinels (`I_INF`, `1`, `_KEY_BASE`, the dump slot) plus the `int64` fold scalars, so the next lever is a pool threaded from the generation entry (`algorithm/neat/_distance.py`), worth ~150 ops per generation and not reachable from this node.
 
 ## Merge algebra (`digest.measure_alignment`)
 A gene row folds into one `int64` composite, positionally and most significant first in base `_KEY_BASE = 2**31`: a node key is itself, an `(in_key, out_key)` connection key is `in * 2**31 + out`.
