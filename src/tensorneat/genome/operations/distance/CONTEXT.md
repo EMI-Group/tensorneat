@@ -152,14 +152,14 @@ Measured on a real evolved seed-42 XOR payload with keys inside `[0, key_span)` 
 
 | cell | pop 500 | pop 1000 |
 |---|---|---|
-| `prepare` | 167 ops / 2.84 ms | 167 ops / 4.84 ms |
-| `measure`, tiled centre (merge, the shipped route) | 98 ops / 2.43 ms | 98 ops / 4.45 ms |
-| `measure`, batch-1 centre (dense) | 102 ops / 1.25 ms | 102 ops / 1.44 ms |
+| `prepare` | 163 ops / 2.63 ms | 163 ops / 4.13 ms |
+| `measure`, tiled centre (merge, the shipped route) | 94 ops / 2.56–2.62 ms | 94 ops / 4.33–4.43 ms |
+| `measure`, batch-1 centre (dense) | 102 ops / 1.38 ms | 102 ops / 2.03 ms |
 | the tiling itself (`single_payload`) | 16 ops / 0.15 ms per call | same |
 
-The dense route is **+4 traced ops and 1.9–3.1× faster in milliseconds**: its cost is element-free of the `(P, 2M + 1) int64` merge, i.e. of the two sorts and the two wide gathers, which is where the merge's time goes. Op count therefore misleads on this comparison — the interpreter's per-op charge is not constant across block widths.
+The dense route is **+8 traced ops and 1.9–2.1× faster in milliseconds**: its cost is element-free of the `(P, 2M + 1) int64` merge, i.e. of the two sorts and the two wide gathers, which is where the merge's time goes. Op count therefore misleads on this comparison — the interpreter's per-op charge is not constant across block widths.
 `tobytes()` identity holds for a tiled centre: the tiled merge, the batch-1 dense route and `execute_distance` return the same `(P,)` vector on every measured cell (both gene families, default and `OriginNode + OriginConn`), so the swap is value-preserving wherever `node_oor == conn_oor == 0`.
-Projected generation-level effect if `algorithm/` passed the batch-1 centre instead of tiling it (40 calls, `species_size=20`): **−480 executed ops/generation** (−640 tiling ops + 4 reshapes kept, +160 for the dense body) and **≈ −47 ms at pop 500 / −120 ms at pop 1000**, i.e. roughly a quarter of a generation on this box.
+Projected generation-level effect if `algorithm/` passed the batch-1 centre instead of tiling it (40 calls, `species_size=20`): **−320 executed ops/generation** (−640 tiling ops, +320 for the dense body) and **≈ −50 ms at pop 500 / −92 ms at pop 1000**, a quarter to a fifth of a generation on this box.
 The obstacle is the documented `key_span` precondition, not the kernel: the live allocator leaves out-of-range keys in most genomes from the first generations on (measured `node_oor`/`conn_oor` = 2 / 4 at pop 500 and 1000), and only those centres diverge — the same fix that stops the execution schedule from silently dropping evolved genes also makes this switch exact.
 A batch-1 centre is never worse even when the dense gate fails: `measure` then broadcasts it itself (`_broadcast_payload`, 12 ops) instead of the caller's 16.
 
