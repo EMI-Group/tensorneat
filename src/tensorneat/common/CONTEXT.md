@@ -46,7 +46,7 @@ Fields, all batch-first, in `Transformed` (a `NamedTuple`):
 | `edge_overflow` | `(P,)` | int32 | number of valid edges dropped because their in-group rank reached `K` |
 
 `level` and `overflow` exist as read-only properties (`level` → `node_level`, `overflow` → `edge_overflow > 0`) for the pre-rewrite host callers and the numpy oracle; new kernels use the stored field names.
-`Transformed` is a plain `typing.NamedTuple` with **no `evoxc.register_pytree_node` call** (only `State` registers, in `state.py`): evoxc's namedtuple branch (`evoxc/core/tree.py::_flatten_into`, checked before plain tuple) flattens it to exactly those 12 leaves in field order via `_fields` and rebuilds with `spec.type(*children)`, so `evoxc.tree_map`/`tree_leaves`/`_repeat_batch` never visit the `level`/`overflow` properties.
+`Transformed` is a plain `typing.NamedTuple` with **no `evoxc.register_pytree_node` call** (only `State` registers, in `state.py`): evoxc's namedtuple branch (`evoxc/core/tree.py::_flatten_into`, checked before plain tuple) flattens it to exactly those 12 leaves in field order via `_fields` and rebuilds with `spec.type(*children)`, so `evoxc.tree_map`/`tree_leaves`/`host_payload._slice_batch` never visit the `level`/`overflow` properties.
 Tests pin the order and dtypes: `test/unit/common/test_tensorization.py::DOCUMENTED_FIELDS` / `DOCUMENTED_DTYPES` and `test_level_and_overflow_are_compatibility_aliases`.
 
 Invariances the consumers may rely on:
