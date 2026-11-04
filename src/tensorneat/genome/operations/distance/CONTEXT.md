@@ -80,7 +80,7 @@ The remaining constants are `int32` sort/index sentinels (`I_INF`, `1`, `merged_
 A gene row folds into one `int64` composite, positionally and most significant first in base `_KEY_BASE = 2**31`: a node key is itself, an `(in_key, out_key)` connection key is `in * 2**31 + out`.
 `2**31` is the whole non-negative `int32` key range, so the fold is injective for **every** key a payload can legally hold, and it never consults `key_span`.
 That is the binding rule of the merge: `key_span` (`S`) bounds only the dense table (and the execution schedule), and it must never be used as an injectivity bound.
-Digits are not gated per column: `2**31` bounds every legal digit, so no fold can overflow, and an absent row's digits are irrelevant because the caller replaces its whole composite with the side's sentinel.
+Digits are not gated per column: `2**31` bounds every legal digit, so no fold can overflow, and an absent row needs no per-digit special case because the payload contract makes *every* key column `I_INF`, which folds to the side's padding sentinel by construction (the `dot` path uses exactly that identity; the node family still writes the sentinel with a `select`).
 The fold is unrolled as `multiply`/`add` steps rather than a weighted `reduce_sum` over the key axis: an innermost-axis integer reduction costs an order of magnitude more than the pair of elementwise ops it replaces.
 A rank-2 node key is its own leading column, so `_pack` emits no slice and no reshape for it (two ops: `not_equal` for validity, one `cast`); a rank-3 connection key reads each column with one kept-axis slice plus one `reshape`.
 That spelling is the **digest side's** (`prepare_family`, once per generation) and the one a rank-2 node key keeps on the centre side.
