@@ -20,17 +20,15 @@ need from them. That keeps the per-test guard in ``../conftest.py`` (no optional
 framework may enter ``sys.modules``) honest for every module in this directory.
 
 Known side effect of :func:`common`: ``import tensorneat.common`` executes
-``src/tensorneat/__init__.py``, which imports the legacy JAX ``pipeline.py``,
-so ``jax``/``jaxlib`` enter ``sys.modules`` the first time the fixture runs.
+``src/tensorneat/__init__.py``, which binds no optional framework, so the
+guard's baseline stays empty.
 ``../conftest.py``'s guard freezes a session baseline at session start and
 records every import statement of a forbidden module, attributed to the file
 that executed it.
-It therefore does observe an import this fixture causes, at module scope or
-inside a test body, and not only a module arriving after the test began.
-It excuses an import executed from ``src/`` — which is exactly this
-``pipeline.py`` — and one executed from ``pytest.importorskip``.
-The cause lies in ``src/`` — the ``pipeline.py`` rewrite away from JAX — and
-``test/release_gate_no_jax.py`` is where that failure is owned.
+It therefore observes an import this fixture causes, at module scope or inside a
+test body, and not only a module arriving after the test began.
+It excuses an import executed from ``src/`` and one executed from
+``pytest.importorskip``.
 """
 
 from __future__ import annotations

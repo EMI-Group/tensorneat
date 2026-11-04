@@ -33,15 +33,13 @@ gate instead of hanging CI. The subprocess is the oracle: its exit status, its
 ``LEAKED=``/``MISSING=`` report lines and its traceback are the only evidence a
 test here is allowed to use.
 
-Current state: this gate is RED, on purpose
--------------------------------------------
-``src/tensorneat/pipeline.py`` is still the legacy JAX module and ``import
-tensorneat`` currently raises from the unfinished ``src/`` skeletons, so the
-gate is red until ``src/tensorneat/pipeline.py`` becomes evoxc-native; that is
-the ratchet. Nothing here is skipped or xfailed while the package is
-unimplemented — a skip would make the ratchet invisible — and every failure
-message carries the offending module list or the subprocess traceback, so it
-names what leaked or what raised.
+Current state: green
+--------------------
+``src/tensorneat/pipeline.py`` is evoxc-native and ``import tensorneat`` succeeds
+without binding ``jax``/``torch``/``brax``/``gymnax``/``mujoco``, so every test
+here passes. Nothing here is skipped or xfailed — a skip would make the ratchet
+invisible — and every failure message carries the offending module list or the
+subprocess traceback, so it names what leaked or what raised.
 
 No ``jax`` import happens in this module (the *subprocess script strings* may
 mention module names), there is no network and no fixture. The file is collected

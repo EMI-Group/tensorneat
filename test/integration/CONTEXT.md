@@ -6,12 +6,10 @@ Seventeen tests across four modules drive the real `Pipeline` (`setup` → `step
 No `jax`/`torch`, no network, no GPU, no wall-clock assertions: a run is judged by generations, fitness, payload shapes and compile counts.
 Every module carries `pytestmark = [pytest.mark.slow]`; `pytest -m slow` selects the directory, the default gate leaves it out.
 
-## Current state: the whole directory skips, structurally
-`src/tensorneat/pipeline.py` is still the pre-rewrite JAX implementation, so `conftest.py::missing_evoxc_pipeline_features(tn)` reports what is missing and `require_evoxc_pipeline(tn)` raises `pytest.skip`.
+## Current state: every test runs
+`src/tensorneat/pipeline.py` is the evoxc compile site, so `conftest.py::missing_evoxc_pipeline_features(tn)` returns an empty list and `require_evoxc_pipeline(tn)` does not skip; all 17 tests run on the numpy backend.
 The probe is structural, never hardcoded: it inspects `inspect.signature(tn.Pipeline.__init__)` for the four documented compile kwargs (`PIPELINE_COMPILE_KWARGS = ("backend", "device", "compile_options", "is_detailed")`), checks whether the loaded `tensorneat.pipeline` module binds `jax`/`jnp`, and scans that module's source file for a top-level `import jax` (it never imports jax to find out).
-The autouse fixture `_evoxc_pipeline_required(tn)` applies the probe to every test in the directory, so a module that forgets the guard still skips instead of erroring.
-Today's reason, identical for all 17 tests: `pipeline.py is still the legacy JAX implementation: Pipeline.__init__ lacks the 'backend' parameter; … lacks the 'device' …; … 'compile_options' …; … 'is_detailed' …; tensorneat.pipeline binds jax, jnp; tensorneat.pipeline:5 has a top-level import jax, jax.numpy as jnp; the evoxc compile site has not landed`.
-The list is empty once `pipeline.py` becomes evoxc-native, so the suite flips to running by itself — no test edit, no skip to delete.
+The autouse fixture `_evoxc_pipeline_required(tn)` applies the probe to every test in the directory, so a regression that reintroduces an evoxc-free pipeline reports a skip naming the missing features instead of a directory of opaque errors.
 No module imports `tensorneat` or a `support` module at module scope: `tn`, `payloads` and `runner` are `support.lazy.require` fixtures, and only `numpy`/`json`/`pytest` plus `from integration.conftest import …` appear at module scope.
 
 ## How a test builds and drives a `Pipeline`
@@ -58,19 +56,19 @@ The compile site must reach the compiler through `evoxc.build`, `build_cached`, 
 `pipeline.fitness_history` is optional: `fitness_history()` falls back to `<save_dir>/log.txt`, which `is_save=True` always writes.
 
 ## Budget
-Measured while skipping: `pytest test/integration -m slow` is 17 skipped in ~0.6 s; the whole `-m slow` gate is ~1.1 s plus the release-gate failure it does not own.
-Once `pipeline.py` lands the directory is budgeted under ~20 s, dominated by `test_xor_run::test_auto_run_reaches_the_xor_fitness_target` (`pop_size=100`, up to 250 generations, one compile per shape); every other module runs 1–10 generations at `pop_size≤16`.
-The convergence budget is calibrated from the legacy curve in `benchmarks/RESULTS.md` (`pop_size=100` reached `mse ≤ 0.1` at generation 77 and `mse ≈ 0.0099` by generation 150); the evoxc rewrite draws different numbers, so it must be re-measured the first time the module actually runs.
+Measured on this machine: `pytest -m slow` is **18 passed, 4 skipped in ~94 s** — the 17 tests here plus the release gate's XOR run; the 4 skips are the four JAX parity modules.
+`test_xor_run::test_auto_run_reaches_the_xor_fitness_target` dominates (`pop_size=100`, up to 250 generations, one compile per shape); every other module runs 1–10 generations at `pop_size≤16`.
+The convergence budget is calibrated from the legacy curve in `benchmarks/RESULTS.md` (`pop_size=100` reached `mse ≤ 0.1` at generation 77 and `mse ≈ 0.0099` by generation 150); the evoxc rewrite reaches its target inside the configured budget on this machine.
 
 ## Known issues / uncertainty
-The convergence budget above is evidence-based, not measured on evoxc — the first real run is the calibration.
+The convergence budget is the legacy-calibrated one; the evoxc run reaches the target inside it, so it stays headroom rather than a measured floor.
 `test_step_advances_one_generation_and_reports_one_fitness_per_individual` assumes the fitness returned by `step` belongs to the population the step consumed (`state_before.pop`); a pipeline that returned post-`tell` fitness instead would fail it loudly.
 `test_the_best_fitness_is_non_decreasing_across_generations` rests on NEAT's per-species elitism preserving the population maximum; if species spawn allocation can drop the elite, this is the assertion to revisit (it is not weakened).
 `state.generation` is asserted to reach exactly `generation_limit` on fixed-length runs and `1` after a single step; a different counter base would surface there.
 Nothing in this directory can observe the pipeline's per-shape cache object itself — only the compile counts — and the off-shape "must raise" contract is not testable from outside a cached executable, so it is not asserted here.
 
 ## Conventions
-Every test has a real body; the only skips are the directory-level probe and the documented compile-observability gap in `./test_shape_rebuild.py`.
+Every test has a real body and none skips; the structural probe stays armed but no longer fires, and the compile-count test finds a real entry point.
 Assertions are never weakened to get green: a genuine `src/` defect is reported (or pinned with `xfail(strict=True)` and a one-line reason), never hidden behind a tolerance or a skip.
 Shapes stay small (`pop_size` 8/16, `max_nodes ≤ 16`), checkpoint tests always pass `save_dir=tmp_path`, and `log.txt`'s `Cost Time` column is parsed but never asserted on.
 Files stay under ~1000 lines; one test module per documented behaviour area, module basenames unique across the tree.

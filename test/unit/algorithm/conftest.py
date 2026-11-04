@@ -34,12 +34,10 @@ on failure.
 Import policy
 -------------
 ``tensorneat`` is imported at module scope here: ``src/`` is implemented, so the
-former ``support.lazy.require`` skip dance is gone.  The import happens at collection
-time, before the per-test guard in ``../conftest.py`` snapshots ``sys.modules``.
-``import tensorneat`` still loads the legacy JAX ``src/tensorneat/pipeline.py``
-through ``tensorneat/__init__``, so this suite needs ``jax`` installed until that file
-becomes evoxc-native; no test *uses* jax, and the algorithm subtree itself is
-jax-free.  ``support.payloads`` is imported at module scope for the same reason.
+former ``support.lazy.require`` skip dance is gone.
+``tensorneat`` imports no jax and no torch, so the per-test guard in
+``../conftest.py`` stays green.  ``support.payloads`` is imported at module scope
+for the same reason.
 
 Nothing here builds a graph, and backend is always ``"numpy"``.
 """

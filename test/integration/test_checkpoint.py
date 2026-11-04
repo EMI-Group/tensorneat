@@ -26,8 +26,8 @@ No test reads a clock.
 
 Why nothing here is a module-scope ``tensorneat`` import
 --------------------------------------------------------
-``tn`` and every ``support`` input arrive as fixtures resolved through ``support.lazy.require`` (``./conftest.py``), so a collection-time import never turns this module into an error while ``src/`` is mid-rewrite.
-The autouse ``_evoxc_pipeline_required`` probe of ``./conftest.py`` skips the whole module while ``src/tensorneat/pipeline.py`` is still the legacy JAX file, and stops skipping by itself once the evoxc compile site lands.
+``tn`` and every ``support`` input arrive as fixtures resolved through ``support.lazy.require`` (``./conftest.py``), so an import that fails names a skip instead of turning this module into a collection error.
+The autouse ``_evoxc_pipeline_required`` probe of ``./conftest.py`` requires the evoxc-native ``Pipeline``; it finds every documented feature and does not skip.
 """
 
 from __future__ import annotations

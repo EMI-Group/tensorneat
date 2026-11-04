@@ -40,8 +40,8 @@ A parametrized case may legitimately carry several variants (mutation rates, neu
 ## Constraints
 Backend is always `"numpy"`; no `requires_iree` case lives here (every kernel under test is numpy-backend only, so an iree variant would prove nothing new).
 No test module imports `jax`/`torch` at module scope or in a body; `sympy` is imported inside the tests that need it.
-`import tensorneat.common` executes `src/tensorneat/__init__.py`, which still imports the legacy JAX `pipeline.py`, so `jax`/`jaxlib` enter `sys.modules` when the `common` fixture first runs — `../conftest.py`'s leak guard snapshots `sys.modules` at autouse-fixture setup, which happens after the module-scoped fixture, so the guard does not observe it; `test/release_gate_no_jax.py` owns that failure, not this suite.
-`import tensorneat` is currently usable, so nothing here is gated behind a "not implemented" skip anymore.
+`import tensorneat.common` executes `src/tensorneat/__init__.py`, which imports no optional framework, so the guard's baseline stays empty and the per-test diff watches only what a test itself pulls in.
+`import tensorneat` is usable, so nothing here is gated behind a "not implemented" skip.
 Files stay ≤ ~1000 lines with one source module per file (the tensorization pair is the one documented exception); nothing here is exported or packaged.
 A test may not edit `../../../src`, `../../../benchmarks` or `pyproject.toml` — a discovered defect is reported to the parent instead of patched here.
 

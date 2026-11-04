@@ -7,7 +7,7 @@ Nothing skips and nothing is `xfail`: the suite is a verifier, not a spec (`git 
 Two modules pin a guard that a naive implementation would pass by accident: `test_forward.py` activates hidden rows but not output rows, and `test_recurrent.py` contrasts a live sibling against a starved one.
 
 ## Layout
-86 test functions, 95 collected cases, one module per source module: `test_payload.py` 15, `test_forward.py` 11, `test_recurrent.py` 10 (19 cases), `test_grad.py` 9, `test_mutation.py` 15, `test_crossover.py` 9, `test_distance.py` 9, `test_host_helpers.py` 8.
+91 test functions, 100 collected cases, one module per source module: `test_payload.py` 15, `test_forward.py` 11, `test_recurrent.py` 10 (19 cases), `test_grad.py` 9, `test_mutation.py` 15, `test_crossover.py` 9, `test_distance.py` 9, `test_host_helpers.py` 8, `test_transform_validation.py` 5.
 `test_payload.py` — `initialize` four-array layout/dtypes/sentinels, the input/output row-key invariant, `setup` chaining order and state immutability, the three constructor rejections, `transform` equal to `support.oracle.schedule` field by field and accepted by `common.validate_schedule`, and `edge_overflow` on a too-small `max_in_degree`.
 `test_forward.py` — closed-form level composition on a 13-row chain (every intermediate read out through a probe output row), output rows unactivated while hidden rows are, activation `-1` = identity, both transforms by composition, bypassed node inert, unconnected node + descendants NaN, padded rows inert, population axis a pure batch axis, random DAGs vs the oracle, the `max_depth` tail bound.
 `test_recurrent.py` — Jacobi ticks via closed-form orbits, input re-injection per tick, `input_transform` never applied, `output_transform` once after the last tick, NaN starvation across ticks, ring vs the oracle, `activate_time` = tick count, `activate_time` validation.
@@ -16,6 +16,7 @@ Two modules pin a guard that a naive implementation would pass by accident: `tes
 `test_crossover.py` — parent 1 keeps the structure, offspring keys ⊆ parent 1, aligned attributes are one of the two parents' (never a blend), non-homologous genes keep parent-1 attributes, padding preserved, shapes/dtypes, self-crossover bit-identity, `find_homologous` exact on the key tuple (including `historical_marker`) and `I_INF` for absent genes.
 `test_distance.py` — configuration validation, zero at identity, symmetry, monotonicity in non-homologous genes, attribute weighting exact, one per changed int option, empty pair `0` not NaN, batched == pairwise, determinism.
 `test_host_helpers.py` — `network_dict` structure/renumbering and single-individual refusal, `repr` exact rendering, `hash` in-graph, `sympy_func`'s 8-tuple plus one exact formula, `visualize` under `Agg` + `tmp_path` with a `networkx.draw` spy, and the recurrent `sympy_func`/`visualize` refusal being `TensorNEATError`.
+`test_transform_validation.py` — `transform` rejects a per-individual node row, a `conn_keys` without a population axis and mismatched population sizes with `TensorNEATError`, and accepts both batched spellings.
 `conftest.py` — the five lazily resolved modules (`genome`, `common`, `payloads`, `oracle`, `runner`), the three graph-glue fixtures (`run_kernel`, `run_transform`, `run_forward`) and the module-scoped `evoxc.Executable` cache they share.
 
 ## Conventions
@@ -33,13 +34,12 @@ Randomness comes only from the repo-level `rng`/`evoxc_key` fixtures (seeded fro
 
 ## Constraints
 A test may not edit `../../../src`, `../../../benchmarks` or `pyproject.toml`; a defect or a doc conflict found here goes into the report to the parent.
-Whole node: 95 passed in ≈17 s on the numpy backend (`--durations=10`); ≈160 distinct graphs are traced per run, which is the floor, because each forward/recurrent test legitimately builds a fresh genome+state.
+Whole node: 100 passed in ≈52 s on the numpy backend (`--durations=10`); ≈160 distinct graphs are traced per run, which is the floor, because each forward/recurrent test legitimately builds a fresh genome+state.
 `test_mutation.py` is ≈1020 lines for 15 invariant tests; it is at the concern threshold and should be split by operation family if it grows.
 `test_host_helpers.py`'s `visualize` test asserts `matplotlib`/`networkx` are absent from `sys.modules` before the call, so it is order-sensitive within one process; pytest runs each module once, so this never bites in a normal run.
 The guard in `test/unit/conftest.py` is the test-side counterpart of `test/release_gate_no_jax.py`: it freezes a session baseline at session start and records every import statement of `jax`/`jaxlib`/`torch`/`brax`/`gymnax`/`mujoco`, attributed to the file that executed it.
 It therefore catches any import of an optional framework executed from `test/unit/**`, whether at module scope or inside a test body.
-It excuses the imports originating in `src/` (the still-legacy `pipeline.py`) or in `pytest.importorskip`.
-`test/release_gate_no_jax.py` stays red until `src/tensorneat/pipeline.py` drops its `import jax`.
+It excuses the imports originating in `src/` or in `pytest.importorskip`.
 `pytest.mark.slow` is reserved for the oversized-population cases; the default gate is `pytest -m "not parity and not slow"`.
 
 ## Notes for Agents

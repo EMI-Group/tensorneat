@@ -1,6 +1,6 @@
 """Shared fixtures and helpers of the ``./integration`` suite: one tiny ``Pipeline`` plus the host-side drivers.
 Every test in this directory drives a whole ``tensorneat.Pipeline`` on the numpy backend, so the shared layer covers exactly the things a whole-pipeline test needs and nothing else.
-``tn``, ``payloads`` and ``runner`` are resolved lazily through :func:`support.lazy.require`, because ``import tensorneat`` must stay deferrable while ``src/`` is mid-rewrite and a module-scope import would turn a named skip into a collection error.
+``tn``, ``payloads`` and ``runner`` are resolved through :func:`support.lazy.require`, which imports them at fixture time and reports a pending implementation as a named skip instead of turning the module into a collection error.
 :data:`TINY_CONFIG` is the single small XOR configuration every pipeline in this suite is built from; :func:`tiny_pipeline` spells it out and refuses unknown knobs instead of ignoring them.
 :func:`run_pipeline` is ``setup()`` plus ``auto_run()``; the per-generation trajectory comes from :func:`step_loop`, which drives the documented ``pipeline.step`` one generation at a time and never reads an internal history attribute.
 :func:`evaluate_population` re-scores any gene payload on the host through the documented kernel triple ``algorithm.transform`` → replicated ``algorithm.forward`` → ``problem.evaluate``.
@@ -208,10 +208,10 @@ def tn():
         Surface" spells them.
 
     Notes:
-        The import is deferred (module docstring): a collection-time import would
-        raise ``NotImplementedError`` and turn every module in this directory into
-        an error instead of a named skip. The module is imported once per module
-        scope, so a broken ``src/`` is reported once per test module.
+        The import happens at fixture time (module docstring): a
+        ``NotImplementedError`` raised during the import becomes a named skip,
+        while every other error surfaces. The module is imported once per module
+        scope, so a broken import is reported once per test module.
     """
     from support.lazy import require
 

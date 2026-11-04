@@ -504,10 +504,9 @@ def default_genome(
     """A ``DefaultGenome`` with the default gene/operator stack and small shapes.
 
     Only constructs the genome (and thereby its dense initial network) — it never
-    calls ``initialize``/``forward``, so the factory keeps working while those
-    kernels are still being implemented in ``src/``. A constructor that raises
-    ``NotImplementedError`` is *not* worked around here: the error belongs to the
-    source skeleton.
+    calls ``initialize``/``forward``, so the factory stays cheap. A constructor
+    that raises ``NotImplementedError`` is *not* worked around here: the error
+    belongs to the source.
 
     Args:
         num_inputs: Input node count; also the network input width.

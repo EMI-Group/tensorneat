@@ -65,12 +65,11 @@ capacity).
 
 ## Sentinels duplicated here on purpose
 
-``I_INF`` and ``KEY_MAX`` are re-declared instead of imported: importing
-``tensorneat`` at this module's import time would break collection while ``src/``
-is a skeleton (``import tensorneat`` currently raises ``NotImplementedError``
-from ``common/state.py``).  Both are computed from numpy's ``int32``/``key``
-bounds exactly as ``tensorneat/common/tools.py`` does, and ``./test_convert.py``
-asserts the equality against the real constants as soon as they are importable.
+``I_INF`` and ``KEY_MAX`` are re-declared instead of imported so this module
+stays a pure-numpy conversion layer with no package import at module scope.
+Both are computed from numpy's ``int32``/``key`` bounds exactly as
+``tensorneat/common/tools.py`` does, and ``./test_convert.py`` asserts the
+equality against the real constants.
 """
 
 from __future__ import annotations
@@ -274,10 +273,9 @@ def _default_payload_factory() -> Callable[..., Any]:
     """Import ``support.payloads.Payload`` lazily (it imports ``tensorneat``).
 
     ``support.payloads`` reads ``tensorneat.common.tools.I_INF`` at import time,
-    and ``import tensorneat`` raises ``NotImplementedError`` while ``src/`` is a
-    skeleton.  Keeping the import inside the default factory lets this module be
-    imported and tested regardless; a caller that needs ``from_legacy`` before
-    ``src/`` is finished passes its own ``payload_factory``.
+    so keeping the import inside the default factory leaves this module's own
+    import side-effect free.  A caller that needs ``from_legacy`` passes its own
+    ``payload_factory``.
     """
     from support.payloads import Payload
 

@@ -57,9 +57,8 @@ def host_graph(common):
     """The module under test: ``tensorneat.common.host_graph``.
 
     Imported by name because the package ``__init__`` does not re-export it (it
-    is a leaf only ``genome`` uses). The ``common`` fixture runs first, so the
-    skip that covers the unimplemented ``src/`` skeleton is reported once, with
-    its own reason.
+    is a leaf only ``genome`` uses). The ``common`` fixture runs first, so a
+    failed package import is reported once, with its own reason.
     """
     return importlib.import_module("tensorneat.common.host_graph")
 
@@ -73,7 +72,8 @@ def errors(common):
     re-export: ``GraphError`` is a broken topology (duplicate key, dangling
     endpoint, cycle, unreachable node) and ``ConfigError`` is a caller mistake
     (bad fixed widths, unknown input/output/candidate keys). ``common`` is
-    requested first so the skeleton skip is reported once, with its own reason.
+    requested first so a failed package import is reported once, with its own
+    reason.
     """
     return importlib.import_module("tensorneat.common.errors")
 

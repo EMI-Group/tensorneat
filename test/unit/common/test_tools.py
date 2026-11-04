@@ -29,8 +29,8 @@ Three post-JAX contracts drive most of the assertions:
 
 Everything runs on ``backend="numpy"`` through the shared runner; no optional
 dependency, no network, no GPU. ``tensorneat.common`` is reached through the
-``common`` fixture (see ``./conftest.py``), not a module-scope import, so this
-file stays collectable even in a checkout where the package is still a skeleton.
+``common`` fixture (see ``./conftest.py``), not a module-scope import, so a
+package that fails to import names a skip instead of a collection error.
 """
 
 from __future__ import annotations

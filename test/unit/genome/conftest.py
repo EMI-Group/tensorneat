@@ -1,18 +1,12 @@
 """Fixtures shared by the ``./unit/genome`` suites: five modules and three graph runners.
 
-Two kinds of fixture live here, and both exist for the same reason — a test
-module in this directory must be *collectable* before ``src/`` is finished.
+Two kinds of fixture live here.
 
-**Inputs, resolved lazily.** ``import tensorneat`` still raises
-``NotImplementedError``: ``tensorneat/algorithm/base.py`` evaluates ``State()``
-as a default argument while its class body is being created, and ``State`` is a
-design skeleton. A module-scope ``from tensorneat.genome import DefaultGenome``
-would therefore turn every module here into a collection error instead of a
-named skip. So ``tensorneat.genome``, ``tensorneat.common``, ``support.payloads``,
-``support.oracle`` and ``support.runner`` are each resolved through
-:func:`support.lazy.require`, which converts *only* the pending-implementation
-``NotImplementedError`` into a skip (an ``ImportError`` still surfaces), inside
-the fixture body, never at module scope.
+**Inputs, resolved at fixture time.** ``tensorneat.genome``, ``tensorneat.common``,
+``support.payloads``, ``support.oracle`` and ``support.runner`` are each resolved
+through :func:`support.lazy.require` inside the fixture body, never at module
+scope: a ``NotImplementedError`` raised during the import becomes a named skip
+while every other error surfaces unchanged.
 
 **Graph glue, one place.** ``support/runner.py`` is the only module allowed to
 call ``evoxc.build``/``run``/``lower``/``compile``/``load``

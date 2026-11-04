@@ -17,17 +17,15 @@ not only one inside a test body.
 
 **An import recorder.**  ``builtins.__import__`` is wrapped once for the session
 and records every import *statement* whose root module is forbidden, together
-with the file that executed it.  This is what gives the guard teeth: ``import
-tensorneat`` still loads the legacy JAX ``pipeline.py``, so ``jax``/``jaxlib``
-are already in ``sys.modules`` before the first unit test runs and a bare
-``sys.modules`` diff cannot see a test that imports them afterwards.  The
+with the file that executed it.  This is what gives the guard teeth: it
+attributes a forbidden module to the file that imported it, so the diff can tell
+a test-side import from an import performed by ``src/`` or another suite.  The
 recorded file also supplies the two allowances the guard needs, i.e. it answers
-"whose leak is it?": an import executed from ``src/`` (the legacy pipeline, a
-``src/`` defect owned by the release gate), from ``pytest``'s own helpers
-(``pytest.importorskip``) or from another suite (parity imports ``jax`` while it
-is being collected, so a mixed ``pytest`` run over parity and unit together
-must not fail here) is not this suite's leak; an import executed from a file
-below this directory is.
+"whose leak is it?": an import executed from ``src/``, from ``pytest``'s own
+helpers (``pytest.importorskip``) or from another suite (parity imports ``jax``
+while it is being collected, so a mixed ``pytest`` run over parity and unit
+together must not fail here) is not this suite's leak; an import executed from a
+file below this directory is.
 
 What the guard does not cover: a *dynamic* ``importlib.import_module("jax")`` of
 a module that is already loaded touches neither ``builtins.__import__`` nor

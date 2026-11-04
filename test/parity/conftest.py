@@ -6,15 +6,14 @@ data, so only the kernels differ.*
 
 ## Lazy imports (why nothing is imported at module scope)
 
-``jax`` and ``tensorneat_legacy`` are optional (the ``bench`` extra), and
-``import tensorneat`` currently raises ``NotImplementedError`` because ``src/`` is
-a skeleton.  A module-scope import of either would turn ``pytest test/parity`` —
-and the repo-wide run — into a collection error instead of a named skip.  So
-:func:`legacy` calls ``pytest.importorskip`` **inside the fixture body** and
-:func:`new` goes through :func:`support.lazy.require`, which converts only the
-pending-implementation ``NotImplementedError`` into a skip.  No other suite may
-import ``jax`` at module scope; this directory is the one place allowed to
-(``../CONTEXT.md``).
+``jax`` and ``tensorneat_legacy`` are optional (the ``bench`` extra), so a
+module-scope import would turn ``pytest test/parity`` — and the repo-wide run —
+into a collection error instead of a named skip.  :func:`legacy` calls
+``pytest.importorskip`` **inside the fixture body** and :func:`new` goes through
+:func:`support.lazy.require`, which imports ``tensorneat`` at fixture time and
+turns only a pending-implementation ``NotImplementedError`` into a skip.  No
+other suite may import ``jax`` at module scope; this directory is the one place
+allowed to (``../CONTEXT.md``).
 
 The legacy library additionally needs its payload as ``jax`` arrays rather than
 numpy arrays: under JAX 0.12 its forward loops with ``lax.fori_loop`` and indexes
@@ -156,10 +155,9 @@ def new():
         ``new.problem.XOR``/``XOR3d``.
 
     Notes:
-        Deferred through :func:`support.lazy.require`: while ``src/`` is a
-        skeleton ``import tensorneat`` raises ``NotImplementedError`` from
-        ``common/state.py``, and that — and only that — becomes a skip naming the
-        missing slice.  An ``ImportError`` still surfaces.
+        Deferred through :func:`support.lazy.require`, which imports the package
+        at fixture time and turns only a ``NotImplementedError`` raised during
+        that import into a skip.  An ``ImportError`` still surfaces.
     """
     from support.lazy import require
 

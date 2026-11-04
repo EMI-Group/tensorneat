@@ -17,15 +17,19 @@ The five assertions and their oracles
 Budgets (measured, never asserted)
 ----------------------------------
 :func:`test_auto_run_reaches_the_xor_fitness_target` is the only heavy test: ``pop_size=100`` × ``generation_limit=250``, calibrated from the legacy JAX curve in ``benchmarks/RESULTS.md`` (``mse <= 0.1`` at generation 77 and ``mse ≈ 0.0099`` by generation 150 at ``pop_size=100``).
-That curve is an order-of-magnitude reference, because the evoxc rewrite draws different random numbers; the budget must be re-measured — never the assertion weakened — once ``pipeline.py`` lands.
+That curve is an order-of-magnitude reference, because the evoxc rewrite draws different random numbers; the budget is re-measured on this machine, never the assertion weakened.
 Everything else runs at ``pop_size=16`` for 1–10 generations: one generation for the shape tests, five for the manual-vs-``auto_run`` cross-check, ten for the elitism check.
 No test reads a clock (``test/CONTEXT.md``: a flaky timing test is a bug in the test); a run is judged by generations, fitness and payload shapes.
 
 Why this file has no skip of its own
 ------------------------------------
-``src/tensorneat/pipeline.py`` is the legacy JAX module until the evoxc compile site lands, so ``./conftest.py``'s autouse probe (:func:`~.conftest.require_evoxc_pipeline`) skips every test here with the exact list of missing evoxc features.
-Nothing in this module hardcodes that skip, so the tests start running — unmodified — the moment the evoxc compile site lands.
-``tensorneat`` is still never imported at module scope: the package arrives through the ``tn`` fixture, exactly as in every other module of this directory.
+``./conftest.py``'s autouse probe (:func:`~.conftest.require_evoxc_pipeline`)
+requires every documented evoxc-pipeline feature and skips with the exact list
+of anything missing.
+Nothing in this module hardcodes a skip, so the tests run unmodified against the
+evoxc compile site.
+``tensorneat`` is never imported at module scope: the package arrives through the
+``tn`` fixture, exactly as in every other module of this directory.
 """
 
 from __future__ import annotations
