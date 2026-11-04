@@ -113,6 +113,9 @@ Baked constant bytes of the `prepare` + `measure(batch 1)` graph, `enp.zeros` �
 What is left is irreducible: the two `key_span`-scaled `(width + 1,)` int32 tables (22 502 cells = 90 008 B each, `S = 150`) plus a handful of small seeds.
 `measure` itself adds only four rank-0 constants; every avoidable byte was the `DenseLayout` built inside `prepare`.
 
+The signed range test costs **+3 traced ops on `prepare`** (137 → 140: one `greater_equal` + one `logical_and` for the one-column node key, two of each for the two-column connection key, minus the removed `uint32` span constant, plus the pooled `int32` zero), and `1.241 → 1.340 ms` at pop 100 (median of 7 same-session runs, min 1.217 → 1.307) — once per generation against `2 * species_size` `measure` calls.
+`measure` is unchanged at 151 ops and gained no unsigned value: with `span_u32` gone from `DenseLayout`, the digest a real pipeline threads into `measure` no longer carries a `uint32` leaf at all (before: four `uint32` graph-boundary values).
+
 Round-2 same-session before → after: `measure` **141 → 111 ops**, wall clock inside drift at pop 1000 (2.43 → 2.25 ms median, minima 2.20), i.e. **2.45 → 2.25 µs/pair**; `prepare` 102 → **128 ops** (+26, once per generation against ~40 calls).
 Per-phase op attribution of the old 141 (recursive op walk + per-phase graphs, pop 1000): `dense_slot`/`slot` 8, owner scatter+gather+matched 3, per-family counts 4, attribute table pair 3, `gene.distance` **27 (node) / 6 (conn)**, reorder 5 + slice 1 + reduce 1, scalar tail **15 per family**, final `add` 1.
 The round-2 shape removes the owner redirect (−1/family), flattens the centre key table once (−1 conn), and stacks the two families' tail inputs on a leading axis so the tail is traced **once** (15+15+1 → 11+9 stacking ops+1 combine), landing at 111.
