@@ -125,7 +125,7 @@ A change to this node is additionally gated by **bit-identical mutation output o
 The **capacity gate** is a soak: drive `Pipeline.step` on the reproducer family (`OriginNode`/`OriginConn`, pop 500, `max_nodes` 16 and 50, `XOR3d`) for ≥ 250 generations over ≥ 20 seeds and assert, host-side on the evaluated payload after every generation, that no destination key has more than `max_in_degree` present incoming rows — `degree.in_degree`/`violation` express the same check in-graph for a future test.
 The last soak (46 runs × 250 generations: seeds 0–19 at `max_nodes=16`, 100–109 at `max_nodes=50`, plus fully-key-visible variants with a raised `key_span`) reports zero violations and zero raises, and seed 6 (which raised at generation 53 before the guard) completes 250 generations.
 The trajectory gate is the 5-generation seed-42 XOR fitness history at pop 100 plus two same-seed pipelines producing identical fitness, and the four payload arrays / `SpeciesState` leaves / `randkey` per generation.
-`pytest` from the repo root is green: 513 passed / 5 skipped (the skips are the four jax-dependent parity cases plus one `requires_iree` case, absent from this venv).
+`pytest` from the repo root is green: 549 collected, 0 failures, 1 skip (the `requires_iree` case); without the `bench` extra the four jax-dependent parity cases skip as well.
 
 ## Routing Table
 | Path | Responsibility |
