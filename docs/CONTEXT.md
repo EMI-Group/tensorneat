@@ -4,6 +4,7 @@
 Sphinx site (autodoc + napoleon + viewcode, theme `sphinx_rtd_theme`) that renders the API of the `src/tensorneat` 0.2.0 tree; it documents the code, it does not replace the `tutorials/` notebooks or the top-level `README.md`.
 Build command: `uv run --extra docs sphinx-build -b html docs docs/_build` (the `docs` extra is declared in `pyproject.toml`; `docs/requirements.txt` mirrors it for a plain `pip install -r` build).
 `docs/_build/` is gitignored (`docs/_build/*` in `.gitignore`) and is never committed.
+The hosted build is driven by the repo-root `.readthedocs.yaml`: ubuntu-24.04 + Python 3.12 (the `requires-python` floor is 3.11), `uv venv $READTHEDOCS_VIRTUALENV_PATH` then `uv sync --extra docs` into that venv — a plain `pip install .` cannot work because `evoxc >= 0.1.1` is resolved from a git tag whose metadata still says `0.1.0`.
 
 ## API Surface
 `docs/conf.py` holds no content: it puts `../src` (absolute, CWD-independent) on `sys.path` when that directory exists, reads `version`/`release` from `importlib.metadata.version("tensorneat")` with a `"0.2.0"` fallback, sets `autodoc_default_options = {members, show-inheritance, undoc-members: False}`, `extensions = [autodoc, napoleon, viewcode]`, `exclude_patterns = ["_build", ...]`, `html_theme = "sphinx_rtd_theme"`.
