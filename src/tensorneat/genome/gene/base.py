@@ -735,27 +735,28 @@ class BaseGene(StatefulBaseClass):
         Sums over the attribute axis: ``|delta|`` for float specs and ``!=`` for int
         specs, so a changed option index contributes exactly 1.
 
-        One block ``subtract`` is shared by both parents, then every attribute column
-        is read as a width-1 *view* (:func:`_column_view`: one ``slice``, no
-        ``reshape``) and one trailing ``reshape`` drops the width axis at the end.
+        One block ``subtract`` is shared by the two float columns and every float
+        column is read as a width-1 *view* (:func:`_column_view`: one ``slice``, no
+        ``reshape``), so an attribute table with only float columns costs one
+        ``subtract`` plus one ``slice`` per column and one trailing ``reshape`` that
+        drops the width axis.
         Measured on the reference interpreter (pop 500 payload at generation 5, one
-        fresh process per run): the node gene on ``(500, 50, 4)`` costs 16 ops /
+        fresh process per run): the node gene on ``(500, 50, 4)`` costs 17 ops /
         0.235 ms against 27 ops / 0.300 ms for the old per-read-:func:`column` form,
         and the conn gene on ``(500, 100, 1)`` 4 ops / 0.065 ms against 6 ops /
         0.073 ms; end to end the executed ops attributed to the ``genome/gene``
-        source bucket drop from ~1450 to ~900 per ``Pipeline.step``.
+        source bucket drop from ~1450 to ~970 per ``Pipeline.step``.
         The fully blocked form (``subtract`` + ``abs`` + indicator over the whole
         ``(*shape, attr_width)`` block, one static kind mask, one ``select``, one
         last-axis ``reduce_sum``) is 9 ops but 0.73 ms per call -- 3x the wall clock
         of this form -- and neither a block ``abs`` (1 op fewer) nor a blocked
         indicator for a contiguous int run (2 ops fewer) helped (0.250 / 0.328 ms), so
         the per-column views stay.
-        An int column compares the *difference* against a rank-0 zero, which equals
-        comparing the parents for every finite value (option indices are exact small
-        floats) and for NaN padding (both sides NaN -> ``not_equal(NaN, 0)`` is True,
-        exactly as ``not_equal(NaN, NaN)`` was); only an infinite value in an
-        option-index column would tell them apart, and the gene tables cannot produce
-        one (options are integers, padding is NaN).
+        An option-index column still compares the parents directly (two ``slice``
+        views plus ``not_equal`` and ``cast``), one op more than the difference form,
+        because ``inf - inf`` is NaN while ``not_equal(inf, inf)`` is False: the
+        difference form is value-identical only for finite values and NaN padding,
+        and this kernel must be exact for every input.
 
         Args:
             state: Host configuration container.
@@ -770,17 +771,18 @@ class BaseGene(StatefulBaseClass):
         if not self.attr_specs:  # no column to compare: the attribute distance is 0
             return enp.zeros(tuple(attrs1.shape[:-1]), dtype=evoxc.float32)
         delta = evoxc.subtract(attrs1, attrs2)
-        zero = None
         total = None
         # Left-to-right over ``attr_specs``: the float32 summation order is observable.
         for index, spec in enumerate(self.attr_specs):
-            column_delta = _column_view(delta, index)
             if spec.kind == "float":
-                term = evoxc.abs(column_delta)
+                term = evoxc.abs(_column_view(delta, index))
             else:
-                if zero is None:  # one rank-0 zero shared by every option-index column
-                    zero = enp.full((), 0.0, dtype=evoxc.float32)
-                term = evoxc.cast(evoxc.not_equal(column_delta, zero), evoxc.float32)
+                term = evoxc.cast(
+                    evoxc.not_equal(
+                        _column_view(attrs1, index), _column_view(attrs2, index)
+                    ),
+                    evoxc.float32,
+                )
             total = term if total is None else evoxc.add(total, term)
         return evoxc.reshape(total, tuple(attrs1.shape[:-1]))
 
