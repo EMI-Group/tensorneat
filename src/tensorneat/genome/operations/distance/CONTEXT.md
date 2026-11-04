@@ -68,10 +68,10 @@ A gene family with no attribute column (`attr_specs = ()`, e.g. an unweighted Hy
 The centre is *never* prepared: `measure` packs the centre's key rows itself (`_pack`, or `dense_slot` on the fast path).
 
 ## Per-trace constant pool (`consts.py`)
-`ConstantPool` memoises the rank-0 `int32`/`int64`/`uint32`/`float32` constants a kernel entry needs (`i32`/`i64`/`u32`/`f32`, keyed by `repr` so `-0.0` and `0.0` stay distinct), because `enp.full((), v, dtype=...)` emits one `constant` op per call and evoxc never deduplicates them.
+`ConstantPool` memoises the rank-0 `int32`/`int64`/`float32` constants a kernel entry needs (`i32`/`i64`/`f32`, keyed by `repr` so `-0.0` and `0.0` stay distinct), because `enp.full((), v, dtype=...)` emits one `constant` op per call and evoxc never deduplicates them.
 One pool belongs to **one trace**: a `SymbolicTensor` belongs to one builder, so a pool must never be module-global or cached across `evoxc.build` calls; every entry point starts a private pool when the caller passes none.
 Reusing a pooled tensor as several operands is legal and is exactly what collapses the duplicates: the distance files dropped from 503 `constant` ops per generation to 163.
-`u32(value)` exists for the dense range test only: `evoxc` compares like dtypes only, and `cast(int32 key, uint32) < S` is one comparison per key column where `>= 0` plus `< S` would be two.
+The pool carries **signed dtypes only** — no unsigned helper exists, and none may be added (see `## Constraints`).
 The remaining constants are `int32` sort/index sentinels (`I_INF`, `1`, `merged_width - 1`, `_KEY_BASE`, the dump slot), so the next lever is a pool threaded from the generation entry (`algorithm/neat/_distance.py`), worth ~150 ops per generation and not reachable from this node.
 
 ## Merge algebra (`digest.measure_alignment`)
