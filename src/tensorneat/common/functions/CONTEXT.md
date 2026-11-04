@@ -87,33 +87,47 @@ The final `has_valid` select (`select(count > 0, acc, 0.0)`) is emitted only whe
 `act_fns` / `agg_fns` must be **trace-time static** Python sequences (they are host configuration), and every entry must be a callable with the documented signature.
 An id outside `[-1, len(options))` (activation) / `[0, len(options))` (aggregation) falls back to the cascade's initial value — `z` / `0.0`; the pre-rewrite `lax.switch` clamped such ids to the last option, an unreachable divergence for well-formed genomes.
 
-## Measured op counts (numpy reference backend, graph ops incl. `constant` and `return`)
+## Measured op counts (numpy reference backend; executed kernels per `evoxc.run`, so the older figures in this file — which also counted the `return` op — are `+1` against these)
 One dispatch call, `(P, N, K) = (100, 50, 8)`:
 
 | graph | 1-option list | canonical list |
 |---|---|---|
-| `apply_activation` | 5 (`tanh`; 10 when the kernel itself needs more ops) | 74 (12 options, identity skipped) |
-| `apply_aggregation` | 7 (`sum`; 12 for `max`) | 57 (6 options) |
-| one level: `apply_activation(apply_aggregation(...))` | 11 | 130 |
-| whole `DefaultGenome.forward` (`max_nodes=50`, `max_conns=100`, `max_depth = 16` unrolled steps) | 621 | 2509 |
+| `apply_activation` | 4 (`tanh`; 9 for `sigmoid`, whose kernel carries four of its own ops) | 73 (12 options, identity skipped) |
+| `apply_aggregation` | 22 (`sum`; 43 for `max`, whose `has_valid` guard folds the mask as well) | 136 (6 options) |
+| one level: `apply_aggregation` ∘ `apply_activation` | 31 at `K = 8`, 23 at `K = 4` (15 before the fold) | 169 at `K = 4` (129 before) |
+| whole `DefaultGenome.forward`, pop 500, tiled `4P` batch, 3 levels | 233 (209 before the fold) | — |
 
-What keeps the count there: the id `cast` is skipped (the gene's `prepare` already casts), an `is_identity` option emits no `equal`/`select` pair, the neutral-padded window is built once per distinct neutral through `_Window` (`sum`/`mean`/`maxabs` share `select(mask, z, 0.0)`), `sum` and `mean` share one `reduce_sum` of that window (`_Window.total()`), `mean` and the `has_valid` guard share one live-edge count, one 0-d `float32` `constant` is emitted per distinct literal (`_Window.scalar()`), the guard itself is skipped when every option is `zero_on_empty`, and no separate zeroed accumulator is emitted (the first `select` carries the `else` value).
-Per level this node owns ~29 % of the `DefaultGenome` forward-pass op count (11 of the ~38 ops a one-option level costs); the rest is the genome's gather/combine work.
-The dispatch is at its op floor: three ops per non-identity option (`constant` index, `equal`, `select`) is the minimum for an id that is gene data, and a one-option list cannot drop the `select` because an out-of-range id must still fall back to identity / `0.0`.
+**The fold raises this count on purpose.** A `reduce_sum` is one op but touches `(P, N, K)`; the fold is `K` slices + `K` adds on `(P, N, 1)` and is 1.5× faster at `K = 4` / 1.3× at `K = 8`. Op *count* is the lever only between ops of the same shape class — never trade a `(P, N, K)` pass for `(P, N)` passes by counting them as equal.
+What keeps the count where it is: the id `cast` is skipped (the gene's `prepare` already casts), an `is_identity` option emits no `equal`/`select` pair, the neutral-padded window is built once per distinct neutral through `_Window` (`sum`/`mean`/`maxabs` share `select(mask, z, 0.0)`), `sum` and `mean` share one fold of that window (`_Window.total()`), `mean` and the `has_valid` guard share one folded live-edge count, one 0-d `float32` `constant` is emitted per distinct literal (`_Window.scalar()`), the guard itself is skipped when every option is `zero_on_empty`, and no separate zeroed accumulator is emitted (the first `select` carries the `else` value).
+The dispatch is at its op floor: three ops per non-identity option (`constant` index, `equal`, `select`) is the minimum for an id that is gene data, and a one-option list cannot drop the `select` because an out-of-range id must still fall back to identity / `0.0`. (`constant` ops cost ~1 µs each — 12 duplicated literals inside a 60-op select graph measure 0.059 ms in total — so hoisting them is not worth a code path.)
 
 ## Measured cost (median of 15 `evoxc.run` calls, build cached, single-threaded)
-One level kernel (`apply_activation ∘ apply_aggregation`) over `(P, 50, 8)` messages, `agg_ids`/`act_ids` int32, one option each: 0.32 ms / 1.29 ms / 2.42 ms for P = 100 / 500 / 1000; with both canonical option lists 3.10 ms / 12.9 ms / 23.7 ms (25.1 ms at P = 1000 before the shared-reduce pass, i.e. one `(P, N, K)` reduce saved).
-`sum` + `mean` in one option list: 0.45 / 1.89 / 3.62 ms (from 0.54 / 2.37 / 4.43), the whole difference being the shared `total()`.
-The shared literals earn op count, not wall time: 12 duplicate `constant` ops inside a 60-op select graph cost 0.059 ms in total.
+One level kernel (`apply_activation ∘ apply_aggregation`) over `(P, 50, K)` messages, `agg_ids`/`act_ids` int32, one option each — before the fold → after it, one cell per fresh process, both trees measured in the same session with the same cell order:
+
+| `K` | P = 100 | P = 500 | P = 1000 |
+|---|---|---|---|
+| 4 (the default genome's width) | 0.278 → 0.254 ms | 0.918 → 0.619 ms | 1.666 → 1.104 ms |
+| 8 | 0.345 → 0.414 ms | 1.281 → 1.027 ms | 2.475 → 1.859 ms |
+
+`K = 8, P = 100` is the one cell the fold loses (0.35 → 0.41 ms: 16 extra ops dominate a 0.16 ms reduction); every other cell wins, and the win grows with `P`.
+With both canonical option lists at `K = 4` (P = 500 / 1000): 12.2 → 10.3 ms and 24.0 → 19.7 ms at `K = 8`; 25.4 → 16.6 ms at `K = 4`.
+`sum` + `mean` in one option list: 4.7 → 4.5 ms at P = 1000 (`K = 4`), the whole difference being the shared `total()` and the shared count.
 Build (cached per shape by the Pipeline, not per generation): 5–6 ms for the one-option level graph, ~45 ms for the canonical one.
-End-to-end `Pipeline.step` (XOR, `DefaultGenome`, `NEAT`, `max_nodes=50`, `max_conns=100`, `species_size=20`, pop 1000, build excluded): ≈713 ms per generation, with individual generations scattering ±30 % on a shared machine; the whole level loop is ≈3–5 % of that at P=500–1000 (a level is 11 of the forward pass's ops but the forward pass is not the generation).
-The rest of a generation is schedule derivation, mutation/crossover, speciation and selection — not this node.
+One whole `DefaultGenome.forward` (pop 500 on the tiled `4P` batch, 3 levels, build excluded): 13.9 → 10.3 ms; at pop 1000, 26.5 → 19.4 ms.
+End-to-end `Pipeline.step` (XOR, `DefaultGenome`, `NEAT`, `max_nodes=50`, `max_conns=100`, `species_size=20`, build excluded, `benchmarks/backend_measure.py` 3 warmup + 20 timed generations, one fresh process per cell): 44.8 → 41.7 ms at pop 100, 196.5 → 185.4 ms at pop 500, 338.8 → 326.7 ms at pop 1000 (−4 % to −7 %).
+The forward pass is only ~7 % of a generation at pop 500, so this node's ceiling is small: the rest is schedule derivation, mutation/crossover, speciation and selection — not this node.
 
 Remaining hot spots inside this node, in order:
-1. `select(mask, z, 0.0)` (≈1.37 ms) plus `reduce_sum` (≈0.87 ms) at P = 1000 — the mandatory neutral-padded window of a single aggregation level, ≈90 % of its 2.42 ms run time. Dropping the padding would require the *genome* to guarantee that dead slots are exactly `0.0` (it currently only NaN-sanitizes them), i.e. a genome-side contract change plus a `zero_on_empty`-style opt-in, not a change here.
-2. The `equal`/`select` cascade of a multi-option list (3 ops per option over `(P, N)`): unavoidable while the id is gene data rather than a shape.
-3. `maxabs` costs 0.85 ms more per level than `sum` at P = 1000 (argmax + 7 `reshape`s + `flat_gather`); `flat_gather` additionally emits a `(P, 1)` int32 offsets constant plus ~4 index-range guards per call even though an `argmax` result is provably in range (see `common/tools.py`, not this node).
-4. `constant` ops are distinct per literal and per dispatch: evoxc has no graph-level constant cache, so each call re-materialises its own literals (the shared-scalar pass only removes the duplicates *within* one call); 3 of the 11 one-option ops are such constants.
+1. `select(mask, z, 0.0)` on `(P, N, K)` — the mandatory neutral-padded window, now the single most expensive op of a level (~1.0 ms of its 2.0 ms at P = 2000 empty, ~0.5 ms inside a real forward). `np.where` runs at ~2.9 GB/s on a 400 k-element float32 window, ~6× slower than a masked multiply, but a multiply cannot replace it: a *dead* slot may hold `NaN` (`NaN * 0` is `NaN`) or `±inf` (`inf * 0` is `NaN`), and `nan_to_num` would also rewrite a live `±inf`. Emitting `select` per plane instead measures identical (0.001 ms apart) with +10 ops, so the single padded window stands.
+2. The `equal`/`select` cascade of a multi-option list (3 ops per option over `(P, N)`): unavoidable while the id is gene data rather than a shape. The two dispatch selects are ~0.3 ms of a 2.0 ms one-option level.
+3. `maxabs` costs ~0.85 ms more per level than `sum` at P = 1000 (argmax + 7 `reshape`s + `flat_gather`); `flat_gather` additionally emits a `(P, 1)` int32 offsets constant plus ~4 index-range guards per call even though an `argmax` result is provably in range (see `common/tools.py`, not this node).
+4. `constant` ops are distinct per literal and per dispatch: evoxc has no graph-level constant cache, so each call re-materialises its own literals (the shared-scalar pass only removes the duplicates *within* one call); 5 of the 23 one-option ops at `K = 4` are such constants, at ~1 µs each.
+
+Rejected levers (measured; do not re-derive):
+- **A halving tree instead of the per-plane fold** (`K/2`-wide slices, `log2 K` stages, ~8 MiB of traffic instead of 25 MiB): the pairwise tree `((a0+a1)+(a2+a3))+((a4+a5)+(a6+a7))` is numpy's order only at `K = 8`, and at `K = 16` numpy pairs `a[j]` with `a[j+8]` instead, so a halving tree is a *different* sum for every other width — one recipe that holds for all `K` is worth more than the ~10 ops it would save at `K = 8`.
+- **Per-plane `select` folded with the adds** (`add(acc, select(m_k, z_k, 0))`): 1.606 ms vs 1.609 ms for the single padded window, with 10 more ops — no win, so the window stays a single op (which also keeps `maxabs` on the same memo).
+- **A masked multiply instead of the padded select**: ~0.2 ms instead of ~1.3 ms at `(2000, 50, 4)`, rejected for the `NaN` / `±inf` reasons in hot spot 1; it would silently poison a node whose dead slots hold a non-finite value.
+- **Folding `apply_activation`'s literals** or caching constants across the unrolled levels: `constant` ops are ~1 µs, so the whole saving is under 0.1 % of a level.
 
 ## Shapes, dtypes, sentinels
 All kernels take and return `float32`; ids arrive as integral-valued `float32` gene columns (cast to `int32`) or as an already-`int32` id column (used as is); an already-`int32` column reaches the dispatcher from `gene/node/base.prepare`, which casts once per forward pass.
