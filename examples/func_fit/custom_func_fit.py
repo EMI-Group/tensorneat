@@ -53,7 +53,7 @@ if __name__ == "__main__":
         fitness_target=-1e-2,
     )
 
-    # initialize the state; this is where the evoxc graphs are built
+    # initialize the host state; the evoxc graphs are built on the first step
     state = pipeline.setup()
     # run until the fitness target is reached or the generation limit hits
     state, best = pipeline.auto_run(state)

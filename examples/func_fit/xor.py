@@ -7,10 +7,11 @@ from tensorneat import Pipeline, algorithm, genome, problem
 from tensorneat.common import ACT
 
 if __name__ == "__main__":
-    # Demo budget: a real run uses pop_size in the thousands and a few hundred generations.
+    # Demo budget: pop 200 for at most 150 generations (it converges around
+    # generation 75); a real run uses pop_size in the thousands and more generations.
     pipeline = Pipeline(
         algorithm=algorithm.NEAT(
-            pop_size=500,
+            pop_size=200,
             species_size=10,
             survival_threshold=0.01,
             genome=genome.DefaultGenome(
@@ -22,14 +23,18 @@ if __name__ == "__main__":
         ),
         problem=problem.XOR(),
         seed=42,
-        generation_limit=40,
+        generation_limit=150,
         # fitness is maximised: this target is "error below 1e-3"
         fitness_target=-1e-3,
     )
 
-    # initialize the state; this is where the evoxc graphs are built
+    # host-only setup: random key, initial population, task data -- no graph yet
     state = pipeline.setup()
-    # run until the fitness target is reached or the generation limit hits
+    # evolve: the evoxc graph is built on the first step, then cached and reused
     state, best = pipeline.auto_run(state)
     # show the best individual found
     pipeline.show(state, best)
+    print(
+        f"final loss: {-pipeline.best_fitness:.2e}"
+        f" after {len(pipeline.fitness_history)} generations"
+    )
