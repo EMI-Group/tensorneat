@@ -183,7 +183,7 @@ A **scatter-derived inverse permutation** instead of `argsort(order)`: behind on
 `algorithm/` should keep structurally allocated keys below `genome.key_span` (or carry a raised span in the shape signature): that is what makes the dense route exact for every payload, and it is the same fix that stops the execution schedule from silently dropping evolved genes.
 `algorithm/neat/_distance.py::DistanceRows.row` must keep passing a **batch-1 centre** to `measure_distance` to get the fast path; a population-shaped centre is legal but always takes the row-wise merge (`DistanceRows.matrix` does that on purpose, one digest row per centre).
 `genome/gene/base.py:50` reads attribute columns with one kept-axis slice plus one reshape per column: 132 + 132 traced ops per generation at pop 500/1000, and the per-column attribute arithmetic of `BaseGene.distance` is now the largest remaining block inside `measure`.
-`operations/alignment.py` still embeds full-size graph constants, a private `_scalar` and the `uint64` packed identities (`constant`/`cast`/`bitwise_left_shift` on `uint64`), so the pair-wise `execute_distance` graph carries **84 unsigned values** and is not `iree`-exportable; `find_homologous` is only on the pair-wise route now, so this node inherits none of it. The pipeline's own path (`prepare` + `measure`) is unsigned-free.
+`operations/alignment.py` (this node's shared aligner): the row identity is an `int64` carrier with one sign flip, so the alignment path carries no unsigned value any more; the graph-level residue here is only the removed `u32` span constant, i.e. none.
 
 ## Routing Table
 | File | Responsibility |
