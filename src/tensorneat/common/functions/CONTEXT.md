@@ -43,15 +43,15 @@ Activations are shape-polymorphic and elementwise: canonical call shape `(P, N)`
 The kernel formulas are bit-identical to the pre-rewrite library (same expression order); `evoxc.sigmoid`/`evoxc.relu` and friends are **not** used, because their rounding differs.
 
 ### AGG — canonical order (6)
-| id | name | reduce over the last axis of `z (P, N, K)` | neutral padding | `zero_on_empty` |
+| id | name | combine over the last axis of `z (P, N, K)` | neutral padding | `zero_on_empty` |
 |---|---|---|---|---|
-| 0 | `sum` | `reduce_sum` | `0.0` | `True` |
-| 1 | `product` | `reduce_prod` | `1.0` | `False` |
-| 2 | `max` | `reduce_max` | `-inf` | `False` |
-| 3 | `min` | `reduce_min` | `+inf` | `False` |
+| 0 | `sum` | `_sum_last` (numpy `pairwise_sum` order) | `0.0` | `True` |
+| 1 | `product` | `_fold_last(…, multiply, 1.0)` | `1.0` | `False` |
+| 2 | `max` | `_fold_last(…, maximum, -inf)` | `-inf` | `False` |
+| 3 | `min` | `_fold_last(…, minimum, +inf)` | `+inf` | `False` |
 | 4 | `maxabs` | signed value of largest `abs` (argmax + flat gather) | `0.0` | `True` |
-| 5 | `mean` | `reduce_sum / maximum(count, 1.0)` | `0.0` | `True` |
-Aggregations are rank-3 only (`(P, N, K)` → `(P, N)`); a consumer with a different incoming layout reshapes to `(..., K)` and passes an all-`True` mask, or reduces on its own.
+| 5 | `mean` | `_sum_last` of the padded window `/ maximum(count, 1.0)` | `0.0` | `True` |
+Aggregations are rank-3 only (`(P, N, K)` → `(P, N)`); a consumer with a different incoming layout reshapes to `(..., K)` and passes an all-`True` mask, or combines on its own.
 
 ## Static kernel flags (the contract the dispatchers read)
 Three attributes are attached to a kernel and read at trace time; a custom kernel supplied by a genome simply lacks them, and the defaults (`False` / absent) always mean "emit the general path", never "skip work":
@@ -61,7 +61,7 @@ Three attributes are attached to a kernel and read at trace time; a custom kerne
 No dispatcher branches on a kernel's *identity* (`fn is sum`); the flags are the extension point for a genome's own option lists.
 
 ## Aggregation contract over the `K` axis
-`z` and `mask` are both `(P, N, K)`: axis 0 population, axis 1 node slot, axis 2 the static in-degree bound `K`; the reduce axis is always the last one and the result is `(P, N) float32`.
+`z` and `mask` are both `(P, N, K)`: axis 0 population, axis 1 node slot, axis 2 the static in-degree bound `K`; the combine axis is always the last one and the result is `(P, N) float32`.
 `mask` is supplied by the genome (`level == l` ∧ edge matched ∧ source value not `NaN`); it — not `isnan(z)` — decides which slots count, so a genuinely `NaN` contribution still poisons its node exactly as in the pre-rewrite library.
 evoxc reductions have no `where=` / `initial=`, so each kernel first rewrites masked-out slots to its neutral element with `evoxc.select` and then **folds** the `K` planes (`_sum_last` / `_fold_last`), never `reduce_*` over the last axis; the `±inf` neutrals are scalar literals that `evoxc.select` weak-promotes to the tensor's float32 dtype.
 
@@ -147,10 +147,10 @@ Shared numeric constants (`SCALE`, `LELU_SLACK`, `INV_EPS`, `LOG_EPS`, `EXP_CLIP
 2. **`clip` is not a registry option**: a 13th sympy-only name would make `ACT`'s two tables disagree in length and shift no numeric behaviour; `clip` stays internal to `SympyExp` (`SympyClip`, exported as a codegen helper) and the ACT option list is exactly the 12 names above, so sampled activation ids stay stable.
 3. **Dispatch is a `select` cascade, not a branch**: evoxc has no `switch` and `cond` demands a 0-d predicate, so every option is evaluated and selected per node.
 4. **Dispatch overhead is minimised by static flags, not by inspecting kernel identity**: `is_identity` / `window_body` / `zero_on_empty` let a genome's custom option list opt in, and their defaults keep the fully general path.
-5. **`_Window` is the single owner of the masked reduction inputs**: `padded(neutral)` and `count()` are the only places this package builds `select(mask, z, neutral)` and `reduce_sum(cast(mask, float32))`, so a kernel body and the dispatcher cannot drift apart.
+5. **`_Window` is the single owner of the masked aggregation inputs**: `padded(neutral)` and `count()` are the only places this package builds `select(mask, z, neutral)` and `cast(mask, float32)` before folding, so a kernel body and the dispatcher cannot drift apart.
 6. **A gather/`stack`-based dispatcher was rejected**: stacking every option result and selecting with one `flat_gather` trades 2 ops per option for a `(len, P, N)` stack, which is *more* wall time on the numpy backend (~2.4 MB of traffic for 12 options at P = 1000) and needs clamp/mask plumbing for the `-1` and out-of-range rules.
-7. **Aggregations are rank-3 and last-axis reducing**: one shape class, one reduce axis, testable against a numpy oracle; HyperNEAT's substrate shape adaptation belongs to that node.
-8. **`maxabs` stays signed** (argmax + `flat_gather`) rather than the cheaper `reduce_max(abs(z))`, because the pre-rewrite kernel returned the signed value and parity tests compare against it.
+7. **Aggregations are rank-3 and fold the last axis**: one shape class, one combine axis, testable against a numpy oracle; HyperNEAT's substrate shape adaptation belongs to that node.
+8. **`maxabs` stays signed** (argmax + `flat_gather`) rather than the cheaper max of `abs(z)`, because the pre-rewrite kernel returned the signed value and parity tests compare against it.
 9. **The manager is immutable** (no `add_func` / `update_sympy`): a gene id indexes the *user's* option list, so custom options need no global registration; a genome wanting sympy support for a custom option constructs its own `FunctionManager`.
 10. **Names are registry data** (`ACT.name_of(fn)`, `ACT.index2name[id]`), with no module-level `get_func_name` helper: `to_dict` / `repr` ask the manager, which knows the canonical spelling of an option.
 11. **Registry validation raises `ValueError`, not `ConfigError`**: a mismatched table is a programmer error in this package, whereas `common.errors.ConfigError` is reserved for user configuration raised by the layer that owns the config.
@@ -161,7 +161,7 @@ Out-of-range activation/aggregation ids fall back to identity / `0.0` instead of
 `mean` is `0.0` instead of `NaN` for an all-`False` mask; indistinguishable through the dispatcher, different only when the kernel is called standalone.
 `sympy_module` accepts only `"numpy"` (a `"jax"` argument raises `ValueError`), and `obtain_sympy` accepts an option id as well as a name or callable.
 `sympy_module()` binds numpy as the *keyword* `backend` (the pre-rewrite `partial(fn, jnp_or_np)` bound it to `val`, so `lambdify`d `clip` evaluations raised `AttributeError`); and `SympyMaxabs` renders as an explicit `Piecewise` over `Eq(Abs(t_i), max_j Abs(t_j))`, because `sp.Max(*z, key=sp.Abs)` is rejected by current sympy — the signed term and its first-maximum tie-break are unchanged.
-The aggregation reduce axis is the last axis of `(P, N, K)` (the pre-rewrite library reduced a per-node axis 0); numerically identical for the same edge order, but HyperNEAT substrate code must reshape its contributions to `(..., K)` instead of calling `AGG.sum(inputs)` on a raw input vector.
+The aggregation combine axis is the last axis of `(P, N, K)` (the pre-rewrite library reduced a per-node axis 0); numerically identical for the same edge order, but HyperNEAT substrate code must reshape its contributions to `(..., K)` instead of calling `AGG.sum(inputs)` on a raw input vector.
 
 ## Constraints
 - No `jax`, `torch`, `numpy.random` anywhere in this package; graph code uses `evoxc` ops only, host code may use `numpy` / `sympy`.
