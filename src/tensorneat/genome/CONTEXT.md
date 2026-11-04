@@ -136,11 +136,11 @@ The attribute term is a reduced sum over the aligned rows; `measure_distance` is
 | `forward` (P rows) | 98 / 1.7 ms | 98 / 4.1 ms | 98 / 7.0–7.2 ms |
 | `execute_mutation` (`DefaultMutation`) | 438 / 5.2 ms | 438 / 11.4 ms | 438 / 20.4 ms |
 | `execute_crossover` | — | 142 / 5.3 ms | 142 / 10.2–10.3 ms |
-| `prepare_distance` (both families) | — | 163 / 2.6 ms | 163 / 4.1 ms |
-| `measure_distance`, tiled centre = the shipped call site (merge) | — | 94 / 2.7 ms | 94 / 5.2 ms |
-| `measure_distance`, batch-1 centre (dense single-centre route) | — | 106 / 1.4–1.6 ms | 106 / 2.0–2.3 ms |
+| `prepare_distance` (both families) | — | 163 / 2.58–2.63 ms | 163 / 4.13–4.15 ms |
+| `measure_distance`, tiled centre = the shipped call site (merge) | — | 94 / 2.36–2.52 ms (median 2.39) | 94 / 4.25–4.56 ms (median 4.33) |
+| `measure_distance`, batch-1 centre (dense single-centre route, unreachable from the pipeline) | — | 102 / 1.35 ms | 102 / 2.02 ms |
 | `execute_distance` (pairwise) | — | 202 / — | — |
-| `Pipeline.step` end-to-end | — | 164–166 ms median | 275–291 ms median |
+| `Pipeline.step` end-to-end | — | 168.8 ms median | 288.6 ms median |
 | `Pipeline.build_seconds` | — | 0.33 s | 0.41 s |
 | legacy JAX baseline (ms/gen) | 51 | 109 | 157 |
 
