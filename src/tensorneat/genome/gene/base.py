@@ -746,16 +746,17 @@ class BaseGene(StatefulBaseClass):
         ``cast``) and saves that cast op. The int column uses ``not_equal`` and not
         ``|delta|`` because ``inf - inf`` is NaN while ``not_equal(inf, inf)`` is False:
         this kernel must be exact for every input.
-        Measured on the reference interpreter (payload at generation 5, one fresh process
-        per pop): the node gene on ``(500, 50, 4)`` 545 -> 437 us and on ``(1000, 50, 4)``
-        943 -> 772 us; the conn gene on ``(500, 100, 1)`` 156 -> 149 us, where a lone
-        attribute column is its own width-1 view and needs no slice at all.
-        The alternatives measured worse: one ``subtract`` over the whole block plus a
-        per-column ``abs`` of its strided views (1.24x, the form that trades strided reads
-        for a wide pass), one ``abs`` over the whole block plus two slices (1.22x), a
-        contiguous same-kind run compared as one block (1.5x), and a fully blocked
-        ``select`` + last-axis ``reduce_sum`` (3x: an innermost-axis reduce is 10-20x an
-        ordinary op regardless of how few ops it takes).
+        Measured on the reference interpreter (payload at generation 5, interleaved
+        A/B against the base commit, separate processes, 3 rounds): the node gene on
+        ``(500, 50, 4)`` 509 -> 421 us and on ``(1000, 50, 4)`` 913 -> 763 us (-17 %);
+        the conn gene on ``(500, 100, 1)`` 138 -> 140 us, i.e. unchanged, because its
+        only float column made the dropped op a width-1 slice view rather than a cast.
+        The alternatives measured worse relative to this form: one ``subtract`` over the
+        whole block plus a per-column ``abs`` of its strided views 1.07x, one ``abs``
+        over the whole block plus two slices 1.2x, a contiguous same-kind run compared
+        as one block 1.4-1.8x, and a fully blocked ``select`` + last-axis
+        ``reduce_sum`` 3x (an innermost-axis reduce is 10-20x an ordinary op however
+        few ops it takes).
 
         Args:
             state: Host configuration container.
