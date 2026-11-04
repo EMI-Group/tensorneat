@@ -262,7 +262,7 @@ class MountainCarContinuous(BaseProblem):
            reward of the still-alive episodes, update the alive mask and freeze
            the state of every episode that just reached the goal.
         5. Fitness = mean over the ``repeat_times`` axis of the episode return
-           (in ``[0, 100]`` per episode), then ``finalize_fitness``.
+           (in ``[-(0.1 * max_step), 100]`` per episode), then ``finalize_fitness``.
 
         NaN handling: ``a = tanh(NaN) = NaN``, so the clip does not fold it
         (numpy ``clip`` is ``minimum(maximum(...))``, and both propagate NaN),
@@ -386,10 +386,10 @@ class MountainCarContinuous(BaseProblem):
 
         Returns:
             The pair ``(total (B,), final_obs (B, 2))``, where ``total`` is the
-            accumulated reward of each episode (in ``[0, 100]``, NaN once that
-            episode's policy emitted a NaN logit) and ``final_obs`` the last
-            observation the carry holds (the state before the terminal
-            transition once the episode is over).
+            accumulated reward of each episode (in ``[-(0.1 * max_step), 100]``,
+            NaN once that episode's policy emitted a NaN logit) and
+            ``final_obs`` the last observation the carry holds (the state before
+            the terminal transition once the episode is over).
         """
         consts = self._constants()
         batch = pop_size * self.repeat_times
