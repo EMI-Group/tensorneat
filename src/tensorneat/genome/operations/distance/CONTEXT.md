@@ -147,7 +147,8 @@ The rule a future agent needs: never build a `(P, M, A)`-shaped index block — 
 The two families' scalar tails cannot be traced once without stacking their inputs, and the three `concatenate`/`reshape` pairs that stacking needs cost more than the 1 op they save (measured: 22 → 21).
 The largest remaining block inside a `measure` call is `gene.distance` plus its column reads, which live in another node's files.
 Element volume on the merge route is already minimal (one `P × M` block per family), and the remaining per-call body is op-floor work, so the only lever left in this node's *own* files is the number of calls — see `## Dense versus merge at the live call site`.
-Both structural rewrites of this body that the op count invites were built and measured — the elementwise centre fold and the single fused sort — and both lose; `## Rejected` carries their numbers, so a future round should start from the route (or from the two ~2 % micro-candidates in `## Known Issues`) rather than from the merge algebra.
+The body is at its dispatch floor: ~94 executed ops at ~0.056 ms each *is* the call's wall time, so a ≥5 % win needs ≥5 ops removed per call and no candidate that large remains (`## Known Issues` holds the two worth ~2 %).
+Both structural rewrites the op count invites — an elementwise centre fold and one sort fused across families — are refuted with numbers in `## Rejected`; the only ≥5 % lever on this route is the caller passing a batch-1 centre (`## Dense versus merge at the live call site`).
 
 ## Dense versus merge at the live call site (measured, `algorithm/` owns the switch)
 `measure` picks its route from the centre's **batch width**, and the live pipeline sends a population-shaped one: `algorithm/neat/_distance.py::DistanceRows.row` / `_kernels.py::single_payload` tile the slot's single centre row to `pop_size` rows (`repeat_leading`, 4 arrays × 4 ops) before the call, so every one of the 40 calls per generation takes the merge.
