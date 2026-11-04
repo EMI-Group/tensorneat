@@ -25,6 +25,13 @@ Every refusal (duplicate edge, self-connection, cycle, capacity, ``max_in_degree
 colliding caller allocation) is a bit-exact no-op for that individual and never a partially
 applied write; a probability of ``0`` still removes that operation's whole chain — the
 cycle predicate included — from the traced graph.
+
+Heritability rule: the value stage runs over the tables the structural stages produced, and
+the rows those stages wrote in this call are then put back verbatim.  A gene a structural
+operation creates therefore enters selection with the attributes the operation gave it —
+an add-node's identity edge still carries ``weight = 1.0``, its copy edge the consumed
+edge's weight and the new node its ``new_identity_attrs`` — instead of being re-drawn by the
+same call's attribute mutation.
 """
 
 from typing import TYPE_CHECKING
@@ -101,6 +108,44 @@ def _broadcast_row(
         ``(P, W)`` tensor whose every row equals ``row``.
     """
     return enp.broadcast_to(row, (pop_size, width))
+
+
+def _written_rows(
+    before: evoxc.SymbolicTensor, after: evoxc.SymbolicTensor
+) -> evoxc.SymbolicTensor:
+    """Mark the rows one call's structural stages wrote, from a key-table difference.
+
+    Only the structural stages change a key array (the value stage touches attributes
+    alone), so one difference between the payload's key tables and the ones
+    :meth:`BaseMutation.mutate_structure` returned is the exact set of rows whose genes
+    were created in this call.  A written row carries a different key; a row the
+    structural stage *cleared* (a deleted node, a consumed or deleted connection) turns
+    ``I_INF`` and is already NaN in the attribute tables, so the value stage's own padding
+    mask keeps it and it needs no separate term.  No structural operation ever rewrites an
+    attribute row while leaving its key row unchanged, so a row whose keys match is a row
+    whose attributes must be left alone.
+
+    Args:
+        before (evoxc.SymbolicTensor): Key array as the call received it — ``(P, max_nodes)``
+            for the node table or ``(P, max_conns, CK)`` for the connection table.
+        after (evoxc.SymbolicTensor): The same key array as ``mutate_structure`` returned.
+
+    Returns:
+        ``(P, max_nodes)`` / ``(P, max_conns)`` bool: True where this call wrote the row.
+        Three-dimensional key tables fold their key-width axis, so a connection row counts
+        as written when *any* of its key columns changed (the ``historical_marker`` one
+        included).
+    """
+    differs = evoxc.not_equal(before, after)
+    if len(differs.shape) == 2:
+        return differs
+    # One ``logical_or`` per key column over kept-axis views, never a trailing-axis
+    # ``reduce_max``: an innermost-axis reduce over a ``(P, E, CK)`` block costs an order of
+    # magnitude more than the same predicate folded from ``CK`` slices.
+    written = differs[:, :, 0]
+    for column in range(1, differs.shape[2]):
+        written = evoxc.logical_or(written, differs[:, :, column])
+    return written
 
 
 def _edge_key_row(
@@ -195,7 +240,7 @@ class _StageContext:
 
 
 class BaseMutation(StatefulBaseClass):
-    """Batched mutation operator: one structural change plus value mutation.
+    """Batched mutation operator: four structural operations plus value mutation.
 
     Subclasses supply the two things that differ between operator families: the four
     probabilities :attr:`structural_probabilities` (validated by the subclass
@@ -224,10 +269,14 @@ class BaseMutation(StatefulBaseClass):
     ) -> GenomeTensors:
         """Mutate a whole population in one kernel call.
 
-        The key is split internally into one key per stage; :meth:`mutate_structure` runs
-        first and :meth:`mutate_values` sees the arrays it produced.  Nothing is applied
-        per individual: gates are elementwise masks on axis 0 and genes whose candidate is
-        invalid are simply carried through.
+        The key is split internally into one key per stage.  :meth:`mutate_structure` runs
+        first and :meth:`mutate_values` sees the tables it produced, after which the rows
+        the structural stages wrote are restored verbatim: the value stage mutates the
+        *pre-existing* genes only, so a gene a structural operation creates is heritable
+        (an add-node's identity edge keeps ``weight = 1.0``, its copy edge the consumed
+        edge's weight, the new node its ``new_identity_attrs``) rather than re-drawn before
+        selection sees it.  Nothing is applied per individual: gates are elementwise masks
+        on axis 0 and genes whose candidate is invalid are simply carried through.
 
         Args:
             state (State): Immutable host configuration container, read for gene metadata
@@ -275,7 +324,11 @@ class BaseMutation(StatefulBaseClass):
                 f"{pop_size}, got {tuple(new_conn_keys.shape)}"
             )
         structure_key, values_key = evoxc.random.split_n(key, 2)
-        node_keys, node_attrs, conn_keys, conn_attrs = self.mutate_structure(
+        node_count = node_keys.shape[1]
+        edge_count = conn_keys.shape[1]
+        node_attr_width = node_attrs.shape[2]
+        conn_attr_width = conn_attrs.shape[2]
+        structured = self.mutate_structure(
             state,
             genome,
             structure_key,
@@ -286,8 +339,28 @@ class BaseMutation(StatefulBaseClass):
             new_node_keys,
             new_conn_keys,
         )
-        return self.mutate_values(
-            state, genome, values_key, node_keys, node_attrs, conn_keys, conn_attrs
+        mutated = self.mutate_values(state, genome, values_key, *structured)
+        # The value stage ran over the same tables, so the rows the structural stage wrote
+        # in this call are put back afterwards: a gene a structural operation creates is
+        # heritable — the value stage must not re-draw it before selection sees it.
+        node_attrs = structured.node_attrs
+        if node_attr_width:
+            written = _written_rows(node_keys, structured.node_keys)
+            node_attrs = evoxc.select(
+                enp.reshape(written, (pop_size, node_count, 1)),
+                structured.node_attrs,
+                mutated.node_attrs,
+            )
+        conn_attrs = structured.conn_attrs
+        if conn_attr_width:
+            written = _written_rows(conn_keys, structured.conn_keys)
+            conn_attrs = evoxc.select(
+                enp.reshape(written, (pop_size, edge_count, 1)),
+                structured.conn_attrs,
+                mutated.conn_attrs,
+            )
+        return GenomeTensors(
+            structured.node_keys, node_attrs, structured.conn_keys, conn_attrs
         )
 
     @property
@@ -469,13 +542,19 @@ class BaseMutation(StatefulBaseClass):
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
     ) -> GenomeTensors:
-        """Mutate the attributes of every existing gene in the population.
+        """Mutate the attributes of every gene in the population that already exists.
 
         One batched ``genome.node_gene.mutate`` and one ``genome.conn_gene.mutate`` call
         cover the whole ``(P, N, NA)`` / ``(P, E, CA)`` tables — the genes are batched over
         their leading axes, so no Python loop or per-individual key split is needed.  The
         result is re-masked with the padding pattern read *before* the mutation, so a
         padded row can never become finite.
+
+        Called from :meth:`__call__` on the tables :meth:`mutate_structure` returned, so
+        the rows a structural operation created in this call are drawn over too;
+        :meth:`__call__` then restores them from the structural write, which is what makes
+        a newly created gene heritable within the same call.  Run standalone (as the
+        two-stage API allows) this method makes no such distinction.
 
         Only ``node_attrs`` and ``conn_attrs`` change; the key arrays are returned
         untouched, and padded rows keep their sentinel values (``I_INF`` keys, NaN attrs).
