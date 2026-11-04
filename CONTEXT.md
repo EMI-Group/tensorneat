@@ -58,7 +58,7 @@ The winning structural idea is *edge-proportional, depth-parallel* evaluation: w
 |---|---|
 | `./src/tensorneat` | The package: pipeline (compile site), kernel contract, genome/algorithm/problem/common subtrees. |
 | `./benchmarks` | Old-vs-new benchmark harness, frozen legacy JAX implementation, spike results, `RESULTS.md`. |
-| `./test` | Pytest suites: unit, parity vs legacy, integration, release gates. |
+| `./test` | Pytest suites: unit, parity vs legacy, integration, backends (`iree`), release gates. |
 | `./examples` | Runnable scripts for each supported problem family. |
 | `./docs` | Sphinx configuration and autodoc stubs. |
 | `./tutorials` | Teaching notebooks (JAX-era; read for concepts, not for API accuracy). |
