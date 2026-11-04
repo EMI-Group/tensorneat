@@ -118,15 +118,16 @@ What is *not* hoistable is anything derived from the centre payload: `_pack`, `_
 
 | kernel | ops |
 |---|---|
-| `prepare` (both families: dense fields, `oor`, both statics bundles) | 162 |
-| `prepare` + `measure` (batch-`P` centre, merge) | 281 |
-| `measure` marginal, merge route (the shipped one) | 120 |
-| `measure` marginal, batch-1 centre (dense route) | 120 |
+| `prepare` (both families: dense fields, `oor`, both statics bundles) | 167 |
+| `prepare` + `measure` (batch-`P` centre, merge) | 266 |
+| `measure` marginal, merge route (the tiled centre the pipeline sends) | 98 |
+| `measure` marginal, batch-1 centre (dense route) | 102 |
 | `execute_distance` (pair-wise, unchanged contract) | 225 |
 
-The counts are independent of `P` (measured identical at pop 100 / 500 / 1000), counted recursively over `module.functions[*].entry_block` and every `op.regions` body with terminators included; the op-nodes-only convention `test/unit/genome/test_distance_digest.py` asserts on reads 161 / 280 / 119 / 224.
-Source-line attribution of one merge `measure` call: `measure_alignment` 40 (two per-family merges), aligned-attribute term 14, scalar tail 22, family add 1, `pack`+`tag` ~13, and **zero** per-call `constant` ops; `gene.distance` and its column reads (~31) belong to `../gene/`.
-Executed ops of one seed-42 XOR generation at pop 500 (`Pipeline.step` 6-step protocol, `species_size=20`): whole graph **9 547**, this node's bucket **3 580** — one `prepare` executed once plus 40 `measure` calls at ~88 executed ops each once the gene-side ops are excluded.
+The counts are independent of `P` (measured identical at pop 100 / 500 / 1000), counted recursively over `module.functions[*].entry_block` and every `op.regions` body with terminators included; the op-nodes-only convention `test/unit/genome/test_distance_digest.py` asserts on reads 167 / 265 / 98 / 101 / 224, and its ceilings are `PREPARE_OP_CEILING = 210` / `MEASURE_OP_CEILING = 120`.
+Source-line attribution of one merge `measure` call: `measure_alignment` 17 per family (34), aligned-attribute term ~6 per family, scalar tail ~11 per family, family add 1, `_pack`/`_tagged` 4 + 4, and **zero** per-call `constant` ops; `gene.distance` and its column reads (~31) belong to `../gene/`.
+Executed ops of one seed-42 XOR generation at pop 500 (`Pipeline.step` 6-step protocol, `species_size=20`): whole graph **8 813**, this node's bucket **3 222** — one `prepare` executed once (167) plus 40 `measure` calls at ~76 executed ops each once the gene-side ops are excluded.
+The 40 calls are 4 *traced* call sites (two per speciation phase, each inside a region that runs 10 times), so the traced body is what the multiplying op count pays.
 Baked constant bytes of the `prepare` + `measure(batch 1)` graph at pop 1000: 223 788 B total, largest single constant 90 008 B (a `key_span`-scaled `(width + 1,) int32` dense table); pop 100 187 788 B, pop 500 203 788 B.
 `measure` itself adds four rank-0 constants; every other byte is a table or a seed built once in `prepare`.
 
