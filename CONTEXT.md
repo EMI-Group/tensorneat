@@ -50,7 +50,7 @@ The winning structural idea is *edge-proportional, depth-parallel* evaluation: w
 
 ## Test Strategy
 `pytest` from the repo root (`[tool.pytest.ini_options]` in `pyproject.toml`, `testpaths = ["test"]`); `test/` mirrors the source tree.
-`test/unit/` runs on the numpy backend with no optional dependency; `test/parity/` requires the `bench` extra (JAX) and compares kernels against `benchmarks/legacy_jax`; `test/integration/` evolves XOR to the fitness target and asserts determinism for a fixed seed.
+`test/unit/` runs on the numpy backend with no optional dependency; `test/parity/` requires the `bench` extra (JAX) and compares kernels against `benchmarks/legacy_jax`; `test/integration/` evolves XOR to the fitness target and asserts determinism for a fixed seed; `test/backends/` runs a real XOR generation on `backend="iree"` and compares it with numpy, and skips cleanly without the `evoxc[iree]` extra (marker `requires_iree`, in no gate).
 `test/release_gate_no_jax.py` asserts that `import tensorneat` pulls in no JAX/torch module.
 
 ## Routing Table
