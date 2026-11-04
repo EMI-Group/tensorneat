@@ -35,8 +35,10 @@ first individual is caught by the same comparison. The shapes in the messages
 are the documented static signature (``max_nodes``/``max_conns`` constants
 below), so an error that stops naming them fails loudly.
 
-No backend, no ``Pipeline`` build, no ``jax``/``torch``: the helper is
-host-only, so these tests are plain numpy.
+No ``Pipeline`` build and no ``jax``/``torch``: the helper is host-only, so these
+tests are plain numpy, except :func:`test_run_network_chunks_the_tiled_batch`,
+which traces one small genome forward to prove the chunk budget is numerically
+neutral.
 """
 
 from __future__ import annotations
@@ -326,3 +328,162 @@ def test_arrays_that_disagree_about_the_population_axis_are_rejected():
     assert "(1," in message and "(2," in message, (
         f"that message must quote the four shapes, got {message!r}"
     )
+
+
+def test_run_network_chunks_the_tiled_batch(monkeypatch):
+    """Invariant: a tiled batch wider than the budget runs in row-contiguous individual groups.
+
+    Oracle: the unchunked path itself. The same ``P * S = 4 * 3`` batch is
+    evaluated once with a budget above the tiled width and once with the budget
+    monkeypatched down to ``8`` rows; the concatenated outputs must be
+    bit-identical, which is the claim behind the regrouping (every forward op is
+    row-local, and the one population-wide quantity — the level bound — is a
+    maximum). The two caught errors this test exists for are a chunk that is not
+    a multiple of ``S`` (its rows would belong to different individuals) and a
+    concatenation in the wrong order.
+
+    Assertion: with ``EVAL_CHUNK_ROWS = 8`` and ``S = 3`` the budget resolves to
+    two individuals per chunk, so ``prepare`` is called twice on a
+    two-individual slice and the forward sees input blocks of six rows each
+    (``[0:6]`` then ``[6:12]``); the unchunked pass prepares the whole population
+    once and sees all twelve rows; the two outputs compare equal
+    (``equal_nan=True``).
+
+    Notes:
+        ``EVAL_CHUNK_ROWS`` is a module constant read inside
+        ``_prepared_query`` at trace time, so the monkeypatch has to wrap the
+        *build*, which is why the two runs are separate ``support.runner`` calls.
+        The payload's individuals carry different edge weights, so an output
+        concatenated in the wrong row order cannot compare equal by symmetry.
+    """
+    import numpy as np
+
+    import tensorneat.genome as genome_pkg
+    import tensorneat.host_payload as host_payload
+    from support.payloads import chain_payload, default_genome, genome_state
+    from support.runner import run_defn
+
+    pop_size, samples = 4, 3
+    payload = chain_payload(pop_size, 8, 16)
+    edges = [(0, 2), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7)]
+    for p in range(pop_size):  # a different weight scale per individual
+        for row, (source, target) in enumerate(edges):
+            payloads_row = 1.0 + 0.25 * p
+            payload.conn_attrs[p, row, 0] = np.float32(payloads_row)
+    genome_object = default_genome(max_nodes=8, max_conns=16, max_in_degree=4)
+    state = genome_state(genome_object)
+    transformed = _derive_schedule(genome_object, state, payload)
+    inputs = np.arange(pop_size * samples * 2, dtype=np.float32).reshape(
+        pop_size * samples, 2
+    )
+    inputs = (inputs * 0.1 - 0.3).astype(np.float32)
+    width = len(transformed)
+
+    calls = []
+
+    def prepare(state_arg, schedule, group_payload, factor):
+        """Record the group the chunk plan prepared, then prepare it for real."""
+        calls.append(("prepare", int(group_payload.node_keys.shape[0]), int(factor)))
+        return genome_object.prepare_pass(
+            state_arg,
+            schedule,
+            group_payload.node_keys,
+            group_payload.node_attrs,
+            group_payload.conn_keys,
+            group_payload.conn_attrs,
+            factor,
+        )
+
+    real_forward = genome_object.forward_prepared
+
+    def forward(state_arg, schedule, prepared, query_inputs):
+        """Record how many rows the group forward was queried with."""
+        calls.append(("forward", int(query_inputs.shape[0])))
+        return real_forward(state_arg, schedule, prepared, query_inputs)
+
+    def traced(*arrays):
+        """Prepare the tiled pass and run its one query, inside one trace."""
+        schedule = _rebuild_transformed(arrays[:width])
+        batch = genome_pkg.GenomeTensors(*arrays[width : width + 4])
+        query = host_payload._prepared_query(
+            state,
+            forward,
+            prepare,
+            schedule,
+            batch,
+            pop_size * samples,
+        )
+        return query(arrays[-1])
+
+    args = (*tuple(transformed), *payload.args(), inputs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(host_payload, "EVAL_CHUNK_ROWS", 8)
+        chunked = run_defn(traced, *args)
+
+    chunked_calls = list(calls)
+    calls.clear()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(host_payload, "EVAL_CHUNK_ROWS", 10**9)
+        unchunked = run_defn(traced, *args)
+
+    unchunked_calls = list(calls)
+
+    assert chunked_calls == [
+        ("prepare", 2, samples),
+        ("prepare", 2, samples),
+        ("forward", 2 * samples),
+        ("forward", 2 * samples),
+    ], (
+        "a budget of 8 rows at S=3 must prepare two individuals per group and "
+        f"query blocks of six rows; got {chunked_calls}"
+    )
+    assert unchunked_calls == [
+        ("prepare", pop_size, samples),
+        ("forward", pop_size * samples),
+    ], (
+        "a budget above the tiled width must keep the whole population in one "
+        f"pass; got {unchunked_calls}"
+    )
+    assert chunked.shape == unchunked.shape == (pop_size * samples, 1)
+    assert np.array_equal(chunked, unchunked, equal_nan=True), (
+        "the chunked and unchunked forwards disagree: "
+        f"{chunked.ravel()} vs {unchunked.ravel()}"
+    )
+
+
+def _derive_schedule(genome_object, state, payload):
+    """Derive ``payload``'s host execution schedule through the public entry point.
+
+    Args:
+        genome_object: The genome whose static shapes match ``payload``.
+        state: The host ``State`` returned by ``payloads.genome_state``.
+        payload: A ``support.payloads.Payload`` batch.
+
+    Returns:
+        The ``common.Transformed`` namedtuple with host numpy leaves.
+    """
+    from support.runner import run_defn
+
+    return run_defn(
+        lambda node_keys, conn_keys: genome_object.transform(
+            state, node_keys, conn_keys
+        ),
+        payload.node_keys,
+        payload.conn_keys,
+    )
+
+
+def _rebuild_transformed(fields):
+    """Rebuild the schedule namedtuple some host fields came from.
+
+    Args:
+        fields: The leading ``len(Transformed._fields)`` arrays of the traced call.
+
+    Returns:
+        A ``common.Transformed`` whose leaves are the traced tensors.
+    """
+    import tensorneat.common as common
+
+    return common.Transformed(*fields)

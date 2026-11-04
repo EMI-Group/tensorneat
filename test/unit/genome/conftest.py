@@ -1,4 +1,4 @@
-"""Fixtures shared by the ``./unit/genome`` suites: five modules and three graph runners.
+"""Fixtures shared by the ``./unit/genome`` suites: five modules and four graph runners.
 
 Two kinds of fixture live here.
 
@@ -24,17 +24,18 @@ re-derives them:
   a symbolic tensor, and the trace fails with a ``TypeError``. The schedule is
   therefore passed **field by field** and rebuilt inside the traced closure,
   where constructing a namedtuple is a pure-Python operation
-  (:func:`run_transform` produces the fields, :func:`run_forward` consumes
-  them); see the report to the parent.
+  (:func:`run_transform` produces the fields, :func:`run_forward` and
+  :func:`run_prepared` consume them); see the report to the parent.
 
 **One executable per graph, not one per call.** Tracing costs about ten times as
-much as running, so :func:`run_kernel`, :func:`run_transform` and
-:func:`run_forward` share one module-scoped ``evoxc.Executable`` cache
-(``_executable_cache``) and reuse a built executable for every later call that
-differs only in *data values*. The key is ``(graph, *per_argument)``: ``graph``
-names the traced closure — ``method.__func__`` plus the identity of the genome
-(``method.__self__``) and of the host ``state`` for a kernel, the genome/state
-plus the ``Transformed`` type for :func:`run_forward` — and each argument
+much as running, so :func:`run_kernel`, :func:`run_transform`,
+:func:`run_forward` and :func:`run_prepared` share one module-scoped
+``evoxc.Executable`` cache (``_executable_cache``) and reuse a built executable
+for every later call that differs only in *data values*. The key is ``(graph,
+*per_argument)``: ``graph`` names the traced closure — ``method.__func__`` plus
+the identity of the genome (``method.__self__``) and of the host ``state`` for a
+kernel, the genome/state plus the ``Transformed`` type for
+:func:`run_forward`/``run_prepared`` — and each argument
 contributes ``("data", shape, dtype)`` for a tensor leaf, ``("static", type
 name, value)`` for a frozen scalar, ``("tuple", ...)`` for a tuple of those, or
 ``("object", identity)`` for anything else. **A different static value, a
@@ -386,6 +387,64 @@ def run_forward(common, runner, _executable_cache):
                 state, common.Transformed(*arrays[:width]), *arrays[width:]
             ),
             (*fields, *payload.args(), inputs),
+        )
+
+    return run
+
+
+@pytest.fixture(scope="module")
+def run_prepared(common, runner, _executable_cache):
+    """Evaluate one payload through the two halves of ``forward``.
+
+    Returns:
+        ``run(genome_object, state, transformed, payload, inputs, samples) ->
+        (P * samples, num_outputs)`` numpy output of
+        ``genome_object.forward_prepared`` on a record from
+        ``genome_object.prepare_pass(..., samples)``.
+
+    Notes:
+        The schedule is passed **field by field** and rebuilt inside the traced
+        closure, for the reason in the module docstring. ``samples`` is a plain
+        Python int, which the runner bakes into the trace as a static value and
+        the cache keys by value, so ``S = 1`` and ``S = 4`` never share an
+        executable. The call is exactly the composition ``forward`` documents:
+        ``prepare_pass`` derives the loop-invariant operands for this payload and
+        tiling factor, and ``forward_prepared`` runs the per-query half on
+        ``inputs``. Comparing the result with :func:`run_forward` is therefore a
+        check that the split is numerically neutral, not a second implementation.
+    """
+    width = len(common.Transformed._fields)
+
+    def run(genome_object, state, transformed, payload, inputs, samples):
+        fields = tuple(transformed)
+        if len(fields) != width:
+            raise ValueError(
+                f"expected the {width} fields of Transformed, got {len(fields)}"
+            )
+
+        def traced(*arrays):
+            """Prepare one pass, then run its per-query half on the same batch."""
+            schedule = common.Transformed(*arrays[:width])
+            payload_arrays = arrays[width : width + 4]
+            query_inputs = arrays[width + 4]
+            prepared = genome_object.prepare_pass(
+                state, schedule, *payload_arrays, arrays[width + 5]
+            )
+            return genome_object.forward_prepared(
+                state, schedule, prepared, query_inputs
+            )
+
+        return _run_one(
+            runner,
+            _executable_cache,
+            (
+                "prepared",
+                _Identity(genome_object),
+                _Identity(state),
+                _Identity(common.Transformed),
+            ),
+            traced,
+            (*fields, *payload.args(), inputs, samples),
         )
 
     return run

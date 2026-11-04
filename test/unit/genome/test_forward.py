@@ -15,6 +15,13 @@ reproduce the *documented* algebra exactly:
    ``NaN`` and everything downstream of it stays ``NaN`` (the legacy poisoning);
 4. the read-out takes ``num_outputs`` trailing rows and applies
    ``output_transform`` — and nothing else.
+The last section fixes the *split* of that pass, which is a performance
+contract rather than an algebraic one: ``forward`` is exactly
+``prepare_pass`` + ``forward_prepared`` (the loop-invariant operands hoisted out
+of the level/tick loop, at ``samples = 1`` and ``samples = 4``), a tiled batch of
+``P * S`` rows repeats each individual's own network on its own ``S`` input rows,
+and a batch that is not a positive multiple of ``P`` is rejected instead of
+being read with a fabricated sample axis.
 
 Every test below fixes one of those clauses on a hand-built payload, so a failure
 names the clause. None of them observes a ``Transformed`` field by name: the
@@ -69,6 +76,7 @@ Backend is ``"numpy"`` throughout, through the shared runner only; no
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 
 # --------------------------------------------------------------------------- #
@@ -923,4 +931,206 @@ def test_a_network_deeper_than_max_depth_leaves_its_tail_nan(
     assert np.array_equal(shallow_schedule.node_level, deep_schedule.node_level)
     np.testing.assert_allclose(
         deep, oracle.forward(payload, deep_schedule, INPUTS), rtol=1e-6, atol=1e-7
+    )
+
+
+# --------------------------------------------------------------------------- #
+# the prepared pass and the tiled sample axis
+# --------------------------------------------------------------------------- #
+
+
+def _family_case(payloads, genome, family):
+    """A payload and a genome of one forward family, with the same static shapes.
+
+    Args:
+        payloads: The ``support.payloads`` module.
+        genome: The ``tensorneat.genome`` package.
+        family: ``"default"`` (level-synchronous chain) or ``"recurrent"``
+            (tick-unrolled ring; the cycle makes ``node_level`` unusable, so it
+            also proves the recurrent pass ignores the level field).
+
+    Returns:
+        ``(payload, genome_object)``: two identical individuals on an
+        ``8``-node/``16``-connection payload whose static shapes match the
+        genome's, and the genome itself.
+    """
+    if family == "default":
+        return payloads.chain_payload(2, 8, 16), _genome(genome)
+    return (
+        payloads.ring_payload(2, 8, 16),
+        payloads.recurrent_genome(activate_time=3, max_in_degree=4),
+    )
+
+
+def _tiled_inputs(pop_size, samples, num_inputs=2):
+    """An individual-major ``(P * S, num_inputs)`` batch whose rows are all distinct.
+
+    Args:
+        pop_size: Population ``P`` the batch is tiled over.
+        samples: Static sample count ``S`` per individual.
+        num_inputs: Input width ``I``.
+
+    Returns:
+        ``(P * S, I) float32``: row ``p * S + s`` holds a distinct affine value,
+        so a batch that was re-ordered, truncated or fanned out wrongly cannot
+        compare equal by symmetry.
+    """
+    values = np.arange(pop_size * samples * num_inputs, dtype=np.float32)
+    return (values.reshape(pop_size * samples, num_inputs) * 0.1 - 0.3).astype(
+        np.float32
+    )
+
+
+@pytest.mark.parametrize("family", ["default", "recurrent"])
+@pytest.mark.parametrize("samples", [1, 4], ids=["S1", "S4"])
+def test_forward_is_prepare_plus_query(
+    payloads, genome, run_transform, run_forward, run_prepared, family, samples
+):
+    """Invariant: ``forward`` is exactly ``prepare_pass`` followed by ``forward_prepared``.
+
+    Oracle: ``forward`` itself, on the same payload and the same ``(P * S, I)``
+    batch. The two calls are traced as separate graphs, so equality is a claim
+    about the split of the pass (the loop-invariant half hoisted out of the level
+    or tick loop), not about two spellings of one expression: a ``prepare_pass``
+    that forgot to expand the schedule to ``P * S`` rows, or a
+    ``forward_prepared`` that re-derived a per-query operand with a different
+    rounding, fails here.
+
+    Assertion: ``np.array_equal(..., equal_nan=True)`` — bit-for-bit values on
+    both families and at ``S = 1`` and ``S = 4``, so the hoist is numerically
+    neutral (``NaN`` is the documented padding value of an unconverged row).
+    """
+    payload, genome_object = _family_case(payloads, genome, family)
+    state = payloads.genome_state(genome_object)
+    transformed = run_transform(genome_object, state, payload)
+    inputs = _tiled_inputs(payload.pop_size, samples)
+
+    plain = run_forward(genome_object, state, transformed, payload, inputs)
+    prepared = run_prepared(
+        genome_object, state, transformed, payload, inputs, samples
+    )
+
+    assert plain.shape == prepared.shape == (payload.pop_size * samples, 1)
+    assert np.array_equal(plain, prepared, equal_nan=True), (
+        f"{family} forward with {samples} sample(s) per individual differs from "
+        f"prepare_pass + forward_prepared: {plain.ravel()} vs {prepared.ravel()}"
+    )
+
+
+@pytest.mark.parametrize("family", ["default", "recurrent"])
+def test_forward_prepared_rejects_wrong_row_count(
+    payloads, genome, common, run_transform, run_prepared, family
+):
+    """Invariant: a query batch that is not ``pop_size * samples`` raises ``TensorNEATError``.
+
+    Oracle: the prepared record's own static ``(pop_size, samples)`` pair. A
+    ``forward_prepared`` that silently evaluated whatever row count it was handed
+    would read the schedule's expanded fields past their rows, or reuse an
+    individual's operand block for a row belonging to another.
+
+    Assertion: ``TensorNEATError`` naming ``forward_prepared`` and the expected
+    row count, for a batch one row short of ``P * 2``.
+    """
+    payload, genome_object = _family_case(payloads, genome, family)
+    state = payloads.genome_state(genome_object)
+    transformed = run_transform(genome_object, state, payload)
+    samples = 2
+    short = _tiled_inputs(payload.pop_size, samples)[:-1]
+
+    with pytest.raises(common.TensorNEATError) as excinfo:
+        run_prepared(genome_object, state, transformed, payload, short, samples)
+
+    message = str(excinfo.value)
+    assert "forward_prepared" in message, (
+        "the rejection must name forward_prepared so the caller knows which half "
+        f"disagreed with the prepared record; got {message!r}"
+    )
+    assert str(payload.pop_size * samples) in message, (
+        "the rejection must quote the row count the record was prepared for, got "
+        f"{message!r}"
+    )
+
+
+def test_tiled_forward_repeats_each_individual(
+    payloads, genome, run_transform, run_forward
+):
+    """Invariant: tiled row ``p * S + s`` is sample ``s`` of individual ``p``.
+
+    Oracle: the same kernel at ``S = 1`` on a one-individual batch: for every
+    ``(p, s)`` the tiled row must equal ``forward(payload.of(p), input_row)``
+    exactly. The two individuals carry different edge weights, so a schedule
+    expanded with the wrong repetition order (say, the whole ``P``-row block
+    repeated instead of each individual) or a naive ``P * S`` fan-out that gave
+    every row individual ``0``'s schedule produces a different value in at least
+    one row.
+
+    Assertion: exact equality (``equal_nan=True``) for all ``P * S`` rows, on a
+    ``P = 2``, ``S = 3`` chain whose second individual weighs every edge at
+    ``0.5``.
+    """
+    pop_size, samples = 2, 3
+    payload = payloads.chain_payload(pop_size, 8, 16)
+    edges = [(0, 2), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7)]
+    for row, (source, target) in enumerate(edges):
+        payloads.set_conn(payload, 1, row, source, target, (0.5,))
+    genome_object = _genome(genome)
+    state = payloads.genome_state(genome_object)
+    transformed = run_transform(genome_object, state, payload)
+    inputs = _tiled_inputs(pop_size, samples)
+
+    tiled = run_forward(genome_object, state, transformed, payload, inputs)
+    assert tiled.shape == (pop_size * samples, 1), (
+        f"the tiled forward must return {pop_size * samples} rows, got {tiled.shape}"
+    )
+
+    for p in range(pop_size):
+        single_payload = payload.of(p)
+        single_transformed = run_transform(genome_object, state, single_payload)
+        for s in range(samples):
+            row = p * samples + s
+            single = run_forward(
+                genome_object,
+                state,
+                single_transformed,
+                single_payload,
+                inputs[row : row + 1],
+            )
+            assert np.array_equal(tiled[row], single[0], equal_nan=True), (
+                f"tiled row {row} (individual {p}, sample {s}) is "
+                f"{tiled[row]!r}, but individual {p} on that input is "
+                f"{single[0]!r}; the sample axis is not expanded individual-major"
+            )
+
+
+@pytest.mark.parametrize("batch", [3, 5], ids=["B3", "B5"])
+def test_sample_count_rejects_ragged_batch(genome, common, runner, batch):
+    """Invariant: a batch that is not a positive multiple of ``P`` raises in ``_sample_count``.
+
+    Oracle: the documented tiling contract — a problem tiles its dataset over the
+    population axis, so the row count must be ``P * S`` with a positive integer
+    ``S``. A ragged batch has no sample axis to expand the schedule with; reading
+    it as ``S = 0`` (or rounding it down) would silently evaluate a prefix.
+
+    Assertion: ``TensorNEATError`` raised while tracing, whose message quotes the
+    batch, the population and the "positive multiple" rule, for ``P = 2`` and
+    two batch sizes that leave a remainder.
+    """
+    pop_size = 2
+    inputs = np.zeros((batch, 2), dtype=np.float32)
+
+    def traced(values):
+        """Ask the shared sample-count helper for the tiling factor."""
+        genome.DefaultGenome._sample_count(values, pop_size)
+        return values
+
+    with pytest.raises(common.TensorNEATError) as excinfo:
+        runner.build_defn(traced, inputs)
+
+    message = str(excinfo.value)
+    assert "positive multiple" in message, (
+        f"the ragged-batch rejection must state the multiple rule, got {message!r}"
+    )
+    assert str(batch) in message and str(pop_size) in message, (
+        "the rejection must quote both the batch and the population size, got "
+        f"{message!r}"
     )
