@@ -102,41 +102,33 @@ Stability also *pins* tie order to input order and matches a compiled backend's 
 
 ## Cost law of this node (how to spend an op budget here)
 The reference interpreter charges a roughly fixed **~13 µs per executed IR op**, almost independent of element count, so op count is the metric and wall clock only a sanity check; `constant`, `reshape` and `arange` are each one full op, and `evoxc` never deduplicates constants.
-A per-call body runs `2 * species_size = 40` times per generation, so **anything that does not depend on the centre belongs in `prepare`**: every rank-0 scalar, every per-individual flat index block and every flat view of a population block now travels in `FamilyDigest.statics` (`MeasureStatics` + `AttrStatics`, see `./layout.py`) rather than being rebuilt per call.
-Measured effect of that rule alone: the distance bucket lost its last `constant`/`arange`/`batch_offsets` lines entirely (536 rank-0 constants + 160 `batch_offsets` ops + 160 attribute-index ops per generation before), and one merge `measure` call went from 4 638/40 ≈ 116 executed ops to ≈ 88.
-Ops inside a region pay per trip, so this rule is doubly binding for anything the generation traces once and runs many times.
+A per-call body runs `2 * species_size = 40` times per generation, so **anything that does not depend on the centre belongs in `prepare`**: every rank-0 scalar, every per-individual flat index block and every flat view of a population block travels in `FamilyDigest.statics` (`MeasureStatics` + `AttrStatics`, built by `layout.build_statics`/`build_attr_statics`) instead of being rebuilt per call.
+Ops inside a region pay per trip, so the rule is doubly binding for anything the generation traces once and runs many times.
+The rejected alternative — a private `ConstantPool` and per-call `enp.arange`/`batch_offsets` inside `measure` — costs 536 rank-0 constant ops plus 160 `batch_offsets` and 160 attribute-index ops per generation, ~20 % of this node's bucket.
+What is *not* hoistable is anything derived from the centre payload: `_pack`, `_tagged`, the merge, the aligned attribute gather and the scalar tail stay per call.
 
-## Cost (measured, numpy reference backend, seed-42 XOR population after 5 generations, build excluded, 1 warmup + 5 timed runs, one fresh process per pop)
+## Cost (measured, numpy reference backend, seed-42 XOR population after 5 generations, build excluded, one fresh process per pop)
 
-| kernel | P=100 | P=500 | P=1000 |
-|---|---|---|---|
-| `prepare` (dense fields, `oor` and both statics bundles) | 162 ops | 162 | 162 |
-| `prepare` + `measure` (batch-`P` centre, merge) | 281 ops | 281 | 281 |
-| `measure` marginal, merge route (the shipped one) | 120 ops | 120 | 120 |
-| `execute_distance` (unchanged) | 225 ops | 225 | 225 |
-| marginal `measure` on the batch-1 dense centre | 120 ops | 120 | 120 |
-Counted recursively over `module.functions[*].entry_block` and every `op.regions` body, terminators included; op nodes only (the convention `test/unit/genome/test_distance_digest.py` asserts on) are 161 / 280 / 119 and 224.
-| source-line attribution of one merge `measure` | merge `measure_alignment` 40, per-call `constant` 0, aligned-attribute term 14, scalar tail 22, family add 1, gene-side `gene.distance` ~31 (not this node) | same | same |
+| kernel | ops |
+|---|---|
+| `prepare` (both families: dense fields, `oor`, both statics bundles) | 162 |
+| `prepare` + `measure` (batch-`P` centre, merge) | 281 |
+| `measure` marginal, merge route (the shipped one) | 120 |
+| `measure` marginal, batch-1 centre (dense route) | 120 |
+| `execute_distance` (pair-wise, unchanged contract) | 225 |
 
-Executed ops of one seed-42 XOR generation at pop 500 (`Pipeline.step` 6-step protocol, `species_size=20`): whole graph **10 865 → 9 547**, this node's bucket **4 638 → 3 580** (−23 %), still **3 580** after the `layout.py` split; the bucket is one `prepare` plus 40 `measure` calls per generation (~1 260 + ~2 320 executed ops, the rest the two families' constant/index lines).
+The counts are independent of `P` (measured identical at pop 100 / 500 / 1000), counted recursively over `module.functions[*].entry_block` and every `op.regions` body with terminators included; the op-nodes-only convention `test/unit/genome/test_distance_digest.py` asserts on reads 161 / 280 / 119 / 224.
+Source-line attribution of one merge `measure` call: `measure_alignment` 40 (two per-family merges), aligned-attribute term 14, scalar tail 22, family add 1, `pack`+`tag` ~13, and **zero** per-call `constant` ops; `gene.distance` and its column reads (~31) belong to `../gene/`.
+Executed ops of one seed-42 XOR generation at pop 500 (`Pipeline.step` 6-step protocol, `species_size=20`): whole graph **9 547**, this node's bucket **3 580** — one `prepare` executed once plus 40 `measure` calls at ~88 executed ops each once the gene-side ops are excluded.
+Baked constant bytes of the `prepare` + `measure(batch 1)` graph at pop 1000: 223 788 B total, largest single constant 90 008 B (a `key_span`-scaled `(width + 1,) int32` dense table); pop 100 187 788 B, pop 500 203 788 B.
+`measure` itself adds four rank-0 constants; every other byte is a table or a seed built once in `prepare`.
 
-Baked constant bytes of the `prepare` + `measure(batch 1)` graph, `enp.zeros` → `window.fill` (pop 1000): **839 772 → 223 788 B** (−615 984 B), largest single constant **404 000 → 90 008 B**; at pop 100 `249 372 → 187 788 B`, pop 500 `511 772 → 203 788 B`.
-What is left is irreducible: the two `key_span`-scaled `(width + 1,)` int32 tables (22 502 cells = 90 008 B each, `S = 150`) plus a handful of small seeds.
-`measure` itself adds only four rank-0 constants; every avoidable byte was the `DenseLayout` built inside `prepare`.
-
-The signed range test costs **+3 traced ops on `prepare`** (137 → 140: one `greater_equal` + one `logical_and` for the one-column node key, two of each for the two-column connection key, minus the removed `uint32` span constant, plus the pooled `int32` zero), and `1.241 → 1.340 ms` at pop 100 (median of 7 same-session runs, min 1.217 → 1.307) — once per generation against `2 * species_size` `measure` calls.
-`measure` is unchanged at 151 ops and gained no unsigned value: with `span_u32` gone from `DenseLayout`, the digest a real pipeline threads into `measure` no longer carries a `uint32` leaf at all (before: four `uint32` graph-boundary values).
-
-Round-2 same-session before → after: `measure` **141 → 111 ops**, wall clock inside drift at pop 1000 (2.43 → 2.25 ms median, minima 2.20), i.e. **2.45 → 2.25 µs/pair**; `prepare` 102 → **128 ops** (+26, once per generation against ~40 calls).
-Per-phase op attribution of the old 141 (recursive op walk + per-phase graphs, pop 1000): `dense_slot`/`slot` 8, owner scatter+gather+matched 3, per-family counts 4, attribute table pair 3, `gene.distance` **27 (node) / 6 (conn)**, reorder 5 + slice 1 + reduce 1, scalar tail **15 per family**, final `add` 1.
-The round-2 shape removes the owner redirect (−1/family), flattens the centre key table once (−1 conn), and stacks the two families' tail inputs on a leading axis so the tail is traced **once** (15+15+1 → 11+9 stacking ops+1 combine), landing at 111.
-
-### The 1.0 µs/pair target is out of reach on this backend, and the arithmetic says why
-`measure(batch 1)` needs ≤ ~50 traced ops for ≤1.0 ms at an ~20 µs mean marginal op cost (pop 1000).
-The measured floor of this formulation is ~100: `gene.distance` alone is 33 ops (20 of the 111 are its column reads — `gene/base.py::column` is a `slice`+`reshape` pair per side per column, 5 attribute columns over two families), the two slot/owner/count blocks are ~25, the attribute table pair + reorder + reduce is ~20, and the stacked tail is 21.
-Element volume is already minimal (`P × M` per family, the alignment is a scatter/gather, never a sort), so the remaining levers are cross-node: a one-op column read in `gene/base.py::column` (~0.3 ms/family) and a centre-batched `measure` API in `algorithm/` (40 calls/generation each pay the full tail and slot machinery).
-Round-2 rejects, measured or arithmetically excluded: fusing the per-column arithmetic into one `(P, M, A)` block pass (`gene/base.py` measured it 3.3× slower — element volume, not op count, is the currency on block ops); a gather-based inverse permutation instead of the reorder scatter (one extra 3-D index build, no op saved); folding `abs`/`not_equal` into one masked block pair (block ops cost ~3× a column op, and the left-to-right column chain must stay byte-exact).
-Remaining hot spot: `gene.distance` (33 ops) plus the two attribute block gathers; the wall clock still scales with `P × M × attr_width`, not with real gene counts.
+### Where the remaining ops are, and why this is near the floor
+The two `argsort`s (4 ops of a family's merge) are the wall-clock hot spot but not an op-count one; see `## Rejected` for the substitutions and their measurements.
+Both permutations are cast to `int32` on purpose: dropping the two casts saves 2 ops per family per call but makes three index blocks `int64`, which measured ~10 % more milliseconds.
+The two families' scalar tails cannot be traced once without stacking their inputs, and the three `concatenate`/`reshape` pairs that stacking needs cost more than the 1 op they save (measured: 22 → 21).
+The largest remaining block inside a `measure` call is `gene.distance` plus its column reads, which live in another node's files.
+Element volume is already minimal on the merge route (one `P × M` block per family) and the dense route's floor is set by the same per-op charge, so the next lever here is the *number of calls*, not their body: the shipped `speciate` measures a population-shaped centre, which forces the merge — `./dense.py`'s batch-1 route is only reachable from a caller that passes one centre (see the cross-node note below).
 
 ## Constraints
 - **No unsigned dtypes in a graph — `iree`'s declared dtype set has none** (`float16/float32/float64/int8/int16/int32/int64/bool`, `evoxc/backends/adapters/iree.py::_dtype_capabilities`), so a `uint32`/`uint64` operand, result, constant or graph-boundary value makes that backend refuse the whole graph (`BackendError: capability drift`). Use **same-width signed carriers**: a range test is `logical_and(greater_equal(key, 0), less(key, S))` on `int32` (`+1` op for a one-column key, `+2` for two columns, against the unsigned one-comparison form), which is the same truth value for every `int32` value while `0 <= S < 2**31` — guarded statically in `layout.dense_width`, the one place `key_span` becomes a table geometry. The `>= 0` half is not decoration: a negative structural key must land in the dump slot exactly as `I_INF` does.
