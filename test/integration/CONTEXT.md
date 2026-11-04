@@ -7,7 +7,7 @@ No `jax`/`torch`, no network, no GPU, no wall-clock assertions: a run is judged 
 Every module carries `pytestmark = [pytest.mark.slow]`; `pytest -m slow` selects the directory, the default gate leaves it out.
 
 ## Current state: every test runs
-`src/tensorneat/pipeline.py` is the evoxc compile site, so `conftest.py::missing_evoxc_pipeline_features(tn)` returns an empty list and `require_evoxc_pipeline(tn)` does not skip; all 21 tests run on the numpy backend.
+`src/tensorneat/pipeline.py` is the evoxc compile site, so `conftest.py::missing_evoxc_pipeline_features(tn)` returns an empty list and `require_evoxc_pipeline(tn)` does not skip; all 23 tests run on the numpy backend.
 The probe is structural, never hardcoded: it inspects `inspect.signature(tn.Pipeline.__init__)` for the four documented compile kwargs (`PIPELINE_COMPILE_KWARGS = ("backend", "device", "compile_options", "is_detailed")`), checks whether the loaded `tensorneat.pipeline` module binds `jax`/`jnp`, and scans that module's source file for a top-level `import jax` (it never imports jax to find out).
 The autouse fixture `_evoxc_pipeline_required(tn)` applies the probe to every test in the directory, so a regression that reintroduces an evoxc-free pipeline reports a skip naming the missing features instead of a directory of opaque errors.
 No module imports `tensorneat` or a `support` module at module scope: `tn`, `payloads` and `runner` are `support.lazy.require` fixtures, and only `numpy`/`json`/`pytest` plus `from integration.conftest import …` appear at module scope.
@@ -58,7 +58,7 @@ The compile site must reach the compiler through `evoxc.build`, `build_cached`, 
 `pipeline.fitness_history` is optional: `fitness_history()` falls back to `<save_dir>/log.txt`, which `is_save=True` always writes.
 
 ## Budget
-Measured on this machine: `pytest -m slow` is **22 passed, 0 skipped in ~16 s** — the 21 tests here plus the release gate's XOR run (no parity test carries the `slow` marker, so the `--extra bench` oracle is never pulled into this selection).
+Measured on this machine: `pytest -m slow` is **24 passed, 0 skipped in ~20 s** — the 23 tests here plus the release gate's XOR run (no parity test carries the `slow` marker, so the `--extra bench` oracle is never pulled into this selection).
 `test_xor_run::test_auto_run_reaches_the_xor_fitness_target` dominates (`pop_size=100`, up to 250 generations, one compile per shape); every other module runs 1–10 generations at `pop_size≤16`; the three evolving cases of `./test_show_best.py` spend one generation each, and its missing-payload case runs no generation at all (only `setup()`).
 The convergence budget is calibrated from the legacy curve in `benchmarks/RESULTS.md` (`pop_size=100` reached `mse ≤ 0.1` at generation 77 and `mse ≈ 0.0099` by generation 150); the evoxc rewrite reaches its target inside the configured budget on this machine.
 
