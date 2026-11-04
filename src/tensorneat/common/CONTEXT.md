@@ -250,7 +250,7 @@ That off-by-`I` slice is legacy-identical (`benchmarks/legacy_jax/tensorneat_leg
 - `argsort` returns int64; its inverse permutation is a `flat_scatter` of `arange(n)`; `stable=True` is required for tie-breaking (group ranks).
 - **`argsort(kind="stable")` has a radix fast path for `int8`/`int16` and a slow general path for `int32`/`int64`**: `(1000, 250)` costs 7.4 ms as `int32` but 1.0 ms as `int16` and 0.62 ms as `int8`. Anything sorted here must be keyed in the narrowest integer dtype that fits its range *including* the sentinel (unstable `kind` is not an option: the schedule needs in-group order).
 - `evoxc.cond` accepts a `while_loop` in each branch on the numpy backend (both branches are traced, one is executed), so a cheap "fast path + expensive fallback" decision is expressible in-graph.
-- `cast(x, uint32)` maps a negative integer to a huge unsigned value, which makes a one-comparison range test (`cast(keys, uint32) < span`) cover both bounds.
+- No unsigned dtype in a graph (see the dtype contract): a non-negative range test is two signed comparisons (`>= 0` and `< span`) in the key's own dtype, not `cast(keys, uint32) < span`, which saves an op but cannot be lowered to iree.
 - There is no `broadcast_to` on `evoxc` (use `enp.broadcast_to`), no `searchsorted`, no `choice`, no `bitcast`, no `where` (it is `evoxc.select(pred, on_true, on_false)`).
 - Control flow (`evoxc.while_loop`/`cond`/`scan`) is traced into regions: loop bodies must keep shapes/dtypes fixed, conditions must be scalar tensors, and no `vmap` may be applied over them.
 - `evoxc.slice(x, start, lengths)` takes per-axis tuples; `evoxc.reshape`/`transpose` are the only structural ops needed here.
