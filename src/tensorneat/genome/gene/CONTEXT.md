@@ -22,6 +22,9 @@ Nothing here imports `jax`/`torch`, and no hook on the compute path runs eager N
 
 Module helpers (trace-time, used by every family):
 - `column(tensor, index) -> tensor[..., index]` — shape-preserving slice `slice(index, index+1)` + `evoxc.reshape`, because a dim-dropping integer index (and `[..., i]`) is rejected in a trace and has no usable VJP; this form is differentiable (verified through `evoxc.grad`).
+- `_column_view(tensor, index) -> tensor[..., 1]` — the slice half alone; a kernel that reads several columns of one block uses it and pays **one** trailing `reshape` instead of one per read (`BaseGene.distance` does: 17 ops / 0.24 ms per node-gene call at `(500, 50, 4)` against 27 / 0.30 for a read-both-parents-per-column form, 4 vs 6 ops for the one-column conn gene).
+- `BaseGene.distance` subtracts the two aligned attribute blocks once, reads one width-1 view per float column, and still compares option-index columns per parent (`not_equal` + `cast`) because `inf - inf` is NaN where `not_equal(inf, inf)` is False.
+A fully blocked form (block `subtract`/`abs`/indicator, static kind mask, one `select`, last-axis `reduce_sum`) is fewer ops but ~3× the wall clock per call — element traffic, not op count, decides this kernel.
 - `hash_int32(keys) -> (...,) uint32` — the hash body; `uint32` ops only, because there is no bitcast in evoxc.
 
 `GeneAttr` is a dataclass: `name`, `kind` (`"float"`/`"int"`), `init_mean`/`init_std` (floats) or `options` (ints), `mutate_power`, `mutate_rate`, `replace_rate`, optional `lower`/`upper`.
