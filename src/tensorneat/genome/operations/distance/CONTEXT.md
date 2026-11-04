@@ -98,7 +98,6 @@ The inverse permutation is the one measured formulation trade-off: `argsort(orde
 The trailing column is why the successor gather needs **no `minimum` clamp and no in-range mask**: `_PAD_CENTRE` is the maximum of the merged row (above every real composite and above `_PAD_POPULATION`), so no centre gene sits at the last position and `position + 1 <= 2M` holds by construction.
 The one op it costs (a concatenate input that is already a `(P, 1)` static) is paid back by the removed `minimum`, the removed `offsets_last` static and the removed trailing-column mask — and a clamped read at position `2M` could only return the trailing sentinel, which never equals a real `composite + 1`.
 `evoxc.slice(x, start, limit)` takes **lengths**, not end indices (`start + limit` is the exclusive end), which is why the centre slice is `((0, count), (pop_size, count))`.
-`evoxc.slice(x, start, limit)` takes **lengths**, not end indices (`start + limit` is the exclusive end), which is why the centre slice is `((0, count), (pop_size, count))`.
 
 ## Sort semantics (`stable=True` is a performance rule, not a tie rule)
 Every `argsort` in the merge and the digest passes `stable=True`, and on the numpy reference interpreter that is where the time went: numpy's stable kind is timsort, which detects the runs the data already contains.
