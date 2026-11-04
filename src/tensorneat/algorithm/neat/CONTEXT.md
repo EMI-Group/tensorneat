@@ -157,21 +157,32 @@ Keys are rank-0 scalars, so a batched kernel takes one key and draws its own pop
 `pipeline`: creates `randkey` with `evoxc.random.key(seed)`, calls `setup` on the host, drives `ask → transform → forward/evaluate → tell`, and calls `show_details` on host-readable values.
 
 ## Measured Cost (numpy backend, real `DefaultGenome(max_nodes=50, max_conns=100)`, XOR, `species_size=20`, seed 42)
-Protocol: one configuration per fresh process, 4 setup generations, then one warmup and 4 timed runs; phases timed as *separate executables* traced on one snapshot state (`step` is the pipeline's own graph), so a generation's phase sum slightly over-counts. Medians, ms, this box (it drifts ±30 % between sessions, so read ratios, not absolute milliseconds):
-**Cumulative effect of the two kept speciation changes** (scan-1 row pre-measurement + narrow scan-2 carry): same-session paired A/B against the pre-change tree, 6 alternating rounds of `benchmarks/backend_measure.py --backend numpy --pop 500 --generations 20 --warmup 3`, medians per run — pre-change 247.9–333.3 ms, current 225.5–243.3 ms; median of the six per-round ratios **0.839 (−16 %)**, median-of-medians 271.2 → 231.6 (−14.6 %), mean 282.6 → 234.5 (−17.0 %), faster in 6 of 6 rounds. `P=100` −3.8 % (41.5 vs 43.4 ms); `P=1000` parity within this box's bimodality.
-Executed ops per generation `P=500`/`P=1000` 11 159 → 10 352 (−7 %).
-The wall-clock win exceeds the op win because the numpy interpreter charges ~13 µs per executed op (operand resolution + `_validate_result` + `Tensor` construction, ~63 % of a generation), so removing an op from a 20-iteration loop body is worth 20× removing a top-level one — and the biggest single win is not an op removal at all but moving the 20 compatibility kernels out of a `while` region (see `## Distance Rows`).
-A generation is ~10.7 k executed ops, so every candidate change is judged by `executed_op_count × 13 µs`, never by IR lines alone; the count is obtained by walking `op.regions` of the built graph and weighting each `while` body by its trip count (`species_size`).
+Protocol: one configuration per fresh process, `benchmarks/backend_measure.py --backend numpy --pop P --generations 20 --warmup 3` (that harness's numbers are `Pipeline.step`); phases timed as *separate executables* traced on one snapshot state, so the phase sum does not equal `step`. Medians and ranges, ms, this box (it drifts ±30 % between sessions and per-run distributions are bimodal, so read paired ratios, never absolute milliseconds):
+`base` below is the tree before the scan-1 row pre-measurement and the narrow scan-2 carry (commit a697531), measured in the same session in alternating rounds (four rounds at `P=500`, three at `P=100` and `P=1000`):
 
-| P | evaluate | update_species | breed (`update_species` + `_create_next_generation`) | speciate | tell | `Pipeline.step` |
+| P | base `step` (mean range / median) | current `step` | base peak RSS | current peak RSS | base build | current build |
 | --- | --- | --- | --- | --- | --- | --- |
-| 100 | 8.5 | 1.3 | 21.9 | 28.6 (26.8 before the wave) | 50.3 (50.5) | 58.9 (58.9) |
-| 500 | 41.1 | 1.8 | 60.5 | **230.0** (237.1) | 294.1 (304.4) | 335.2 (354.2) |
-| 1000 | 96.3 | 2.2 | 116.7 | **388.1** (439.6) | 511.8 (562.5) | 608.1 (618.5) |
+| 100 | 43.4–45.2 / 43.8–44.0 | 41.1–42.3 / 41.0–42.2 | 118.2 MiB | 118.0 MiB | 0.29 s | 0.29 s |
+| 500 | 261.9–270.9 / 265.5–273.0 | 228.6–232.4 / 221.3–229.3 | 260.8 MiB | 539.0 MiB | 0.35 s | 0.69 s |
+| 1000 | 465.1–522.6 / 477.0–499.8 | 504.9–511.8 / 502.4–506.7 | 431.3 MiB | 976.5 MiB | 0.43 s | 0.77 s |
 
-`tell` is `speciate` 57 % / 78 % / 76 % and breeding 43 % / 21 % / 23 %; the species update is ~1 %.
-The pipeline's own graph (`benchmarks/run_benchmark.py --impl new --backend numpy --cases xor_p100,xor_p500,xor_p1000 --generations 20`, one repeat, warmup 3) reports **63.6 / 334.2 / 571.6 ms per generation**, i.e. the same numbers as `Pipeline.step`.
-Against the declared legacy JAX baseline (51 / 109 / 157 ms per generation) the cycle is ~1.2x / ~3.1x / ~3.9x over budget at `P=100 / 500 / 1000`.
+The wall win is `P=500` only: **−15 %** (4 of 4 paired rounds, 0.85 median ratio; an earlier session whose base read 320 ms measured −28 %), `P=100` −5 % (the narrow scan-2 carry; its gated path never measures a table) and `P=1000` parity to 8 % slower.
+Wall and memory move together and in opposite directions: the same hoist that buys the `P=500` win costs **2.07x peak RSS (260.8 → 539.0 MiB) and +0.34 s of one-off build**, and `P=1000` pays 2.26x (431.3 → 976.5 MiB) for no wall gain (`P=100` pays nothing because it stays on the gated path).
+Mechanism: `evoxc`'s numpy interpreter (`backends/numpy/interpreter.py::_run_block`) keeps every SSA result of a block in that block's environment until the block returns and pops a nested region's environment per iteration, so the 20 `measure_distance` kernels hoisted to the top level keep all of their `(P, 2 * max_conns, ...)` intermediates alive for the rest of the generation, while inside a `while` only the carried values survive; build grows from the same cause, because a loop body is traced once and a static loop over 20 centres traces 20 copies of the ~309-op kernel.
+**Rule: a kernel hoisted out of a `while` is paid for in peak RSS, because the entry block's environment keeps every SSA result until the graph returns — measure peak RSS and build for every hoist, not just wall time.**
+Executed ops per generation `P=500`/`P=1000` 11 159 → 10 352 (−7 %); the wall-clock win exceeds the op win because the interpreter charges ~13 µs per executed op (operand resolution + `_validate_result` + `Tensor` construction, ~63 % of a generation), so removing an op from a 20-iteration loop body is worth 20× removing a top-level one.
+A generation is ~10.7 k executed ops, so every candidate change is judged by `executed_op_count × 13 µs` **and by peak RSS**, never by IR lines alone; the count is obtained by walking `op.regions` of the built graph and weighting each `while` body by its trip count (`species_size`).
+Phase decomposition of the current tree (medians of 7 runs per executable, snapshot state after 3 generations):
+
+| P | evaluate | update_species | digest | speciate (digest included) | breed (`update_species` + `_create_next_generation`) | tell |
+| --- | --- | --- | --- | --- | --- | --- |
+| 100 | 7.7 | 1.2 | 1.2 | 20.4 | 9.3 | 29.4 |
+| 500 | 22.4 | 1.6 | 2.5 | 160.1 | 21.5 | 202.4 |
+| 1000 | 41.2 | 2.0 | 4.2 | 285.7 | 39.7 | 336.8 |
+
+`speciate` is 69 % / 79 % / 85 % of `tell` and breeding 32 % / 11 % / 12 %; the species update and the digest are ~1 % each.
+The separate-executable sum under-counts `Pipeline.step` at `P=1000` (378 ms vs 505 ms), consistent with the same entry-block retention: inside the single generation graph the evaluation phase's temporaries are still alive while `tell` runs, so isolate phases for shares and always measure the whole `step` for a verdict.
+Against the declared legacy JAX baseline (51 / 109 / 157 ms per generation) the cycle is ~0.8x / ~2.1x / ~3.2x over budget at `P=100 / 500 / 1000`.
 Live species slots in the measured states: 3 / 20 / 20 at `P=100 / 500 / 1000` — the sparse gate is what keeps `P=100` on the `cond` path.
 The generation's distance work is `2 · species_size · pop_size` = 4 000 / 20 000 / 40 000 pairs at 6.7 / 11.5 / 9.7 µs per pair; that product, not the dispatch count, is what `speciate` measures.
 Kernel width scaling at `P=1000` (`prepare_distance` + one `measure_distance` call, tiled digest and tiled centres, per-pair µs): 1 000 rows/call 13.0, 2 000 10.3, 4 000 **9.7**, 10 000 10.3, 20 000 13.8 — the 4-centre optimum and the 13.0 µs of the current one-centre-per-call shape bracket `speciate`'s 388 ms, and the whole-table call is the slowest option.
