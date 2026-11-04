@@ -11,7 +11,7 @@ Nothing here ships: the harness never imports both implementations in one proces
 - `legacy_jax/` — frozen pre-rewrite JAX implementation; the timing baseline and numerical oracle (read-only, see its `CONTEXT.md`).
 - `results/` — machine-readable run records: the three committed evidence records (`authoritative.json` for `RESULTS.md`, `threads1.json` for `THREADS.md`, `iree.json` for `iree.md`) plus scratch `*.json` (e.g. the default `latest.json`), git-ignored and safe to delete.
 - `RESULTS.md` — the generated report: environment fingerprint, protocol, headline old-vs-new table (median speed-up plus the per-repeat range and quality overlap), per-case tables, verdict, win/lose narrative with the generated memory paragraph, per-repeat quality curves, declared baseline, non-comparisons, how to reproduce.
-- `BACKENDS.md` — measured accelerator evidence: `iree` cannot lower a single case in the matrix, so the numpy reference backend is the only measured backend; the report points at it only when the file sits next to the report.
+- `BACKENDS.md` — measured compiled-backend evidence: `iree` compiles and runs every case, is 5–24× slower per generation than numpy on this box, and `xla` has no PJRT plugin; it carries the per-gate failure/fix record and the remaining exporter deferrals.
 - `THREADS.md` — generated report of the committed `--threads 1` sensitivity run of the XOR family (`results/threads1.json`); the report points at it only when the file sits next to the report.
 - `iree.md` — generated report of the IREE attempt (`results/iree.json`): all 8 cases `error` in `Pipeline.setup`, verdict `INCOMPLETE`; it is never part of the CPU verdict and sits next to `BACKENDS.md` as its machine-readable companion.
 ## Metric Protocol
