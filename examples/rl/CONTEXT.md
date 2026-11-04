@@ -158,7 +158,7 @@ Construction-level configuration only; there is no eager compute mode, so a scri
 Never set `output_transform` on these three problems: each one owns its action mapping (argmax ordering) or squashing (`tanh`).
 Host-only introspection (`network_dict`, `repr`, `sympy_func`, `visualize`) never feeds back into a graph, and needs a one-individual (`P == 1`) payload.
 `max_in_degree` is a genome static: a recurrent genome accumulates many incoming edges per node, so a recurrent example sizes the window at 16; too small a window aborts the run with "the execution schedule dropped N connection(s)".
-No argparse, no helper packages, no unused imports; a script stays ≲ 110 lines and is a single readable top-level run (`cartpole.py` 71, `pendulum.py` 80, `mountaincar.py` 87 lines).
+No argparse, no helper packages, no unused imports; a script stays ≲ 110 lines and is a single readable top-level run (`cartpole.py` 71, `pendulum.py` 81, `mountaincar.py` 87 lines).
 Keep the whole-repo rule that nothing here imports `jax`, `torch`, `brax`, `gymnax` or `mujoco`.
 
 ## Test Strategy
