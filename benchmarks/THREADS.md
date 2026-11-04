@@ -1,7 +1,7 @@
 # TensorNEAT benchmark — thread-bound sensitivity (XOR family, --threads 1)
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from `benchmarks/results/threads1.json` at 2026-11-02T06:31:32+00:00.
-> Re-rendered from that same JSON at 2026-11-04T19:39:05+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-04T19:39:35+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > It must not be hand-edited: rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *This is the thread-bound sensitivity run (`--threads 1`, the declared-contract condition) of the XOR family; the authoritative default-thread matrix is `RESULTS.md`.*

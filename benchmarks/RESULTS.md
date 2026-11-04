@@ -1,7 +1,7 @@
 # TensorNEAT benchmark — evoxc rewrite vs frozen JAX baseline
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from `benchmarks/results/authoritative.json` at 2026-11-04T19:01:27+00:00.
-> Re-rendered from that same JSON at 2026-11-04T19:39:02+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-04T19:39:35+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > It must not be hand-edited: rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 ## Headline: old vs new
