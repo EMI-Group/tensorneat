@@ -70,10 +70,13 @@ TITLE = "# TensorNEAT benchmark — evoxc rewrite vs frozen JAX baseline"
 DEFAULT_REPORT_NOTE = ""
 """Default note under the banner: none, so an unflagged render is byte-for-byte the old one."""
 
-PARITY_TEST_COUNT = 53
-"""Collected parity tests on this box, measured 2026-11-02 with
-``pytest test/parity --collect-only -q`` (18 convert + 5 distance + 13 fitness + 12 forward
-+ 5 grad). The report reads ``meta.parity_tests`` first so a future CLI can override it."""
+PARITY_TEST_COUNT = 18
+"""Fallback collected parity-test count, measured 2026-11-04 with
+``pytest test/parity --collect-only -q`` (one file, ``test/parity/test_convert.py``).
+A record may override it with ``meta.parity_tests``; this constant is only the fallback and is
+documentation of a measured count, not a derived value — it is refreshed by hand whenever
+``test/parity`` changes, because a re-render must never spawn pytest."""
+
 
 
 # --- Environment --------------------------------------------------------------------------
