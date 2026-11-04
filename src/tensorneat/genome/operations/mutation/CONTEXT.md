@@ -73,12 +73,12 @@ A feedforward genome's add-conn can close a cycle, so that branch keeps the pred
 ## Measured cost (numpy reference interpreter, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100)`, build excluded, one warmup + median of 5, RNG key created inside the trace)
 | kernel | pop | traced ops | ms |
 | --- | --- | --- | --- |
-| `DefaultMutation` `execute_mutation` | 100 / 500 / 1000 | **409** (398 before the add-node guard) | 5.8 / 17.9 / 32.6 |
-| `RecurrentMutation` `execute_mutation` (`p_recur=0.1`) | 1000 | **445** (434) | ~35 |
-| `RecurrentMutation` `execute_mutation` (`p_recur=0.0`, cycle elided) | 1000 | **325** (423) | 14.2 (31.2) |
+| `DefaultMutation` `execute_mutation` | 100 / 500 / 1000 | **452** (409 before the log2-doubling suffix count, 398 before the add-node guard) | 5.6 / 13.7 / 24.9 |
+| `RecurrentMutation` `execute_mutation` (`p_recur=0.1`) | 1000 | **488** (445, 434 before the add-node guard) | ~35 |
+| `RecurrentMutation` `execute_mutation` (`p_recur=0.0`, cycle elided) | 1000 | **338** (325, 423 before the gate) | 14.2 (31.2) |
 | `degree.in_degree` (diagnostic) | 100 / 500 / 1000 | 15 | 0.29 / 1.08 / 2.11 |
 
-These are single traced graphs that already include the gene-side `mutate`/`new_identity_attrs` calls; the earlier per-file "ledger" added those twice and over-reported both `DefaultMutation` (462) and `p_recur=0.1` (498) by 53 ops — do not reuse that sum.
+These are single traced graphs that already include the gene-side `mutate`/`new_identity_attrs` calls; the earlier per-file "ledger" added those twice and over-reported both `DefaultMutation` (462, +24 = 486 with the suffix count) and `p_recur=0.1` (498, +24 = 522) by 53 ops — do not reuse that sum.
 The box drifts ±10–30 %, so op counts and same-process A/B ratios are the load-bearing numbers.
 The add-node validation is +11 traced ops (398 → 409 for `DefaultMutation` on the reference genome, 407 → 418 on the reproducer's `OriginNode`/`OriginConn` one): median-of-5 run time unchanged within noise at pop 100/500/1000.
 Per-file op ledger (`mutledger2.py`, pop 100): default 462 = `cycle.py` 130 + `base.py` 74 + `arrays.py` 66 + `default.py` 54 + `plan.py` 17 + ~145 gene/tools-side; recurrent 498 = `cycle.py` 130 + `arrays.py` 76 + `base.py` 74 + `recurrent.py` 59 + `default.py` 21 + `plan.py` 17 + the same ~145.
