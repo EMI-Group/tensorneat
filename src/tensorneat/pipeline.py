@@ -897,12 +897,9 @@ class Pipeline(StatefulBaseClass):
         ``evoxc.constant`` and re-derives the schedule there; a concrete tensor
         captured in a closure would raise ``evoxc.TraceError`` instead.
 
-        ``payload`` is taken **as given**, i.e. already batch-first at its own
-        population size: :meth:`show` hands it the one individual
-        ``host_payload._one_individual`` normalised, and ``_analyse`` hands it the
-        whole population the diagnostics hook is documented to receive.  It is
-        therefore not passed through ``_one_individual``, whose contract is
-        exactly one individual.
+        ``payload`` is taken **as given** -- already batch-first at its own
+        population size: :meth:`show` passes one individual, ``_analyse`` the whole
+        population.
         """
         config = self._static_config(state)
         algorithm = self.algorithm
@@ -938,12 +935,10 @@ class Pipeline(StatefulBaseClass):
             None; the report comes from the problem's ``show`` (stdout).
 
         Raises:
-            TensorNEATError: If ``best`` is missing (``None``, e.g. the
-                ``best_genome`` of a run that produced no finite fitness), is not
-                a four-array genome payload, carries more than one individual, or
-                its arrays disagree about the population axis.  Pass the
-                one-individual batch ``(1, max_nodes)`` that ``auto_run(state)``
-                reports, or a bare row.
+            TensorNEATError: If ``best`` is missing (``None`` -- e.g. a run with no
+                finite fitness), is not a four-array genome payload, carries more
+                than one individual, or arrays disagreeing about the population
+                axis; see ``host_payload._one_individual`` for the two spellings.
 
         Notes:
             Host-side only. The schedule is derived once for the report (so a
