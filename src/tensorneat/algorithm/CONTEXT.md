@@ -4,8 +4,8 @@
 The evolutionary layer: it owns the population, the ask → transform → forward → tell generation cycle, speciation, parent selection, the crossover/mutation dispatch, and the HyperNEAT CPPN → substrate decode.
 Everything here runs **inside an evoxc trace** — `pipeline.py` builds one graph per shape signature covering a whole generation — except the explicitly host-side helpers (`__init__` validation, `setup` on the host, `show_details`, substrate construction).
 This layer owns no network mathematics: genomes own `transform/forward/grad/distance`, problems own `evaluate`, and the algorithm only shuffles whole populations with static shapes.
-Cost profile: one population digest plus `2 · species_size` population-shaped compatibility rows in `speciate` (scan 1's whole table pre-measured outside the scan on the dense path, scan 2's measured in-loop) and `O(pop_size)` selection/crossover/mutation per generation; no `max_nodes × max_nodes` tensor ever appears here.
-Measured with the real `DefaultGenome`/`XOR` (see `./neat/CONTEXT.md` `## Measured Cost`): `Pipeline.step` runs in ~41 / ~229 / ~505 ms per generation at pop 100 / 500 / 1000 (`species_size=20`), of which `speciate` is 69 / 79 / 85 % of `tell`.
+Cost profile: one population digest plus `2 · species_size` population-shaped compatibility rows in `speciate` (scan 1's whole table measured up front on the dense path inside one fixed-length `evoxc.scan`, scan 2's measured in-loop) and `O(pop_size)` selection/crossover/mutation per generation; no `max_nodes × max_nodes` tensor ever appears here.
+Measured with the real `DefaultGenome`/`XOR` (see `./neat/CONTEXT.md` `## Measured Cost`): `Pipeline.step` runs in ~43 / ~170 / ~305 ms per generation at pop 100 / 500 / 1000 (`species_size=20`), with peak RSS at or below the pre-digest tree in every cell.
 `speciate` is still the top term above pop 300 and it is per-pair bound: the pair count `2 · species_size · pop_size` is irreducible, and the cost of one pair is the genome's per-pair homologue sort.
 
 ## Kernel Contract (binding for this subtree)
