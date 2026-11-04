@@ -190,7 +190,7 @@ No `.at[]`, no `cumsum` on the compute path (prefix sums are triangular `dot`), 
 Shapes are static: `P`, `S`, `max_nodes`, `max_conns` are fixed at build time; a change forces a rebuild by the pipeline.
 Errors: configuration validation raises `common.errors.TensorNEATError` with a named message; trace/shape/backend errors propagate unchanged and are never re-wrapped or silently fallen back.
 State keys touched: `randkey`, `pop_size`, `pop`, `generation`, `species`, plus the genome/problem keys documented above — nothing else.
-Files stay under 1000 lines: `species.py` (959) the species algebra, `_kernels.py` (817) the graph helpers, `_distance.py` (289) the digest-backed rows, `_validation.py` (128) the host validators, `neat.py` (961) the population cycle.
+Files stay under 1000 lines: `species.py` (948) the species algebra, `neat.py` (961) the population cycle, `_kernels.py` (942) the graph helpers, `_distance.py` (299) the digest-backed rows, `_validation.py` (128) the host validators.
 
 ## Known Risks
 `evoxc.random.randint` needs a symbolic `high` that stays ≥ 1 at runtime — guaranteed by `max(survive_size, 1)`, which also removes the legacy NaN case.
