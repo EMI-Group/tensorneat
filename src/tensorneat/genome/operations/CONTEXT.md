@@ -32,7 +32,7 @@ Structural resolution is plan-based: the four helpers only decide *what* to writ
 
 ## Crossover semantics
 `DefaultCrossover` always keeps parent 1's structure and recombines attributes only: a gene whose exact key-column tuple has a homologue in parent 2 is crossed per attribute by `gene.crossover`, one with no homologue keeps parent 1's attributes, and padded rows stay padded.
-`alignment.find_homologous(keys1, keys2)` is the only aligner and serves both crossover and distance: one packed `uint64` identity per key row (`row_identity`) → one `argsort` of the concatenated `2M` identities → each gene's rank as `argsort(order)` → successor test "the element right after me is a parent-2 row with my identity" → `_confirm_rows` for key columns past the packed prefix. `O(M log M)`, never an `O(M^2)` scan, one batched kernel.
+`alignment.find_homologous(keys1, keys2)` is the only aligner and serves both crossover and distance: one packed `int64` identity per key row (`row_identity`, sign-flipped so a signed `argsort` orders it like the unsigned pack) → one `argsort` of the concatenated `2M` identities → each gene's rank as `argsort(order)` → successor test "the element right after me is a parent-2 row with my identity" → `_confirm_rows` for key columns past the packed prefix. `O(M log M)`, never an `O(M^2)` scan, one batched kernel.
 
 ## Distance semantics
 Two shapes of the same arithmetic: the pair-wise `__call__` (fitter/first parent pair per row) and the two-phase `prepare`/`measure` pair speciation uses, where the population side is sorted **once per generation** and each wide `measure` call only merges the centres against that digest.
