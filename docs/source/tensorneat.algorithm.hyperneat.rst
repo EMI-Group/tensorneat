@@ -1,37 +1,12 @@
-tensorneat.algorithm.hyperneat package
-======================================
+tensorneat.algorithm.hyperneat
+==============================
 
-Subpackages
------------
+HyperNEAT: a CPPN evolved by NEAT is queried on a fixed substrate.
 
 .. toctree::
    :maxdepth: 4
 
    tensorneat.algorithm.hyperneat.substrate
-
-Submodules
-----------
-
-tensorneat.algorithm.hyperneat.hyperneat module
------------------------------------------------
-
-.. automodule:: tensorneat.algorithm.hyperneat.hyperneat
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.algorithm.hyperneat.hyperneat\_feedforward module
-------------------------------------------------------------
-
-.. automodule:: tensorneat.algorithm.hyperneat.hyperneat_feedforward
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: tensorneat.algorithm.hyperneat
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.algorithm.hyperneat.genes
+   tensorneat.algorithm.hyperneat.hyperneat
+   tensorneat.algorithm.hyperneat.hyperneat_feedforward

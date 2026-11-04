@@ -1,8 +1,7 @@
-tensorneat package
-==================
+tensorneat
+==========
 
-Subpackages
------------
+Root of the library; every public object below is documented on its defining module page.
 
 .. toctree::
    :maxdepth: 4
@@ -11,22 +10,5 @@ Subpackages
    tensorneat.common
    tensorneat.genome
    tensorneat.problem
-
-Submodules
-----------
-
-tensorneat.pipeline module
---------------------------
-
-.. automodule:: tensorneat.pipeline
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: tensorneat
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.host_payload
+   tensorneat.pipeline

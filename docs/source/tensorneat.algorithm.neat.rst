@@ -1,29 +1,10 @@
-tensorneat.algorithm.neat package
-=================================
+tensorneat.algorithm.neat
+=========================
 
-Submodules
-----------
+Plain NEAT: the evolution loop, speciation and its host bookkeeping.
 
-tensorneat.algorithm.neat.neat module
--------------------------------------
+.. toctree::
+   :maxdepth: 4
 
-.. automodule:: tensorneat.algorithm.neat.neat
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.algorithm.neat.species module
-----------------------------------------
-
-.. automodule:: tensorneat.algorithm.neat.species
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: tensorneat.algorithm.neat
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.algorithm.neat.neat
+   tensorneat.algorithm.neat.species

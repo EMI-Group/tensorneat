@@ -1,53 +1,13 @@
-tensorneat.common.functions package
-===================================
+tensorneat.common.functions
+===========================
 
-Submodules
-----------
+Activation and aggregation registries, with their sympy mirrors.
 
-tensorneat.common.functions.act\_jnp module
--------------------------------------------
+.. toctree::
+   :maxdepth: 4
 
-.. automodule:: tensorneat.common.functions.act_jnp
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.common.functions.act\_sympy module
----------------------------------------------
-
-.. automodule:: tensorneat.common.functions.act_sympy
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.common.functions.agg\_jnp module
--------------------------------------------
-
-.. automodule:: tensorneat.common.functions.agg_jnp
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.common.functions.agg\_sympy module
----------------------------------------------
-
-.. automodule:: tensorneat.common.functions.agg_sympy
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.common.functions.manager module
-------------------------------------------
-
-.. automodule:: tensorneat.common.functions.manager
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: tensorneat.common.functions
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.common.functions.act
+   tensorneat.common.functions.act_sympy
+   tensorneat.common.functions.agg
+   tensorneat.common.functions.agg_sympy
+   tensorneat.common.functions.manager

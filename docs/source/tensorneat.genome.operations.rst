@@ -1,8 +1,7 @@
-tensorneat.genome.operations package
-====================================
+tensorneat.genome.operations
+============================
 
-Subpackages
------------
+Genome operators: crossover, distance and mutation.
 
 .. toctree::
    :maxdepth: 4
@@ -10,11 +9,4 @@ Subpackages
    tensorneat.genome.operations.crossover
    tensorneat.genome.operations.distance
    tensorneat.genome.operations.mutation
-
-Module contents
----------------
-
-.. automodule:: tensorneat.genome.operations
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.genome.operations.alignment

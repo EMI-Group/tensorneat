@@ -1,29 +1,15 @@
-tensorneat.genome.operations.mutation package
-=============================================
+tensorneat.genome.operations.mutation
+=====================================
 
-Submodules
-----------
+Mutation operators: default, recurrent and degree-based.
 
-tensorneat.genome.operations.mutation.base module
--------------------------------------------------
+.. toctree::
+   :maxdepth: 4
 
-.. automodule:: tensorneat.genome.operations.mutation.base
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.genome.operations.mutation.default module
-----------------------------------------------------
-
-.. automodule:: tensorneat.genome.operations.mutation.default
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: tensorneat.genome.operations.mutation
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.genome.operations.mutation.arrays
+   tensorneat.genome.operations.mutation.base
+   tensorneat.genome.operations.mutation.cycle
+   tensorneat.genome.operations.mutation.default
+   tensorneat.genome.operations.mutation.degree
+   tensorneat.genome.operations.mutation.plan
+   tensorneat.genome.operations.mutation.recurrent

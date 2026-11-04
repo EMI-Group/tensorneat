@@ -1,29 +1,10 @@
-tensorneat.genome.operations.crossover package
-==============================================
+tensorneat.genome.operations.crossover
+======================================
 
-Submodules
-----------
+Crossover operators over the tensorized genome.
 
-tensorneat.genome.operations.crossover.base module
---------------------------------------------------
+.. toctree::
+   :maxdepth: 4
 
-.. automodule:: tensorneat.genome.operations.crossover.base
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.genome.operations.crossover.default module
------------------------------------------------------
-
-.. automodule:: tensorneat.genome.operations.crossover.default
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: tensorneat.genome.operations.crossover
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.genome.operations.crossover.base
+   tensorneat.genome.operations.crossover.default
