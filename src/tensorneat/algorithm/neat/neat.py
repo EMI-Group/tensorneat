@@ -10,9 +10,12 @@ inside an active trace.
 Conventions that hold everywhere in this module:
 
 * population is axis 0 of every population tensor (``P = pop_size``), and the
-  batch dimension is written out explicitly -- no ``vmap``;
-* control flow appears only at the outermost level of a kernel, and only as
-  ``evoxc.scan`` over a static axis (see :meth:`NEAT._batched`);
+  batch dimension is written out explicitly;
+* control flow (``scan``/``cond``/``while_loop``) *is* used, but only at the
+  outermost layer of a kernel and only over static axes -- :meth:`NEAT._batched`
+  is an ``evoxc.scan`` over the batch axis.  ``vmap`` is never applied over
+  control flow, and every operation inside a loop body is a whole-batch tensor op
+  on the explicit batch axis;
 * the gene payload is the **four split arrays** of
   :class:`tensorneat.genome.utils.GenomeTensors` (``evoxc`` has no bitcast, so
   integer keys and float attributes are never packed together) with a
@@ -541,8 +544,10 @@ class NEAT(BaseAlgorithm):
               -- crossover, mutation, and the key carried into
               ``state.randkey``.
 
-            Keys are rank-0 scalars and never travel through a loop carry, so no
-            random draw happens inside a control-flow body.
+            Keys are rank-0 scalars and never travel through a loop carry: when
+            ``pop_batch_size`` chunks a kernel, the pre-split keys travel as the
+            scan's ``xs``, so each step draws its own population-shaped
+            randomness from its step key inside the loop body.
         """
         fitness = _sanitize_fitness(fitness, self._pop_size)
         generation = evoxc.add(
