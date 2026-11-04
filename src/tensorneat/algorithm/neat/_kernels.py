@@ -612,13 +612,19 @@ def speciate(
       ``gather``.  Above ``GATED_ROWS`` the species table is full, so a skipped
       slot's ``if`` region would cost more than the row it skips (see
       ``GATED_ROWS``), while measuring the rows up front keeps the compatibility
-      kernel out of the ``while`` body entirely.  Scan 1's rows are the ones the
-      gated path would read: slot ``i``'s centre is the carry row ``i``, and no
-      earlier iteration can rewrite it (every ``scatter`` writes index ``slot``
-      and each slot is visited once).  Scan 2 still measures its selected centre
-      per iteration (``pop[seed]`` for a creating slot, the scan-1 centre row
-      otherwise -- a closed-over value, because scan 2 no longer carries the
-      centre tables), because a creating slot's centre is data-dependent.
+      kernel out of the reservation ``while`` body entirely.  ``matrix`` runs
+      those calls inside its own fixed-length ``scan``, one centre per
+      iteration, so each iteration's region environment -- the kernel's
+      ``(pop_size, 2 * max_conns, ...)`` transients -- is released before the
+      next centre is measured, where a top-level loop would keep all
+      ``species_size`` of them alive for the rest of the generation.  Scan 1's
+      rows are the ones the gated path would read: slot ``i``'s centre is the
+      carry row ``i``, and no earlier iteration can rewrite it (every
+      ``scatter`` writes index ``slot`` and each slot is visited once).  Scan 2
+      still measures its selected centre per iteration (``pop[seed]`` for a
+      creating slot, the scan-1 centre row otherwise -- a closed-over value,
+      because scan 2 no longer carries the centre tables), because a creating
+      slot's centre is data-dependent.
       This form needs a callable with ``matrix`` (:class:`._distance.DistanceRows`);
       any other callable raises ``TensorNEATError`` instead of falling back to the
       slower shape, and the gated path keeps accepting an arbitrary callable.
@@ -918,19 +924,16 @@ def speciate(
     # iteration can rewrite it (every ``scatter`` in ``reserve`` writes index
     # ``slot``, and each slot is visited exactly once), so the pre-scan centre
     # table already holds exactly the centre every iteration reads.  The dense
-    # path measures that whole table before the scan -- one population-shaped
-    # call per centre, the kernel's row-independent shape -- and each iteration
-    # reads its own row with a ``gather``, which keeps the compatibility kernel
-    # out of the ``while`` body.  The rows are the same floats; the gated path
-    # keeps its lazy per-slot ``cond`` untouched.
+    # path measures that whole table before the scan and each iteration reads
+    # its own row with a ``gather``, which keeps the compatibility kernel out of
+    # the reservation ``while`` body.
     #
-    # Memory price of that hoist: the numpy interpreter keeps every SSA result of
-    # a block alive until the block returns, so these ``species_size`` kernels
-    # hold all their ``(pop_size, 2 * max_conns, ...)`` intermediates for the
-    # rest of the generation -- 261 -> 539 MiB peak RSS at pop 500 and 0.35 ->
-    # 0.69 s of build.  Measuring them inside a dedicated fixed-length ``scan``
-    # restores the baseline footprint but gives the whole wall win back (parity
-    # with the pre-change tree), so the top-level table is the kept trade.
+    # ``distance_fn.matrix`` does the measuring inside its own fixed-length
+    # ``scan``, one centre per iteration: that region is the memory scope, so
+    # only one centre's ``(pop_size, 2 * max_conns, ...)`` transients are live at
+    # a time instead of the arrays of all ``species_size`` of them.  A kernel at
+    # the top level would keep every one of those alive until the generation
+    # graph returns, which is both a peak-RSS and a build cost.
     rows1 = None if gate else distance_fn.matrix(state, centre_payload)
 
     carry, _ = evoxc.scan(reserve, carry, iota_i32(species_size))

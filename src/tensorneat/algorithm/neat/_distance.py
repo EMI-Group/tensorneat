@@ -21,13 +21,15 @@ tiling.
 batch ``pop_size`` (measured as it stands) or batch ``1`` (tiled to
 ``pop_size`` rows and measured in one call) and rejects every other batch width.
 :meth:`DistanceRows.row` is the same measurement spelled explicitly for one
-centre, and :meth:`DistanceRows.matrix` is the explicit whole-table form: it
-concatenates one ``row`` call per centre row, so an ``(S, P)`` table is ``S``
-calls of ``pop_size`` rows rather than one ``S * P`` batch.  The rows are
-identical either way, because the compatibility kernel is row-independent, and a
-per-centre call keeps the transient footprint of the kernel at one population
-instead of ``S`` of them.  ``matrix`` is never selected by ``__call__``: a
-caller that wants a whole table asks for it by name.
+centre, and :meth:`DistanceRows.matrix` is the explicit whole-table form: one
+such call per centre row, run as a single fixed-length ``evoxc.scan`` over the
+``S`` centre rows, so an ``(S, P)`` table is ``S`` calls of ``pop_size`` rows
+rather than one ``S * P`` batch.  The rows are identical either way, because the
+compatibility kernel is row-independent, and one centre per call keeps the
+kernel's transient footprint at one population instead of ``S`` of them, which
+the scan body then releases again before the next iteration.  ``matrix`` is
+never selected by ``__call__``: a caller that wants a whole table asks for it by
+name.
 
 Nothing here re-implements distance arithmetic: every number comes from the
 genome's own kernel, so the rows are bit-identical to
@@ -36,50 +38,42 @@ population.
 
 Measured cost
 -------------
-``speciate`` on the numpy reference backend, ``species_size=20``, one
-configuration per fresh process, ``Pipeline.step`` medians of one warmup plus
-twenty timed generations after three setup generations, interleaved A/B against
-the pre-change tree on the same box (which drifts by tens of percent between
-sessions, so read the paired ratios):
+Numpy reference backend, ``species_size=20``, one configuration per fresh
+process, ``benchmarks/backend_measure.py --backend numpy --generations 20
+--warmup 3`` (its numbers are ``Pipeline.step``): ``P = 500`` 164.2 ms mean,
+240.5 MiB peak RSS and 0.40 s of build; ``P = 1000`` 314.7 ms, 391.7 MiB and
+0.40 s.  The table costs exactly one ``measure_distance`` call per centre row;
+what the scan buys is the *region* around those calls, not fewer of them.
 
-* ``P = 100`` (gated path, unchanged): 43.0 ms before, 42.9 ms now;
-* ``P = 500`` (dense path): 266.6 ms before, 230.9 ms now (about 13 % faster,
-  and the best of three paired rounds in each direction);
-* ``P = 1000`` (dense path): 463.0 ms before, 451.5 ms now (parity).
+Measuring the same rows at the top level of the generation graph instead reads
+199.8 ms / 454.4 MiB / 0.56 s at ``P = 500`` and 339.5 ms / 809.4 MiB / 0.65 s
+at ``P = 1000``: slower and roughly twice the footprint, for the reason in
+`Peak memory` below.
 
-The win is scan 1's: ``speciate`` measures that centre table with :meth:`matrix`
-before the scan instead of one population-shaped call inside every iteration, so
-the compatibility kernel leaves the ``while`` body (59 ops per iteration instead
-of 228).  The *number* of executed ops is unchanged -- the same kernel runs once
-per centre either way -- so the gain is the interpreter's per-iteration region
-and carry overhead, not the arithmetic.
-
-Two variants were measured and rejected.  Pre-measuring *both* scans needs a
-``cond`` for scan 2's data-dependent ``pop[seed]`` centre and costs ~+50 % peak
-RSS (832 vs 556 MiB at ``P = 500``, 1540 vs 1021 MiB at ``P = 1000``) for no
-timed gain.  Grouping several centres into one ``measure_distance`` call (a
-tiled digest and a ``block * pop_size``-row centre batch) is 12 % cheaper than
-one call per centre in isolation at ``P = 500`` (66.6 vs 75.4 ms for twenty
-rows), but *slower* end to end: the wider batches materialise ``block`` times
-bigger temporaries, which costs more than the dispatch it saves (block of 4:
-266 ms at ``P = 500`` against 231 ms for one centre per call, and 472 vs 383 ms
-at ``P = 1000``).  Running the ``matrix`` rows inside a dedicated ``scan``
-instead of at the top level is bit-identical and restores the base tree's peak
-RSS and build (260.9 MiB / 0.35 s vs 539.0 MiB / 0.69 s at ``P = 500``) but
-loses the whole wall win, ending at parity with the pre-change tree (247.6-279.8
-ms against 261.9-270.9), so the top-level table stays.
+Pre-measuring *both* speciation scans needs a ``cond`` for scan 2's
+data-dependent ``pop[seed]`` centre and costs ~50 % more peak RSS for no timed
+gain.  Grouping several centres into one ``measure_distance`` call (a tiled
+digest and a ``block * pop_size``-row centre batch) is ~12 % cheaper than one
+call per centre in isolation at ``P = 500`` (66.6 vs 75.4 ms for twenty rows),
+but *slower* end to end, because the wider batches materialise ``block`` times
+bigger temporaries and that costs more than the dispatch it saves; measured at
+2, 4, 10 and 20 centres per call, all upstream of this one-centre-per-call
+shape.
 
 Peak memory
 -----------
-``matrix`` builds ``S`` top-level kernel calls, and ``evoxc``'s numpy interpreter
-keeps every SSA result of a block in that block's environment until the graph
-returns, so all ``S`` kernels' ``(pop_size, 2 * max_conns, ...)`` intermediates
-stay resident for the rest of the generation: 261 -> 539 MiB at ``P = 500``,
-431 -> 976 MiB at ``P = 1000``, and +0.34 s of one-off build (a loop body is
-traced once, a static loop traces ``S`` copies of the kernel).
-That is the price of keeping the kernel out of the reservation ``while``
-region, and it is measured, not incidental: any future hoist has to report peak
-RSS and build next to its wall time.
+``evoxc``'s numpy interpreter keeps every SSA result of a block in that block's
+environment until the block returns, and pops a nested region's environment per
+iteration.  A kernel inside a ``scan`` body therefore pays one region's
+transients at a time, while a kernel at the top level keeps its ``(pop_size,
+2 * max_conns, ...)`` intermediates alive for the rest of the generation.  The
+whole-table scan adds ~12 MiB over the floor of a generation with no distance
+kernel at all at ``P = 500`` (228.2 -> 240.5 MiB) and ~24 MiB at ``P = 1000``
+(368.2 -> 391.7 MiB), where the top-level form adds 226 / 441 MiB.  Build
+follows the same split, because a loop body is traced once and a static loop
+over ``S`` centres traces ``S`` copies of the kernel.
+Any future hoist out of the region has to report peak RSS and build next to its
+wall time.
 """
 
 from __future__ import annotations
@@ -90,22 +84,6 @@ import evoxc
 import evoxc.numpy as enp
 
 from tensorneat.common.errors import TensorNEATError
-
-
-def _rows(payload: Any, start: int, count: int) -> Any:
-    """Slice ``count`` consecutive rows out of every field of a payload.
-
-    Args:
-        payload (Any): Payload whose fields are batch-first ``(K, *rest)``.
-        start (int): Static first row.
-        count (int): Static number of rows.
-
-    Returns:
-        Any: Payload of the same type with ``(count, *rest)`` fields.
-    """
-    rank = len(payload[0].shape)
-    slicer = (slice(start, start + count),) + (slice(None),) * (rank - 1)
-    return type(payload)(*(field[slicer] for field in payload))
 
 
 def repeat_leading(x: Any, repeats: int) -> Any:
@@ -298,21 +276,31 @@ class DistanceRows:
             :meth:`__call__`: a caller holding an ``(S, ...)`` centre table asks
             for it by name, so a table cannot be mistaken for a population-shaped
             centre when ``S == P``.
-            One ``row`` call per centre row, concatenated along axis ``0``: each
-            call carries a population-shaped centre, so the kernel always sees
-            the batch width the digest was prepared with.  Concatenating rows of
-            single calls keeps every transient at one population instead of
-            ``K`` of them; the static row loop is trace-time only and costs no
-            graph op.  The rows themselves are measured at the *top level* of
-            the generation graph, so their intermediates stay resident -- see
-            `Peak memory` in the module docstring before moving this into a
-            loop.
+            One population-shaped ``measure_distance`` call per centre row, run
+            as one fixed-length ``evoxc.scan`` over the ``K`` centre rows: the
+            kernel never sees a ``K * P`` batch, and because a scan body's region
+            environment is popped per iteration, only one centre's transients are
+            alive at a time.  Measuring the same rows at the top level of the
+            generation graph would keep all ``K`` of them resident -- see
+            `Peak memory` in the module docstring.
         """
         count = int(centres[0].shape[0])
-        rows = [
-            evoxc.reshape(self.row(state, _rows(centres, slot, 1)), (1, self.pop_size))
-            for slot in range(count)
-        ]
-        if count == 1:
-            return rows[0]
-        return evoxc.concatenate(rows, axis=0)
+
+        def body(carry: Any, slot: Any) -> Any:
+            """One centre row of the table, measured inside the scan region."""
+            centre = type(centres)(
+                *(
+                    evoxc.gather(field, evoxc.reshape(slot, (1,)), axis=0)
+                    for field in centres
+                )
+            )
+            return carry, self.genome.measure_distance(
+                state, self.population_shaped(centre), self.digest
+            )
+
+        _, stacked = evoxc.scan(
+            body,
+            enp.zeros((1,), dtype=evoxc.float32),
+            enp.arange(0, count, dtype=evoxc.int32),
+        )
+        return stacked
