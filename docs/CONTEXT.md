@@ -10,6 +10,8 @@ The hosted build is driven by the repo-root `.readthedocs.yaml`: ubuntu-24.04 + 
 `docs/conf.py` holds no content: it puts `../src` (absolute, CWD-independent) on `sys.path` when that directory exists, reads `version`/`release` from `importlib.metadata.version("tensorneat")` with a `"0.2.0"` fallback, sets `autodoc_default_options = {members, show-inheritance, undoc-members: False}`, `extensions = [autodoc, napoleon, viewcode]`, `exclude_patterns = ["_build", ...]`, `html_theme = "sphinx_rtd_theme"`.
 `docs/index.rst` is the front page: intent paragraph (NEAT/HyperNEAT tensorization on `evoxc`, no JAX/PyTorch), a quickstart matching the real `Pipeline`/`algorithm.NEAT`/`problem.XOR` API, an "API reference" toctree pointing at `source/modules`, and GitHub links to `README.md`, `benchmarks/RESULTS.md`, `benchmarks/BACKENDS.md`.
 `docs/source/modules.rst` is the API root and the only page `index.rst` links to; it toctrees the package root `tensorneat`.
+`docs/source/tensorneat.problem.rl.*.rst` covers the three RL modules (`cartpole` → `CartPole`, `mountaincar` → `MountainCarContinuous`, `pendulum` → `Pendulum`), all three listed by the `tensorneat.problem.rl` package page.
+`src/tensorneat/problem/rl/_common.py` is `_`-prefixed and therefore deliberately has no page.
 
 ## Constraints
 The stub set mirrors `src/tensorneat`: one page per public module (`source/tensorneat.<module>.rst`) and one landing page per package/subpackage (`source/tensorneat.<pkg>.rst`); `_`-prefixed modules (`algorithm/neat/_kernels.py`, `_distance.py`, `_validation.py`) are private and get no page.
@@ -22,12 +24,13 @@ Every page must stay reachable from `source/modules.rst`; an unreachable page wa
 Pages stay 5–20 lines; a page that needs more is documenting more than one thing.
 
 ## Known Issues
-`-W` (warnings-as-errors) still fails on 3 docutils warnings that originate in `src/` docstrings, not in `docs/`: `genome/gene/node/base.py` (`BaseNode.to_dict`, unterminated inline literal after napoleon splits the `Returns:` block) and `genome/operations/mutation/degree.py` (module docstring: "Unexpected indentation" plus "Block quote ends without a blank line").
-A plain (non-`-W`) build therefore exits 0 with exactly those 3 warnings and no others; they must be fixed in `src/`, not suppressed here.
+None.
+`rm -rf docs/_build && uv run --extra docs sphinx-build -W -b html docs docs/_build` exits 0, reports zero warnings, and `-w <log>` leaves that log empty.
 
 ## Test Strategy
-Verification is the build itself: `rm -rf docs/_build && uv run --extra docs sphinx-build -b html docs docs/_build -w /tmp/w.log`, then assert `/tmp/w.log` contains only the 3 `src/`-owned docutils lines above.
+Verification is the build itself: `rm -rf docs/_build && uv run --extra docs sphinx-build -W -b html docs docs/_build -w /tmp/w.log` must exit 0 with an empty `/tmp/w.log` (0 lines) and print `build succeeded.`.
 Spot-check the rendered API: `grep -o 'id="tensorneat.pipeline.Pipeline"' docs/_build/source/tensorneat.pipeline.html` and confirm `docs/_build/index.html` shows the quickstart without leaking literal RST markup.
+Spot-check the RL pages the same way: `id="tensorneat.problem.rl.pendulum.Pendulum"`, `id="tensorneat.problem.rl.mountaincar.MountainCarContinuous"`, `id="tensorneat.problem.rl.cartpole.CartPole"`, and all three modules listed by `docs/_build/source/tensorneat.problem.rl.html`.
 `uv sync --extra docs` must be run first; `uv` lives at `~/.local/bin/uv` and may not be on `PATH`.
 
 ## Routing Table

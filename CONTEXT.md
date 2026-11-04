@@ -14,7 +14,7 @@ The library keeps its research identity (GECCO 2024 Best Paper, arXiv 2404.01817
 ## API Surface
 - `from tensorneat import Pipeline, algorithm, genome, problem, common`; `tensorneat.__version__` is the installed distribution version.
 - `Pipeline(algorithm, problem, seed=42, fitness_target=..., generation_limit=1000, backend="numpy", device=None, compile_options=None, is_save=False, is_detailed=True)` → `setup()` (host-only, builds nothing), `step(state)`, `auto_run(state)`, `show(state, best)`.
-- `algorithm.NEAT(...)`, `algorithm.HyperNEAT(substrate, neat)`, `genome.DefaultGenome/RecurrentGenome`, `problem.XOR/XOR3d/CustomFuncFit/CartPole`, `common.ACT/AGG/State`.
+- `algorithm.NEAT(...)`, `algorithm.HyperNEAT(substrate, neat)`, `genome.DefaultGenome/RecurrentGenome`, `problem.XOR/XOR3d/CustomFuncFit/CartPole/Pendulum/MountainCarContinuous`, `common.ACT/AGG/State`.
 - A genome payload is a four-array record (`node_keys`, `node_attrs`, `conn_keys`, `conn_attrs`) and is **batch-first**: `auto_run` returns `best` as a one-individual batch (`(1, max_nodes)`, …), which `show` and `genome.network_dict(state, best)` consume; bare rows are accepted by the host helpers and written one-genome-per-file by checkpointing.
 - Configuration objects are constructor-level and host-side; every numerical operation is a batch-first kernel inside an `evoxc` graph.
 ## Environment (uv)
@@ -42,17 +42,17 @@ Remaining lever, measured and out of scope so far: the padded gene geometry (`ma
 - NaN padding semantics of the pre-rewrite library are preserved (unconnected node value = `NaN`, `NaN` fitness = `-inf`), because `test/parity/` compares against the frozen implementation.
 - Files stay under ~1000 lines; `common/tensorization.py` is the one documented exception (one cohesive schedule derivation).
 - No silent error swallowing: configuration errors raise `tensorneat.common.errors.TensorNEATError`; trace/shape/backend errors propagate from `evoxc` unchanged.
-- Dropped on purpose: the Brax/Gymnax/mujoco-playground RL environments required JAX; `problem.rl.CartPole` is the evoxc-native replacement.
+- Dropped on purpose: the Brax/Gymnax/mujoco-playground RL environments required JAX; `problem.rl` ships three simulator-free evoxc-native replacements instead — `CartPole` (discrete), `Pendulum` (continuous torque), `MountainCarContinuous` (continuous force, one-time goal bonus).
 ## Test Strategy
-`uv run pytest` from the repo root (`testpaths = ["test"]` in `pyproject.toml`); `test/` mirrors the source tree and the current full run is 564 passed / 1 skipped (the `iree` backend test) with `uv sync --extra bench`, 0 failed.
-`test/unit/` runs on the numpy backend with no optional dependency; `test/parity/` needs `--extra bench` and compares kernels bit-for-bit against `benchmarks/legacy_jax` (53 tests); `test/integration/` evolves XOR, asserts determinism per seed, rebuild-on-shape-change and checkpoint round-trips; `test/backends/` runs a real `iree` generation and skips when the extra is absent; `test/release_gate_no_jax.py` enforces the import hygiene.
+`uv run pytest` from the repo root (`testpaths = ["test"]` in `pyproject.toml`); `test/` mirrors the source tree and the current full run is green with `uv sync --all-extras` (see `test/CONTEXT.md` for the live per-directory counts).
+`test/unit/` runs on the numpy backend with no optional dependency (the Pendulum and MountainCarContinuous suites carry their own in-file host-numpy oracles, in the same spirit as `test_cartpole.py`); `test/parity/` needs `--extra bench` and compares kernels bit-for-bit against `benchmarks/legacy_jax` (53 tests); `test/integration/` evolves XOR, asserts determinism per seed, rebuild-on-shape-change and checkpoint round-trips; `test/backends/` runs a real `iree` generation and skips when the extra is absent; `test/unit/benchmarks/` covers the harness's own git fingerprint; `test/release_gate_no_jax.py` enforces the import hygiene.
 ## Routing Table
 | Path | Responsibility |
 |---|---|
 | `./src/tensorneat` | The package: pipeline (the single compile site), host payload helpers, genome/algorithm/problem/common subtrees. |
 | `./test` | Pytest suites: unit, parity vs the frozen legacy library, integration, compiled backends, release gates. |
 | `./benchmarks` | Old-vs-new harness + frozen JAX oracle, `RESULTS.md`/`THREADS.md`/`iree.md`/`BACKENDS.md` (generated), `PERF_NUMPY.md` (hand-measured op-count pass). |
-| `./examples` | Runnable scripts per problem family; five of ten cross their fitness target inside the shipped demo budget. |
+| `./examples` | Runnable scripts per problem family; six of twelve cross their fitness target inside the shipped demo budget (all twelve exit 0). |
 | `./docs` | Sphinx configuration, autodoc stubs (one per public module) and the built-site rules. |
 | `./tutorials` | `quickstart.ipynb` for the current API (`legacy_jax/` keeps the pre-rewrite notebooks, concepts only). |
 | `./imgs` | Static assets referenced by README and tutorials (logo, network/RL figures). |
