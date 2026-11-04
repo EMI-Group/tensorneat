@@ -47,6 +47,11 @@ Sentinel contract (shared with :mod:`~tensorneat.common.tensorization`):
   in the same array.
 * ``NaN`` in a **float** array means "absent row" (``isnan(x[:, 0])``) or
   "not computed yet".
+Mutation scope: :func:`mutate_float` and :func:`mutate_int` are the standalone
+public mutation kernels of this module (exported by ``common.__init__``).
+The genome attribute-mutation path is
+:func:`tensorneat.genome.gene.blocks.mutate_attrs`, which owns its own
+per-spec draws and does not call either of them.
 """
 
 import numpy as np
@@ -681,6 +686,9 @@ def mutate_float(key, val, init_mean, init_std, mutate_power, mutate_rate, repla
     Notes:
         Branching is ``evoxc.select``, never ``where``/Python ``if``; the
         legacy ``jnp.where`` nests map one-to-one onto two nested selects.
+        Standalone public kernel: the genome attribute-mutation path is
+        :func:`tensorneat.genome.gene.blocks.mutate_attrs`, which does not call
+        this helper.
     """
     mutate_rate = _rate("mutate_rate", mutate_rate, allow_one=True)
     replace_rate = _rate("replace_rate", replace_rate)
@@ -731,6 +739,9 @@ def mutate_int(key, val, options, replace_rate):
     Notes:
         ``options`` must be non-empty and static; an empty option list is a
         configuration bug, not a runtime condition.
+        Standalone public kernel: the genome attribute-mutation path is
+        :func:`tensorneat.genome.gene.blocks.mutate_attrs`, which does not call
+        this helper.
     """
     replace_rate = _rate("replace_rate", replace_rate, allow_one=True)
     count = int(options.shape[0])

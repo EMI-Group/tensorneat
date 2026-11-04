@@ -35,7 +35,6 @@ from .state import State
 from .stateful_class import StatefulBaseClass
 
 from .errors import (
-    BackendMismatchError,
     ConfigError,
     GraphError,
     ShapeBoundError,
@@ -81,7 +80,6 @@ __all__ = [
     "ConfigError",
     "ShapeBoundError",
     "GraphError",
-    "BackendMismatchError",
     # sentinels and batched helpers
     "I_INF",
     "KEY_MAX",

@@ -100,14 +100,3 @@ class GraphError(TensorNEATError):
     node key is missing from the connection payload. Recurrent genomes accept
     cycles by definition and therefore never raise this for cyclic topology.
     """
-
-
-class BackendMismatchError(TensorNEATError):
-    """Host state and compiled executable were built for different backends.
-
-    Raised when, for example, a ``State`` produced under ``backend="iree"`` is
-    resumed under ``backend="numpy"``, or when a cached executable is reused
-    with a device that the backend that compiled it cannot serve. Real backend
-    failures (an unsupported op, an unsupported shape) are **not** this error:
-    they propagate as ``evoxc.BackendError`` unchanged.
-    """

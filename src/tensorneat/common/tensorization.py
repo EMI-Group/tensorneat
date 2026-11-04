@@ -448,65 +448,6 @@ def edge_order(dst, edge_valid, max_nodes, max_conns):
     return rank, cc
 
 
-def edge_group_rank(dst, edge_valid, max_conns):
-    """Rank each connection row within the valid rows ordered by destination.
-
-    Args:
-        dst: ``(P, C)`` ``int32`` destination slots; ``I_INF`` on an invalid row;
-            edge_valid: ``(P, C)`` ``bool`` from the lookup.
-        max_conns (int): ``C``.
-
-    Returns:
-        ``(P, C)`` ``int32``: the position of row ``c`` among the valid rows ordered
-        by ``(dst, connection index)``; ``I_INF`` for invalid rows.
-
-    Notes:
-        One ``argsort(..., stable=True)`` over the ``int32`` composite ``dst * C +
-        conn_index`` (invalid rows sanitized to slot ``0`` first), then one
-        ``flat_scatter`` of ``arange(C)`` to invert the permutation.
-        :func:`derive_schedule` uses :func:`edge_order`, whose single sort yields
-        this ``rank`` *and* ``cc`` on a radix-friendly key.
-    """
-    max_conns = _positive_static(max_conns, "max_conns")
-    pop_size, width = dst.shape
-    pop_size, width = int(pop_size), int(width)
-    if width != max_conns:
-        raise ConfigError(f"dst must have {max_conns} columns, got {width}")
-    columns = _node_slots(pop_size, max_conns)
-    zero = enp.zeros((pop_size, max_conns), dtype=evoxc.int32)
-    safe_dst = evoxc.select(edge_valid, dst, zero)
-    composite = evoxc.add(
-        evoxc.multiply(safe_dst, _scalar_constant(max_conns, evoxc.int32)), columns
-    )
-    order = evoxc.argsort(
-        evoxc.select(edge_valid, composite, _iinf_like(composite)), axis=-1, stable=True
-    )
-    inverse = flat_scatter(
-        enp.zeros((pop_size, max_conns), dtype=evoxc.int32),
-        evoxc.cast(order, evoxc.int32),
-        columns,
-        trusted=True,
-    )
-    return evoxc.select(edge_valid, inverse, _iinf_like(inverse))
-
-
-def cum_in_degree(dst, edge_valid, max_nodes):
-    """Count, per node, how many valid edges point at it or at a lower slot.
-
-    Args:
-        dst: ``(P, C)`` ``int32`` destination slots (``I_INF`` for invalid rows);
-            edge_valid: ``(P, C)`` ``bool``; max_nodes (int): ``N``.
-
-    Returns:
-        ``(P, N)`` ``int32``: ``cc[p, i]`` = number of valid edges of genome ``p``
-        whose destination slot is ``<= i`` — the ``cumsum``-free ``cc`` of
-        :func:`edge_order`, kept separately so the step stays testable alone.
-    """
-    max_nodes = _positive_static(max_nodes, "max_nodes")
-    _rank, cc = edge_order(dst, edge_valid, max_nodes, int(dst.shape[1]))
-    return cc
-
-
 def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
     """Pack each node's incoming edges into the static ``(P, N, K)`` table.
 
