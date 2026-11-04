@@ -22,7 +22,7 @@ Measured consequences that shape this node:
 
 ## Two-phase structural stage
 The stage **plans, then writes once**: `_edit_context` builds the shared masks/index blocks, `_plan_operations` resolves the four candidates independently (each a `NamedTuple` in `plan.py`, never a payload rewrite), `_merge_plan` folds the four mutually-exclusive plans into one `Edit`, and `plan.apply` performs one clearing `select` per connection array (slot 0 plus the delete-node detach), one flat `scatter` per connection array for slots 1–2, and one `select` per node array.
-On the `select` route (`arrays.write_rows`, used by the clearing pass and both node arrays) a slot's "no write" row is the array's own row count, which matches no row of the shared row-index constant, so no dump row and no flat index block is needed.
+On the `select` route (`plan.apply`'s inlined form of `arrays.write_rows`'s pattern, shared by both node arrays) a slot's "no write" row is the array's own row count, which matches no row of the shared row-index constant, so no dump row and no flat index block is needed.
 The `scatter` route (`plan._scatter_slots`) instead appends `slots × W` dump cells with one `pad`, redirects an invalid slot to its own dump cell, and slices the tail off; the dump index block is `slots × W` static entries, not `P`-scaled.
 The connection key and attribute arrays share their row layout, so `apply` stacks the slot rows once and both arrays consume the same `(P, slots, 1)` row/validity block.
 The two node arrays share their row layout too, so `apply` builds the row-index comparison against the slot's row **once** and broadcasts that mask over the attribute axis.
