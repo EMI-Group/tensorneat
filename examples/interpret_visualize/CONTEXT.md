@@ -3,10 +3,10 @@
 ## Intent
 Two host-only demos of genome introspection: turn one genome into sympy formulas / Python code / LaTeX, and draw its topology as an SVG.
 Neither script needs `Pipeline`; both are guarded by `if __name__ == "__main__":`.
-`genome_sympy.py` takes 0.8 s and `visualize_genome.py` 0.9 s on this CPU.
+`genome_sympy.py` takes 0.85 s and `visualize_genome.py` 0.95 s on this CPU, wall clock including `uv run` startup.
 
 ## API Surface
-- `genome_sympy.py` — `DefaultGenome(num_inputs=3, num_outputs=1, max_nodes=10, max_conns=20, init_hidden_layers=(3,), output_transform=ACT.sigmoid, node_gene=BiasNode(activation_options=ACT.tanh, aggregation_options=AGG.sum))`; prints `repr(state, payload)`, `output_expr.subs(args_symbols)`, `to_python_code(*res)`, `to_latex_code(*res)`.
+- `genome_sympy.py` — `DefaultGenome(num_inputs=3, num_outputs=1, max_nodes=10, max_conns=20, init_hidden_layers=(3,), output_transform=ACT.sigmoid, node_gene=BiasNode(activation_options=ACT.tanh, aggregation_options=AGG.sum))`; prints `g.repr(state, payload)`, then `res[4][0].subs(res[1])`, `to_python_code(*res)` and `to_latex_code(*res)` for `res = g.sympy_func(state, network, sympy_output_transform=ACT.obtain_sympy(ACT.sigmoid))`.
 - `visualize_genome.py` — same genome with `num_outputs=2`; writes `network.svg` next to the script via `Path(__file__).with_name(...)` and prints the path.
 - Scripts are run from the repository root as `uv run python examples/interpret_visualize/<name>.py`.
 
@@ -21,5 +21,5 @@ Neither script needs `Pipeline`; both are guarded by `if __name__ == "__main__":
 `genome_sympy.py` prints the genome `repr`, the substituted sympy formula, the Python code and the LaTeX code, then exits 0.
 `visualize_genome.py` prints the genome `repr` and `saved network figure to .../network.svg`, then exits 0.
 `network.svg` is a runtime artefact the script writes next to itself: it is git-ignored by the repo `.gitignore` and never tracked, so a regenerated copy stays out of a commit.
-Both demos need only sympy and matplotlib.
+Both demos need only the base install (`sympy` and `matplotlib` are project dependencies, not extras).
 No pytest target lives here: `test/` owns the automated suites.
