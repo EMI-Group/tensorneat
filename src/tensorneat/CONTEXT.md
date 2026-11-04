@@ -96,7 +96,7 @@ Current per-generation op counts: `forward` 112 traced ops (749 before the level
 - NaN padding semantics of the pre-rewrite library are preserved (`test/parity/` depends on them); `select` chains stand in for `lax.switch`.
 - Errors: user/config validation raises `common.errors.TensorNEATError` (and its subclasses); tensor/backend errors are never caught and re-wrapped.
 - Files ≤ ~1000 lines; shared math lives in `common/`, never duplicated per genome/algorithm.
-- `pipeline.py` (1132 lines) is one job — the single compile site plus the design, caching, overflow and measured-cost documentation that belongs next to it — and is a deliberate exception to the line budget; the code is ~900 lines and the rest is the module docstring.
+- `pipeline.py` (996 lines) is one job — the single compile site plus the design, caching, overflow and measured-cost documentation that belongs next to it; the host-side payload helpers live in `./host_payload.py` so the file stays under the line budget.
 
 ## Routing Table
 | Path | Responsibility |
