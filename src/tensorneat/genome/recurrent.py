@@ -26,7 +26,7 @@ from .operations import (
     DefaultDistance,
     DefaultMutation,
 )
-from .window import fill
+from .window import any_slot, fill
 
 
 class RecurrentGenome(BaseGenome):
@@ -184,10 +184,13 @@ class RecurrentGenome(BaseGenome):
         # ``BaseGenome._padding_safe_attrs``).
         node_attrs = self._padding_safe_attrs(node_attrs, node_keys)
         hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs)
-        valid_count = enp.sum(evoxc.cast(transformed.in_valid, evoxc.int32), axis=-1)
+        # "Has at least one live incoming slot" is a boolean *any* over the window, so it is
+        # the same static slice fold as the once-per-tick liveness test of the window step
+        # (:func:`..window.any_slot`) instead of a count: ``count > 0`` would be an
+        # innermost-axis ``reduce_sum`` over the whole ``(P, N, K)`` block, the most expensive
+        # op shape on the reference backend, for a predicate that costs ``2K`` cheap ops.
         update_mask = evoxc.logical_and(
-            transformed.node_exists,
-            evoxc.greater(valid_count, enp.full((), 0, dtype=evoxc.int32)),
+            transformed.node_exists, any_slot(transformed.in_valid)
         )
         for _ in range(self.activate_time):
             values = evoxc.concatenate(

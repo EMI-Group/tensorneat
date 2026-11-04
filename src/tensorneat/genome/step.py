@@ -54,8 +54,6 @@ class _StepStatics:
         flat_index: ``(P * N * K,) int32`` flat gather index of the node-value window.
         present: ``(P, N, K) bool`` liveness of each window slot.
         output_rows: ``(P, N) bool``, True on the rows read out as network outputs.
-        nan: Rank-0 ``float32`` NaN, the fill of every window gather of this pass — one
-            constant instead of a fresh ``enp.full`` on every unrolled level.
         node_attrs: The attribute tensor the prepared ``node`` was built from, so a second
             forward pass cannot silently reuse it.
         node: ``NodeOperands`` of ``node_attrs``; ``None`` until the first step.
@@ -66,7 +64,6 @@ class _StepStatics:
         "flat_index",
         "present",
         "output_rows",
-        "nan",
         "node_attrs",
         "node",
     )
@@ -77,7 +74,6 @@ class _StepStatics:
         flat_index: evoxc.SymbolicTensor,
         present: evoxc.SymbolicTensor,
         output_rows: evoxc.SymbolicTensor,
-        nan: evoxc.SymbolicTensor,
     ):
         """Store the tensors derived once by :meth:`BaseGenome._hit_conn_attrs`.
 
@@ -86,13 +82,11 @@ class _StepStatics:
             flat_index: Flat gather index of the node-value window.
             present: Liveness mask of the same slots.
             output_rows: ``(P, N) bool`` output-row mask.
-            nan: Rank-0 ``float32`` NaN shared by every window gather of the pass.
         """
         self.conn = conn
         self.flat_index = flat_index
         self.present = present
         self.output_rows = output_rows
-        self.nan = nan
         self.node_attrs = None
         self.node = None
 
@@ -184,30 +178,27 @@ class NodeStepMixin:
         x: evoxc.SymbolicTensor,
         idx: evoxc.SymbolicTensor,
         mask: evoxc.SymbolicTensor,
-        fill: float | evoxc.SymbolicTensor | None,
     ) -> evoxc.SymbolicTensor:
         """Gather ``(P, *shape)`` window slots out of one batch-first table.
         The index is flattened to a batch-wide one-dimensional gather index
         (:func:`_slot_index`) because ``evoxc.gather`` follows ``np.take`` semantics and
         splices the *whole* index shape into the axis it indexes; the flat form is the only
         one that works, so ``x`` is flattened, gathered and reshaped back.  When the index is
-        derived once per forward pass (:func:`_slot_index`), a level pays only
-        :func:`_gather_prepared` — one gather plus the fill select.
-        Masked-out and ``I_INF`` slots are redirected to row ``0`` before the gather and
-        overwritten with ``fill`` afterwards, so the backend never sees an out-of-range index.
+        derived once per forward pass (:func:`_slot_index`), the per-level half is
+        :func:`_gather_prepared` — one flatten plus one gather.
+        Masked-out and ``I_INF`` slots are clamped to an in-range row of their own individual
+        before the gather, so the backend never sees an out-of-range index; the value they
+        return is never read (see :func:`_gather_prepared`).
         Args:
             x: ``(P, R, ...)`` source table (node values, or the connection attribute payload).
             idx: ``(P, *shape) int32`` row indices into ``x``'s second axis; ``I_INF`` (or a
                 masked-out position) means "no slot".
             mask: ``(P, *shape) bool`` liveness of each slot.
-            fill: Value written where the slot is absent, or ``None`` to keep the gathered
-                value; a rank-0 tensor is reused verbatim instead of materialising a per-call
-                constant (see :func:`_gather_prepared`).
         Returns:
             ``(P, *shape)`` tensor with ``x``'s dtype.
         """
-        flat_index, present = _slot_index(idx, mask, int(x.shape[1]))
-        return _gather_prepared(x, flat_index, present, fill)
+        flat_index, _ = _slot_index(idx, mask, int(x.shape[1]))
+        return _gather_prepared(x, flat_index)
     def _hit_conn_attrs(
         self, transformed: Transformed, conn_attrs: evoxc.SymbolicTensor
     ) -> _StepStatics:
@@ -225,10 +216,10 @@ class NodeStepMixin:
             conn_attrs: ``(P, E, CA) float32`` connection attributes, NaN padded.
 
         Returns:
-            :class:`_StepStatics` of this population: the gathered edge attributes (absent
-            slots hold NaN, cleaned by the connection gene's ``prepare``), the flat window
-            index of the node values, its present-slot mask, the output-row mask and the
-            rank-0 NaN every window gather of the pass fills its dead slots with.
+            :class:`_StepStatics` of this population: the gathered edge attributes (a dead
+            slot keeps the attribute row its index was clamped to, which no consumer reads),
+            the flat window index of the node values, its present-slot mask and the
+            output-row mask.
 
         Notes:
             The flat index of slot ``(p, n, k, w)`` is ``p * (E * CA) + row * CA + w``, i.e.
@@ -239,15 +230,11 @@ class NodeStepMixin:
         """
         pop_size, max_nodes, window = (int(size) for size in transformed.in_conn.shape)
         conn_rows, attr_width = (int(size) for size in conn_attrs.shape[1:])
-        # One rank-0 NaN for the whole pass: the attribute gather fills its absent slots with
-        # it here, and every unrolled level reuses it as the fill of the value window.
-        nan = enp.full((), float("nan"), dtype=evoxc.float32)
-        if attr_width:  # absent slots hold NaN, which the conn gene's prepare cleans
+        if attr_width:  # a family with evolvable attributes: gather them once per pass
             hit = self._gather_slots(
                 evoxc.reshape(conn_attrs, (pop_size, conn_rows * attr_width)),
-                _column_index(transformed.in_conn, attr_width),
+                _column_index(transformed.in_conn, attr_width, conn_rows),
                 _column_mask(transformed.in_valid),
-                nan,
             )
         else:  # a family without evolvable attributes: nothing to gather
             hit = enp.zeros((pop_size, max_nodes, window, 0), dtype=evoxc.float32)
@@ -255,7 +242,6 @@ class NodeStepMixin:
             self.conn_gene.prepare(hit),
             *_slot_index(transformed.in_src, transformed.in_valid, max_nodes),
             self._output_row_mask(pop_size, max_nodes),
-            nan,
         )
     def _node_step(
         self,
@@ -275,29 +261,32 @@ class NodeStepMixin:
 
         1. ``xv = gather(values, statics.flat_index)`` -> ``(P, N, K)`` source values per
            slot (flatten the value table, one gather into the window block shape — the index
-           table is already block-shaped, so nothing is reshaped back), with every *static*
-           dead slot overwritten by ``NaN`` in the same step (the gather's fill ``select``).
-           ``values`` stays ``(P, N)`` and is never widened into a ``max_nodes``-wide column
-           per node. The index table is derived once per pass, so a level pays only
-           flatten/gather/fill.
-        2. ``live = xv == xv`` — IEEE makes ``x == x`` False exactly on ``NaN``, so that
-           equality *is* ``~isnan(xv)`` in a single comparison. It is the *liveness* mask
-           because step 1 writes ``NaN`` into every statically dead slot: a slot the schedule
-           marked dead and a slot whose source row is still ``NaN`` are both excluded, which
-           is exactly ``present & ~isnan(gathered)`` at one op instead of two. The same mask
-           is what lets the connection gene skip its own sanitisation.
+           table is already block-shaped, so nothing is reshaped back). ``values`` stays
+           ``(P, N)`` and is never widened into a ``max_nodes``-wide column per node. The
+           index table is derived once per pass, so a level pays only flatten + gather: a
+           *static* dead slot is clamped to an in-range row and keeps that row's value
+           instead of being overwritten with ``NaN``, which would be one ``(P, N, K)``
+           ``select`` per level for a value no consumer reads (step 2 masks it out, step 3's
+           aggregation neutral-fills it).
+        2. ``live = statics.present & (xv == xv)`` — IEEE makes ``x == x`` False exactly on
+           ``NaN``, so that equality catches a *live* slot whose source row is still ``NaN``,
+           while ``statics.present`` excludes the statically dead slots whose gathered value
+           is now an arbitrary in-range row. Two cheap ops on the mask replace the wide fill
+           of step 1, and ``live`` is still exactly ``present & ~isnan(gathered)``. The same
+           mask is what lets the connection gene skip its own sanitisation.
         3. ``msg = conn_gene.forward(state, statics.conn, xv)`` -> ``(P, N, K)``, one scalar
            message per edge slot: the gene multiplies by the weight column, which arrives
-           already NaN-cleaned. A dead slot writes ``NaN * weight`` there, and that is safe
-           because every aggregation option replaces the slots of ``live`` with its neutral
-           value *before* reducing (``common/functions/agg.py``), so no ``NaN`` reaches a
-           reduce or a differentiated op. That is why the gene needs no second sanitisation
-           (and why the per-level op budget lost one).
+           already NaN-cleaned. A dead slot writes ``value * weight`` for a value nobody
+           reads, and that is safe because every aggregation option replaces the slots of
+           ``live`` with its neutral value *before* reducing
+           (``common/functions/agg.py``), so nothing from a dead slot reaches a reduce or a
+           differentiated op. That is why the gene needs no second sanitisation (and why the
+           per-level op budget has no fill).
         4. ``z = node_gene.forward(state, statics.node, msg, statics.output_rows, live)`` ->
            ``(P, N)``: the gene runs ``apply_aggregation`` (dead slots neutral-filled per
            option, then a ``select`` chain), then ``combine`` (``bias + response * agg``), then
            the activation, whose id is ``-1`` (identity) on the output rows.
-        5. ``values = select(update_mask & (live_count > 0), z, values)``: a node with no live
+        5. ``values = select(update_mask & any_slot(live), z, values)``: a node with no live
            incoming edge keeps its previous value, so NaN stays NaN and its descendants lose
            their only live source — the legacy NaN poisoning, reproduced exactly.
 
@@ -312,7 +301,7 @@ class NodeStepMixin:
             update_mask: ``(P, N) bool`` caller gate — for the feedforward genome the plain
                 ``node_level == level`` comparison (the schedule already stores ``I_INF`` on
                 every absent row, so a separate ``node_exists`` term is redundant), for the
-                recurrent one ``node_exists & (valid_count > 0)``; the dynamic "has a live
+                recurrent one ``node_exists & any_slot(in_valid)``; the dynamic "has a live
                 slot" term is ANDed in here (step 5).
 
         Returns:
@@ -337,16 +326,16 @@ class NodeStepMixin:
                 f"{tuple(int(size) for size in hit_conn_attrs.present.shape[1:])} for a "
                 f"schedule of window {block}"
             )
-        # The gather fills every statically dead slot with ``NaN``, so one comparison gives
-        # the liveness mask: ``x == x`` is False exactly on ``NaN``, which now covers both a
-        # statically dead slot and a live slot whose source row is still ``NaN``.
-        xv = _gather_prepared(
-            values,
-            hit_conn_attrs.flat_index,
-            hit_conn_attrs.present,
-            hit_conn_attrs.nan,
-        )
-        live = evoxc.equal(xv, xv)
+        # The gather is *unfilled*: a statically dead slot is clamped to an in-range row of
+        # its own individual (see ``window._slot_index``) and keeps that row's value, so the
+        # liveness mask is the static ``present`` mask ANDed with the ``x == x`` test that
+        # rejects a live slot whose source row is still ``NaN``. Writing ``NaN`` into the
+        # dead slots instead would cost one ``(P, N, K)`` ``select`` per level and buy
+        # nothing: no consumer of ``messages`` ever reads a dead slot (the aggregation
+        # neutral-fills every slot of ``live`` before reducing), so a narrow
+        # ``logical_and`` over the mask replaces the wide fill for bit-identical values.
+        xv = _gather_prepared(values, hit_conn_attrs.flat_index)
+        live = evoxc.logical_and(hit_conn_attrs.present, evoxc.equal(xv, xv))
         messages = self.conn_gene.forward(state, hit_conn_attrs.conn, xv)
         z = self.node_gene.forward(
             state,
