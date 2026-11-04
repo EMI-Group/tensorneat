@@ -27,6 +27,13 @@ column (``scatter`` is set-only, so a refused edge writes the dump instead of cl
 node).  The frontier only ever gains bits and the node count bounds it, so the set stabilises
 within ``max_nodes + 1`` hops: the "still growing" flag alone terminates the loop, with no
 iteration counter to carry (and no hop cap to fall back on).
+
+IREE constraint (release gate): the frontier is seeded with a one-hot ``equal`` over the flat
+``(P, width)`` index, **never** with a boolean ``scatter``.  A ``scatter`` whose result is the
+``while_loop`` init makes ``iree-compile`` (IREE 3.11, llvm-cpu) SIGSEGV on the generation
+graph — the same scatter inside the loop body is fine, so only the always-taken seed form is
+restricted.  Verify with ``pytest test/backends``; the one-hot seed is the same values and
+costs 4 ops.
 """
 
 import numpy as np
@@ -289,15 +296,17 @@ def closes_cycle(
     src_flat = evoxc.select(
         enp.reshape(edge_valid, (edge_positions,)), src_flat, dump_flat
     )
-    # Seed the frontier at the destination: one indexed write per individual into a
-    # cleared flat frontier, so the seed pays for the one cell it sets rather than for a
-    # ``(P, N)`` row comparison plus a pad.  Every individual writes its own cell, so the
-    # write order inside the ``scatter`` is unobservable, and a miss writes ``False``.
-    frontier = evoxc.scatter(
-        fill((pop_size * width,), False, dtype=evoxc.bool_),
-        enp.reshape(evoxc.add(dst_row, offsets), (pop_size,)),
-        enp.reshape(dst_hit, (pop_size,)),
-        axis=0,
+    # Seed the frontier at the destination as a one-hot row over the flat ``(P, width)``
+    # frontier.  ``width`` carries the dump column, and ``dst_row`` lies in
+    # ``[0, node_count)``, so that column starts ``False``.  The seed is **not** a
+    # ``scatter``: a boolean scatter whose result is the ``while_loop`` init makes
+    # ``iree-compile`` (IREE 3.11, llvm-cpu) SIGSEGV on the generation graph, while this
+    # ``equal``/``logical_and`` pair (4 ops, same values) compiles — see the module note.
+    frontier = enp.reshape(
+        evoxc.logical_and(
+            evoxc.equal(enp.arange(0, width, dtype=evoxc.int32), dst_row), dst_hit
+        ),
+        (pop_size * width,),
     )
     def cond(carried):
         """Continue while the frontier gained a node."""
