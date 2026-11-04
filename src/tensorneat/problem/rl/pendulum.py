@@ -44,8 +44,6 @@ class _PendulumConstants(NamedTuple):
         max_torque: Bound of the ``tanh``-squashed action.
         pi: Half turn in radians, the centre of the angle-normalisation window.
         two_pi: One full turn in radians, the modulus of that window.
-        neg_pi: ``-pi``, the offset that moves the normalised angle back into
-            ``[-pi, pi)``.
         speed_penalty: Weight of the angular-velocity cost (``0.1``).
         torque_penalty: Weight of the control cost (``0.001``).
         one: The float32 ``1`` (the upper bound of the reset draw).
@@ -62,7 +60,6 @@ class _PendulumConstants(NamedTuple):
     max_torque: Any
     pi: Any
     two_pi: Any
-    neg_pi: Any
     speed_penalty: Any
     torque_penalty: Any
     one: Any
@@ -223,7 +220,8 @@ class Pendulum(BaseProblem):
                new_theta = theta + new_thdot * dt
                total     = total - cost
 
-           with ``angle_normalize(x) = remainder(x + pi, 2 * pi) - pi``.
+           with ``angle_normalize(x) = x - 2*pi*floor((x + pi) / (2*pi))``,
+           the backend-portable spelling of Gym's ``((x + pi) % (2*pi)) - pi``.
         5. Fitness = mean over the ``repeat_times`` axis of the episode return
            (a value in ``[-max_step * max_cost, 0]`` per episode), then
            ``finalize_fitness``.
@@ -497,7 +495,6 @@ class Pendulum(BaseProblem):
             max_torque=enp.full((), self.max_torque),
             pi=enp.full((), float(np.pi)),
             two_pi=enp.full((), float(2.0 * np.pi)),
-            neg_pi=enp.full((), float(-np.pi)),
             speed_penalty=enp.full((), 0.1),
             torque_penalty=enp.full((), 0.001),
             one=enp.full((), 1.0),
@@ -554,12 +551,19 @@ class Pendulum(BaseProblem):
     def _angle_normalize(self, x: Any, consts: _PendulumConstants) -> Any:
         """Wrap an angle in radians into ``[-pi, pi)``.
 
-        This is exactly Gym's ``((x + pi) % (2 * pi)) - pi``.
-        ``evoxc.remainder`` is the floor-modulo of the numpy ``remainder``
-        contract (the result carries the sign of the *divisor*, verified
-        empirically on the numpy backend), which is what makes the wrapping
-        agree with Gym rather than with ``fmod``; ``enp`` has no ``remainder``,
-        so the top-level op is the escape hatch.
+        This is Gym's ``((x + pi) % (2 * pi)) - pi`` written as the floor-mod
+        ``x - two_pi * floor((x + pi) / two_pi)``: subtracting ``pi`` after a
+        non-negative remainder is the same as subtracting the whole turn from
+        ``x`` itself. It costs two traced ops more than a ``remainder`` spelling
+        (five against three), which buys the portability described below.
+
+        ``evoxc.remainder`` is **not** a portable way to spell this: the numpy
+        backend implements floor-mod, while ``stablehlo.remainder`` (and hence
+        ``iree``) is ``fmod``, i.e. it carries the sign of the dividend, so a
+        negative angle wrapped to ``-3pi`` instead of ``-pi`` and the cost
+        ballooned. ``evoxc.floor`` is an exact IEEE op on every backend, so the
+        floor form is the portable one; ``enp`` has no ``floor``/``remainder``,
+        which is why the top-level ops are the escape hatch.
 
         Args:
             x: Angles in radians, any shape.
@@ -568,4 +572,5 @@ class Pendulum(BaseProblem):
         Returns:
             The same-shape angle in ``[-pi, pi)``.
         """
-        return evoxc.remainder(x + consts.pi, consts.two_pi) + consts.neg_pi
+        turns = evoxc.floor((x + consts.pi) / consts.two_pi)
+        return x - consts.two_pi * turns
