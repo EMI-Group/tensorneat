@@ -22,7 +22,6 @@ import math
 from typing import TYPE_CHECKING
 
 import evoxc
-import evoxc.numpy as enp
 
 from ....common import I_INF, ConfigError, State
 from ...utils import valid_count
