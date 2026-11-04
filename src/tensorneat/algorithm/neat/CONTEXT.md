@@ -82,6 +82,26 @@ Both scans close over their graph-time constants (`I_INF`, `0`, `0.0`, `iota_i32
 Speciation post-pass: leftovers adopt the last species key, slots created this generation get `best_fitness = -inf` / `last_improved = generation`, and `member_count` is one masked compare-sum over `(S, P)`.
 Body sizes: scan-1 body 55 traced ops, scan-2 body 221 traced ops with a 7-value `while` carry.
 
+## Search Quality (XOR3d / XOR, measured)
+Config: `DefaultGenome(num_inputs=3 (XOR3d) / 2 (XOR), num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, `XOR3d()` / `XOR()`, `backend="numpy"`, `fitness_target=-1e-9`, 150 generations, `Pipeline.setup` + a manual `step` loop.
+Parent pairing must hand each elite slot a **different** top member, not `genome_elitism` copies of the champion: with the champ cloned into both elite slots the population never split into compatibility basins at small pops (1 live species every generation) and the search sat at the `-0.25` constant-0.5 plateau of a sigmoid read-out for a non-linearly-separable task.
+Measured with the elementwise pin (this tree) against the clone-the-champion pin (same tree, kernel patched in a host harness), 3 seeds, 150 generations:
+
+| case | live species (before → after) | final best (before → after) | first gen ≥ target (after) |
+| --- | --- | --- | --- |
+| XOR3d P=100 seed 42 | 1 → 2 at gen 4, peak 5 | −0.250000 → −0.250000 (still −0.250000 at 500 gens) | never |
+| XOR3d P=100 seed 43 | 1 → 2 at gen 12, peak 12 | −0.250000 → −0.244246 (−0.141682 at 500 gens) | never |
+| XOR3d P=100 seed 44 | 1 → 1 | −0.250000 → **−0.183160** | never |
+| XOR3d P=500 seed 42 | 1 → 2 at gen 150, peak 19 | −0.250000 → **−0.000009** | gen 50 (−0.047614) |
+| XOR P=100 seed 42 | 1 → 2 at gen 5, peak 4 | plateau → **−0.000027** | gen 89 (−0.077552) |
+| XOR P=500 seed 42 | 1 → 12 at gen 150, peak 20 | plateau → **−0.000016** | gen 35 (−0.112053) |
+
+`benchmarks/legacy_jax` on the same config splits into 2 species at gen 3, 4 at gens 12–25 and 7 by gen 17, so the post-fix species counts sit in the legacy range and the pre-fix single basin did not.
+The `-0.25` value is the exact optimum of "predict 0.5 everywhere" (mse 0.25) and the plateau is not distance-gated: the population's max pairwise compatibility distance already reaches 2.4–2.5 with median 0.44–0.9, overlapping the legacy distribution (legacy gen-15 100×100 matrix: median 1.57, max 2.79), so no threshold change can open a basin the population is already outside of.
+P=100 XOR3d seed 42 remains at exactly −0.250000 for 500 generations while 99/100 genomes carry 1–3 hidden nodes (mean 1.77 at gen 15) and mean real connections fall to ~2 — the escape needs the genome's structural-mutation chain (below), not more species.
+Known residual, genome-owned: `DefaultMutation` applies at most one structural op per genome per generation (first-hit-wins), where the legacy chain could apply several independent ones; with a single survivor prefix (`survival_threshold=0.01` floors `survive_size` to 1 until a species passes 100 members) the champion's lineage is the only variation source in small species.
+Raising the survivor floor to `min(2, member_count)` on top of the elementwise pin was measured and rejected: it does not move P=100 XOR3d (seeds 42/43/44 all still exactly −0.250000) and it departs from the legacy `max(1, floor(thr · members))` formula, so the floor stays as it is.
+
 ## Distance Rows (one digest per generation; one population-shaped call per centre)
 Both phases need one `(P,)` compatibility row per species slot, and the same population is measured `2 · species_size` times, so `NEAT.tell` digests it once: `genome.prepare_distance(state, pop)` sorts each gene family of the population into a `DistanceDigest` (batch `P` on every population-indexed leaf) and `DistanceRows` turns centres into rows against it without re-sorting the population.
 Call shape: the `distance_fn` contract is population-shaped — `(state, centre, pop) -> (P,)` with **both** payloads batched `P` — so `DistanceRows.row` tiles its one centre row to `P` rows with `repeat_leading` and makes exactly one `genome.measure_distance` call.
