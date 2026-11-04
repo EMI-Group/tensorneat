@@ -76,7 +76,6 @@ Files stay under ~1000 lines; one test module per source module, named `test_<mo
 
 ## Constraints
 `release_gate_no_jax.py` does not match pytest's default `python_files` patterns, so `conftest.py::pytest_collect_file` explicitly collects that one filename; do not rename it without editing the hook.
-Notebooks (`*.ipynb`) at this level are legacy JAX-era artifacts kept for reference; pytest never collects them, so `testpaths` needs no exclusion.
 A test may not edit `../src`, `../benchmarks` or `pyproject.toml`: cross-node needs go into the report to the parent.
 Suite output must be deterministic — a flaky test is a bug in the test, not a `pytest.retries` candidate (the plugin is not installed).
 

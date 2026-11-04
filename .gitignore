@@ -118,9 +118,8 @@ cython_debug/
 
 tutorials/.ipynb_checkpoints/*
 docs/_build/*
-examples/func_fit/evolving_state.pkl
+examples/interpret_visualize/network.svg
 
-src/evox/*
 .ai/
 .cursor/
 experiment/
