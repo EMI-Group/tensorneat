@@ -106,6 +106,8 @@ The recurrent executor (`RecurrentGenome`) ignores `max_depth` — it ticks a fi
 ## Constraints
 No `jax` / `torch` / `numpy.random` on the compute path; `numpy` is used only in `__init__`/`_static_bounds` validation, for `np.ascontiguousarray` before `evoxc.from_numpy`, and in host-only `repr`/`to_dict`.
 No (un)vectorization of any kind: no `vmap`, no `fori_loop`, no `switch`; this node contains no `cond`/`while_loop`/`scan` of its own and every kernel is region-free and batch-first.
+Axes in graph ops are written as non-negative static integers: `forward` concatenates the bias column with `axis=1`, `_conn_keys` with `axis=2` and `_attr_columns` stacks with `axis=2`, never `-1`, because the StableHLO exporter forwards a `concatenate` axis verbatim as `stablehlo.concatenate`'s `dimension`, which StableHLO requires to be non-negative — a `-1` axis makes `iree-compile` reject the whole generation graph.
+Do not reintroduce a negative axis in any other graph op either (`gather`/`scatter`/`slice`/`broadcast`/reduction `axis=`): `evoxc.stack` normalises a negative axis internally, every other op does not, so the rule is uniform here.
 No `.at[...]` updates, no `tile` on batched data (evoxc's `tile` has no batching rule), no `repeat`, no `max/sum(where=…)`, no `any`/`all`: mask with `evoxc.select`, reduce afterwards.
 `evoxc` `getitem` is static-only and rejects `Ellipsis`, so column selection goes through the genes' `column_of` (which wraps `genome.gene.base.column`'s explicit `(slice(None),) * (ndim - 1) + (index,)` key) rather than a literal last-axis index.
 Python `if`/`for` over constructor configuration is legal and unrolls at trace time; branching on traced values is a `TraceError`.
