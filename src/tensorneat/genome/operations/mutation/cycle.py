@@ -32,8 +32,8 @@ IREE constraint (release gate): the frontier is seeded with a one-hot ``equal`` 
 ``(P, width)`` index, **never** with a boolean ``scatter``.  A ``scatter`` whose result is the
 ``while_loop`` init makes ``iree-compile`` (IREE 3.11, llvm-cpu) SIGSEGV on the generation
 graph — the same scatter inside the loop body is fine, so only the always-taken seed form is
-restricted.  Verify with ``pytest test/backends``; the one-hot seed is the same values and
-costs 4 ops.
+restricted.  Verify with ``pytest test/backends`` (the ``evoxc[iree]`` extra); the one-hot seed
+is the same values and 2 traced ops cheaper than the boolean ``scatter`` it replaced.
 """
 
 import numpy as np
