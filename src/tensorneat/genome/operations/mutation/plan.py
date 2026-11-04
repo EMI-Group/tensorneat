@@ -8,12 +8,12 @@ replaces the four helpers' sequential full-array rewrites (each of which had to 
 whole array with ``select``) by one write per slot, with the slot-0 clear and the
 node-deletion detach sharing a single clearing pass over the connection arrays.
 
-A node slot is written by comparing the array's row-index constant against the slot's row
-(the pattern of :func:`~.arrays.write_rows`): a row index equal to the array's own row count
-matches nothing, which is the "no write" case, so no dump row and no flat index block is
-needed.  A connection slot goes through one flat ``scatter`` instead, because a ``select``
-pays whole-array traffic.  Both shapes keep the stage's cost proportional to the number of
-*distinct* accesses and to the cells actually written.
+A node slot is written by comparing the array's row-index constant against the slot's row:
+a row index equal to the array's own row count matches nothing, which is the "no write" case,
+so no dump row and no flat index block is needed.  A connection slot goes through one flat
+``scatter`` instead, because a ``select`` pays whole-array traffic.  Both shapes keep the
+stage's cost proportional to the number of *distinct* accesses and to the cells actually
+written.
 """
 
 from typing import NamedTuple

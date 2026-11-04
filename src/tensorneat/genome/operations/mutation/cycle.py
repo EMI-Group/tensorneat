@@ -1,11 +1,10 @@
 """Cycle detection for one candidate edge per individual, in a single loop region.
 
 The predicate answers "would adding ``src -> dst`` close a cycle?", i.e. "is ``src`` already
-reachable from ``dst``?".  It replaces the unrolled ``max_nodes - 1`` hop relaxation of
-:func:`tensorneat.genome.utils.check_cycles` with **one** ``evoxc.while_loop``: the reference
-interpreter pays per traced op, so 49 hand-unrolled hops (≈360 traced ops, each executed) cost
-far more than a 7-op loop body that runs once per *real* hop of the shallow DAGs a NEAT run
-produces.
+reachable from ``dst``?".  It is **one** ``evoxc.while_loop`` monotone frontier relaxation,
+not an unrolled ``max_nodes - 1`` hop relaxation: the reference interpreter pays per traced
+op, so 49 hand-unrolled hops (≈360 traced ops, each executed) cost far more than a 7-op loop
+body that runs once per *real* hop of the shallow DAGs a NEAT run produces.
 
 Key resolution is a **merge join**, not a broadcast match.
 Node keys are arbitrary ``int32`` values — the mutation operator allocates them as

@@ -4,8 +4,9 @@ All four structural operations are batch-wide kernels: each gate is an elementwi
 the population axis, and an individual whose gate is off — or whose candidate is invalid —
 comes out unchanged.  Capacity invariants are hard: ``max_nodes``, ``max_conns`` and the
 genome's ``max_in_degree`` are never exceeded, a refused add is a no-op for that individual
-(never a silent repair), and new rows go to ``first_free_row`` in the same layout for keys
-and attributes.
+(never a silent repair), and new rows go to the first free row of each array —
+``arrays.first_row`` over the stage's ``context.free_node`` / ``context.free_conn`` masks —
+in the same layout for keys and attributes.
 
 Because the four operations are mutually exclusive, this module **plans** them instead of
 applying them one after another: each helper resolves one operation's candidate rows and
@@ -164,12 +165,13 @@ class DefaultMutation(BaseMutation):
     ) -> AddNodePlan:
         """Resolve one node split per individual, preserving the network's output.
 
-        The chosen connection is consumed, the new node goes to ``first_free_row`` of the node
-        table with the node gene's identity attributes, and two connections are created: an
-        identity one from the old source (``conn_gene.new_identity_attrs``) and a copy of the
-        consumed one into the old destination (with the recorded original attributes).  The
-        two connection rows are the *first* and *second* free rows once the consumed row
-        counts as free, which is exactly what the sequential formulation produced.
+        The chosen connection is consumed, the new node goes to the first free node row
+        (``first_row(context.free_node)``) with the node gene's identity attributes, and two
+        connections are created: an identity one from the old source
+        (``conn_gene.new_identity_attrs``) and a copy of the consumed one into the old
+        destination (with the recorded original attributes).  The two connection rows are the
+        *first* and *second* free rows once the consumed row counts as free, which is exactly
+        what the sequential formulation produced.
 
         No candidate when ``gate`` is false, when there is no connection to consume, when the
         node table is full, or when fewer than two connection rows are free.

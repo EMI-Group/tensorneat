@@ -1,12 +1,12 @@
 """In-graph row plumbing for the structural mutation plan.
 
 Why this module exists (and why it does not just call :mod:`tensorneat.common.tools`):
-the structural stage writes whole rows of the four payload arrays and reads a handful of
-attribute rows, and the general-purpose helpers there rebuild a flat index block *and* pay
-a range-escape check on every call.  The plan computes every row it touches itself, so each
-index is in range by construction, and one index block is shared by every read/write of the
-same array — which is what keeps this stage's traced-op count proportional to the number of
-*distinct* accesses rather than to the number of helper calls.
+the structural stage reads a handful of rows and blocks of the four payload arrays, and the
+general-purpose helpers there rebuild a flat index block *and* pay a range-escape check on
+every call.  The plan computes every row it touches itself, so each index is in range by
+construction, and one index block is shared by every access to the same array — which is
+what keeps this stage's traced-op count proportional to the number of *distinct* accesses
+rather than to the number of helper calls.
 
 Everything here is called inside an active trace, takes batch-first tensors and returns
 batch-first tensors of static shape; nothing branches on a traced value.
@@ -30,7 +30,6 @@ __all__ = [
     "take_block_at",
     "take_rows",
     "uniform_bounds",
-    "write_rows",
 ]
 
 
@@ -291,37 +290,3 @@ def take_block_at(
     return evoxc.gather(
         x_flat, evoxc.add(base, evoxc.multiply(rows_column, width)), axis=0
     )
-
-
-def write_rows(
-    x: evoxc.SymbolicTensor,
-    row_index: evoxc.SymbolicTensor,
-    rows: evoxc.SymbolicTensor,
-    values: evoxc.SymbolicTensor,
-) -> evoxc.SymbolicTensor:
-    """Overwrite one row per individual with a ``select`` on a row-index comparison.
-
-    A row index equal to ``x``'s own row count matches no row, which is exactly
-    the "no write" slot the plan uses; no dump row, no flattening and no
-    out-of-range index is needed, and an individual whose plan writes nothing
-    keeps its row bit-for-bit (``-0.0`` and ``NaN`` included).
-
-    Args:
-        x: ``(P, R)`` or ``(P, R, W)`` payload to write into.
-        row_index: ``(1, R)`` (rank 2) or ``(1, R, 1)`` (rank 3) ``int32`` constant
-            ``[0, 1, ..., R-1]`` — the rank sets the rank of the written values.
-        rows: ``(P,) int32`` destination rows, ``R`` meaning "no write".
-        values: Written value, broadcastable to ``x``'s shape (``(P, 1)`` for a rank-2
-            payload, ``(P, 1, W)`` for a rank-3 one, or a rank-0 constant).
-
-    Returns:
-        ``x`` with ``rows`` overwritten, same shape and dtype.
-
-    Raises:
-        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
-    """
-    mask = evoxc.equal(
-        row_index,
-        enp.reshape(rows, (rows.shape[0],) + (1,) * (len(x.shape) - 1)),
-    )
-    return evoxc.select(mask, values, x)
