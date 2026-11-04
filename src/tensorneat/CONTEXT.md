@@ -80,14 +80,15 @@ numpy reference backend, one config per fresh process, build excluded, one warmu
 The box drifts ±30 % between sessions, so the ratio against the frozen legacy baseline is the load-bearing number, never the absolute milliseconds.
 Remaining hot spots at `pop ≥ 500`: `speciate` dominates `tell` (2 phases × 20 species slots × P distance measurements = 4 000 / 20 000 / 40 000 pairs per generation, ~7.5 µs/pair at pop 100 to ~13 µs/pair at pop 1000 after the digest API), `breed` is second (~30 / ~76 / ~148 ms in the phase-sum protocol) and `evaluate` (`transform` + `forward` on the tiled `4P` batch) is last.
 The pair count is irreducible under NEAT's assignment semantics, and the reference interpreter pays per traced op and per element while the legacy baseline was the same work fused by XLA — so parity at large `P` is not reachable on `backend="numpy"`.
-The compiled route is blocked inside `evoxc`: `scan` desugars to `while` + gather/scatter and a matrix-valued scan carry needs a rank-3 scatter the v1 StableHLO exporter rejects, `iree`'s llvm-cpu compiler SIGSEGVs non-deterministically on a `while` with ≥3 carried values plus a `select`, compile costs ~3–7 s per few-thousand-op graph, and there is no committed llvm-cpu measurement above ~8 k ops.
-The shipped backend is therefore the reference interpreter, and a compiled backend must be re-evaluated when `evoxc` lifts those limits — no compiled win is claimed.
+`backend="iree"` runs every shipped case end to end since the graph formulations were made v1-exportable, but on llvm-cpu it is 5–24× slower per generation than the interpreter and costs 8–11 s of `iree-compile` per static shape; `benchmarks/BACKENDS.md` holds the measured table, the protocol and the per-gate fix record.
+`backend="xla"` needs a user-supplied PJRT plugin `.so` (`EVOXC_PJRT_PLUGIN`); `backend="tvm"` is untested.
+No compiled backend beats the numpy interpreter on this box, so the reference interpreter stays the default.
 Current per-generation op counts: `forward` 112 traced ops (749 before the level loop was reformulated), `execute_mutation` 1360 (3114), `measure_distance` 7.5 µs/pair (25–48 µs before the digest API).
 
 ## Known Issues / Notes for Agents
 `test/integration/` drives `Pipeline` end-to-end on the numpy backend (`setup`/`step`/`auto_run`, the batch-first best-genome payload, determinism per seed, one build per shape signature, checkpoint round-trip); `test/unit/` covers the kernels and `test/parity/` the legacy comparison, the latter needing the `bench` extra so its jax-dependent cases skip without it.
-`benchmarks/RESULTS.md` still carries the old-side baseline only (`jax 0.12`, `evoxc n/a`); its owner must re-render it from a harness run that includes the new-side rows above.
-`benchmarks/run_benchmark.py --impl new --backend numpy --cases xor_p100` drives this `step` contract unchanged (it reads fitness from the last element of the step result) and reports `INCOMPLETE` until an old-side row is measured on the same box.
+`benchmarks/RESULTS.md` records the CPU speed contract as `FAIL`: on `backend="numpy"` a generation is slower than the frozen JAX baseline at every measured case and population (1.5–9× there, 1.07–4.1× under the 6-step protocol above).
+`docs/source/` carries one autodoc stub per public module here, so a new module needs a matching `docs/source/tensorneat.<module>.rst` plus its toctree entry (the rule is in `docs/CONTEXT.md`).
 
 ## Constraints
 - `import tensorneat` must not import `jax`, `torch`, `brax`, `gymnax`, `mujoco` (release-gate test); optional backends are pulled in only by `evoxc.build(backend=...)`.

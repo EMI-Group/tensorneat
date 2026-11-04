@@ -330,7 +330,7 @@ The eight pipeline scripts use demo budgets (`# Demo budget:` in the source: pop
 
 ## Tutorials
 
-- `tutorials/quickstart.ipynb` — the current-API notebook: pipeline, genome, evolution, visualization, code generation on the evoxc backend.
+- `tutorials/quickstart.ipynb` — the current-API notebook, executed top to bottom: build a genome/algorithm/problem, `Pipeline.setup`/`step`/`auto_run`, the batch-first `best` payload, switching `backend=`, and inspecting the built `evoxc` executable.
 - `tutorials/legacy_jax/` — the three pre-rewrite notebooks (`tutorial-00-functional programming and state.ipynb`, `tutorial-01-genome.ipynb`, `tutorial-02-Usage.ipynb`), kept for concepts only: their code is the old `jax`/`vmap` API and does not run against this tree.
 
 ## Project layout

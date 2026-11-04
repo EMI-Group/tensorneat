@@ -19,7 +19,7 @@ Quickstart
 
    pipeline = Pipeline(
        algorithm=algorithm.NEAT(
-           pop_size=500,
+           pop_size=200,
            species_size=10,
            survival_threshold=0.01,
            genome=genome.DefaultGenome(
@@ -31,18 +31,20 @@ Quickstart
        ),
        problem=problem.XOR(),
        seed=42,
-       generation_limit=40,
+       generation_limit=200,
        # fitness is maximised: this target is "error below 1e-3"
        fitness_target=-1e-3,
    )
 
-   state = pipeline.setup()          # builds the evoxc graphs for this shape
+   state = pipeline.setup()          # host-side state only -- no graph is built yet
    state, best = pipeline.auto_run(state)
    pipeline.show(state, best)
 
-``Pipeline.setup`` creates the initial state and compiles the per-shape
-executables; ``Pipeline.auto_run`` evolves until ``fitness_target`` or
-``generation_limit`` is reached and returns the best genome.
+``Pipeline.setup`` creates the host-side state; the evoxc executable for a shape
+signature is compiled lazily by the first ``Pipeline.step`` and then reused for
+every generation of that shape.  ``Pipeline.auto_run`` evolves until
+``fitness_target`` or ``generation_limit`` is reached and returns the best genome
+as a one-individual, batch-first payload.
 
 API reference
 -------------
