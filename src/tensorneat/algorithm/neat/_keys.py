@@ -10,15 +10,18 @@ payload but never appears in the phenotype.
 ``Transformed.edge_overflow`` reports only an in-degree overflow, so an
 out-of-span key trips none of the pipeline's guards.
 
-The allocator in :func:`first_free_keys` therefore hands out the **lowest free
-key inside ``[0, key_span)``** of the individual that will receive it, which is
-in span by construction, and :func:`validate_key_space` rejects a genome whose
-table is too narrow to guarantee that a free key always exists.
+:func:`node_keys_for_split` is the allocator :class:`NEAT` uses: a **wrapped
+per-individual spread** over the free-key window ``[max_nodes, key_span)`` -- the
+only part of the table no payload row can occupy -- with
+:func:`first_free_keys` as the collision fallback.
+:func:`validate_key_space` rejects a genome whose table is too narrow to
+guarantee that a free key always exists.
 
-Both halves live here rather than in ``_kernels.py`` because that module is at
-its line budget and this is a self-contained allocation concern:
+All three live here rather than in ``_kernels.py`` because that module is at its
+line budget and this is a self-contained allocation concern:
 ``validate_key_space`` is host-side (constructor validation) while
-``first_free_keys`` is a plain graph helper that runs inside the active trace.
+``first_free_keys`` and ``node_keys_for_split`` are plain graph helpers that run
+inside the active trace.
 """
 
 from __future__ import annotations
@@ -28,11 +31,14 @@ from typing import Any
 
 import evoxc
 import evoxc.numpy as enp
+import numpy as np
 
 from tensorneat.common.errors import TensorNEATError
 from tensorneat.common.tools import batch_offsets
 
-__all__ = ["first_free_keys", "validate_key_space"]
+from ._kernels import static_i32
+
+__all__ = ["first_free_keys", "node_keys_for_split", "validate_key_space"]
 
 
 def validate_key_space(genome: Any) -> None:
@@ -83,7 +89,9 @@ def first_free_keys(node_keys: Any, key_span: int) -> Any:
 
     Runs inside the active trace.  One occupancy table per individual is built
     as "every key free except the ones this row holds", and the allocated key is
-    the first cell still free.
+    the first cell still free.  This is the **fallback primitive** of
+    :func:`node_keys_for_split`: it is free by construction, so it is only ever
+    consulted for the rows whose spread candidate the payload already holds.
 
     Args:
         node_keys: ``(P, max_nodes) int32`` node keys, ``I_INF`` padded.  Only
@@ -191,3 +199,127 @@ def first_free_keys(node_keys: Any, key_span: int) -> Any:
 
     lowest = evoxc.argmin(evoxc.reshape(written, (pop_size, width)), axis=1)
     return evoxc.cast(lowest, evoxc.int32)
+
+
+def node_keys_for_split(
+    node_keys: Any, key_span: int, max_nodes: int, base: Any
+) -> Any:
+    """Wrapped per-individual spread node key, with a lowest-free fallback.
+
+    Runs inside the active trace.  Per individual ``p`` the candidate is
+
+    ``max_nodes + (base[p] + (1 + p)) mod (key_span - max_nodes)``
+
+    i.e. the pre-rewrite ``max_node_key + 1 + slot`` formula wrapped into the
+    *free-key window* ``[max_nodes, key_span)`` -- the part of the dense key
+    table that no payload row can occupy, since a row holds at most
+    ``max_nodes`` keys.  The spread keeps the character of the unbounded
+    formula: a per-individual monotone base plus the population-slot offset, so
+    different individuals (and different generations) receive different keys
+    instead of all landing on the lowest free one.  That matters for search
+    quality, not for correctness: the compatibility distance aligns node genes
+    *by key* and charges non-homologous keys to the disjoint term, so a compact
+    lowest-free policy inflates node homology across the population and
+    collapses speciation (measured on XOR3d, pop 500: final best ``-0.25`` with
+    a peak of 3 species, against ``-8.74e-06`` with a peak of 19-20 species for
+    the spread).
+
+    The window is only ``key_span - max_nodes`` keys wide -- ``max_conns`` at
+    the default span -- so with ``pop_size`` above that width the wrapped
+    candidates collide with keys the individual already holds.  The candidate is
+    therefore tested exactly like the genome's ``plan_add_node`` alias guard
+    (``reduce_max(equal(node_keys, candidate))``), and the rows that hold it
+    fall back to :func:`first_free_keys`, which is free by construction.  An
+    allocation is thus never a key the payload already owns and never outside
+    ``[0, key_span)``.
+
+    Args:
+        node_keys: ``(P, max_nodes) int32`` node keys of the payload that will
+            receive the key (the crossover child), ``I_INF`` padded.
+        key_span (int): Static width ``S`` of the schedule's dense key table.
+        max_nodes (int): Static node-row count, i.e. the number of keys an
+            individual can hold, hence the start of the free-key window.
+        base (Any): ``(P,) int32`` per-individual spread base, normally
+            ``genome.max_node_key(state, node_keys)``.  Taken as an argument so
+            this module stays a plain graph helper with no ``State``/genome
+            wiring; ``NEAT._new_gene_keys`` supplies it.
+
+    Returns:
+        ``(P,) int32``: for every row, ``max_nodes + (base + 1 + p) mod
+        (key_span - max_nodes)`` when that key is free for the row, else the
+        row's lowest free key in ``[0, key_span)``.
+
+    Raises:
+        TensorNEATError: If ``node_keys`` is not 2-D ``(P, max_nodes)``,
+            ``base`` is not ``(P,)``, ``key_span`` is not positive, or
+            ``key_span <= max_nodes`` (no free-key window) -- all static wiring
+            errors.
+
+    Note:
+        **No overflow concern.**  ``base`` is the individual's largest present
+        key and every key ``genome.initialize`` or this allocator writes is below
+        ``key_span``, so ``base + 1 + p < key_span + pop_size``; the sum stays far
+        inside the int32 range even at ``pop_size`` in the tens of thousands, and
+        ``remainder`` then lands it in ``[0, key_span - max_nodes)``.  A negative
+        ``base`` would break that (``remainder`` keeps the dividend's sign), but
+        no legal payload carries one: keys start at ``0`` and nothing here emits
+        a negative key.
+
+        **Cross-individual sharing.**  The window is ``key_span - max_nodes``
+        keys wide, so with ``pop_size`` above it two individuals can be handed
+        the same key; that is the pre-rewrite behaviour and the intended meaning
+        of "both invented the same structural node" -- the distance reads the
+        shared key as a homologue.
+
+        **Op cost.**  Thirteen traced ops plus the fallback's twenty-two: four
+        ``constant`` (the ``(1 + p) mod W`` offset vector, ``W``, ``max_nodes``
+        and ``0``), ``add``, ``remainder``, ``add``, ``reshape`` (the candidate
+        as a column), ``equal``, ``cast``, ``reduce_max``, ``not_equal`` and
+        ``select``.  The fallback runs unconditionally rather than behind a
+        ``cond``: its result is discarded on every collision-free row, and an
+        ``if`` region costs more than those rows save.
+    """
+    shape = tuple(int(size) for size in node_keys.shape)
+    if len(shape) != 2:
+        raise TensorNEATError(
+            "node_keys_for_split needs a 2-D node_keys of shape (pop_size, "
+            f"max_nodes), got shape {shape}"
+        )
+    span = operator.index(key_span)
+    nodes = operator.index(max_nodes)
+    window = span - nodes
+    if window <= 0:
+        raise TensorNEATError(
+            "node_keys_for_split needs a non-empty free-key window: "
+            f"key_span={span}, max_nodes={nodes}; see validate_key_space"
+        )
+    pop_size = shape[0]
+    base_shape = tuple(int(size) for size in base.shape)
+    if base_shape != (pop_size,):
+        raise TensorNEATError(
+            f"node_keys_for_split needs base of shape ({pop_size},), got "
+            f"{base_shape}"
+        )
+    if node_keys.dtype != evoxc.int32:
+        node_keys = evoxc.cast(node_keys, evoxc.int32)
+    if base.dtype != evoxc.int32:
+        base = evoxc.cast(base, evoxc.int32)
+
+    # ``(1 + p) mod W`` is static, so it is baked as one constant op; adding it
+    # to the base is the same value as ``(base + 1 + p) mod W``.
+    offsets = static_i32((np.arange(pop_size, dtype=np.int64) + 1) % window)
+    wrapped = evoxc.remainder(
+        evoxc.add(base, offsets), enp.full((), window, dtype=evoxc.int32)
+    )
+    candidate = evoxc.add(wrapped, enp.full((), nodes, dtype=evoxc.int32))
+
+    column = evoxc.reshape(candidate, (pop_size, 1))
+    held = evoxc.reduce_max(
+        evoxc.cast(evoxc.equal(node_keys, column), evoxc.int32), axes=1
+    )
+    fallback = first_free_keys(node_keys, span)
+    return evoxc.select(
+        evoxc.not_equal(held, enp.full((), 0, dtype=evoxc.int32)),
+        fallback,
+        candidate,
+    )

@@ -49,7 +49,7 @@ from ...genome.utils import GenomeTensors
 from ..base import BaseAlgorithm
 from .species import SpeciesController, SpeciesState
 from ._distance import DistanceRows
-from ._keys import first_free_keys, validate_key_space
+from ._keys import node_keys_for_split, validate_key_space
 from ._validation import positive_int
 
 
@@ -662,11 +662,11 @@ class NEAT(BaseAlgorithm):
         population in one kernel, so every individual needs keys that do not
         collide with *its own* existing rows:
 
-        * ``new_node_keys = first_free_keys(node_keys, key_span)`` -- the lowest
-          key in ``[0, genome.key_span)`` that the individual does not hold
-          (:func:`._keys.first_free_keys`); with ``arange(P)`` inserted in the
-          ``"add_node"`` path, each genome adds at most one node per mutation
-          call;
+        * ``new_node_keys = node_keys_for_split(node_keys, key_span, max_nodes,
+          max_node_key(node_keys))`` -- the wrapped spread ``max_nodes +
+          (max_node_key + 1 + slot) mod (key_span - max_nodes)`` with the
+          lowest-free key as collision fallback (:func:`._keys.node_keys_for_split`);
+          the ``"add_node"`` path adds at most one node per mutation call;
         * ``new_conn_markers`` is ``(P, 3)`` int32:
           ``reshape(max_conn_marker(state, conn_keys), (P, 1))
           + (1 + arange(P * 3)).reshape(P, 3)`` when the connection gene carries
@@ -686,24 +686,29 @@ class NEAT(BaseAlgorithm):
         Note:
             **Bounded allocation from the child.**  The schedule addresses node
             keys through a dense table of width ``genome.key_span`` and silently
-            drops a key outside ``[0, key_span)``, so the allocator hands out the
-            lowest *free* key in that range instead of ``max_key + 1`` (which
-            outruns the table after a handful of generations); ``NEAT.__init__``
-            enforces ``key_span > max_nodes`` statically, which is what
-            guarantees a free key always exists.  The key is chosen from
-            ``crossed.node_keys`` -- the payload that actually receives it --
-            not from the pre-crossover parents: a base derived from the parents
-            can already be owned by the child, and the genome's ``plan_add_node``
-            alias guard would then silently refuse the split (a skipped
-            structural mutation).  Against the child's own key set the
-            allocation is provably free where it lands; the genome-side alias
-            guard stays untouched and simply stops firing for legal payloads.
+            drops a key outside ``[0, key_span)``, so the allocator wraps the
+            ``max_node_key + 1 + slot`` spread into the free-key window
+            ``[max_nodes, key_span)`` instead of letting it outrun the table;
+            ``NEAT.__init__`` enforces ``key_span > max_nodes`` statically, which
+            guarantees the window -- and hence a free key -- always exists.  The
+            spread matters for search quality (the distance aligns node genes by
+            key, so a compact lowest-free policy inflates node homology and
+            collapses speciation; see :func:`._keys.node_keys_for_split`).  The
+            key is chosen from ``crossed.node_keys`` -- the payload that
+            actually receives it -- not from the pre-crossover parents: a base
+            derived from the parents can already be owned by the child, and the
+            genome's ``plan_add_node`` alias guard would then silently refuse the
+            split (a skipped structural mutation).  The allocation is free where
+            it lands, so the genome-side alias guard stops firing for legal payloads.
 
             **Rank contract.**  Uniqueness is guaranteed *within* an
             individual's own gene keys only: keys are namespaced per individual,
             two individuals with the same occupied set receive the same new key,
             and the compatibility distance reads that shared key as a homologue
             -- the intended meaning of "both invented the same structural node".
+            The free-key window is ``key_span - max_nodes`` keys wide, so with
+            ``pop_size`` above it different individuals regularly share a key;
+            that sharing is the pre-rewrite behaviour, not a defect.
 
             **Markers.**  ``max_conn_marker`` still continues from
             ``state.pop.conn_keys``: a ``historical_marker`` is a population-wide
@@ -718,7 +723,12 @@ class NEAT(BaseAlgorithm):
             are baked into the ``int32`` arange constant, so no ``int64``
             promotion can creep in.
         """
-        new_node_keys = first_free_keys(node_keys, self.genome.key_span)
+        new_node_keys = node_keys_for_split(
+            node_keys,
+            self.genome.key_span,
+            self.genome.max_nodes,
+            self.genome.max_node_key(state, node_keys),
+        )
 
         if self.genome.conn_gene.uses_historical_marker:
             conn_base = self.genome.max_conn_marker(state, state.pop.conn_keys)
