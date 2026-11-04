@@ -132,6 +132,8 @@ The dense route emits the same kinds of pass but no `(P, 2M + 1)` block, so noth
 Source-line attribution of one merge `measure` call: `measure_alignment` 15 per family (30), aligned-attribute term 5 per family, scalar tail ~11 per family, family add 1, `_pack`/`_tagged` 4 + 4, and **zero** per-call `constant` ops; `gene.distance` and its column reads (~31) belong to `../gene/`.
 Executed ops of one seed-42 XOR generation at pop 500 (`Pipeline.step` protocol, `species_size=20`), same-session A/B: whole graph **8 693 → 8 529**, this node's bucket **3 702 → 3 538** — one `prepare` executed once plus ~41 `measure` calls, so one op removed per call removes exactly 41 from the generation.
 A generation's op total is not a constant: it moves with the number of species slots the two speciation phases run (an empty slot still executes its `measure`), so only same-session A/B pairs are comparable.
+End-to-end, same-session A/B at `benchmarks/backend_measure.py --backend numpy --generations 20 --warmup 3`: `Pipeline.step` median **183.2 → 177.8 ms** at pop 500 (mean 186.4 → 179.8) and **435.6 → 410.3 ms** at pop 1000 (mean 428.8 → 420.0), i.e. −3 % and −6 %, which is what 41 calls × the per-call saving predicts (0.13 ms / 0.6 ms).
+The `measure` route is therefore the node's dominant cost *and* its owned budget: 41 calls × 2.6 ms (pop 500) is ~59 % of a 178 ms generation, against `prepare`'s one-off 2.6 ms.
 Baked constant bytes of the `prepare` + `measure(batch 1)` graph at pop 1000: 223 788 B total, largest single constant 90 008 B (a `key_span`-scaled `(width + 1,) int32` dense table); pop 100 187 788 B, pop 500 203 788 B.
 `measure` itself adds four rank-0 constants; every other byte is a table or a seed built once in `prepare`.
 
