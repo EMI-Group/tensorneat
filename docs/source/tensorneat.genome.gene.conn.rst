@@ -4,34 +4,16 @@ tensorneat.genome.gene.conn package
 Submodules
 ----------
 
-tensorneat.genome.gene.conn.base module
----------------------------------------
+.. toctree::
+   :maxdepth: 4
 
-.. automodule:: tensorneat.genome.gene.conn.base
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.genome.gene.conn.default module
-------------------------------------------
-
-.. automodule:: tensorneat.genome.gene.conn.default
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.genome.gene.conn.origin module
------------------------------------------
-
-.. automodule:: tensorneat.genome.gene.conn.origin
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.genome.gene.conn.base
+   tensorneat.genome.gene.conn.default
+   tensorneat.genome.gene.conn.origin
 
 Module contents
 ---------------
 
 .. automodule:: tensorneat.genome.gene.conn
    :members:
-   :undoc-members:
    :show-inheritance:
