@@ -73,7 +73,8 @@ NaN: `tanh(NaN)` → the `0.1*a**2` penalty is NaN → the live step's reward is
 - Files <= ~1000 lines (`cartpole.py` 714, `mountaincar.py` 688, `pendulum.py` 572, `_common.py` 142).
 
 ## Measured cost
-Rollout component only (`evaluate` traced alone, no genome forward, toy policy — `1.5*sin(theta) + 0.5*theta_dot` for Pendulum, `3*position + 2*velocity + 1` for MountainCarContinuous, `(tanh(theta) - x, 2*theta + 3*theta_dot)` for CartPole), one `evoxc.build` then 7 `evoxc.run`, build excluded, **best median of 3 fresh processes**; evoxc 0.1.0, numpy 2.5.4, iree-base-compiler 3.11 (llvm-cpu), CPython 3.12, one 20-core box.
+Rollout component only (`evaluate` traced alone, no genome forward, toy policy — `1.5*sin(theta) + 0.5*theta_dot` for Pendulum, `3*position + 2*velocity + 1` for MountainCarContinuous, `(tanh(theta) - x, 2*theta + 3*theta_dot)` for CartPole), one `evoxc.build` then 7 `evoxc.run`, build excluded, **best median of 3 fresh processes**; evoxc 0.1.0, numpy 2.5.4, iree-base-compiler 3.11 (llvm-cpu), one 20-core box — the Pendulum/MountainCar rows on CPython 3.12, the CartPole rows on CPython 3.14 (an earlier session; the same box on 3.12 reads ≈7 % lower).
+The box drifts ±30 % between processes, so the ratios are the load-bearing numbers and single-run medians can move by 2× under contention.
 `R` is `repeat_times`; the `build` column is the one-off per static shape.
 
 | env | pop | max_step | R | numpy ms | iree ms | ratio | build numpy / iree s |
