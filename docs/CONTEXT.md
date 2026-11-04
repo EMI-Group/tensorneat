@@ -1,27 +1,38 @@
 # docs
 
 ## Intent
-Sphinx (autodoc + napoleon + viewcode, theme `sphinx_rtd_theme`) site for the `tensorneat` package; it documents the source tree, it does not replace the tutorials.
-`uv run --extra docs sphinx-build -b html docs docs/_build` is the build; `docs/_build/` is gitignored output.
+Sphinx site (autodoc + napoleon + viewcode, theme `sphinx_rtd_theme`) that renders the API of the `src/tensorneat` 0.2.0 tree; it documents the code, it does not replace the `tutorials/` notebooks or the top-level `README.md`.
+Build command: `uv run --extra docs sphinx-build -b html docs docs/_build` (the `docs` extra is declared in `pyproject.toml`; `docs/requirements.txt` mirrors it for a plain `pip install -r` build).
+`docs/_build/` is gitignored (`docs/_build/*` in `.gitignore`) and is never committed.
 
 ## API Surface
-`docs/conf.py` puts `../src` on `sys.path` and keeps `autodoc_default_options = {members, show-inheritance, undoc-members: False}`; it holds no documentation content.
-`docs/index.rst` is the front page: intent, quickstart code block, and an "API reference" toctree that points at `source/modules`.
-`docs/source/modules.rst` is the API root; it is the only page `index.rst` links to and it toctrees the package root `tensorneat`.
+`docs/conf.py` holds no content: it puts `../src` (absolute, CWD-independent) on `sys.path` when that directory exists, reads `version`/`release` from `importlib.metadata.version("tensorneat")` with a `"0.2.0"` fallback, sets `autodoc_default_options = {members, show-inheritance, undoc-members: False}`, `extensions = [autodoc, napoleon, viewcode]`, `exclude_patterns = ["_build", ...]`, `html_theme = "sphinx_rtd_theme"`.
+`docs/index.rst` is the front page: intent paragraph (NEAT/HyperNEAT tensorization on `evoxc`, no JAX/PyTorch), a quickstart matching the real `Pipeline`/`algorithm.NEAT`/`problem.XOR` API, an "API reference" toctree pointing at `source/modules`, and GitHub links to `README.md`, `benchmarks/RESULTS.md`, `benchmarks/BACKENDS.md`.
+`docs/source/modules.rst` is the API root and the only page `index.rst` links to; it toctrees the package root `tensorneat`.
 
 ## Constraints
-Every page under `docs/source/` must stay reachable from `source/modules.rst` (an unreachable page warns `toc.not_included`, which `-W` turns into a failure).
-Package pages (`source/tensorneat.rst`, every `source/tensorneat.<pkg>.rst` for a package directory) are pure landing pages: one sentence of intent plus a `:maxdepth: 4` toctree over that package's subpackages and submodules; they never carry an `automodule`.
-Module pages (`source/tensorneat.<module>.rst`) carry exactly one `.. automodule::` with `:members:` and `:show-inheritance:` — that page is the single place an object is documented, because every package `__init__.py` only re-exports and a second registration makes every unqualified cross-reference ambiguous.
-When a class documents a member in its own `Attributes:` section, napoleon renders that as an `.. attribute::`, so autodoc's member entry for the same member duplicates the object; the module page excludes that name with `:exclude-members:` instead of hiding the object.
-`:exclude-members:` is the only suppression in this tree: `suppress_warnings`, `nitpicky = False` and page-level `:no-index:` are not used.
-The remaining build warnings come from docstrings in `src/` (`genome/gene/node/base.py`, `genome/operations/mutation/degree.py`) and must be fixed there, not here.
+The stub set mirrors `src/tensorneat`: one page per public module (`source/tensorneat.<module>.rst`) and one landing page per package/subpackage (`source/tensorneat.<pkg>.rst`); `_`-prefixed modules (`algorithm/neat/_kernels.py`, `_distance.py`, `_validation.py`) are private and get no page.
+When `src/tensorneat` gains or loses a public module, add or delete the matching stub and its toctree entry in the enclosing package page — `find src/tensorneat -name '*.py' | sort` versus `ls docs/source/*.rst` is the sync check.
+Module pages carry exactly one `.. automodule::` with `:members:` and `:show-inheritance:`; that page is the single place an object is documented, because every package `__init__.py` merely re-exports and a second registration makes each unqualified cross-reference ambiguous (and emits duplicate-object warnings).
+Package pages are pure landing pages: one sentence of intent plus a `:maxdepth: 4` toctree over subpackages/submodules, never an `automodule`.
+When a class documents a member in its own `Attributes:` section, napoleon already emits an `.. attribute::` for it, so the module page excludes that name via `:exclude-members:` rather than hiding the object.
+`:exclude-members:` is the only suppression used: `suppress_warnings`, `nitpicky = False` and page-level `:no-index:` are not acceptable shortcuts.
+Every page must stay reachable from `source/modules.rst`; an unreachable page warns `toc.not_included`, which `-W` turns into a failure.
 Pages stay 5–20 lines; a page that needs more is documenting more than one thing.
+
+## Known Issues
+`-W` (warnings-as-errors) still fails on 3 docutils warnings that originate in `src/` docstrings, not in `docs/`: `genome/gene/node/base.py` (`BaseNode.to_dict`, unterminated inline literal after napoleon splits the `Returns:` block) and `genome/operations/mutation/degree.py` (module docstring: "Unexpected indentation" plus "Block quote ends without a blank line").
+A plain (non-`-W`) build therefore exits 0 with exactly those 3 warnings and no others; they must be fixed in `src/`, not suppressed here.
+
+## Test Strategy
+Verification is the build itself: `rm -rf docs/_build && uv run --extra docs sphinx-build -b html docs docs/_build -w /tmp/w.log`, then assert `/tmp/w.log` contains only the 3 `src/`-owned docutils lines above.
+Spot-check the rendered API: `grep -o 'id="tensorneat.pipeline.Pipeline"' docs/_build/source/tensorneat.pipeline.html` and confirm `docs/_build/index.html` shows the quickstart without leaking literal RST markup.
+`uv sync --extra docs` must be run first; `uv` lives at `~/.local/bin/uv` and may not be on `PATH`.
 
 ## Routing Table
 | Path | Purpose |
 |---|---|
-| `./conf.py` | Sphinx configuration only (paths, extensions, autodoc defaults, theme). |
-| `./index.rst` | Front page: intent, quickstart, link into the API reference. |
-| `./source/modules.rst` | API root toctree. |
-| `./source/*.rst` | One page per module (autodoc) or per package (landing page). |
+| `./conf.py` | Sphinx configuration only (paths, version, extensions, autodoc defaults, theme). |
+| `./index.rst` | Front page: intent, quickstart, API-reference toctree, external links. |
+| `./requirements.txt` | `docs`-extra dependencies for a plain `pip install -r` build. |
+| `./source/` | Autodoc stubs mirroring the `src/tensorneat` tree: `modules.rst` root, package landing pages, one page per module. |
