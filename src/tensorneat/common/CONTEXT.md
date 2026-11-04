@@ -104,6 +104,20 @@ Rejected levers (measured; do not re-derive):
 - **A `-2**30` sentinel instead of the `select(greater(best, -1), best + 1, -1)` guard**: an unsettled predecessor would settle its child at `0`; caught by the field-by-field diff.
 - **A trusted, guard-free index block everywhere** (the escape test is what makes the backend *raise* instead of reading a neighbouring row): only offered as an opt-in `trusted=True` and only used where the index range is provably inside the table.
 
+### `node_levels` is at its op floor (re-measured; do not re-derive)
+Where the time goes at the real window: on a real feed-forward XOR population (seed 42, generation 7, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100)`, `NEAT(pop_size=500, species_size=20)`, so `(P, N, K) = (500, 50, 4)` and depth ≈ 4), `node_levels(acyclic=True)` is 2.79–3.15 ms of a 6.9–7.2 ms `derive_schedule` (the box drifts; the ratio is the result, ~40–45 %).
+Its fast path is ~16 executed ops per loop trip over `depth + 1` trips, i.e. ~35–40 µs per op at this size, so the loop is bound by *executed op count* and every lever below was measured as neutral or worse (base = 100 %, interleaved rounds of 15 `evoxc.run`, build excluded, medians of 5 alternating rounds).
+Value identity of every candidate except the two-sub-step one was checked field by field against the unmodified `node_levels` on the real feed-forward population **and** a synthetic cyclic one, with `acyclic` both `True` and `False`.
+
+- **`reduce_max` over the `K` axis instead of the pairwise fold**: 4.81 vs 3.15 ms (1.52× worse) — the K=8 / P=1000 verdict above holds at the narrower K=4 window, so the fold stays.
+- **Dropping the per-trip `(P, N)` dump-column `concatenate`** (gather from `values` with `min(in_src, N - 1)` and one precomputed `(P, N, K)` window mask instead of a `-2` dump cell): 3.26 vs 2.79 ms (1.17× worse) — one `(P, N, K)` `select` costs ~0.5 ms more than the `(P, N)` concat it replaces, so the dump cell stays.
+- **Two relaxation sub-steps per loop trip** (halves the trip count, keeps the pairwise fold): 3.67 vs 3.04 ms (1.21× worse); it also raises the fast-path level of a *cyclic* payload handed to an `acyclic=True` genome to `2N` instead of `N`, so it is not value-identical there either.
+- **Shrinking the loop state from three leaves to two** (jump `step` to `cap` inside the body instead of carrying the `changed` leaf and folding it into the condition): 1.00× — the per-trip state copy is not a term.
+- **Folding `pinned` out of the fast path's exit blank** (`blank = level < 0` instead of `~pinned & (level < 0)`): provably identical, because a pinned node is `0` in every trip of both campaigns so `level < 0` already excludes it, and it removes two `(P, N)` ops per campaign — but it measures 0.98–1.00×, under the ±2 % noise floor, so it was not landed (take it as a free cleanup only alongside a change that pays for its own re-measurement).
+- **Static unrolling, dense `(N, N)` max-plus, one-hot prefix counting, per-member `cond`**: still rejected for the reasons in the list above.
+A variant is cheapest tested without touching the file: `exec` `textwrap.dedent(inspect.getsource(tensorization.node_levels))` with one textual substitution into `dict(vars(tensorization))`, then `build_defn(variant, in_conn, in_src, input_slot, max_nodes, acyclic, (src, dst, edge_valid))` (arrays from a real `Transformed`, `edges` as the tuple) and compare against the unmodified function on the same arrays — both built in one process, one `evoxc.run` per sample, variants interleaved.
+The ceiling here is small by construction: `transform` is ~3 % of one `Pipeline.step` (183.1 ms/generation median at pop 500, XOR, seed 42, this box), so even a 2× `node_levels` would move a generation by ~1 %.
+
 Reproduction (build **once**, then time `evoxc.run` only — `run_defn` per iteration would time the build; the synthetic `tensorneat` package lets the snippet run from `src/` without installing the package):
 
 ```
