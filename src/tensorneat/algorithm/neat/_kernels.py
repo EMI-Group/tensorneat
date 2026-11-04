@@ -429,15 +429,11 @@ def pair_parents(
     father, ``>=``, matching the legacy comparison) before elite pinning, so it
     does not depend on which population slot ends up owning the pair.
 
-    Elite slot ``k`` of a block (``idx_in_block == k < genome_elitism``) then pins
-    both parents to that block's ``k``-th ranked member -- the legacy elementwise
-    pin (its ``jnp.where`` replaces the whole parent row with the whole ranking
-    row), which keeps the species' top ``genome_elitism`` **distinct** members
-    unmutated instead of cloning its single best member into every elite slot.
-    The rank is clamped at ``min(k, live_members - 1)``: a species with fewer than
-    ``k + 1`` live (finite-fitness) members repeats its last live member rather
-    than adopting a non-member (legacy's behaviour) or a sanitised ``-inf`` genome,
-    which the library's "a broken topology can never win selection" rule forbids.
+    Elite slot ``k`` of a block (``idx_in_block == k < genome_elitism``) pins both
+    parents to that block's ``k``-th ranked member (the legacy elementwise pin), so
+    the species' top ``genome_elitism`` **distinct** members survive unmutated; the
+    rank is clamped at ``live_members - 1`` so an elite never adopts a non-member or
+    a sanitised ``-inf`` genome.
     """
     members = membership(species_keys, idx2species)
     masked = evoxc.select(members, enp.expand_dims(fitness, 0), neg_inf())
@@ -470,27 +466,15 @@ def pair_parents(
     winner = evoxc.gather(winner_species, flat_slot, axis=0)
     loser = evoxc.gather(loser_species, flat_slot, axis=0)
     elite_mask = evoxc.less(idx_in_block, genome_elitism)
-    # ``rank_matrix[s, c] = min(c, live_members[s] - 1)``: column ``c`` of a block is
-    # the rank elite slot ``c`` pins.  The ranking is strictly descending in fitness
-    # and every finite fitness beats the ``-inf`` a sanitised broken genome maps to,
-    # so a species' finite members occupy the head of its row: clamping at
-    # ``live_members - 1`` keeps the pin on a live member (never the ``-inf`` tail)
-    # while still handing every elite slot a distinct top member whenever the species
-    # has that many live ones.
+    # Elite slot ``c`` pins rank ``min(c, live_members - 1)``: the ranking is descending
+    # and every finite fitness beats the ``-inf`` a sanitised genome maps to, so the
+    # finite members head the row and the clamp stays on a live member.
     alive = evoxc.cast(evoxc.greater(fitness, neg_inf()), evoxc.float32)
-    live_members = evoxc.sum(
-        evoxc.select(members, enp.expand_dims(alive, 0), const(0.0)), axes=1
-    )
-    cap = evoxc.maximum(
-        evoxc.subtract(evoxc.cast(live_members, evoxc.int32), int_const(1)), int_const(0)
-    )
-    block_rank = evoxc.minimum(
-        enp.expand_dims(enp.arange(pop_size, dtype=evoxc.int32), 0),
-        enp.expand_dims(cap, 1),
-    )
-    pinned = evoxc.gather(
-        evoxc.reshape(flat_gather(ranking, block_rank), (width,)), flat_slot, axis=0
-    )
+    live = evoxc.sum(evoxc.select(members, enp.expand_dims(alive, 0), const(0.0)), axes=1)
+    cap = evoxc.maximum(evoxc.subtract(evoxc.cast(live, evoxc.int32), int_const(1)), int_const(0))
+    ranks = enp.reshape(enp.arange(pop_size, dtype=evoxc.int32), (1, pop_size))
+    block_rank = evoxc.minimum(ranks, enp.expand_dims(cap, 1))
+    pinned = evoxc.gather(evoxc.reshape(flat_gather(ranking, block_rank), (width,)), flat_slot, axis=0)
     return (
         evoxc.select(elite_mask, pinned, winner),
         evoxc.select(elite_mask, pinned, loser),
