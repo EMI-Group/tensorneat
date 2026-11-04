@@ -133,22 +133,23 @@ The attribute term is a reduced sum over the aligned rows; `measure_distance` is
 | kernel | P=100 | P=500 | P=1000 |
 |---|---|---|---|
 | `transform` (`acyclic=True`) | 280 / 3.1 ms | 280 / 6.7 ms | 280 / 10.5 ms |
-| `forward` (P rows) | 98 / 1.7 ms | 98 / 4.1 ms | 98 / 7.8 ms |
+| `forward` (P rows) | 98 / 1.7 ms | 98 / 4.1 ms | 98 / 7.0–7.2 ms |
 | `execute_mutation` (`DefaultMutation`) | 438 / 5.2 ms | 438 / 11.4 ms | 438 / 20.4 ms |
-| `execute_crossover` | — | 142 / 5.4 ms | 142 / 10.3 ms |
+| `execute_crossover` | — | 142 / 5.3 ms | 142 / 10.2–10.3 ms |
 | `prepare_distance` (both families) | — | 163 / 2.6 ms | 163 / 4.1 ms |
 | `measure_distance`, tiled centre = the shipped call site (merge) | — | 94 / 2.7 ms | 94 / 5.2 ms |
 | `measure_distance`, batch-1 centre (dense single-centre route) | — | 106 / 1.4–1.6 ms | 106 / 2.0–2.3 ms |
 | `execute_distance` (pairwise) | — | 202 / — | — |
-| `Pipeline.step` end-to-end | — | ~175 ms median | ~290–410 ms (very noisy) |
+| `Pipeline.step` end-to-end | — | ~171 ms median | ~287–290 ms median |
 | `Pipeline.build_seconds` | — | 0.33 s | 0.41 s |
 | legacy JAX baseline (ms/gen) | 51 | 109 | 157 |
 
-The `forward` row is a P-row batch; on the pipeline's tiled `4P` batch the same 98-op graph measures **3.5 / 12.8 / 24.2 ms** at P=100/500/1000 (interleaved same-session A/B against the commit before the dead-slot fill removal: 3.9→3.5, 14.4→12.8, 27.4→24.2 ms, −9 / −11 / −12 %, bit-identical on the 4P and P forward outputs, the recurrent 4P output and ten seed-42 generation hashes).
+The `forward` row is a P-row batch; on the pipeline's tiled `4P` batch the same 98-op graph measures **3.5 / 12.9 / 24.9–26.5 ms** at P=100/500/1000 (interleaved same-session A/B against the commit before the dead-slot fill removal: 3.9→3.5, 14.3–16.0→12.9, 27.7–28.5→24.9–26.5 ms, −9…−20 %, bit-identical on the 4P and P forward outputs, the recurrent 4P output and ten seed-42 generation hashes).
+`execute_crossover`'s A/B on the same protocol: 6.2→5.3 ms at pop 500 and 12.1–12.4→10.2–10.3 ms at pop 1000 (−14…−17 %), bit-identical children and generation hashes; the kernel is now `argsort`- and `gene/blocks.py::crossover_attrs`-bound (see `./operations/crossover/CONTEXT.md`).
 Its cost split at 4P (cProfile over `evoxc.run`, 5 runs): the aggregation's innermost-axis `reduce_sum` **4.2 ms** (3 trips × 1.4 ms, ~33 % of the pass, the one remaining op shape this node cannot cheapen — see item 6 under "Outside this node"), the `(P, N, K)` window gather 1.6 ms, the wide `select`s 2.6 ms, every other elementwise op 2.6 ms, interpreter dispatch 3.5 ms.
 The distance rows are same-session A/B medians of a `prepare`-once + 6×`measure` body (per call = `(total - prepare)/6`), base commit against the current kernel; the per-call ratio between the two `measure` routes is the load-bearing number there, never the absolute.
-The box drifts ±30 % between sessions, so the ratio against the frozen legacy baseline is the load-bearing number, never the absolute milliseconds: a generation is now **~1.6×** legacy at pop 500 (175 vs 109 ms) and **1.8–2.6×** at pop 1000 (290–410 vs 157 ms), so the CPU speed contract is still not met and the remaining margin is not in this node.
-At pop 500 one generation executes ~8 600 IR ops: `genome/operations/distance` 3 058, `algorithm/*` 2 953, `genome/gene` 962, `common/*` 660, `genome/operations/mutation` ~360, `genome/operations/alignment.py` 117, `genome/window.py` 75, `host_payload.py` 48, `genome/step.py` 25, `genome/default.py` 21, `genome/crossover` 6, everything else under 15 (problem, pipeline, base).
+The box drifts ±30 % between sessions, so the ratio against the frozen legacy baseline is the load-bearing number, never the absolute milliseconds: a generation is now **~1.6×** legacy at pop 500 (171 vs 109 ms) and **~1.8×** at pop 1000 (287 vs 157 ms), so the CPU speed contract is still not met and the remaining margin is not in this node (the forward and crossover kernels are ~12 % of a generation; `algorithm/` and the distance kernels hold the rest).
+At pop 500 one generation executes **8 614 IR ops**: `genome/operations/distance` 3 058, `algorithm/*` 2 953, `genome/gene` 962, `common/*` 660, `genome/operations/mutation` 362, `genome/operations/alignment.py` 117, `genome/window.py` 75, `host_payload.py` 48, `genome/step.py` 25, `genome/default.py` 21, `genome/crossover` 6, everything else under 15 (problem, pipeline, base).
 That op share is the cost share, because the interpreter charges ~13 µs per executed op, but the mutation kernel is traffic-bound rather than dispatch-bound: its 452 → 438 traced ops bought 7–16 % of kernel wall time (13.6 → 11.4 ms at pop 500, 24.2 → 20.4 ms at pop 1000, interleaved same-session A/B) by replacing full-size `select` passes with one flat indexed write, shrinking the cycle join's index blocks, and moving the attribute stage's masks onto cheap rank-0 ops, while static op count alone went slightly up in the last step.
 What was removed from the distance path: the per-call rank-0 constants and index blocks (now built once in `prepare` and carried in the digest — the `measure` body emits **no** `constant` op), redundant `reshape`s, the successor clamp, half the per-call attribute reads, and the `(P, M, A)` two-axis index block in the aligned-attribute tail (a `(P, M)` row index plus a row gather instead); `gene/base.py::BaseGene.distance` reads one attribute column at a time.
 `measure_distance` on the merge route is **sort-bound**: its two `argsort`s per family (`argsort` of the `(P, 2M+1)` int64 composite block, then `argsort` of that permutation) plus their two `int32` casts are 27–30 % of the call, and every other op is an ordinary `(P, M)` pass at 5–90 µs; the dense single-centre route sorts nothing, which is why its 106 ops cost 1.9–2.1× less wall time than the merge's 94, and op count therefore misleads on that comparison.

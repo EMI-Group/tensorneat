@@ -40,7 +40,7 @@ The one precondition of the merge is the payload's own uniqueness invariant: the
 ## Measured Cost (numpy reference backend, build excluded)
 `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)` + `NEAT(pop 500/1000)` + `XOR()`, seed 42, parents = the generation-5 payload: **142 traced ops**, **5.4 ms at pop 500** and **10.3 ms at pop 1000**.
 Same-session interleaved A/B on the identical payload (11 rounds each, medians): 6.85 ms before this path's rewrite, 5.67 ms after — **-17 %**, children bit-identical (all four payload arrays).
-Per generation the kernel executes **117 `alignment.py` ops + 6 `crossover` ops** (was 119 + 14), i.e. 1.4 % of the 8 626 IR ops a pop-500 `Pipeline.step` runs.
+Per generation the kernel executes **117 `alignment.py` ops + 6 `crossover` ops** (was 119 + 14), i.e. 1.4 % of the 8 614 IR ops a pop-500 `Pipeline.step` runs.
 Per-op split at pop 500 (instrumented, ms): merge `argsort` 1.09 (2 calls) > `gene.crossover`'s uniform draw 0.80 + select 0.69 (out of this node) > final mask `select` 0.23 > `sort` 0.18 > gathers 0.36 > adds 0.30 > `bitwise_*` 0.49 > casts 0.18.
 The merge is **sort-bound**: one `argsort` of the `(P, M)`/`(P, 2M)` `int64` identities per family is 20 % of the kernel and cannot be removed (a dense key table would need `key_span`-bounded keys, see `../../CONTEXT.md`), and `gene.crossover` (`../gene/blocks.py`) is another ~27 % with its per-entry `U[0,1)` block draw.
 
