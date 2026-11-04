@@ -12,26 +12,16 @@ Subpackages
 Submodules
 ----------
 
-tensorneat.algorithm.hyperneat.hyperneat module
------------------------------------------------
+.. toctree::
+   :maxdepth: 4
 
-.. automodule:: tensorneat.algorithm.hyperneat.hyperneat
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.algorithm.hyperneat.hyperneat\_feedforward module
-------------------------------------------------------------
-
-.. automodule:: tensorneat.algorithm.hyperneat.hyperneat_feedforward
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.algorithm.hyperneat.genes
+   tensorneat.algorithm.hyperneat.hyperneat
+   tensorneat.algorithm.hyperneat.hyperneat_feedforward
 
 Module contents
 ---------------
 
 .. automodule:: tensorneat.algorithm.hyperneat
    :members:
-   :undoc-members:
    :show-inheritance:

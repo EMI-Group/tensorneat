@@ -13,18 +13,15 @@ Subpackages
 Submodules
 ----------
 
-tensorneat.genome.gene.base module
-----------------------------------
+.. toctree::
+   :maxdepth: 4
 
-.. automodule:: tensorneat.genome.gene.base
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.genome.gene.base
+   tensorneat.genome.gene.blocks
 
 Module contents
 ---------------
 
 .. automodule:: tensorneat.genome.gene
    :members:
-   :undoc-members:
    :show-inheritance:

@@ -13,42 +13,21 @@ Subpackages
 Submodules
 ----------
 
-tensorneat.genome.base module
------------------------------
+.. toctree::
+   :maxdepth: 4
 
-.. automodule:: tensorneat.genome.base
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.genome.default module
---------------------------------
-
-.. automodule:: tensorneat.genome.default
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.genome.recurrent module
-----------------------------------
-
-.. automodule:: tensorneat.genome.recurrent
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-tensorneat.genome.utils module
-------------------------------
-
-.. automodule:: tensorneat.genome.utils
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.genome.base
+   tensorneat.genome.default
+   tensorneat.genome.grad
+   tensorneat.genome.host
+   tensorneat.genome.recurrent
+   tensorneat.genome.step
+   tensorneat.genome.utils
+   tensorneat.genome.window
 
 Module contents
 ---------------
 
 .. automodule:: tensorneat.genome
    :members:
-   :undoc-members:
    :show-inheritance:

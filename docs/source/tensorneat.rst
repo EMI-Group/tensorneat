@@ -15,18 +15,15 @@ Subpackages
 Submodules
 ----------
 
-tensorneat.pipeline module
---------------------------
+.. toctree::
+   :maxdepth: 4
 
-.. automodule:: tensorneat.pipeline
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.host_payload
+   tensorneat.pipeline
 
 Module contents
 ---------------
 
 .. automodule:: tensorneat
    :members:
-   :undoc-members:
    :show-inheritance:

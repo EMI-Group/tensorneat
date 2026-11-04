@@ -13,18 +13,14 @@ Subpackages
 Submodules
 ----------
 
-tensorneat.algorithm.base module
---------------------------------
+.. toctree::
+   :maxdepth: 4
 
-.. automodule:: tensorneat.algorithm.base
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.algorithm.base
 
 Module contents
 ---------------
 
 .. automodule:: tensorneat.algorithm
    :members:
-   :undoc-members:
    :show-inheritance:

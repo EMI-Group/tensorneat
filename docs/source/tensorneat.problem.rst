@@ -13,18 +13,14 @@ Subpackages
 Submodules
 ----------
 
-tensorneat.problem.base module
-------------------------------
+.. toctree::
+   :maxdepth: 4
 
-.. automodule:: tensorneat.problem.base
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   tensorneat.problem.base
 
 Module contents
 ---------------
 
 .. automodule:: tensorneat.problem
    :members:
-   :undoc-members:
    :show-inheritance:
