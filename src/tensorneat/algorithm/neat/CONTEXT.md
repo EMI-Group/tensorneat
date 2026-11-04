@@ -157,6 +157,10 @@ Keys are rank-0 scalars, so a batched kernel takes one key and draws its own pop
 
 ## Measured Cost (numpy backend, real `DefaultGenome(max_nodes=50, max_conns=100)`, XOR, `species_size=20`, seed 42)
 Protocol: one configuration per fresh process, 4 setup generations, then one warmup and 4 timed runs; phases timed as *separate executables* traced on one snapshot state (`step` is the pipeline's own graph), so a generation's phase sum slightly over-counts. Medians, ms, this box (it drifts ±30 % between sessions, so read ratios, not absolute milliseconds):
+**Cumulative effect of the two kept speciation changes** (scan-1 row pre-measurement + narrow scan-2 carry): same-session paired A/B against the pre-change tree, 6 alternating rounds of `benchmarks/backend_measure.py --backend numpy --pop 500 --generations 20 --warmup 3`, medians per run — pre-change 247.9–333.3 ms, current 225.5–243.3 ms; median of the six per-round ratios **0.839 (−16 %)**, median-of-medians 271.2 → 231.6 (−14.6 %), mean 282.6 → 234.5 (−17.0 %), faster in 6 of 6 rounds. `P=100` −3.8 % (41.5 vs 43.4 ms); `P=1000` parity within this box's bimodality.
+Executed ops per generation `P=500`/`P=1000` 11 159 → 10 352 (−7 %).
+The wall-clock win exceeds the op win because the numpy interpreter charges ~13 µs per executed op (operand resolution + `_validate_result` + `Tensor` construction, ~63 % of a generation), so removing an op from a 20-iteration loop body is worth 20× removing a top-level one — and the biggest single win is not an op removal at all but moving the 20 compatibility kernels out of a `while` region (see `## Distance Rows`).
+A generation is ~10.7 k executed ops, so every candidate change is judged by `executed_op_count × 13 µs`, never by IR lines alone; the count is obtained by walking `op.regions` of the built graph and weighting each `while` body by its trip count (`species_size`).
 
 | P | evaluate | update_species | breed (`update_species` + `_create_next_generation`) | speciate | tell | `Pipeline.step` |
 | --- | --- | --- | --- | --- | --- | --- |
