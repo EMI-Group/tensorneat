@@ -31,6 +31,7 @@ from .arrays import (
     graph_constant,
     i32 as _int32,
     row_offsets,
+    uniform_bounds,
 )
 from .plan import (
     AddConnPlan,
@@ -51,7 +52,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only; keeps genome -> operations 
 _OPERATION_COUNT = 4
 
 
-def _broadcast_row(row: evoxc.SymbolicTensor, pop_size: int) -> evoxc.SymbolicTensor:
+def _broadcast_row(
+    row: evoxc.SymbolicTensor, pop_size: int, width: int
+) -> evoxc.SymbolicTensor:
     """Spread one gene attribute row over the population axis.
 
     The gene factories (``new_identity_attrs``, ``new_zero_attrs``) build a single
@@ -61,14 +64,21 @@ def _broadcast_row(row: evoxc.SymbolicTensor, pop_size: int) -> evoxc.SymbolicTe
     plus an ``add``.  ``broadcast_to`` also normalizes a ``(1, W)`` row, so a gene factory
     returning either rank costs the same single op — no intermediate ``reshape``.
 
+    The width is passed explicitly rather than read off ``row.shape[-1:]`` so a
+    zero-width family (``attr_specs == ()``) yields a ``(P, 0)`` block instead of a
+    rank-2 broadcast of a rank-0/one-dimensional row, which the caller's
+    ``(P, 1, 0)`` ``reshape`` could not consume.
+
     Args:
-        row: ``(W,)`` or ``(1, W)`` attribute row of one gene.
+        row: ``(W,)`` or ``(1, W)`` attribute row of one gene (a rank-0 row for
+            ``width == 0``).
         pop_size: Population size ``P`` (static).
+        width: Attribute width ``W`` of the gene (static).
 
     Returns:
         ``(P, W)`` tensor whose every row equals ``row``.
     """
-    return enp.broadcast_to(row, (pop_size,) + tuple(row.shape[-1:]))
+    return enp.broadcast_to(row, (pop_size, width))
 
 
 def _edge_key_row(
@@ -136,6 +146,56 @@ def _gated(
     # gate is expanded to the payload's rank (``(P, 1)``, ``(P, 1, 1)``, ...).
     mask = enp.reshape(gate, (gate.shape[0],) + (1,) * (len(old.shape) - 1))
     return evoxc.select(mask, new, old)
+
+
+class _StageContext:
+    """One structural stage's shared row bookkeeping plus the uniform-bound pair.
+
+    The presence masks, row-index constants and flat index blocks live in the
+    :class:`~.plan.EditContext`; the stage also needs the two rank-0 ``float32``
+    bounds every ``evoxc.random.uniform`` draw shares (:func:`~.arrays.uniform_bounds`),
+    because a Python float bound costs one ``float64`` ``constant`` *per draw* under the
+    reference interpreter.  That pair is a draw detail of this stage rather than row
+    bookkeeping, so it rides here instead of widening ``EditContext`` — whose field set
+    is the frozen contract with the write plan — while every other attribute is read
+    through to the wrapped context, so the plan methods keep seeing the same object
+    shape.
+
+    Attributes:
+        context (EditContext): The stage's row bookkeeping (every other attribute of
+            this object reads through to it).
+        uniform_low: Rank-0 ``float32`` ``0.0``.
+        uniform_high: Rank-0 ``float32`` ``1.0``.
+    """
+
+    __slots__ = ("context", "uniform_low", "uniform_high")
+
+    def __init__(
+        self,
+        context: EditContext,
+        low: evoxc.SymbolicTensor,
+        high: evoxc.SymbolicTensor,
+    ):
+        self.context = context
+        self.uniform_low = low
+        self.uniform_high = high
+
+    @property
+    def uniform_bounds(
+        self,
+    ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+        """The shared ``(low, high)`` pair, in the order ``evoxc.random.uniform`` takes.
+
+        Returns:
+            tuple: the rank-0 ``float32`` ``0.0`` and ``1.0`` tensors.
+        """
+        return self.uniform_low, self.uniform_high
+
+    def __getattr__(self, name: str):
+        # Only reached for names this wrapper does not declare, i.e. the EditContext
+        # fields; the delegation is what keeps every plan's ``context.<field>`` read
+        # unchanged.
+        return getattr(self.context, name)
 
 
 class BaseMutation(StatefulBaseClass):
@@ -304,16 +364,19 @@ class BaseMutation(StatefulBaseClass):
         pop_size = node_keys.shape[0]
         # Four operation keys plus the gate key, in the order the operations run.
         keys = evoxc.random.split_n(key, _OPERATION_COUNT + 1)
-        gates = self._structural_gates(keys[_OPERATION_COUNT], pop_size)
         context = self._edit_context(
             genome, node_keys, node_attrs, conn_keys, conn_attrs
+        )
+        stage = self._stage_context(context)
+        gates = self._structural_gates(
+            keys[_OPERATION_COUNT], pop_size, stage.uniform_bounds
         )
         plans = self._plan_operations(
             state,
             genome,
             keys,
             gates,
-            context,
+            stage,
             node_keys,
             conn_keys,
             conn_attrs,
@@ -335,6 +398,24 @@ class BaseMutation(StatefulBaseClass):
             conn_attrs.shape[2],
         )
         return apply(edit, context, node_keys, node_attrs, conn_keys, conn_attrs)
+
+    def _stage_context(self, context: EditContext) -> _StageContext:
+        """Wrap the stage's row bookkeeping together with its uniform-bound pair.
+
+        The two rank-0 ``float32`` bounds are built **once** here and shared by every
+        ``evoxc.random.uniform`` draw of the stage (:meth:`_structural_gates` and the
+        per-operation plans); a Python float bound would embed one ``float64``
+        ``constant`` *per draw* instead.  ``0.0``/``1.0`` are exact in ``float32``, so the
+        drawn values are bit-identical (see :func:`~.arrays.uniform_bounds`).
+
+        Args:
+            context (EditContext): The stage's masks, constants and flat index blocks.
+
+        Returns:
+            _StageContext: ``context`` plus the shared ``(low, high)`` bounds.
+        """
+        low, high = uniform_bounds()
+        return _StageContext(context, low, high)
 
     def mutate_values(
         self,
@@ -387,7 +468,10 @@ class BaseMutation(StatefulBaseClass):
         )
 
     def _structural_gates(
-        self, key: evoxc.SymbolicTensor, pop_size: int
+        self,
+        key: evoxc.SymbolicTensor,
+        pop_size: int,
+        uniform: tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor],
     ) -> tuple[
         evoxc.SymbolicTensor,
         evoxc.SymbolicTensor,
@@ -404,6 +488,9 @@ class BaseMutation(StatefulBaseClass):
         Args:
             key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this draw.
             pop_size (int): Population size ``P`` (static).
+            uniform (tuple): The stage's shared ``(low, high)`` rank-0 ``float32`` bounds
+                (:func:`~.arrays.uniform_bounds`); ``0.0``/``1.0`` as tensors cost two
+                constants per stage instead of two per draw, and draw bit-identically.
 
         Returns:
             tuple: four ``(P,)`` bool gates, in the order add-node, delete-node, add-conn,
@@ -417,8 +504,9 @@ class BaseMutation(StatefulBaseClass):
             rather than by slicing a one-hot block, which is cheaper under the reference
             interpreter (one op per gate, no reshape).
         """
+        low, high = uniform
         drawn = evoxc.random.uniform(
-            key, (_OPERATION_COUNT, pop_size), 0.0, 1.0, dtype=evoxc.float32
+            key, (_OPERATION_COUNT, pop_size), low, high, dtype=evoxc.float32
         )
         thresholds = graph_constant(
             np.asarray(self.structural_probabilities, dtype=np.float32).reshape(
@@ -561,7 +649,9 @@ class BaseMutation(StatefulBaseClass):
             genome ("BaseGenome"): Genome owning the genes and the static invariants.
             keys (evoxc.SymbolicTensor): ``(5,)`` per-operation keys from one ``split_n``.
             gates (tuple): four ``(P,)`` bool gates from :meth:`_structural_gates`.
-            context (EditContext): Shared masks and flat index blocks.
+            context (_StageContext): Shared masks, flat index blocks and the stage's
+                ``(low, high)`` uniform bounds; the plans read it as an ``EditContext``
+                because every other attribute is delegated.
             node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys.
             conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
             conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` connection attributes.
@@ -672,7 +762,7 @@ class BaseMutation(StatefulBaseClass):
         add_node, delete_node, add_conn, delete_conn = plans
         if self.node_add > 0.0:
             node_identity = _broadcast_row(
-                genome.node_gene.new_identity_attrs(state), pop_size
+                genome.node_gene.new_identity_attrs(state), pop_size, node_attr_width
             )
         else:
             node_identity = fill(
@@ -716,7 +806,7 @@ class BaseMutation(StatefulBaseClass):
         )
         if self.node_add > 0.0:
             conn_identity = _broadcast_row(
-                genome.conn_gene.new_identity_attrs(state), pop_size
+                genome.conn_gene.new_identity_attrs(state), pop_size, conn_attr_width
             )
         else:
             conn_identity = fill(
@@ -724,7 +814,7 @@ class BaseMutation(StatefulBaseClass):
             )
         if self.conn_add > 0.0:
             conn_zero = _broadcast_row(
-                genome.conn_gene.new_zero_attrs(state), pop_size
+                genome.conn_gene.new_zero_attrs(state), pop_size, conn_attr_width
             )
         else:
             conn_zero = fill(

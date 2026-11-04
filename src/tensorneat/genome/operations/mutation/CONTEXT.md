@@ -7,18 +7,20 @@ Nothing here allocates keys: `new_node_keys (P,)` and `new_conn_keys (P, 3)` arr
 That allocation is **not** guaranteed fresh: `algorithm/neat/neat.py::_new_gene_keys` bases it on the pre-crossover parent population while the payload mutated is the crossover child, so a child can already own the key it is handed (see Known Issues); `plan_add_node` therefore validates the allocation it receives.
 
 ## Cost model (drives every design choice here)
-The backend is the evoxc reference numpy interpreter, so a traced op costs **dispatch (~10–15 µs) plus array traffic (~0.2 µs per 1 000 elements at pop 1000)**: both op count and element volume are budget.
+The backend is the evoxc reference numpy interpreter, so a traced op costs **dispatch (~13 µs) plus array traffic (~0.2 µs per 1 000 elements at pop 1000)**: both op count and element volume are budget.
 Measured consequences that shape this node:
 - Rank-0 constants are real ops: a per-use `i32(...)`/`enp.full((), ...)` is ~10 µs each, so every repeated constant is hoisted into `EditContext` and shared per stage.
 - A full-payload op on `(P, E, CK)` (300 k elements) costs ~60–80 µs at pop 1000, so a helper that flattens/reshapes the same array four times is four times the traffic.
 - For the recurrent `(P, tries, E)` slabs the **contiguous innermost reduce is the cheaper one** on this box (2 M elements: `axes=2` 0.82 ms vs the transposed `axes=1` 1.65 ms; `equal` 0.68 vs 1.11 ms) — the opposite of the incoming-window rule in `../../CONTEXT.md`, so do not transpose these slabs.
 - A broadcast key match against the node table is the one formulation to avoid: `(P, 2E+2, N)` is 10.1 M elements at pop 1000 (plus an int32 cast and `argmax`), which cost 21 of the 23 ms the cycle predicate used to take.
 - Guarding one plan is cheap when the reduce is over the node or connection axis (tens of elements per row): the add-node validation below is `(P, N)` + `(P, E)` equality/reduce pairs, 11 traced ops, unmeasurable in wall time.
+- A `select` pays for the *whole* array, an indexed write pays for the cells it writes: two row writes on `conn_keys (P,E,2)` + `conn_attrs (P,E,1)` cost 8 ops / 1.00 ms as `select`s and 20 ops / 0.42 ms as one flat `scatter` (probe at pop 500), and the two `select`s on the *node* arrays cost 0.34 ms. So "one op per write slot" is not automatically the cheap shape — measure before assuming op count decides, and prefer `scatter` when a slot writes at most a couple of rows out of a large array (the op price is ~13 µs, the traffic price of a `(500,100,2)` pass is ~0.4 ms).
 
 ## Two-phase structural stage
-The stage **plans, then writes once**: `_edit_context` builds the shared masks/index blocks, `_plan_operations` resolves the four candidates independently (each a `NamedTuple` in `plan.py`, never a payload rewrite), `_merge_plan` folds the four mutually-exclusive plans into one `Edit`, and `plan.apply` performs one `select` per write slot plus one clearing `select` per array.
-A slot's "no write" row is the array's own row count, which matches no row of the shared row-index constant, so no dump row, no flat index block and no per-call column constant is needed for the write path (`arrays.write_rows`).
-The connection key and attribute arrays share their row layout, so `apply` builds one `(P, E, 1)` row mask per slot and both arrays consume it.
+The stage **plans, then writes once**: `_edit_context` builds the shared masks/index blocks, `_plan_operations` resolves the four candidates independently (each a `NamedTuple` in `plan.py`, never a payload rewrite), `_merge_plan` folds the four mutually-exclusive plans into one `Edit`, and `plan.apply` performs one clearing `select` per connection array (slot 0 plus the delete-node detach), one flat `scatter` per connection array for slots 1–2, and one `select` per node array.
+On the `select` route (`arrays.write_rows`, used by the clearing pass and both node arrays) a slot's "no write" row is the array's own row count, which matches no row of the shared row-index constant, so no dump row and no flat index block is needed.
+The `scatter` route (`plan._scatter_slots`) instead appends `slots × W` dump cells with one `pad`, redirects an invalid slot to its own dump cell, and slices the tail off; the dump index block is `slots × W` static entries, not `P`-scaled.
+The connection key and attribute arrays share their row layout, so `apply` stacks the slot rows once and both arrays consume the same `(P, slots, 1)` row/validity block.
 Every write slot is gated on its plan's `ok` (`_merge_plan`), so folding a validation into `ok` is a bit-exact no-op: nothing in the payload is rewritten and the value stage still runs for that individual.
 
 ## API Surface
@@ -54,7 +56,11 @@ A probability of `0` is a true identity — the plan is elided at trace time, ke
 Key resolution is a **merge join**: every query and every node folds its key and payload into one injective `int64` composite, the `(P, N + Q)` merge (`Q = 2E + 2`) is sorted once, an inclusive suffix count of the node tags gives the rank of the first node at or after each position, and one flat `gather` reads the row; the low field keeps queries in `[0, Q)` and nodes in `[Q, Q + N)` in ascending row order, so that first node is the *smallest* row carrying the key — the same row the previous `argmax(argmax(match))` produced.
 That suffix count is a Hillis–Steele **log2-doubling** — `ceil(log2(N + Q))` static shifts of one `pad` + `slice` + `add` each, in `int8` flags while `max_nodes <= 127` — because `cumsum` is a StableHLO v1 export deferral; every op of the predicate is v1-exportable and `evoxc.backends.stablehlo.export` succeeds on the graph.
 No dense key→row table is possible: the algorithm allocates node keys as `max_node_key + 1 + arange(P)`, so a real pop-100 run reaches keys 225–249 with `key_span=150` and keeps growing; keys must be treated as arbitrary `int32`.
-Result: 140 traced ops, 8.6 ms at pop 1000, 4.3 ms at 500 and 1.9 ms at 100 (pristine-versus-patched, same box, interleaved: 8.26 / 4.17 / 1.52 ms at 116 ops, so the 24 doubling ops cost +0.34 ms at pop 1000) — a merge join over `P·(N + Q)` elements instead of a 10.1 M-element broadcast match.
+The frontier is monotone non-decreasing (a `scatter` only sets bits) and the node count bounds it, so the loop carries only `(frontier, growing)` and `growing` alone terminates it: no iteration counter, no `step < max_nodes` cap, no int32 seed.
+The absent-endpoint mask is folded into the gather's index block once, outside the region (`select(edge_valid, src_flat, dump_flat)`); the dump column is never written, so it always reads `False` and the per-hop `logical_and` disappears.
+Result: **125 traced ops** (140 before this wave), 3.89 ms at pop 500 and ~8.0 ms at pop 1000, i.e. the largest single file in the kernel — a merge join over `P·(N + Q)` elements instead of a 10.1 M-element broadcast match.
+Its measured internals at pop 500: 24 log2-doubling ops 0.62 ms (8 `pad`s 0.37, 8 `add`s 0.15, 8 `slice`s the rest), the int64 merge `sort` 0.33 ms, the transpose-back `scatter` 0.35 ms, the frontier gather+scatter per hop 0.12 + 0.28 ms.
+The `rank` lookup clamps to `node_count - 1` instead of reading a trailing sentinel row: `rank == node_count` implies the query's key exceeds every node key, so the read-back node carries a different key and the radius hit test rejects it.
 The call site is **statically gated** on `genome.network_type == "feedforward" or self.p_recur > 0.0`: those are the only two consumers (the acyclicity veto for a feedforward genome, and the `p_recur` requirement built only when `p_recur > 0`), so a recurrent genome with `p_recur == 0` traces neither the region nor its ops (`execute_mutation` 423 → 325 traced ops, 31.2 → 14.2 ms at pop 1000, 2.2×); the gate does not touch `p_recur > 0` (434 → 445, the +11 being the add-node guard) or the feedforward path.
 A feedforward genome's add-conn can close a cycle, so that branch keeps the predicate unconditionally.
 
@@ -68,22 +74,24 @@ A feedforward genome's add-conn can close a cycle, so that branch keeps the pred
 - Rank-0 constants and static index blocks are built **once** per stage (in `EditContext`, or as a folded `graph_constant`) and shared: a per-use `enp.full((), v, int32)` is one traced op each.
 - Zero-width attribute tables (`attr_width == 0`) work: the write path uses row-index selects, so nothing builds a `0`-stride arange.
 - Errors: configuration problems raise `ConfigError` (`TensorNEATError`); `evoxc` shape/backend errors propagate unchanged.
-- Files ≤ ~1000 lines: `base.py` (738) owns the key split, the gate draw, the context, the plan merge and the value stage; `default.py` (411) the four `DefaultMutation` plans, `_fetch_two` and the split validation; `recurrent.py` (279) the recurrent add-conn; `cycle.py` (291) the merge-join reachability predicate; `plan.py` (266) the plan datatypes, `EditContext` and the single writer; `arrays.py` (321) the flat-index primitives; `degree.py` (118) the diagnostic in-degree audit.
+- Files ≤ ~1000 lines: `base.py` (838) owns the key split, the gate draw, the context, the plan merge and the value stage; `default.py` (448) the four `DefaultMutation` plans, `_fetch_two` and the split validation; `plan.py` (409) the plan datatypes, `EditContext` and the single writer; `arrays.py` (357) the flat-index primitives; `cycle.py` (321) the merge-join reachability predicate; `recurrent.py` (279) the recurrent add-conn; `degree.py` (118) the diagnostic in-degree audit.
 
-## Measured cost (numpy reference interpreter, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100)`, build excluded, one warmup + median of 5, RNG key created inside the trace)
+## Measured cost (numpy reference interpreter, `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100)`, build excluded, one warmup + median of 5–7, RNG key created inside the trace)
 | kernel | pop | traced ops | ms |
 | --- | --- | --- | --- |
-| `DefaultMutation` `execute_mutation` | 100 / 500 / 1000 | **452** (409 before the log2-doubling suffix count, 398 before the add-node guard) | 5.6 / 13.7 / 24.9 |
-| `RecurrentMutation` `execute_mutation` (`p_recur=0.1`) | 1000 | **488** (445, 434 before the add-node guard) | ~35 |
-| `RecurrentMutation` `execute_mutation` (`p_recur=0.0`, cycle elided) | 1000 | **338** (325, 423 before the gate) | 14.2 (31.2) |
+| `DefaultMutation` `execute_mutation` | 100 / 500 / 1000 | **456** | 5.53 / 12.05 / 24.07 |
+| `RecurrentMutation` `execute_mutation` (`p_recur=0.1`) | 1000 | **494** | 25.27 (27.58 before this wave) |
+| `RecurrentMutation` `execute_mutation` (`p_recur=0.0`, cycle elided) | 1000 | **353** | 16.98 (19.35 before this wave) |
 | `degree.in_degree` (diagnostic) | 100 / 500 / 1000 | 15 | 0.29 / 1.08 / 2.11 |
 
-These are single traced graphs that already include the gene-side `mutate`/`new_identity_attrs` calls; the earlier per-file "ledger" added those twice and over-reported both `DefaultMutation` (462, +24 = 486 with the suffix count) and `p_recur=0.1` (498, +24 = 522) by 53 ops — do not reuse that sum.
-The box drifts ±10–30 %, so op counts and same-process A/B ratios are the load-bearing numbers.
-The add-node validation is +11 traced ops (398 → 409 for `DefaultMutation` on the reference genome, 407 → 418 on the reproducer's `OriginNode`/`OriginConn` one): median-of-5 run time unchanged within noise at pop 100/500/1000.
-Per-file op ledger (`mutledger2.py`, pop 100): default 462 = `cycle.py` 130 + `base.py` 74 + `arrays.py` 66 + `default.py` 54 + `plan.py` 17 + ~145 gene/tools-side; recurrent 498 = `cycle.py` 130 + `arrays.py` 76 + `base.py` 74 + `recurrent.py` 59 + `default.py` 21 + `plan.py` 17 + the same ~145.
-Remaining reducible blocks, in order: `closes_cycle`'s 140 traced ops (its own 8.6 ms at pop 1000; inside it the int64 `sort` of the `(P, 252)` merge ~1.7 ms, the 24-op log2-doubling suffix count — `pad` + int8 `add`, ~0.3 ms over the `cumsum` it replaced — and the transpose-back `scatter` ~1.5 ms), the gene-side `node_gene.mutate`/`conn_gene.mutate` (~65 ops, owner `../gene/`), and `arrays.py`'s remaining static constants.
-Whole-generation context: `Pipeline.step` at pop 100/500/1000 is 45 / 336 / 603 ms, of which mutation is now ~5.6 / 13.6 / 24 ms — `speciate` dominates a generation, so a mutation-only cut moves `step` by a few percent.
+These are single traced graphs that already include the gene-side `mutate`/`new_identity_attrs` calls; the earlier per-file "ledger" added those twice and over-reported both `DefaultMutation` (462) and `p_recur=0.1` (498) by 53 ops — do not reuse that sum.
+The box drifts ±10–30 %, so op counts and same-process A/B ratios are the load-bearing numbers; the default row read 452 ops / 13.42 / 5.60 ms before this wave's rewrites, so the current kernel is **+0.9 % ops and −10 % wall time** at pop 500 (−6.5 % at pop 1000, −8.4 % / −12 % on the recurrent variants).
+Op count is not the verdict when a `select` trades for a `scatter`: the scatter rewrite of `plan.apply` added 19 static ops and removed 0.75 ms, because a `select` over `(P, E, 2)` costs 13× a dispatch.
+The add-node validation is +11 traced ops (its own `(P, N)` + `(P, E)` equality/reduce pairs): median-of-5 run time unchanged within noise at pop 100/500/1000.
+Per-file op ledger at pop 500 (`execute_mutation`, recursive over `regions`): `blocks.py` 77 (gene-side, not this node) + `cycle.py` 125 + `base.py` 70 + `arrays.py` 64 + `default.py` 63 + `plan.py` 36 + `window.py` 16 + 4 unattributed = 456; 85 of them are `constant` ops and 64 `reshape` / 23 `slice`.
+Per-file wall time at pop 500 (per-op instrumentation, 12.3 ms/run): `cycle.py` 3.89, `blocks.py` 3.71 (not this node), `arrays.py` 1.53, `default.py` 0.98, `base.py` 0.73, `plan.py` 0.71, the `while` region 0.62, `window.py` 0.11.
+Inside `arrays.py` the two biggest items are the three `masked_random_row` draws (0.76 ms) and the two node-array `write_rows` selects (0.34 ms); the draws are untouchable (draw order is the contract), the selects are break-even with a scatter (20 ops ≈ 0.26 ms).
+Whole-generation context: one pop-500 `Pipeline.step` executes **8 811 IR ops** and the mutation bucket is **363** of them (distance 3 222, algorithm 2 953, gene 970, common 660), so a mutation-only cut moves `step` by a few percent; the same-session end-to-end median is **182.9 ms/gen** (pristine tree on the same box: 200.9; the gap includes every sibling wave's merged work) with an identical 20-generation fitness trajectory, and pop 1000 end-to-end is too noisy on this box to attribute (measured 318–503 ms across runs for both trees).
 Element volume, recurrent add-conn at pop 1000: two `(P, max_conn_tries, E)` bool slabs (2 M elements each) and nothing else of that size — the int32 cast of the in-degree slab, the two `present_conn` factors and the second output-key equality are gone, and endpoint/attempt gathers run on the `(P·tries)` blocks.
 
 ## Known Issues
@@ -101,12 +109,12 @@ Element volume, recurrent add-conn at pop 1000: two `(P, max_conn_tries, E)` boo
 - `p_recur == 0` still splits the key into `attempt_key`/`recur_key` although no `p_recur` draw happens; removing the split would change `attempt_key` and therefore the draws, so it is not behaviour-neutral.
 
 ## Test Strategy
-`test/unit/genome/test_mutation.py` (15 tests) and `test_crossover.py` (9) are the acceptance spec and pass (`pytest test/unit/genome`, 95 passed), together with `test/parity/` (53 passed).
+`test/unit/genome/test_mutation.py` (15 tests) and `test_crossover.py` (9) are the acceptance spec and pass (`pytest test/unit/genome`, 108 passed; whole suite 513 passed / 5 skipped), together with `test/parity/` (18 passed / 4 skipped here — the four jax cases skip in this venv, identically on the pristine tree).
 A change to this node is additionally gated by **bit-identical mutation output on fixed inputs**: `execute_mutation` for `DefaultGenome`+`DefaultMutation` and `RecurrentGenome`+{`DefaultMutation`, `RecurrentMutation`} on a real seed-42 evolved payload with `evoxc.random.key(12345)`, `new_node_keys = arange(P) + 1000`, `new_conn_keys = arange(3P).reshape(P, 3) + 5000`, compared NaN-aware per leaf over ≥ 40 RNG keys and over configurations (each structural probability 0/1 in turn, saturated node and connection tables, `historical_marker` 3-column keys, `attr_width == 0` genes).
 The **capacity gate** is a soak: drive `Pipeline.step` on the reproducer family (`OriginNode`/`OriginConn`, pop 500, `max_nodes` 16 and 50, `XOR3d`) for ≥ 250 generations over ≥ 20 seeds and assert, host-side on the evaluated payload after every generation, that no destination key has more than `max_in_degree` present incoming rows — `degree.in_degree`/`violation` express the same check in-graph for a future test.
 The last soak (46 runs × 250 generations: seeds 0–19 at `max_nodes=16`, 100–109 at `max_nodes=50`, plus fully-key-visible variants with a raised `key_span`) reports zero violations and zero raises, and seed 6 (which raised at generation 53 before the guard) completes 250 generations.
 The trajectory gate is the 5-generation seed-42 XOR fitness history at pop 100 plus two same-seed pipelines producing identical fitness, and the four payload arrays / `SpeciesState` leaves / `randkey` per generation.
-`pytest test/unit` still reports 5 pre-existing failures in `test/unit/algorithm/` (`test_neat_tell.py` ×4, `test_speciation.py` ×1), and `pytest test` adds 3 `test/integration/test_xor_run.py` failures; all eight fail identically on `b18716e` and are outside this node.
+`pytest` from the repo root is green: 513 passed / 5 skipped (the skips are the four jax-dependent parity cases plus one `requires_iree` case, absent from this venv).
 
 ## Routing Table
 | Path | Responsibility |
@@ -121,5 +129,5 @@ The trajectory gate is the 5-generation seed-42 XOR fitness history at pop 100 p
 
 ## Graph constants
 `ghost`/`never` sentinels, the identity/zero rows, the elided-plan fallback and the cycle predicate's scatter targets are all `...window.fill(...)` (one element plus `broadcast_to`), not materialised `(pop_size, …)` fills.
-`execute_mutation` bakes 6 735 / 17 935 / 31 935 B at P=100/500/1000 (was 649 221 / 3 230 821 / 6 457 821) at 427 traced ops (was 408) and 5.08 / 12.86 / 22.13 ms (was 4.95 / 12.88 / 22.62).
+`execute_mutation` bakes 6 735 / 17 935 / 31 935 B at P=100/500/1000 (was 649 221 / 3 230 821 / 6 457 821), and the write path's dump cells are `graph_constant` data of `slots × W` entries per array, not population-scaled.
 `fill` is a real traced broadcast: a shape feeding `reshape` or `scatter` must be passed exactly, while symmetric-broadcast consumers (`select`, `clip`, arithmetic) may still grow it.

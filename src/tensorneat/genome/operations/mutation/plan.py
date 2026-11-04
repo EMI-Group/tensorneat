@@ -5,7 +5,8 @@ so at most **one** node row and **three** connection rows change per individual 
 generation.  Expressing the stage as a plan — "which row of which array receives which
 value", plus the data-dependent set of connections a node deletion detaches — therefore
 replaces the four helpers' sequential full-array rewrites (each of which had to re-gate a
-whole array with ``select``) by one write per slot and one clearing ``select``.
+whole array with ``select``) by one write per slot, with the slot-0 clear and the
+node-deletion detach sharing a single clearing pass over the connection arrays.
 
 A slot is written by comparing the array's row-index constant against the slot's row
 :func:`~.arrays.write_rows`: a row index equal to the array's own row count matches nothing,
@@ -17,11 +18,12 @@ independent of element count, so the stage's cost is its *op count*.
 
 from typing import NamedTuple
 
+import numpy as np
 import evoxc
 import evoxc.numpy as enp
 
 from ...utils import GenomeTensors
-from .arrays import write_rows
+from .arrays import graph_constant, write_rows
 
 class AddNodePlan(NamedTuple):
     """Candidate rows and values of one node split.
@@ -190,14 +192,15 @@ class Edit(NamedTuple):
         node_keys: ``(P,) int32`` key value written at ``node_rows``.
         node_attrs: ``(P, NA) float32`` attribute value written at ``node_rows``.
         conn_rows: Three ``(P,) int32`` connection rows to write, ``E`` for "none".  Slot
-            order is delete / identity-or-add / copy, applied in that order, so a later slot
+            order is clear / identity-or-add / copy, applied in that order, so a later slot
             wins where two slots name the same row.
         conn_keys: Three key values written at ``conn_rows``: the rank-0 ``I_INF`` sentinel
             (a cleared row) and two ``(P, 1, CK)`` blocks.
         conn_attrs: Three attribute values written at ``conn_rows``: the rank-0 NaN sentinel
             and two ``(P, 1, CA)`` blocks.
-        drop: ``(P, E) bool`` connection rows a node deletion detaches (cleared after the
-            slots; a deletion writes no row of its own).
+        drop: ``(P, E) bool`` connection rows a node deletion detaches, cleared in the same
+            pass as slot 0 (a deletion writes no row of its own, and slot 0 always carries
+            the same cleared value, so the two masks never overlap).
     """
 
     node_rows: evoxc.SymbolicTensor
@@ -209,6 +212,94 @@ class Edit(NamedTuple):
     drop: evoxc.SymbolicTensor
 
 
+def _dump_cells(
+    pop_size: int, row_count: int, width: int, slots: int
+) -> np.ndarray:
+    """Flat indices of the ``slots`` throw-away cells appended after a payload.
+
+    ``scatter`` is set-only, so a "no write" slot still has to name *some* cell; it names
+    one of these trailing cells instead, which the write path slices off again.  One cell
+    per slot (not one per slot *and* individual) keeps the cell count independent of the
+    population, and giving every slot its own cell means no two entries of one scatter
+    ever share an index — the result then does not depend on duplicate-index ordering.
+
+    Args:
+        pop_size: Population size ``P`` (static).
+        row_count: Rows per individual ``R`` of the array this index block addresses.
+        width: Row width ``W`` of that array.
+        slots: Number of written rows per individual (static).
+
+    Returns:
+        ``(1, slots, W) int32`` host array for :func:`~.arrays.graph_constant`.
+    """
+    base = pop_size * row_count * width
+    return (
+        np.arange(slots, dtype=np.int32).reshape(1, slots, 1) * np.int32(width)
+        + np.arange(width, dtype=np.int32).reshape(1, 1, width)
+        + np.int32(base)
+    ).astype(np.int32)
+
+
+def _scatter_slots(
+    x: evoxc.SymbolicTensor,
+    rows: evoxc.SymbolicTensor,
+    valid: evoxc.SymbolicTensor,
+    values: evoxc.SymbolicTensor,
+    column_base: evoxc.SymbolicTensor,
+    width_value: evoxc.SymbolicTensor,
+    dump: evoxc.SymbolicTensor,
+    pop_size: int,
+    row_count: int,
+    width: int,
+    slots: int,
+) -> evoxc.SymbolicTensor:
+    """Write one row per slot per individual with a single flat ``scatter``.
+
+    A ``select`` pays for the whole ``(P, R, W)`` array even though it rewrites at most
+    ``slots`` rows of each individual, and the reference interpreter is element-volume
+    bound at that size (a ``(500, 100, 2)`` ``np.where`` costs ~0.4 ms whether or not a row
+    is touched).  One flat ``scatter`` addresses only the written cells, so the stage pays
+    one copy (``pad``) plus one indexed write instead of ``slots`` full-array passes.
+
+    The target is the payload flattened with ``slots * width`` trailing dump cells; a slot
+    that names no row (``valid`` false, i.e. the "no write" row ``R``) writes its own dump
+    cell, which is sliced off at the end.  Every index is distinct, so the write order
+    inside the ``scatter`` is unobservable.
+
+    Args:
+        x: ``(P, R, W)`` array to write into, after the clearing pass.
+        rows: ``(P, slots, 1) int32`` destination rows, ``R`` meaning "no write".
+        valid: ``(P, slots, 1) bool`` "this slot names a real row".
+        values: ``(P, slots, W)`` values written at those rows.
+        column_base: ``(P, 1, W) int32`` constant ``p * R * W + column``.
+        width_value: Rank-0 ``int32`` row width ``W``.
+        dump: ``(1, slots, W) int32`` constant from :func:`_dump_cells`.
+        pop_size: Population size ``P`` (static).
+        row_count: Rows per individual ``R`` (static).
+        width: Row width ``W`` (static).
+        slots: Written rows per individual (static).
+
+    Returns:
+        ``(P, R, W)`` array with the ``slots`` rows per individual overwritten.
+    """
+    if width == 0:
+        # A zero-width row has no cell to write; the plan's key/attribute values are empty.
+        return x
+    index = evoxc.add(column_base, evoxc.multiply(rows, width_value))
+    index = evoxc.select(valid, index, dump)
+    padded = evoxc.pad(
+        enp.reshape(x, (pop_size * row_count * width,)), ((0, slots * width),)
+    )
+    written = evoxc.scatter(
+        padded,
+        enp.reshape(index, (slots * pop_size * width,)),
+        enp.reshape(values, (slots * pop_size * width,)),
+        axis=0,
+    )
+    kept = evoxc.slice(written, (0,), (pop_size * row_count * width,))
+    return enp.reshape(kept, (pop_size, row_count, width))
+
+
 def apply(
     edit: Edit,
     context: EditContext,
@@ -217,7 +308,22 @@ def apply(
     conn_keys: evoxc.SymbolicTensor,
     conn_attrs: evoxc.SymbolicTensor,
 ) -> GenomeTensors:
-    """Write one plan into the payload: one ``select`` per slot plus the clearing selects.
+    """Write one plan into the payload: one clear pass, one scatter and two node writes.
+
+    Connection slot 0 always writes the *cleared* value — the ``_merge_plan`` of the
+    operator fills its key/attribute value with the shared rank-0 ``I_INF``/NaN constants —
+    so it carries exactly what the node-deletion detach clears and the two share a single
+    ``select`` pass.
+    That is bit-identical to clearing slot 0 and then ``drop``: an individual whose slot 0
+    really names a row (an add-node or a delete-connection) has an all-False ``drop``, and a
+    delete-node individual points every slot at the "no write" row, which matches no row of
+    the row-index constant.  The masks cannot overlap, so their order is unobservable.
+    Slots 1 and 2 name two different rows of the same individual (an add-node split writes
+    both of its new edges), so they go into one flat ``scatter``
+    (:func:`_scatter_slots`): it addresses only the written cells, where a ``select`` per
+    slot would pay for the whole array twice under the element-volume-bound interpreter.
+    Slot order inside the scatter is unobservable because the two slots never name the same
+    row (the copy edge goes to a *later* free row than the identity edge).
 
     Args:
         edit (Edit): The plan.
@@ -234,7 +340,8 @@ def apply(
         included), because nothing is recomputed for it.
     """
     pop_size = node_keys.shape[0]
-    edge_count, attr_width = conn_keys.shape[1], conn_attrs.shape[2]
+    edge_count = conn_keys.shape[1]
+    key_width, attr_width = conn_keys.shape[2], conn_attrs.shape[2]
     written_node_keys = write_rows(
         node_keys,
         context.node_row_index,
@@ -247,20 +354,56 @@ def apply(
         edit.node_rows,
         enp.reshape(edit.node_attrs, (pop_size, 1, node_attrs.shape[2])),
     )
-    # One row comparison per connection slot, reused by the key and the attribute array: the
-    # two arrays share their row layout, so the mask is built once and both writes consume it.
-    masks = tuple(
-        evoxc.equal(context.conn_row_column, enp.reshape(rows, (pop_size, 1, 1)))
-        for rows in edit.conn_rows
+    # One clearing pass over the connection arrays for slot 0 plus the detach mask, so the
+    # whole stage pays one full-array select per array instead of two.
+    clear_mask = evoxc.logical_or(
+        evoxc.equal(
+            context.conn_row_column,
+            enp.reshape(edit.conn_rows[0], (pop_size, 1, 1)),
+        ),
+        enp.reshape(edit.drop, (pop_size, edge_count, 1)),
     )
-    written_conn_keys, written_conn_attrs = conn_keys, conn_attrs
-    for mask, key_values, attr_values in zip(masks, edit.conn_keys, edit.conn_attrs):
-        written_conn_keys = evoxc.select(mask, key_values, written_conn_keys)
-        written_conn_attrs = evoxc.select(mask, attr_values, written_conn_attrs)
-    drop = enp.reshape(edit.drop, (pop_size, edge_count, 1))
+    written_conn_keys = evoxc.select(clear_mask, context.sentinel, conn_keys)
+    written_conn_attrs = evoxc.select(clear_mask, context.nan_fill, conn_attrs)
+    # Slots 1 and 2 name *different* rows for the same individual (an add-node split writes
+    # both of its new edges), so no single ``select`` can express them; one flat ``scatter``
+    # over the two rows addresses only the written cells and replaces two full-array passes
+    # per array.
+    slots = len(edit.conn_rows) - 1
+    slot_rows = enp.stack(tuple(edit.conn_rows[1:]), axis=1)
+    slot_valid = enp.reshape(
+        evoxc.less(slot_rows, context.conn_row_limit), (pop_size, slots, 1)
+    )
+    slot_rows = enp.reshape(slot_rows, (pop_size, slots, 1))
+    written_conn_keys = _scatter_slots(
+        written_conn_keys,
+        slot_rows,
+        slot_valid,
+        enp.concatenate(list(edit.conn_keys[1:]), axis=1),
+        context.conn_key_base,
+        context.key_width,
+        graph_constant(_dump_cells(pop_size, edge_count, key_width, slots)),
+        pop_size,
+        edge_count,
+        key_width,
+        slots,
+    )
+    written_conn_attrs = _scatter_slots(
+        written_conn_attrs,
+        slot_rows,
+        slot_valid,
+        enp.concatenate(list(edit.conn_attrs[1:]), axis=1),
+        context.conn_attr_base,
+        context.attr_width,
+        graph_constant(_dump_cells(pop_size, edge_count, attr_width, slots)),
+        pop_size,
+        edge_count,
+        attr_width,
+        slots,
+    )
     return GenomeTensors(
         written_node_keys,
         written_node_attrs,
-        evoxc.select(drop, context.sentinel, written_conn_keys),
-        evoxc.select(drop, context.nan_fill, written_conn_attrs),
+        written_conn_keys,
+        written_conn_attrs,
     )

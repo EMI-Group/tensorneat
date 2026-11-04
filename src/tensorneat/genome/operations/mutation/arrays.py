@@ -30,6 +30,7 @@ __all__ = [
     "take_block",
     "take_block_at",
     "take_rows",
+    "uniform_bounds",
     "write_rows",
 ]
 
@@ -64,6 +65,27 @@ def i32(value: int) -> evoxc.SymbolicTensor:
         Rank-0 ``int32`` tensor inside the active trace.
     """
     return enp.full((), int(value), dtype=evoxc.int32)
+
+
+def uniform_bounds() -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
+    """Rank-0 ``float32`` ``0.0`` / ``1.0`` pair to hand to ``evoxc.random.uniform``.
+
+    Passing Python floats as the bounds makes ``evoxc`` embed one ``float64``
+    ``constant`` per bound *per draw*, and the reference interpreter charges a
+    full op for each of them.  ``evoxc.random.uniform`` also accepts symbolic
+    bounds, and the numpy kernel computes ``(low + u * (high - low)).astype(dtype)``
+    with the fraction ``u`` in ``float64``; ``0.0`` and ``1.0`` are exact in
+    ``float32`` as well, so every drawn value is bit-identical.  Building the
+    pair once per stage and sharing it across the stage's draws therefore turns
+    the per-draw bound constants into two constants for the whole stage.
+
+    Returns:
+        ``(low, high)``: rank-0 ``float32`` tensors holding ``0.0`` and ``1.0``.
+    """
+    return (
+        enp.full((), 0.0, dtype=evoxc.float32),
+        enp.full((), 1.0, dtype=evoxc.float32),
+    )
 
 
 def row_offsets(pop_size: int, width: int) -> evoxc.SymbolicTensor:
@@ -148,6 +170,8 @@ def first_row(
 def random_row(
     key: evoxc.SymbolicTensor,
     mask: evoxc.SymbolicTensor,
+    low: "evoxc.SymbolicTensor | None" = None,
+    high: "evoxc.SymbolicTensor | None" = None,
 ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
     """Uniformly random ``True`` entry of each batch row, with its "any entry" flag.
 
@@ -160,19 +184,23 @@ def random_row(
     Args:
         key: Rank-0 ``evoxc.random`` key; the whole batch comes from this one key.
         mask: ``(P, L) bool`` eligibility mask.
+        low: Optional rank-0 ``float32`` lower bound; ``0.0`` when omitted.
+        high: Optional rank-0 ``float32`` upper bound; ``1.0`` when omitted.
 
     Returns:
         ``(row, hit)``: ``(P,) int32`` chosen column (``0`` where the row is empty) and
         ``(P,) bool`` "this row has a ``True`` entry".
     """
     hit = evoxc.reduce_max(mask, axes=1)
-    return masked_random_row(key, evoxc.cast(mask, evoxc.float32), hit)
+    return masked_random_row(key, evoxc.cast(mask, evoxc.float32), hit, low, high)
 
 
 def masked_random_row(
     key: evoxc.SymbolicTensor,
     weights: evoxc.SymbolicTensor,
     hit: evoxc.SymbolicTensor,
+    low: "evoxc.SymbolicTensor | None" = None,
+    high: "evoxc.SymbolicTensor | None" = None,
 ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
     """Draw one sampled column out of an already masked weight block.
 
@@ -187,13 +215,21 @@ def masked_random_row(
         weights: ``(P, L) float32`` eligibility mask, ``1.0`` where eligible and
             ``0.0`` elsewhere.
         hit: ``(P,) bool`` "this row has an eligible entry" (``any(mask, axis=1)``).
+        low: Optional rank-0 ``float32`` lower bound (``0.0`` when omitted); a
+            shared tensor instead of a per-call float ``constant`` (see
+            :func:`uniform_bounds`), which draws bit-identically.
+        high: Optional rank-0 ``float32`` upper bound (``1.0`` when omitted).
 
     Returns:
         ``(row, hit)``: ``(P,) int32`` chosen column (``0`` where the row is empty) and the
         ``hit`` flag passed in.
     """
     draws = evoxc.random.uniform(
-        key, tuple(weights.shape), 0.0, 1.0, dtype=evoxc.float32
+        key,
+        tuple(weights.shape),
+        0.0 if low is None else low,
+        1.0 if high is None else high,
+        dtype=evoxc.float32,
     )
     row = evoxc.cast(evoxc.argmax(evoxc.multiply(draws, weights), axis=1), evoxc.int32)
     return row, hit
