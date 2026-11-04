@@ -220,7 +220,7 @@ Per level `l = 0 .. reduce_max(node_level)`:
 - `mask = in_valid & ~isnan(gathered source value)` — the legacy `conn_exists & src_valid` mask.
 - gather each conn gene attribute with `tools.masked_flat_gather` from the flattened `(P, C*attrs)` payload using `in_conn` (indices `(P, N, K)`).
 - gather source values with `tools.masked_flat_gather(vals, in_src)` (`(P, N, K)`).
-- `z = functions.agg.apply_aggregation(contribs, mask, agg_ids)` — masked reduce over the `K` axis, neutral-padded, dispatching on the per-node aggregation id.
+- `z = functions.agg.apply_aggregation(contribs, mask, agg_ids)` — masked reduction over the `K` axis as a static `K`-plane fold (not a `reduce_*`; `functions/CONTEXT.md` owns the recipe and its `K <= 128` bound), neutral-padded, dispatching on the per-node aggregation id.
 - `new = functions.act.apply_activation(z, act_ids)`; `vals = select((node_level == l) & valid_count > 0, new, vals)` with `valid_count = reduce_sum(in_valid, -1)`.
 The per-node `valid_count` guard matters: a node whose incoming edges are all invalid keeps `NaN` (legacy behaviour relied on `lax.cond(has_valid, ...)`).
 Kernels must never index outside `[0, size)` — evoxc's numpy backend **raises** on out-of-range gather/scatter where JAX clamped, so clamping plus masking is mandatory, not an optimisation.
