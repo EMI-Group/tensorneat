@@ -20,6 +20,6 @@ Neither script needs `Pipeline`; both are guarded by `if __name__ == "__main__":
 ## Test Strategy
 `genome_sympy.py` prints the genome `repr`, the substituted sympy formula, the Python code and the LaTeX code, then exits 0.
 `visualize_genome.py` prints the genome `repr` and `saved network figure to .../network.svg`, then exits 0.
-`network.svg` is a runtime artefact written next to the script; it is tracked in this repository, so re-running `visualize_genome.py` dirties the working tree — restore or delete it after inspecting a run and never commit a regenerated copy.
+`network.svg` is a runtime artefact the script writes next to itself: it is not tracked and not git-ignored, so delete it after inspecting a run and never commit a regenerated copy.
 Both demos need only sympy and matplotlib.
 No pytest target lives here: `test/` owns the automated suites.
