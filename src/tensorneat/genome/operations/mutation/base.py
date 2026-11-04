@@ -27,14 +27,14 @@ applied write; a probability of ``0`` still removes that operation's whole chain
 cycle predicate included — from the traced graph.
 
 Heritability rule: the value stage runs over the tables the structural stages produced, and
-the rows those stages wrote in this call are then put back verbatim.  A gene a structural
-operation creates therefore enters selection with the attributes the operation gave it —
-an add-node's identity edge still carries ``weight = 1.0``, its copy edge the consumed
-edge's weight and the new node its ``new_identity_attrs`` — instead of being re-drawn by the
-same call's attribute mutation.
+the rows the **add-node** stage wrote in this call are then put back verbatim, so a split
+stays neutral (identity edge ``weight = 1.0``, the consumed edge's weight on the copy edge,
+``new_identity_attrs`` on the new node).  A newly added *connection* is not exempt: it is
+expected to receive its weight in the call that creates it (the pre-change and legacy
+behaviour).  Deletions turn ``I_INF``/NaN and the value stage's padding mask keeps them.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 import evoxc
@@ -80,23 +80,23 @@ _STAGE_WRITES = (
     (False, True),
 )
 
+#: Per-stage static flags, in stage order, marking the stages whose newly written rows the
+#: same call's value stage must not re-draw.  Only add-node is exempt (a split has to be
+#: neutral); an add-conn edge is expected to receive its weight in the call that creates it,
+#: and the delete stages only clear rows to ``I_INF``/NaN, which the value stage keeps anyway.
+_EXEMPT_WRITES = (True, False, False, False)
+
 
 def _broadcast_row(
     row: evoxc.SymbolicTensor, pop_size: int, width: int
 ) -> evoxc.SymbolicTensor:
     """Spread one gene attribute row over the population axis.
 
-    The gene factories (``new_identity_attrs``, ``new_zero_attrs``) build a single
-    ``(W,)`` row because the values are static, while the payload writers take a
-    ``(P, W)`` block; ``broadcast_to`` expresses that in one traced op, where an
-    elementwise add against a ``(1, W)`` view would cost a full-size ``zeros`` constant
-    plus an ``add``.  ``broadcast_to`` also normalizes a ``(1, W)`` row, so a gene factory
-    returning either rank costs the same single op — no intermediate ``reshape``.
-
-    The width is passed explicitly rather than read off ``row.shape[-1:]`` so a
-    zero-width family (``attr_specs == ()``) yields a ``(P, 0)`` block instead of a
-    rank-2 broadcast of a rank-0/one-dimensional row, which the caller's
-    ``(P, 1, 0)`` ``reshape`` could not consume.
+    The gene factories build a single ``(W,)`` row while the payload writers take a
+    ``(P, W)`` block, and ``broadcast_to`` expresses that in one traced op (no full-size
+    ``zeros`` constant, no ``reshape``).  The width is passed explicitly rather than read
+    off ``row.shape`` so a zero-width family (``attr_specs == ()``) yields a ``(P, 0)``
+    block instead of a rank-2 broadcast of a rank-0/one-dimensional row.
 
     Args:
         row: ``(W,)`` or ``(1, W)`` attribute row of one gene (a rank-0 row for
@@ -110,28 +110,32 @@ def _broadcast_row(
     return enp.broadcast_to(row, (pop_size, width))
 
 
+def _fold(
+    existing: "evoxc.SymbolicTensor | None", new: evoxc.SymbolicTensor
+) -> evoxc.SymbolicTensor:
+    """Fold one exempt stage's mask into the accumulator (or start it when ``None``)."""
+    return new if existing is None else evoxc.logical_or(existing, new)
+
+
 def _written_rows(
     before: evoxc.SymbolicTensor, after: evoxc.SymbolicTensor
 ) -> evoxc.SymbolicTensor:
-    """Mark the rows one call's structural stages wrote, from a key-table difference.
+    """Mark the rows one *structural stage* wrote, from that stage's key-table difference.
 
-    Only the structural stages change a key array (the value stage touches attributes
-    alone), so one difference between the payload's key tables and the ones
-    :meth:`BaseMutation.mutate_structure` returned is the exact set of rows whose genes
-    were created in this call.  A written row carries a different key; a row the
-    structural stage *cleared* (a deleted node, a consumed or deleted connection) turns
-    ``I_INF`` and is already NaN in the attribute tables, so the value stage's own padding
-    mask keeps it and it needs no separate term.  No structural operation ever rewrites an
-    attribute row while leaving its key row unchanged, so a row whose keys match is a row
-    whose attributes must be left alone.
+    Only a structural stage changes a key array (the value stage touches attributes
+    alone), so the difference between that stage's input key table and its output names
+    exactly the rows whose genes it created or cleared.  A cleared row turns ``I_INF`` and
+    is already NaN in the attribute tables, so the value stage's padding mask keeps it
+    without a separate term; no structural operation rewrites an attribute row while
+    leaving its key row unchanged, so a matching key row means "leave it alone".
 
     Args:
-        before (evoxc.SymbolicTensor): Key array as the call received it — ``(P, max_nodes)``
+        before (evoxc.SymbolicTensor): Key array as one stage received it — ``(P, max_nodes)``
             for the node table or ``(P, max_conns, CK)`` for the connection table.
-        after (evoxc.SymbolicTensor): The same key array as ``mutate_structure`` returned.
+        after (evoxc.SymbolicTensor): The same key array as that stage returned.
 
     Returns:
-        ``(P, max_nodes)`` / ``(P, max_conns)`` bool: True where this call wrote the row.
+        ``(P, max_nodes)`` / ``(P, max_conns)`` bool: True where the stage wrote the row.
         Three-dimensional key tables fold their key-width axis, so a connection row counts
         as written when *any* of its key columns changed (the ``historical_marker`` one
         included).
@@ -239,6 +243,19 @@ class _StageContext:
         return getattr(self.context, name)
 
 
+class _StructuralWrite(NamedTuple):
+    """One ``mutate_structure`` pass: the payload plus the rows the value stage must skip.
+
+    ``node_rows`` / ``conn_rows`` are the ``(P, max_nodes)`` / ``(P, max_conns)`` bool masks
+    of the rows an exempt stage (:data:`_EXEMPT_WRITES`) wrote, or ``None`` when no exempt
+    stage ran.  They are trace-time tensors of the pass, consumed by :meth:`__call__`.
+    """
+
+    payload: GenomeTensors
+    node_rows: "evoxc.SymbolicTensor | None"
+    conn_rows: "evoxc.SymbolicTensor | None"
+
+
 class BaseMutation(StatefulBaseClass):
     """Batched mutation operator: four structural operations plus value mutation.
 
@@ -271,12 +288,12 @@ class BaseMutation(StatefulBaseClass):
 
         The key is split internally into one key per stage.  :meth:`mutate_structure` runs
         first and :meth:`mutate_values` sees the tables it produced, after which the rows
-        the structural stages wrote are restored verbatim: the value stage mutates the
-        *pre-existing* genes only, so a gene a structural operation creates is heritable
-        (an add-node's identity edge keeps ``weight = 1.0``, its copy edge the consumed
-        edge's weight, the new node its ``new_identity_attrs``) rather than re-drawn before
-        selection sees it.  Nothing is applied per individual: gates are elementwise masks
-        on axis 0 and genes whose candidate is invalid are simply carried through.
+        the **add-node** stage wrote are restored verbatim, so a split stays neutral (its
+        identity edge keeps ``weight = 1.0``, its copy edge the consumed edge's weight, the
+        new node its ``new_identity_attrs``).  A newly added connection is not restored — it
+        takes its weight from this call's value stage, as before.  Nothing is applied per
+        individual: gates are elementwise masks on axis 0 and genes whose candidate is
+        invalid are simply carried through.
 
         Args:
             state (State): Immutable host configuration container, read for gene metadata
@@ -328,7 +345,7 @@ class BaseMutation(StatefulBaseClass):
         edge_count = conn_keys.shape[1]
         node_attr_width = node_attrs.shape[2]
         conn_attr_width = conn_attrs.shape[2]
-        structured = self.mutate_structure(
+        written = self._mutate_structure(
             state,
             genome,
             structure_key,
@@ -339,23 +356,24 @@ class BaseMutation(StatefulBaseClass):
             new_node_keys,
             new_conn_keys,
         )
+        structured = written.payload
         mutated = self.mutate_values(state, genome, values_key, *structured)
-        # The value stage ran over the same tables, so the rows the structural stage wrote
-        # in this call are put back afterwards: a gene a structural operation creates is
-        # heritable — the value stage must not re-draw it before selection sees it.
-        node_attrs = structured.node_attrs
-        if node_attr_width:
-            written = _written_rows(node_keys, structured.node_keys)
+        # The value stage ran over the same tables, so the rows the exempt (add-node) stage
+        # wrote are put back afterwards: the split stays neutral — the value stage must not
+        # re-draw its identity edge, copy edge or new node row before selection sees it.
+        # Every other row, including a newly added connection, keeps the value stage's
+        # result; when no exempt stage ran the masks are ``None`` and nothing is restored.
+        node_attrs = mutated.node_attrs
+        if node_attr_width and written.node_rows is not None:
             node_attrs = evoxc.select(
-                enp.reshape(written, (pop_size, node_count, 1)),
+                enp.reshape(written.node_rows, (pop_size, node_count, 1)),
                 structured.node_attrs,
                 mutated.node_attrs,
             )
-        conn_attrs = structured.conn_attrs
-        if conn_attr_width:
-            written = _written_rows(conn_keys, structured.conn_keys)
+        conn_attrs = mutated.conn_attrs
+        if conn_attr_width and written.conn_rows is not None:
             conn_attrs = evoxc.select(
-                enp.reshape(written, (pop_size, edge_count, 1)),
+                enp.reshape(written.conn_rows, (pop_size, edge_count, 1)),
                 structured.conn_attrs,
                 mutated.conn_attrs,
             )
@@ -408,33 +426,49 @@ class BaseMutation(StatefulBaseClass):
         (duplicate edge, self-connection, cycle, capacity, ``max_in_degree``, a colliding
         caller allocation) is a bit-exact no-op for that individual.
 
-        Args:
-            state (State): Immutable host configuration container.
-            genome ("BaseGenome"): Genome providing gene objects and static capacity
-                invariants.
-            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key; split into one key per
-                operation plus one for the gate draw.
-            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys, ``I_INF`` padded.
-            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` node attributes,
-                NaN padded.
-            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys,
-                ``I_INF`` padded.
-            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` connection
-                attributes, NaN padded.
-            new_node_keys (evoxc.SymbolicTensor): ``(P,) int32`` allocated node keys.
-            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated connection
-                keys; column 0 is the add-node identity edge, column 1 the add-node copy
-                edge and column 2 the add-conn edge.
+        Called standalone this is the structure-only stage of the two-stage API; the
+        exemption bookkeeping the value stage needs is internal to :meth:`__call__`.
+
+        Args: the payload arrays take the same spellings as :meth:`__call__`, and ``key``
+        is a rank-0 ``evoxc`` key split into one key per operation plus the gate draw.
 
         Returns:
             GenomeTensors: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` after every
             stage; an individual whose gates are all off — or whose candidates were all
             refused — is returned unchanged.
+        """
+        return self._mutate_structure(
+            state,
+            genome,
+            key,
+            node_keys,
+            node_attrs,
+            conn_keys,
+            conn_attrs,
+            new_node_keys,
+            new_conn_keys,
+        ).payload
 
-        Raises:
-            ConfigError: If ``genome.network_type`` is neither ``"feedforward"`` nor
-                ``"recurrent"`` — the add-connection helper would otherwise have to guess
-                whether a cycle-closing edge is legal.
+    def _mutate_structure(
+        self,
+        state: State,
+        genome: "BaseGenome",
+        key: evoxc.SymbolicTensor,
+        node_keys: evoxc.SymbolicTensor,
+        node_attrs: evoxc.SymbolicTensor,
+        conn_keys: evoxc.SymbolicTensor,
+        conn_attrs: evoxc.SymbolicTensor,
+        new_node_keys: evoxc.SymbolicTensor,
+        new_conn_keys: evoxc.SymbolicTensor,
+    ) -> _StructuralWrite:
+        """Run the four stages and record the rows the exempt stage wrote.
+
+        The payload after every stage comes back with the masks a *stage-scoped* key-table
+        difference supplies for the stages flagged in :data:`_EXEMPT_WRITES` (add-node
+        only), so a mask names exactly the rows that stage wrote and no later stage's.  A
+        cleared connection row is dropped from the exemption: it turns ``I_INF`` (NaN
+        anyway), and a later stage may reuse the freed row for a fresh add-conn edge that
+        must still be mutated in this call.  ``None`` means no exempt stage ran.
         """
         if genome.network_type not in ("feedforward", "recurrent"):
             raise ConfigError(
@@ -454,6 +488,8 @@ class BaseMutation(StatefulBaseClass):
         node_attr_width = node_attrs.shape[2]
         conn_attr_width = conn_attrs.shape[2]
         payload = (node_keys, node_attrs, conn_keys, conn_attrs)
+        node_rows = None
+        conn_rows = None
         # Static Python loop over the four stages: ``index`` is a Python int, so both the
         # elision below and the plan/write dispatch inside the helpers are ordinary
         # Python control flow, never a traced one.
@@ -494,7 +530,7 @@ class BaseMutation(StatefulBaseClass):
                 conn_attr_width,
             )
             write_nodes, clear_conn = _STAGE_WRITES[index]
-            payload = tuple(
+            updated = tuple(
                 apply(
                     edit,
                     context,
@@ -506,7 +542,18 @@ class BaseMutation(StatefulBaseClass):
                     clear_conn=clear_conn,
                 )
             )
-        return GenomeTensors(*payload)
+            if _EXEMPT_WRITES[index]:
+                # Stage-scoped diff: this stage alone touched these key tables, so the
+                # masks name exactly the rows it wrote.  A cleared connection row is
+                # dropped (``I_INF`` ⇒ NaN anyway, and a later stage may reuse the row).
+                present = evoxc.not_equal(updated[2][:, :, 0], _int32(I_INF))
+                stage_conns = evoxc.logical_and(
+                    _written_rows(conn_keys, updated[2]), present
+                )
+                node_rows = _fold(node_rows, _written_rows(node_keys, updated[0]))
+                conn_rows = _fold(conn_rows, stage_conns)
+            payload = updated
+        return _StructuralWrite(GenomeTensors(*payload), node_rows, conn_rows)
 
     def _stage_context(
         self,
@@ -552,9 +599,10 @@ class BaseMutation(StatefulBaseClass):
 
         Called from :meth:`__call__` on the tables :meth:`mutate_structure` returned, so
         the rows a structural operation created in this call are drawn over too;
-        :meth:`__call__` then restores them from the structural write, which is what makes
-        a newly created gene heritable within the same call.  Run standalone (as the
-        two-stage API allows) this method makes no such distinction.
+        :meth:`__call__` then restores exactly the rows the exempt (add-node) stage wrote,
+        which is what keeps a split neutral within the call.  A freshly added connection is
+        deliberately *not* restored: it is expected to receive its weight here, as before.
+        Run standalone (as the two-stage API allows) this method makes no such distinction.
 
         Only ``node_attrs`` and ``conn_attrs`` change; the key arrays are returned
         untouched, and padded rows keep their sentinel values (``I_INF`` keys, NaN attrs).
