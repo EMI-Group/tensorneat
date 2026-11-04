@@ -103,7 +103,7 @@ Stability also *pins* tie order to input order and matches a compiled backend's 
 
 | kernel | P=100 | P=500 | P=1000 |
 |---|---|---|---|
-| `prepare` (dense fields + `oor` included) | 137 ops | 137 | 137 |
+| `prepare` (dense fields + `oor` included) | 140 ops | 140 | 140 |
 | `prepare` + `measure` (batch-1 centre, **dense**) | 252 ops / 187 788 B constants | 252 / 203 788 B | 252 / 223 788 B |
 | `prepare` + `measure` (batch-`P` centre, merge) | 287 ops / 189 460 B | 287 / 211 860 B | 287 / 239 860 B |
 | `execute_distance` (unchanged) | 218 ops | 218 | 218 |
