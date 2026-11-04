@@ -35,6 +35,9 @@ Host-only helpers (`network_dict`, `sympy_func`, `visualize`, `repr`, `hash`) st
 `step(state) -> (state, previous_pop, fitnesses)` is the single compile site and one compiled-graph run; fitness is **last**, a host `numpy` `(P,)` float32 array, `previous_pop` is a `GenomeTensors` of host arrays (the population that produced those fitnesses) and `step` prints nothing.
 `auto_run(state) -> (state, best_genome)` loops on the host until `fitness_target` or `generation_limit`, owning all output, logging, checkpointing and early stop.
 `show(state, best)` prints one genome's behaviour through the problem's host-side `show` (schedule derived once, network re-baked as `evoxc.constant`), and `show_config() -> dict` is the JSON-serialisable description of the run.
+`best_genome` is spelled **batch-first** everywhere: a one-individual batch — `node_keys (1, max_nodes)`, `node_attrs (1, max_nodes, A)`, `conn_keys (1, max_conns, key_width)`, `conn_attrs (1, max_conns, W)` — i.e. exactly `state.pop` at `P = 1`; `None` when no generation produced a finite fitness.
+`auto_run`/`_analyse` store the selected individual with its leading axis added back, and `show` accepts that batch as well as the bare rows a checkpoint stores (`host_payload._one_individual` promotes bare rows and rejects a payload whose arrays disagree about the population axis or use an impossible rank).
+`tensorneat.__version__` is `importlib.metadata.version("tensorneat")` with a `PackageNotFoundError` fallback to `"0.0.0"`; it imports nothing that reaches a backend.
 Host-visible attributes: `fitness_history` (list of `(generation, max_fitness)`), `best_fitness`, `best_genome`, `shape_signature`, `build_seconds`, `builds`, `_executables`, `save_dir`.
 Fitness is maximized; NaN or infinite fitness is mapped to `-inf` before selection so broken topologies cannot win.
 No `problem.jitable` flag exists: whether a graph compiles is the backend's business and `evoxc.BackendError` propagates.
