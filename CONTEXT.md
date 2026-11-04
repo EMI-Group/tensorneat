@@ -43,9 +43,10 @@ The winning structural idea is *edge-proportional, depth-parallel* evaluation: w
 | cell | median ms/gen before | median ms/gen now | peak RSS before → now |
 | --- | --- | --- | --- |
 | xor p100 | 43.47 | 38.58 | 118.2 → 114.4 MiB |
-| xor p500 | 268.39 | 159.90 | 260.8 → 240.5 MiB |
-| xor p1000 | 342.21 | 270.08 | 431.6 → 391.5 MiB |
+| xor p500 | 262.5 | 159.5 | 260.8 → 240.5 MiB |
+| xor p1000 | 504.2 | 277.2 | 431.3 → 391.7 MiB |
 | xor3d p500 | 290.04 | 176.98 | 291.3 → 264.7 MiB |
+The pop-500/pop-1000 rows are the median of three interleaved base/new rounds (the base median itself drifts 191.8–262.8 ms and 484.1–526.8 ms across rounds on this shared box; the new side stays inside 156.8–162.8 and 272.7–282.9, so even the most conservative pairing is −17 % / −43 %).
 A generation is now **8 150 executed IR ops** (was 10 767), and ~63 % of the remaining wall time is the numpy interpreter's fixed per-op cost (~13 µs: operand resolution + dtype/shape validation + `Tensor` construction in `evoxc/backends/numpy/interpreter.py::_run_block`), not array work — so **executed op count is the lever for any further win**, and host-side bookkeeping in `Pipeline.step` is 0.1 %.
 The interpreter keeps every SSA result of a block alive until that block returns, so a kernel's live set is charged once per enclosing block: **never hoist a kernel out of a `while`/`scan` without measuring peak RSS** (hoisting the 20 speciation rows was 28 % faster and 1.7× the memory; measuring them inside one `evoxc.scan` is 40 % faster and below the starting memory).
 `benchmarks/RESULTS.md` predates this pass (its new-side rows are stale; the verdict must be re-rendered by `run_benchmark.py`, never hand-edited).
