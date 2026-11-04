@@ -8,11 +8,11 @@ Every suite reads `../src/tensorneat` and `../benchmarks/legacy_jax` as read-onl
 
 ## How to run
 Commands an owner runs from the repo root (`[tool.pytest.ini_options]` in `pyproject.toml` sets `testpaths = ["test"]`, `addopts = "-q"`; a doubled `-q` suppresses the summary line, so read the counts with `-o addopts=""`):
-- `pytest -m "not parity and not slow"` — the default gate: `./unit` plus the release gate, numpy backend only, no optional dependency. Measured on this machine: **466 passed, 0 failed, 0 xfailed in 97 s**, with 36 tests deselected and the four JAX parity modules reported as skips at import.
+- `pytest -m "not parity and not slow"` — the default gate: `./unit` plus the release gate, numpy backend only, no optional dependency. Measured on this machine: **466 passed, 0 failed, 0 xfailed in 80 s**, with 39 tests deselected and the four JAX parity modules reported as skips at import.
 - `pytest -m parity` — kernel equality against the frozen legacy JAX implementation; needs `pip install -e ".[bench]"` and finishes in **19 s** (53 passed). Without the extra, the four JAX oracle modules skip at import and `test_convert.py` alone runs **18 passed**. Every parity module calls `pytest.importorskip("jax")` so a bare environment skips rather than errors.
-- `pytest -m slow` — `./integration` (XOR evolution, determinism, rebuild-on-shape-change, checkpoint round-trip) plus the release gate's end-to-end XOR run: **18 passed in 94 s**.
+- `pytest -m slow` — `./integration` (XOR evolution, determinism, rebuild-on-shape-change, checkpoint round-trip) plus the release gate's end-to-end XOR run: **21 passed, 4 skipped in 86 s**.
 - `pytest test/release_gate_no_jax.py` — the import-hygiene gate alone; **4 passed**.
-- `pytest` (no marker) — the whole tree: **502 passed, 4 skipped in 188 s** in a bare environment, the skips being the four JAX parity modules.
+- `pytest` (no marker) — the whole tree: **505 passed, 4 skipped in 163 s** in a bare environment, the skips being the four JAX parity modules.
 Markers `parity` and `slow` are declared in `pyproject.toml`; `requires_iree` is declared in `conftest.py` and is in no gate (it needs `evoxc[iree]`).
 
 ## Layout
@@ -28,7 +28,7 @@ test/
   integration/           whole-Pipeline runs, marker `slow`
 ```
 Every directory that holds test modules carries an `__init__.py`: pytest's default prepend import mode names a module by its basename, so un-namespaced directories collide (`test/unit/genome/test_forward.py` vs `test/parity/test_forward.py`) and abort the session with an import-mismatch error.
-Current counts: `unit/common` 155, `unit/genome` 100, `unit/algorithm` 144, `unit/problem` 62, `unit/test_version.py` 2, `parity` 53 (18 without jax), `integration` 17, release gate 4.
+Current counts: `unit/common` 155, `unit/genome` 100, `unit/algorithm` 144, `unit/problem` 62, `unit/test_version.py` 2, `parity` 53 (18 without jax), `integration` 20, release gate 4.
 
 ## What each suite proves
 - `./unit/common` — the schedule derived from a hand-built genome has the right level order, incoming-edge windows and sentinels, `validate_schedule` accepts what `derive_schedule` produces and rejects every tampered invariant, flat gather/scatter/mutation helpers agree with a plain-numpy oracle, the ACT/AGG dispatchers agree with a per-option Python loop for all 12 ACT / 6 AGG ids (including `-1` and out-of-range ⇒ identity), `State` is an immutable pytree container, and the host graph walks (`decode_graph`, `topological_sort`, `find_useful_nodes`, `node_depth`, `check_cycles`) agree with the in-graph `node_level`.
@@ -36,7 +36,7 @@ Current counts: `unit/common` 155, `unit/genome` 100, `unit/algorithm` 144, `uni
 - `./unit/algorithm` — speciation, stagnation, spawn allocation, parent selection and `NEAT.tell` bookkeeping: `sum(spawn) == pop_size`, the last-qualifying-block layout rule, damping law and `min_species_size` floor, elite pinning, father-wins-tie, no NaN fitness surviving `tell`, a one-member species never yielding NaN probabilities, every genome ending in exactly one species.
 - `./unit/problem` — func-fit losses against the closed form for each `error_method`, individual-major dataset tiling order, `NaN` prediction ⇒ `-inf` fitness, `CustomFuncFit` sampling from a seeded `Generator` (`method="grid"` pinned), `CartPole` construction validation and returns against a host-numpy re-implementation of the same Euler dynamics, and NaN logits ⇒ `-inf` fitness.
 - `./parity` — on *identical* genomes: `forward` values and NaN pattern (rtol 1e-5) on chain / skip / isolated / random-DAG genomes, `execute_distance` closed forms, `XOR`/`XOR3d` fitness for every `error_method`, and gradients w.r.t. `conn_attrs`/`node_attrs` (rtol 1e-4), plus the lossless-schedule guard in `convert.py`.
-- `./integration` — `Pipeline.auto_run` reaches the XOR fitness target inside a small generation budget, the same seed reproduces the same run, a shape-signature change rebuilds (and does not corrupt) the cached executable, and `is_save` writes a loadable checkpoint.
+- `./integration` — `Pipeline.auto_run` reaches the XOR fitness target inside a small generation budget, the same seed reproduces the same run, a shape-signature change rebuilds (and does not corrupt) the cached executable, `is_save` writes a loadable checkpoint, and the documented reporting tail `show(state, best)` prints the XOR report for the batched best and for its bare rows.
 - `release_gate_no_jax.py` — in a clean subprocess, `import tensorneat` leaves `jax`, `torch`, `brax`, `gymnax`, `mujoco` out of `sys.modules`, and a full XOR generation still runs.
 
 ## Shared infrastructure (`./support`)
