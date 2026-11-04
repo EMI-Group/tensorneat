@@ -43,7 +43,7 @@ Every number comes from one worker run of one `(case, impl, backend, repeat)` tu
 - Trajectories or bitwise equality: the sides use different PRNGs (JAX `PRNGKey` vs evoxc splitmix64), so one seed identifies the same *workload*, not the same search. Numerical fidelity is `test/parity/`'s job.
 - Accelerator numbers: the contract is CPU; `--backend iree|xla|tvm` rows are informational.
 - Import time and visualization/codegen cost (only `rss_after_import_mb` is recorded).
-- CartPole against the legacy side: the pre-rewrite library has no evoxc CartPole (its RL problems are gym/brax/mujoco based and need extra dependencies), so that case is new-only and marked `n/a` for old.
+- CartPole against the legacy side: the pre-rewrite library has no evoxc CartPole (its RL problems are gym/brax/mujoco based and need extra dependencies), so that case is new-only and marked `n/a` for old; on the numpy backend it measures ~275 ms/gen after the rollout hoist (`results/fix_after.json` at `90d97b4`, was 381.73 in the committed record).
 ## Verdict Rules
 - timing PASS when `new_ms_per_generation <= old_ms_per_generation` for every case both sides ran (speed-up >= 1.00x).
 - quality PASS when `new_final_best >= old_final_best - max(QUALITY_TOLERANCE_REL * |old_final_best|, QUALITY_ABS_TOL)` for every such case, with `QUALITY_TOLERANCE_REL = 0.10` and `QUALITY_ABS_TOL = 1e-3` owned by `harness/protocol.py`.
