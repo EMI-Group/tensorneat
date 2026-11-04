@@ -527,8 +527,11 @@ def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
         ``start[i] = cc[i - 1]`` (``0`` for ``i == 0``) and ``col = rank -
         start[dst]``; the flat scatter target ``dst * K + col`` lands in a ``(P, N *
         K + 1)`` buffer whose trailing cell is the dump slot, so edges with ``col
-        >= K`` or an invalid row go there instead of raising. ``edge_overflow`` is
-        a ``reduce_sum`` of ``(col >= K) & edge_valid``: data, not an exception.
+        >= K`` or an invalid row go there instead of raising. Both tables are
+        written by **one** scatter over a doubled buffer (:func:`_window_pair`),
+        because two scatters sharing one index block do not compile on IREE.
+        ``edge_overflow`` is a ``reduce_sum`` of ``(col >= K) & edge_valid``:
+        data, not an exception.
     """
     max_nodes = _positive_static(max_nodes, "max_nodes")
     max_in_degree = _positive_static(max_in_degree, "max_in_degree")
@@ -561,11 +564,14 @@ def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
         evoxc.multiply(safe_dst, _scalar_constant(max_in_degree, evoxc.int32)),
         evoxc.select(keep, kept_column, zero),
     )
-    block = _window_block(target, keep, pop_size, max_nodes, max_in_degree)
-    in_conn = _window_table(
-        block, _node_slots(pop_size, max_conns), pop_size, max_nodes, max_in_degree
+    in_conn, in_src = _window_pair(
+        target,
+        keep,
+        (_node_slots(pop_size, max_conns), src),
+        pop_size,
+        max_nodes,
+        max_in_degree,
     )
-    in_src = _window_table(block, src, pop_size, max_nodes, max_in_degree)
     edge_overflow = evoxc.cast(
         evoxc.reduce_sum(
             evoxc.cast(
@@ -579,30 +585,58 @@ def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
     return in_conn, in_src, edge_overflow
 
 
-def _window_block(target, keep, pop_size, max_nodes, max_in_degree):
-    """Flat scatter block for the ``(P, N*K + 1)`` window buffer, built once.
+def _window_pair(target, keep, updates, pop_size, max_nodes, max_in_degree):
+    """Scatter both window payloads into their ``(P, N, K)`` tables in **one** write.
 
-    ``target = dst * K + col`` is provably inside ``[0, N*K)``; a row without
-    ``keep`` is routed to the dump cell ``N*K``, so the block is ``trusted``.
+    Args:
+        target: ``(P, C)`` ``int32`` cell of every connection row,
+            ``dst * K + col``; provably inside ``[0, N * K)``.
+        keep: ``(P, C)`` ``bool`` — row lands in the window (``False`` routes it
+            to a dump cell instead).
+        updates: pair of ``(P, C)`` ``int32`` payloads, scattered through the
+            *same* cell block (connection row ids and source slots).
+        pop_size (int): ``P``; max_nodes (int): ``N``; max_in_degree (int): ``K``.
+
+    Returns:
+        tuple: two ``(P, N, K)`` ``int32`` tables, ``I_INF`` where no edge landed.
+
+    Notes:
+        **One scatter, never two.** Both payloads write the same cells, so a
+        per-payload scatter would reuse one index block for two ``scatter`` ops,
+        and that is not portable: IREE's StableHLO→Linalg conversion collapses a
+        rank-2 ``(K, 1)`` scatter index to rank 1 through a materialization it
+        cannot resolve while a second op still consumes the rank-2 value, and
+        ``iree-compile`` then fails with ``failed to legalize unresolved
+        materialization from ('tensor<Kx1xi32>') to ('tensor<Kxi32>')``.
+        The two payloads therefore share one ``(P, 2 * (N * K + 1))`` buffer —
+        the second half offset by one window-span — and one index block, so a
+        single scatter writes both tables; the cost is also one scatter instead
+        of two.
+        Every dropped write (``keep == False``, or ``col >= K``) goes to the
+        last cell of the second half, which is that half's dump column and is
+        sliced off with the rest of it.
     """
     width = max_nodes * max_in_degree
-    return prepare_flat_index((pop_size, width + 1), target, keep, width, trusted=True)
-
-
-def _window_table(block, updates, pop_size, max_nodes, max_in_degree):
-    """Scatter one payload into a fresh ``(P, N, K)`` window table.
-
-    The shared body of :func:`incoming_table`'s two passes: an ``(P, N*K + 1)``
-    ``I_INF`` buffer written through ``block`` (dropped rows land in its trailing
-    cell), the dump column sliced off and the rest reshaped to the window.
-    """
-    width = max_nodes * max_in_degree
-    buffer = flat_scatter_prepared(
-        enp.full((pop_size, width + 1), I_INF, dtype=evoxc.int32), block, updates
+    span = width + 1
+    first, second = updates
+    columns = evoxc.concatenate(
+        [target, evoxc.add(target, _scalar_constant(span, evoxc.int32))], axis=1
     )
-    return evoxc.reshape(
-        evoxc.slice(buffer, (0, 0), (pop_size, width)),
-        (pop_size, max_nodes, max_in_degree),
+    writes = evoxc.concatenate([keep, keep], axis=1)
+    block = prepare_flat_index(
+        (pop_size, 2 * span), columns, writes, 2 * span - 1, trusted=True
+    )
+    buffer = flat_scatter_prepared(
+        enp.full((pop_size, 2 * span), I_INF, dtype=evoxc.int32),
+        block,
+        evoxc.concatenate([first, second], axis=1),
+    )
+    return tuple(
+        evoxc.reshape(
+            evoxc.slice(buffer, (0, start), (pop_size, width)),
+            (pop_size, max_nodes, max_in_degree),
+        )
+        for start in (0, span)
     )
 
 
