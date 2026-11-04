@@ -97,8 +97,11 @@ class DefaultGenome(BaseGenome):
                 input-to-output layer.
             max_in_degree: Static window width ``K``; ``None`` resolves to
                 ``max(initial in-degree, 4)``.
-            max_depth: Static depth unroll count ``D``; deeper networks leave their unreachable
-                tail NaN (and raise ``Transformed.overflow``).
+            max_depth: Static depth unroll count ``D``; a node deeper than ``D`` is never
+                visited and keeps its ``NaN`` value. That truncation is silent: it never sets
+                ``Transformed.overflow``, which is only the ``edge_overflow > 0`` alias of the
+                connection-count overflow (a node with more than ``max_in_degree`` incoming
+                edges).
             key_span: Static key bound ``S`` of the schedule's dense key table; ``None``
                 resolves to ``max(max_nodes, num_inputs + num_outputs) + max_conns``. A caller
                 that allocates structural keys beyond that default (the mutation operators take
@@ -172,7 +175,9 @@ class DefaultGenome(BaseGenome):
         graph. The bound is the population maximum because the loop counter is one scalar, so a
         batch containing one deep individual still pays for it. A node whose level exceeds
         ``max_depth`` is never visited and keeps the ``NaN`` seed (the documented depth limit; a
-        rebuild with a larger ``max_depth`` is the fix, and ``Transformed.overflow`` flags it).
+        rebuild with a larger ``max_depth`` is the fix, and nothing reports it — only a
+        connection that missed its incoming window sets ``Transformed.overflow``, the
+        ``edge_overflow > 0`` alias of the per-individual dropped-edge count).
 
         Args:
             state: Host configuration container.

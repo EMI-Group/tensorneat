@@ -4,9 +4,15 @@ This module owns host-side configuration (static sizes, gene/operator objects, t
 the payload/row-key invariant, the schedule entry point and the operator entry points.
 The *shared* window-reduce machinery both concrete genomes compose lives in ``step.py``
 (:class:`NodeStepMixin`) — ``default.py`` and ``recurrent.py`` must not duplicate it.
-Every compute method is batch-first (population on axis 0) with static shapes: no
-``vmap``/``vectorize`` and no ``scan``/``while_loop``/``cond`` — depth and tick loops are plain
-Python ``for`` loops unrolled at trace time, which is what keeps ``evoxc.grad`` usable.
+Every compute method is batch-first (population on axis 0) with static shapes: batch
+dimensions are written explicitly and ``vmap``/``vectorize`` is never applied over these
+kernels. Control flow (``scan``/``cond``/``while_loop``) appears only at the outermost layer
+of a kernel — the feedforward level sweep's ``while_loop`` (``default.py``), the mutation
+cycle predicate, and the ``while_loop``/``cond`` of the schedule derivation
+(``../common/tensorization.py``) — never inside a level step and never under ``vmap``. The
+exact gradient path in ``grad.py`` uses no region op at all: its level loop is a plain Python
+``for`` unrolled at trace time, which is what keeps ``evoxc.grad`` usable, and the recurrent
+path unrolls its ``activate_time`` ticks the same way.
 The exact gradient path — a dense-weight twin of the window forward, needed because evoxc
 0.1.0's ``gather`` VJP does not accumulate duplicate indices — lives in ``grad.py``;
 :meth:`BaseGenome.grad` is its public entry point and delegates there.
@@ -17,7 +23,9 @@ Every name below is provided by the ``common`` node and is never re-derived here
 ``../common.functions.apply_activation``/``apply_aggregation`` are the only activation and
 window-reduce kernels, reached through the node gene.
 ``../common.tools.I_INF`` is the ``int32`` "no index" sentinel padding every key array, and
-``../common.tools.masked_flat_gather`` is the flat-index gather used by the window step.
+``./window._gather_prepared`` is the flat-index gather the window step uses (prepared once per
+forward pass by ``window._slot_index``; ``../common.tools.masked_flat_gather`` is not on this
+path).
 ``../common.State``/``StatefulBaseClass`` are the immutable host containers and
 ``../common.errors.TensorNEATError`` (``ConfigError``) covers every configuration violation.
 
@@ -888,8 +896,9 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
             *args: One payload (``GenomeTensors`` or the four-array spelling).
 
         Returns:
-            ``DistanceDigest`` — a six-tensor pytree, batch-first over the input
-            population, cacheable for one generation.
+            ``DistanceDigest`` — a 19-field pytree (15 tensors plus four static
+            scaffolds), batch-first over the input population, cacheable for one
+            generation.
 
         Raises:
             TensorNEATError: If more than one payload is passed.

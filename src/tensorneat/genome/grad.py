@@ -40,6 +40,7 @@ from ..common import (
     validate_schedule,
 )
 from ..common.errors import ConfigError
+from .window import fill
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps base -> grad a one-way import
     from .base import BaseGenome
@@ -326,7 +327,7 @@ def dense_forward(
     # needed on the (P, E) update vector.
     updates = evoxc.select(_graph_constant(plan.edge_used), weight, zero)
     scattered = evoxc.scatter(
-        enp.zeros((pop_size * padded_cells,), dtype=evoxc.float32),
+        fill((pop_size * padded_cells,), 0.0, dtype=evoxc.float32),
         _graph_constant(plan.cell_index),
         evoxc.reshape(updates, (pop_size * max_conns,)),
     )
@@ -344,8 +345,10 @@ def dense_forward(
         seeded = evoxc.concatenate(
             [
                 seeded,
-                enp.zeros(
-                    (pop_size, max_nodes - genome.num_inputs), dtype=evoxc.float32
+                fill(
+                    (pop_size, max_nodes - genome.num_inputs),
+                    0.0,
+                    dtype=evoxc.float32,
                 ),
             ],
             axis=1,
@@ -353,7 +356,7 @@ def dense_forward(
     values = evoxc.select(
         _graph_constant(plan.input_rows),
         seeded,
-        enp.full((pop_size, max_nodes), float("nan"), dtype=evoxc.float32),
+        fill((pop_size, max_nodes), float("nan"), dtype=evoxc.float32),
     )
 
     live_matrix = _graph_constant(plan.live_matrix)
