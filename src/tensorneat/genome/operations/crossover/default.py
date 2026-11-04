@@ -102,7 +102,9 @@ class DefaultCrossover(BaseCrossover):
         """Locate, for every gene of parent 1, its homologous row in parent 2.
 
         Exact match on the whole key-column tuple, found by one rank merge: one packed
-        ``uint64`` identity per gene row, one ``argsort`` of the two parents' concatenated
+        ``int64`` identity per gene row (sign-flipped so a signed ``argsort`` orders it like
+        the unsigned pack, see :func:`~..alignment.row_identity`), one ``argsort`` of the two
+        parents' concatenated
         identities whose inverse permutation is the rank, and a successor test on the
         element right after each gene in sorted order — a gene has a homologue exactly when
         its successor is a parent-2 row with the same identity.  That is ``O(M log M)`` in
