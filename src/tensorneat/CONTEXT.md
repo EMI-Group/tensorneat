@@ -45,7 +45,7 @@ No `problem.jitable` flag exists: whether a graph compiles is the backend's busi
 ## Compile Site
 One `evoxc` graph per shape signature covers `split randkey → ask → transform → problem.evaluate(eval_key, act_fn) → tell`, so a generation is one `evoxc.run` plus host bookkeeping.
 The graph boundary carries **tensors only** (the four payload arrays, `generation`, `randkey`, the `SpeciesState` leaves, then `fitness` and the eval-phase `edge_overflow` maximum); the tensor-free configuration `State` is baked through the closure (`Pipeline._static_config` drops every tensor and every `_RUNTIME_KEYS` entry, the `NEAT._static_state` pattern), so no concrete tensor is ever captured by a trace.
-`act_fn` is a closure over the already-transformed schedule: it repeats the schedule and payload `S = rows / P` times with `_repeat_batch` in **individual-major** order, matching how a problem tiles a dataset or a rollout batch, and runs `algorithm.forward` through the arity adapter (`NEAT` takes the payload, `HyperNEAT` hides it in its substrate schedule).
+`act_fn` is a closure over the already-transformed schedule: it repeats the schedule and payload `S = rows / P` times with `host_payload._repeat_batch` in **individual-major** order, matching how a problem tiles a dataset or a rollout batch, and runs `algorithm.forward` through the arity adapter (`NEAT` takes the payload, `HyperNEAT` hides it in its substrate schedule).
 `ask` costs zero ops, so the returned `previous_pop` *is* the population that produced `fitnesses`.
 
 ## Caching Policy
