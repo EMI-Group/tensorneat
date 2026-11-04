@@ -36,7 +36,11 @@ Tiled batches: a problem tiles its dataset (``P * S`` rows) or its episodes
 (``P * R`` rows) over the population axis, while the genome kernels are
 batch-first over ``P``.  The ``act_fn`` this module hands the problem therefore
 repeats the schedule and the payload ``S`` times with
-:func:`_repeat_batch`, in the individual-major order the problem's tiling uses.
+:func:`~tensorneat.host_payload._repeat_batch`, individual-major as the problem tiles.
+
+A "best genome" is **batch-first**: the selected individual is a one-individual
+batch (``node_keys (1, max_nodes)``, ``conn_keys (1, max_conns, key_width)``,
+...), i.e. ``state.pop`` at ``P = 1``; only the checkpoint files flatten it.
 
 No ``jax``, no ``torch``, no ``numpy.random``: ``numpy`` appears only in the
 host-side bookkeeping of :meth:`Pipeline.auto_run` (logging, checkpointing) and
@@ -125,6 +129,15 @@ import numpy as np
 from .algorithm import BaseAlgorithm
 from .common import State, StatefulBaseClass, TensorNEATError, to_numpy
 from .genome.utils import GenomeTensors
+from .host_payload import (
+    _config_value,
+    _declared_shape,
+    _jsonable,
+    _one_individual,
+    _repeat_batch,
+    _run_network,
+    _schedule_overflow,
+)
 from .problem import BaseProblem
 
 __all__ = ["Pipeline"]
@@ -134,175 +147,8 @@ __all__ = ["Pipeline"]
 _RUNTIME_KEYS: tuple[str, ...] = ("pop", "generation", "species", "randkey")
 
 
-# --------------------------------------------------------------------------- #
-# module helpers (host-side rendering + the tiled-batch act_fn body)
-# --------------------------------------------------------------------------- #
-
-
-def _jsonable(value: Any) -> Any:
-    """Render one configuration value so ``json.dumps`` can always accept it.
-
-    Primitives pass through (NumPy scalars unwrapped with ``.item()``),
-    containers are rendered element-wise and anything else becomes
-    ``repr(value)``, so a compiled executable or a gene object shows up in
-    ``config.txt`` instead of aborting the checkpoint.
-    """
-    if value is None or isinstance(value, (bool, str)):
-        return value
-    if isinstance(value, (int, float)):
-        return value
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return [_jsonable(item) for item in value]
-    return repr(value)
-
-
-def _config_value(owner: Any, name: str) -> Any:
-    """The ``_jsonable`` value of ``owner.name``, or ``None`` when it does not exist.
-
-    Only the two "this value is not available here" errors (``AttributeError``,
-    ``NotImplementedError`` from an abstract shape) are absorbed; any other
-    exception is a bug in the configuration object and propagates.
-    """
-    try:
-        value = getattr(owner, name)
-    except (AttributeError, NotImplementedError):
-        return None
-    return _jsonable(value)
-
-
-def _declared_shape(owner: Any, name: str) -> Optional[tuple[int, ...]]:
-    """The per-sample ``input_shape``/``output_shape`` of ``owner``, or ``None``.
-
-    Raises:
-        TensorNEATError: If the declared value is not a sequence of ints -- a
-            broken declaration must not read as "no shape".
-    """
-    try:
-        value = getattr(owner, name)
-    except (AttributeError, NotImplementedError):
-        return None
-    try:
-        return tuple(int(size) for size in value)
-    except TypeError as error:
-        raise TensorNEATError(
-            f"{type(owner).__name__}.{name} must be a sequence of ints, got {value!r}"
-        ) from error
-
-
-def _schedule_overflow(schedule: Any) -> Any:
-    """The ``(P,)`` overflow counter of a schedule, or ``None`` if it has none.
-
-    A genome ``Transformed`` exposes ``edge_overflow`` directly; a wrapper such
-    as ``HyperNEAT``'s ``SubstrateSchedule`` nests the genome schedule in its
-    ``schedule`` field; a fixed topology overflows by construction, never.
-    The branch is over *types* at trace time, never over a traced value.
-    """
-    overflow = getattr(schedule, "edge_overflow", None)
-    if overflow is None:
-        overflow = getattr(getattr(schedule, "schedule", None), "edge_overflow", None)
-    return overflow
-
-
-def _repeat_batch(tree: Any, factor: int, pop_size: int) -> Any:
-    """Repeat every batch-first leaf of a pytree ``factor`` times along axis 0.
-
-    A problem tiles its batch over the population axis, so the schedule and the
-    payload must be repeated to ``P * factor`` rows in the flat order
-    ``p * factor + s`` (individual slowest) that the tiling uses.  Leaves
-    without the population axis (a shared key or order table) pass through.
-    """
-    if factor == 1:
-        return tree
-
-    def expand(leaf: Any) -> Any:
-        """Repeat one leaf along a new sample axis, if it carries the population."""
-        shape = getattr(leaf, "shape", None)
-        if not shape or int(shape[0]) != pop_size:
-            return leaf
-        trailing = tuple(int(size) for size in shape[1:])
-        widened = enp.reshape(leaf, (pop_size, 1) + trailing)
-        repeated = enp.broadcast_to(widened, (pop_size, factor) + trailing)
-        return enp.reshape(repeated, (pop_size * factor,) + trailing)
-
-    return evoxc.tree_map(expand, tree)
-
-
-def _run_network(
-    state: State,
-    forward: Callable[[Any, Any, Any, Any], Any],
-    transformed: Any,
-    payload: GenomeTensors,
-    inputs: Any,
-) -> Any:
-    """Evaluate a population on a tiled batch (the body of every ``act_fn``).
-
-    ``transformed``/``payload`` arrive batch-first over ``P``; ``inputs`` is
-    ``(P * S, *input_shape)``, so both are repeated ``S`` times before the
-    ``forward`` adapter (:meth:`Pipeline._forward_adapter`) runs them.
-
-    Raises:
-        TensorNEATError: If the batch is not a positive multiple of ``P``.
-    """
-    row_count = int(payload.node_keys.shape[0])
-    batch = int(inputs.shape[0])
-    factor, remainder = divmod(batch, row_count)
-    if remainder or factor < 1:
-        raise TensorNEATError(
-            f"the problem asked the network for a batch of {batch} row(s), which is "
-            f"not a positive multiple of the population {row_count}; a tiled "
-            "dataset must be individual-major over the population axis"
-        )
-    return forward(
-        state,
-        _repeat_batch(transformed, factor, row_count),
-        inputs,
-        _repeat_batch(payload, factor, row_count),
-    )
-
-
-def _one_individual(payload: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Normalise a payload to its four arrays with **one** individual on axis 0.
-
-    Args:
-        payload (Any): A ``GenomeTensors`` (or any four-element sequence) whose
-            arrays either carry a population axis of length 1 or are the bare
-            per-individual rows :attr:`Pipeline.best_genome` stores.
-
-    Returns:
-        tuple: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` as numpy arrays
-        shaped ``(1, N)``, ``(1, N, NA)``, ``(1, E, CK)``, ``(1, E, CA)``.
-
-    Raises:
-        TensorNEATError: If the payload is not four non-scalar arrays.
-    """
-    fields = list(payload)
-    if len(fields) != 4:
-        raise TensorNEATError(
-            "a genome payload is the four arrays (node_keys, node_attrs, conn_keys, "
-            f"conn_attrs), got {len(fields)} array(s) of {type(payload).__name__}"
-        )
-    arrays = []
-    for index, field in enumerate(fields):
-        array = np.asarray(to_numpy(field))
-        if array.ndim == 0:
-            raise TensorNEATError(
-                f"payload field {index} is rank-0; expected a per-individual row "
-                "(node_keys (N,), node_attrs (N, NA), conn_keys (E, CK), "
-                "conn_attrs (E, CA)) or the same with a leading population axis"
-            )
-        arrays.append(array)
-    node_keys, node_attrs, conn_keys, conn_attrs = arrays
-    if node_keys.ndim == 1:
-        node_keys = node_keys[np.newaxis, :]
-        node_attrs = node_attrs[np.newaxis, ...]
-        conn_keys = conn_keys[np.newaxis, ...]
-        conn_attrs = conn_attrs[np.newaxis, ...]
-    return node_keys, node_attrs, conn_keys, conn_attrs
-
+# The host payload helpers (``_repeat_batch``, ``_one_individual``, ...) live in
+# :mod:`tensorneat.host_payload` and are imported above.
 
 # --------------------------------------------------------------------------- #
 # the pipeline
@@ -388,6 +234,8 @@ class Pipeline(StatefulBaseClass):
         self._validate_arity()
 
         # In-memory trajectory / best-so-far; reset again by ``setup``.
+        # ``best_genome`` is a one-individual batch -- ``state.pop`` at ``P = 1``,
+        # so ``(1, max_nodes)`` keys and ``(1, max_nodes, A)`` node attrs.
         self.fitness_history: list[tuple[int, float]] = []
         self.best_fitness: float = float("-inf")
         self.best_genome: Optional[GenomeTensors] = None
@@ -893,9 +741,11 @@ class Pipeline(StatefulBaseClass):
 
         Returns:
             tuple: ``(state, best_genome)`` -- the final state and the best
-            payload seen (``GenomeTensors`` of host numpy arrays, one individual
-            without a population axis), or ``None`` if no generation produced a
-            finite fitness.
+            payload seen, a ``GenomeTensors`` of host numpy arrays shaped as a
+            **one-individual batch** (``node_keys (1, max_nodes)``,
+            ``node_attrs (1, max_nodes, A)``, ``conn_keys (1, max_conns,
+            key_width)``, ``conn_attrs (1, max_conns, W)`` -- ``state.pop`` at
+            ``P = 1``), or ``None`` if no generation produced a finite fitness.
 
         Raises:
             TensorNEATError: Propagated from :meth:`step` (e.g. schedule
@@ -943,6 +793,9 @@ class Pipeline(StatefulBaseClass):
         counter is what the log numbers, as in the legacy library),
         ``previous_pop``/``fitnesses`` are the population that produced this
         generation's fitness and ``cost_time`` its wall time in seconds.
+        The best individual is stored **batch-first** -- the selected rows with a
+        leading population axis of 1 added back, so :attr:`best_genome` is
+        ``state.pop`` at ``P = 1``, never a set of bare rows.
         Both diagnostics hooks are *reporting* only, so neither can abort an
         evolution run: a failing hook is printed (never swallowed silently) and
         the loop continues.
@@ -961,8 +814,10 @@ class Pipeline(StatefulBaseClass):
         max_index = int(np.argmax(fitnesses))
         if float(fitnesses[max_index]) > self.best_fitness:
             self.best_fitness = float(fitnesses[max_index])
+            # ``previous_pop``'s fields are ``(P, ...)``, so an index gives a bare
+            # row; add the leading axis back to keep the one-individual batch.
             self.best_genome = GenomeTensors(
-                *(np.array(field[max_index]) for field in previous_pop)
+                *(np.asarray(field[max_index])[np.newaxis, ...] for field in previous_pop)
             )
 
         if self.is_save:
@@ -1068,15 +923,20 @@ class Pipeline(StatefulBaseClass):
 
         Args:
             state (State): State carrying the configuration (a ``setup`` output).
-            best (Any): The genome to report: a ``GenomeTensors`` (four arrays,
-                with or without a leading population axis), a four-element
-                sequence, or the ``best_genome`` :meth:`auto_run` returns.
+            best (Any): The genome to report, spelled **batch-first** like
+                :attr:`best_genome`: a ``GenomeTensors`` of four arrays with a
+                leading population axis of 1 (``node_keys (1, max_nodes)``,
+                ``conn_keys (1, max_conns, key_width)``, ...), a four-element
+                sequence of those, or the ``best_genome`` :meth:`auto_run`
+                returns.  The bare per-individual rows a checkpoint stores are
+                accepted too and promoted to that batch.
 
         Returns:
             None; the report comes from the problem's ``show`` (stdout).
 
         Raises:
-            TensorNEATError: If ``best`` is not a four-array genome payload.
+            TensorNEATError: If ``best`` is not a four-array genome payload, or
+                its arrays disagree about the population axis.
 
         Notes:
             Host-side only. The schedule is derived once for the report (so a
@@ -1102,8 +962,9 @@ class Pipeline(StatefulBaseClass):
     ) -> None:
         """Write ``genomes/<generation>.npz`` -- this generation's best genome.
 
-        Plain ``numpy.savez`` of the best individual's four payload rows plus its
-        own fitness, so ``np.load`` round-trips to a payload :meth:`show` accepts.
+        Plain ``numpy.savez`` of the best individual's four **bare** payload rows
+        (one genome per file: no population axis), plus its own fitness, so
+        ``np.load`` round-trips to a payload :meth:`show` accepts.
         """
         np.savez(
             os.path.join(self.genome_dir, f"{generation}.npz"),
@@ -1117,6 +978,9 @@ class Pipeline(StatefulBaseClass):
     def _save_best(self) -> None:
         """Write ``genomes/best_genome.npz`` for the best genome of the run.
 
+        :attr:`best_genome` is a one-individual batch, so the leading population
+        axis is stripped and the file holds the four **bare** rows of a single
+        genome -- one genome per file, exactly like ``genomes/<generation>.npz``.
         A no-op when no generation produced a finite fitness: there is nothing to
         checkpoint, and an empty file would look like a valid genome.
         """
@@ -1124,9 +988,9 @@ class Pipeline(StatefulBaseClass):
             return
         np.savez(
             os.path.join(self.genome_dir, "best_genome.npz"),
-            node_keys=np.asarray(self.best_genome.node_keys),
-            node_attrs=np.asarray(self.best_genome.node_attrs),
-            conn_keys=np.asarray(self.best_genome.conn_keys),
-            conn_attrs=np.asarray(self.best_genome.conn_attrs),
+            node_keys=np.asarray(self.best_genome.node_keys)[0],
+            node_attrs=np.asarray(self.best_genome.node_attrs)[0],
+            conn_keys=np.asarray(self.best_genome.conn_keys)[0],
+            conn_attrs=np.asarray(self.best_genome.conn_attrs)[0],
             fitness=float(self.best_fitness),
         )

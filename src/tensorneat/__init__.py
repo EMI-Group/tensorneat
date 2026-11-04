@@ -10,7 +10,14 @@ No ``jax`` and no ``torch`` is imported by this package -- the compute layer is
 ``evoxc``, and ``test/release_gate_no_jax.py`` enforces it.
 """
 
-__all__ = ["Pipeline", "algorithm", "common", "genome", "problem"]
+from importlib.metadata import PackageNotFoundError, version
+
+__all__ = ["Pipeline", "algorithm", "common", "genome", "problem", "__version__"]
+
+try:
+    __version__ = version("tensorneat")
+except PackageNotFoundError:  # a source checkout that was never installed
+    __version__ = "0.0.0"
 
 from . import algorithm, common, genome, problem
 from .pipeline import Pipeline

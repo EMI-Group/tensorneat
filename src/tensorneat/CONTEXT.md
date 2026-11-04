@@ -33,8 +33,11 @@ Host-only helpers (`network_dict`, `sympy_func`, `visualize`, `repr`, `hash`) st
 `Pipeline(algorithm, problem, seed=42, fitness_target=1, generation_limit=1000, backend="numpy", device=None, compile_options=None, is_save=False, save_dir=None, is_detailed=True, show_problem_details=False, pop_batch_size=None)` — host-only construction, no graph built and nothing printed until the first `step`.
 `setup(state=None) -> State` registers `randkey`, `backend`/`device`/`compile_options`, the algorithm's payload/species and the problem's data, resets the run's history and, with `is_save`, writes `config.txt` and the `log.txt` header.
 `step(state) -> (state, previous_pop, fitnesses)` is the single compile site and one compiled-graph run; fitness is **last**, a host `numpy` `(P,)` float32 array, `previous_pop` is a `GenomeTensors` of host arrays (the population that produced those fitnesses) and `step` prints nothing.
-`auto_run(state) -> (state, best_genome)` loops on the host until `fitness_target` or `generation_limit` (`best_genome` is one individual without a population axis, or `None` if no generation was finite), owning all output, logging, checkpointing and early stop.
+`auto_run(state) -> (state, best_genome)` loops on the host until `fitness_target` or `generation_limit`, owning all output, logging, checkpointing and early stop.
 `show(state, best)` prints one genome's behaviour through the problem's host-side `show` (schedule derived once, network re-baked as `evoxc.constant`), and `show_config() -> dict` is the JSON-serialisable description of the run.
+`best_genome` is spelled **batch-first** everywhere: a one-individual batch — `node_keys (1, max_nodes)`, `node_attrs (1, max_nodes, A)`, `conn_keys (1, max_conns, key_width)`, `conn_attrs (1, max_conns, W)` — i.e. exactly `state.pop` at `P = 1`; `None` when no generation produced a finite fitness.
+`auto_run`/`_analyse` store the selected individual with its leading axis added back, and `show` accepts that batch as well as the bare rows a checkpoint stores (`host_payload._one_individual` promotes bare rows and rejects a payload whose arrays disagree about the population axis or use an impossible rank).
+`tensorneat.__version__` is `importlib.metadata.version("tensorneat")` with a `PackageNotFoundError` fallback to `"0.0.0"`; it imports nothing that reaches a backend.
 Host-visible attributes: `fitness_history` (list of `(generation, max_fitness)`), `best_fitness`, `best_genome`, `shape_signature`, `build_seconds`, `builds`, `_executables`, `save_dir`.
 Fitness is maximized; NaN or infinite fitness is mapped to `-inf` before selection so broken topologies cannot win.
 No `problem.jitable` flag exists: whether a graph compiles is the backend's business and `evoxc.BackendError` propagates.
@@ -42,7 +45,7 @@ No `problem.jitable` flag exists: whether a graph compiles is the backend's busi
 ## Compile Site
 One `evoxc` graph per shape signature covers `split randkey → ask → transform → problem.evaluate(eval_key, act_fn) → tell`, so a generation is one `evoxc.run` plus host bookkeeping.
 The graph boundary carries **tensors only** (the four payload arrays, `generation`, `randkey`, the `SpeciesState` leaves, then `fitness` and the eval-phase `edge_overflow` maximum); the tensor-free configuration `State` is baked through the closure (`Pipeline._static_config` drops every tensor and every `_RUNTIME_KEYS` entry, the `NEAT._static_state` pattern), so no concrete tensor is ever captured by a trace.
-`act_fn` is a closure over the already-transformed schedule: it repeats the schedule and payload `S = rows / P` times with `_repeat_batch` in **individual-major** order, matching how a problem tiles a dataset or a rollout batch, and runs `algorithm.forward` through the arity adapter (`NEAT` takes the payload, `HyperNEAT` hides it in its substrate schedule).
+`act_fn` is a closure over the already-transformed schedule: it repeats the schedule and payload `S = rows / P` times with `host_payload._repeat_batch` in **individual-major** order, matching how a problem tiles a dataset or a rollout batch, and runs `algorithm.forward` through the arity adapter (`NEAT` takes the payload, `HyperNEAT` hides it in its substrate schedule).
 `ask` costs zero ops, so the returned `previous_pop` *is* the population that produced `fitnesses`.
 
 ## Caching Policy
@@ -62,7 +65,7 @@ Exactly one `evoxc.random.split` happens at the pipeline boundary per generation
 ## Checkpoint Layout (`is_save=True`, written by `setup`/`auto_run`)
 `config.txt` — `json.dumps(show_config(), indent=4)`.
 `log.txt` — header `Generation,Max,Min,Mean,Std,Cost Time`, then one row per generation.
-`genomes/<generation>.npz` and `genomes/best_genome.npz` — `node_keys`, `node_attrs`, `conn_keys`, `conn_attrs` and `fitness`, one individual per file (no population axis), so `np.load` round-trips to a payload `show` accepts and re-scores to its recorded fitness.
+`genomes/<generation>.npz` and `genomes/best_genome.npz` — `node_keys`, `node_attrs`, `conn_keys`, `conn_attrs` and `fitness`, one individual per file: the batch-first payload flattened (no population axis), so `np.load` round-trips to a payload `show` accepts and re-scores to its recorded fitness.
 `best_genome.npz` is omitted when no generation produced a finite fitness; a bare `step` loop writes no files (`auto_run`/`_analyse` is the writer).
 
 ## Measured Cost
@@ -82,9 +85,7 @@ The shipped backend is therefore the reference interpreter, and a compiled backe
 Current per-generation op counts: `forward` 112 traced ops (749 before the level loop was reformulated), `execute_mutation` 1360 (3114), `measure_distance` 7.5 µs/pair (25–48 µs before the digest API).
 
 ## Known Issues / Notes for Agents
-`test/integration/**` bodies are `pytest.skip` stubs and name `state.pop_nodes`/`state.pop_conns`, which no longer exist (the algorithm registers `pop` as a `GenomeTensors`), so the suite reports 15 skipped and verifies nothing.
-`test/unit/**` bodies are hard-coded `pytest.skip` stubs (364 skipped), and `test/parity/` passes its 18 jax-free cases while skipping the 32 that need the `bench` extra, so `pytest test` reports 22 passed, 411 skipped.
-Verification of this package currently goes through driving `Pipeline` end-to-end on the numpy backend (`setup`/`step`/`auto_run`, determinism per seed, one build per shape signature, checkpoint round-trip).
+`test/integration/` drives `Pipeline` end-to-end on the numpy backend (`setup`/`step`/`auto_run`, the batch-first best-genome payload, determinism per seed, one build per shape signature, checkpoint round-trip); `test/unit/` covers the kernels and `test/parity/` the legacy comparison, the latter needing the `bench` extra so its jax-dependent cases skip without it.
 `benchmarks/RESULTS.md` still carries the old-side baseline only (`jax 0.12`, `evoxc n/a`); its owner must re-render it from a harness run that includes the new-side rows above.
 `benchmarks/run_benchmark.py --impl new --backend numpy --cases xor_p100` drives this `step` contract unchanged (it reads fitness from the last element of the step result) and reports `INCOMPLETE` until an old-side row is measured on the same box.
 
@@ -95,7 +96,7 @@ Verification of this package currently goes through driving `Pipeline` end-to-en
 - NaN padding semantics of the pre-rewrite library are preserved (`test/parity/` depends on them); `select` chains stand in for `lax.switch`.
 - Errors: user/config validation raises `common.errors.TensorNEATError` (and its subclasses); tensor/backend errors are never caught and re-wrapped.
 - Files ≤ ~1000 lines; shared math lives in `common/`, never duplicated per genome/algorithm.
-- `pipeline.py` (1132 lines) is one job — the single compile site plus the design, caching, overflow and measured-cost documentation that belongs next to it — and is a deliberate exception to the line budget; the code is ~900 lines and the rest is the module docstring.
+- `pipeline.py` (996 lines) is one job — the single compile site plus the design, caching, overflow and measured-cost documentation that belongs next to it; the host-side payload helpers live in `./host_payload.py` so the file stays under the line budget.
 
 ## Routing Table
 | Path | Responsibility |
@@ -105,4 +106,5 @@ Verification of this package currently goes through driving `Pipeline` end-to-en
 | `./algorithm` | `NEAT` (ask/tell/speciation), `HyperNEAT` and substrates — batched, fixed-length scans, no vmap-over-control-flow. |
 | `./problem` | Task layer: `FuncFit`/`XOR`/`XOR3d`/`CustomFuncFit` and the evoxc-native `CartPole` rollout. |
 | `./pipeline.py` | Host-side compile site, generation loop, logging/checkpointing, `show`. |
-| `./__init__.py` | Re-exports `Pipeline` and the four subpackages. |
+| `./host_payload.py` | Host-only payload helpers: config rendering (`_jsonable`/`_config_value`/`_declared_shape`), batch tiling (`_repeat_batch`/`_run_network`), schedule overflow lookup and the batch-first `_one_individual` arity check. |
+| `./__init__.py` | Re-exports `Pipeline`, the four subpackages and `__version__`. |
