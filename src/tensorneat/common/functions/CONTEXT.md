@@ -9,7 +9,7 @@ Nothing here knows about genomes, populations or the Pipeline: a node gene hands
 | File | Responsibility |
 |---|---|
 | `act.py` | 12 elementwise activation kernels, the constants they share with the sympy counterparts, `ACT_FUNCS` (canonical order), `apply_activation`. |
-| `agg.py` | 6 masked aggregations over the incoming-edge axis, the `_Window` memo that shares their padded tensors and live-edge count, `AGG_FUNCS` (canonical order), `apply_aggregation`. |
+| `agg.py` | 6 masked aggregations over the incoming-edge axis, the static `K`-plane folds (`_planes`/`_sum_last`/`_fold_last`) that replace `reduce_*` over that axis, the `_Window` memo that shares their padded tensors and live-edge count, `AGG_FUNCS` (canonical order), `apply_aggregation`. |
 | `act_sympy.py` | `sp.Function` counterparts of `ACT_FUNCS` plus `SympyClip`, `ACT_SYMPY_FUNCS`, `ACT_SYMPY_HELPERS`. |
 | `agg_sympy.py` | `sp.Function` counterparts of the aggregations, `AGG_SYMPY_FUNCS`. |
 | `manager.py` | `FunctionManager`: names/ids/lookups, pairing validation, `sympy_module`, `random_index`. |
