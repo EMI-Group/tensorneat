@@ -183,7 +183,7 @@ def measure_centre(
         digest.tail_counts,
         attribute,
         pool,
-        consts=digest.node_layout.tail,
+        consts=digest.node_statics.attr.tail,
     )
     return evoxc.reduce_sum(stacked, axes=0)
 

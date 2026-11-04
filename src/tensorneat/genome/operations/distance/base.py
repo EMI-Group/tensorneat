@@ -222,6 +222,8 @@ class BaseDistance(StatefulBaseClass):
             node.layout,
             conn.layout,
             tail_counts,
+            node.statics,
+            conn.statics,
         )
 
     def measure(
@@ -284,6 +286,7 @@ class BaseDistance(StatefulBaseClass):
             digest.node_attrs,
             digest.node_count,
             digest.node_key_cols,
+            digest.node_statics,
         )
         conn_distance = self._measure_family(
             pool,
@@ -295,6 +298,7 @@ class BaseDistance(StatefulBaseClass):
             digest.conn_attrs,
             digest.conn_count,
             digest.conn_key_cols,
+            digest.conn_statics,
         )
         return evoxc.add(node_distance, conn_distance)
 
@@ -389,6 +393,7 @@ class BaseDistance(StatefulBaseClass):
         digest_attrs: evoxc.SymbolicTensor,
         digest_count: evoxc.SymbolicTensor,
         digest_key_cols: evoxc.SymbolicTensor,
+        statics,
     ) -> evoxc.SymbolicTensor:
         """One gene family of :meth:`measure`, with the pool and the alignment threaded in.
 
@@ -404,6 +409,9 @@ class BaseDistance(StatefulBaseClass):
             digest_count (evoxc.SymbolicTensor): ``(P,) int32`` real genes per individual.
             digest_key_cols (evoxc.SymbolicTensor): ``(P, M, K) int32`` population key columns
                 in the digest's gene order.
+            statics (MeasureStatics): The family's per-generation scaffolding from the digest —
+                the rank-0 scalars and the two flat index blocks, so this call traces neither a
+                ``constant`` nor an ``arange`` of its own.
 
         Returns:
             evoxc.SymbolicTensor: ``(P,) float32`` distances of this gene family.
@@ -413,7 +421,7 @@ class BaseDistance(StatefulBaseClass):
             re-derives a mask from an ``I_INF`` row table or re-counts the centre's genes.
         """
         aligned = _digest.measure_alignment(
-            gene, keys, digest_keys, digest_key_cols, consts=pool
+            gene, keys, digest_keys, digest_key_cols, statics=statics, consts=pool
         )
         return self.distance_from_alignment(
             state,
@@ -425,6 +433,7 @@ class BaseDistance(StatefulBaseClass):
             aligned.count,
             aligned.matched,
             digest_count,
+            statics=statics.attr,
             consts=pool,
         )
 
@@ -440,6 +449,7 @@ class BaseDistance(StatefulBaseClass):
         matched: evoxc.SymbolicTensor,
         cnt2: evoxc.SymbolicTensor,
         *,
+        statics=None,
         consts=None,
     ) -> evoxc.SymbolicTensor:
         """Distance of one gene family from a finished alignment (subclass hook).
@@ -456,6 +466,9 @@ class BaseDistance(StatefulBaseClass):
             cnt1 (evoxc.SymbolicTensor): ``(P,)`` real genes of parent 1.
             matched (evoxc.SymbolicTensor): ``(P,)`` number of homologous genes.
             cnt2 (evoxc.SymbolicTensor): ``(P,)`` real genes of parent 2.
+            statics (AttrStatics | None): The family's per-generation attribute scaffold when
+                the caller has a digest (the row-wise ``measure`` route); the pair-wise route
+                passes ``None`` and builds what it needs per call.
             consts (ConstantPool | None): Pool for the rank-0 constants of this trace.
 
         Returns:
@@ -475,8 +488,6 @@ class BaseDistance(StatefulBaseClass):
             state, gene, attrs1, attrs2, rows_inf, cnt1, cnt2
         )
 
-
-
     def _tail_constants(self) -> tuple[float, float, float] | None:
         """Constants the scalar tail multiplies by, or ``None`` for an operator without them.
 
@@ -485,11 +496,12 @@ class BaseDistance(StatefulBaseClass):
             1.0)`` when the subclass has a fixed scalar tail, else ``None``.
 
         Notes:
-            Hoisted through the digest so ``2 * species_size`` dense measures of a generation
+            Hoisted through the digest so the ``2 * species_size`` measures of a generation
             share one rank-0 constant each instead of emitting three per call: ``evoxc`` never
             deduplicates constants, and on the reference interpreter a rank-0 constant costs one
-            traced op like any other.  The row-wise routes keep reading them off the pool, which
-            is the same thing for a single call.
+            traced op like any other.  Both routes read them off
+            :attr:`~.layout.MeasureStatics.tail`; only a standalone call with no digest builds
+            them from its own pool.
         """
         return None
 
