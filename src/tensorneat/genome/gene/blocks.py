@@ -62,16 +62,32 @@ Every parameter table is *static data* built on the host once per traced graph, 
 it is created with ``evoxc.constant`` (never with eager NumPy on the compute path);
 shapes are static and come from the traced tensors, and randomness is drawn from
 ``evoxc.random`` keys only.
+
+Two further op cuts are value-identical rather than merely cheaper, and both are made
+once per pass (:class:`_ScalarPool`, :class:`_ColumnPool`):
+
+* ``evoxc`` never deduplicates constants and every RNG parameter (``low``/``high`` of
+  ``uniform``, ``mean``/``std`` of ``normal``, ``low``/``high`` of ``randint``) is a
+  fresh rank-0 constant when it is passed as a Python number, so a pass that draws one
+  gate per column bakes the same ``0.0``/``1.0`` pair once per column, three ops per
+  draw. Handing ``evoxc.random`` a *pooled* constant instead costs one op per draw and
+  the operand's value and dtype are unchanged (the pool builds the same ``float64``
+  scalar ``_param`` would), so every drawn number is bit-identical.
+* A per-column table whose entries are all equal becomes one pooled rank-0 constant,
+  and a broadcast ``(*batch, 1)`` column that several specs share (two single-option
+  ``"int"`` columns both re-draw the constant ``0.0``) is built once.
+* A branch whose ``U[0, 1)`` cutoff is not positive can never be selected, so it is not
+  traced at all and its operand slot borrows another column of the same shape: the
+  selected ``select`` operand is the only consumer, and it is never reached.
 """
 
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 import evoxc
 import evoxc.numpy as enp
 import numpy as np
 
 from ...common.errors import ConfigError
-from ..window import fill
 from ..window import fill
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
@@ -80,6 +96,115 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
 #: Probability threshold of a branch that can never fire (``U[0, 1)`` is never
 #: below it), used as the perturbation cutoff of an ``"int"`` column.
 _NEVER: float = -1.0
+
+
+# --------------------------------------------------------------------------- #
+# per-pass constant pools
+# --------------------------------------------------------------------------- #
+
+
+def _pooled(cache: dict, value: Any, dtype: Any) -> evoxc.SymbolicTensor:
+    """Return the rank-0 ``dtype`` constant ``value``, building it at most once.
+
+    ``evoxc`` emits one ``constant`` op per ``enp.full`` call and never deduplicates
+    them, so a pass that hands ``evoxc.random`` the same ``0.0``/``1.0`` pair to every
+    column's draw would pay two ops per draw. The cache is keyed by ``repr`` rather
+    than by the number itself, because ``0.0 == -0.0`` compares (and hashes) equal and
+    a value-keyed cache would silently hand out the wrong sign of zero.
+
+    Args:
+        cache: One per-dtype dict of one traced pass (never module-global: a traced
+            tensor belongs to the builder that produced it).
+        value: Python ``float`` or ``int`` baked into the trace.
+        dtype: ``evoxc`` dtype of the constant.
+
+    Returns:
+        Rank-0 ``dtype`` tensor, the same object on every call with the same ``value``.
+    """
+    key = repr(value)
+    tensor = cache.get(key)
+    if tensor is None:
+        tensor = enp.full((), value, dtype=dtype)
+        cache[key] = tensor
+    return tensor
+
+
+class _ScalarPool:
+    """Rank-0 constants of one traced block pass, one per distinct dtype and value.
+
+    Attributes:
+        _f64 (dict): ``repr`` of a float to a rank-0 ``float64`` constant -- the dtype
+            ``evoxc.random``'s ``low``/``high``/``mean``/``std`` parameters take when
+            they are passed as Python floats.
+        _f32 (dict): ``repr`` of a float to a rank-0 ``float32`` constant, the dtype a
+            scalar operand of ``multiply``/``add``/``clip`` is weak-promoted to.
+        _i64 (dict): ``int`` to a rank-0 ``int64`` constant, the dtype of
+            ``randint``'s ``low``/``high``.
+    """
+
+    __slots__ = ("_f64", "_f32", "_i64")
+
+    def __init__(self) -> None:
+        """Start an empty pool for one traced block pass."""
+        self._f64: dict[str, evoxc.SymbolicTensor] = {}
+        self._f32: dict[str, evoxc.SymbolicTensor] = {}
+        self._i64: dict[str, evoxc.SymbolicTensor] = {}
+
+    def f64(self, value: float) -> evoxc.SymbolicTensor:
+        """Return the pooled rank-0 ``float64`` constant ``value``."""
+        return _pooled(self._f64, float(value), evoxc.float64)
+
+    def f32(self, value: float) -> evoxc.SymbolicTensor:
+        """Return the pooled rank-0 ``float32`` constant ``value``."""
+        return _pooled(self._f32, float(value), evoxc.float32)
+
+    def i64(self, value: int) -> evoxc.SymbolicTensor:
+        """Return the pooled rank-0 ``int64`` constant ``value``."""
+        return _pooled(self._i64, int(value), evoxc.int64)
+
+
+class _ColumnPool:
+    """``(*batch_shape, 1)`` broadcast columns of one pass, one per distinct value.
+
+    Attributes:
+        _shape (tuple): ``(*batch_shape, 1)`` shape every column of the pass has.
+        _columns (dict): ``repr`` of a float to the ``..window.fill`` column holding it.
+    """
+
+    __slots__ = ("_shape", "_columns")
+
+    def __init__(self, column_shape: tuple[int, ...]) -> None:
+        """Start an empty pool for the given column shape."""
+        self._shape: tuple[int, ...] = tuple(int(size) for size in column_shape)
+        self._columns: dict[str, evoxc.SymbolicTensor] = {}
+
+    def column(self, value: float) -> evoxc.SymbolicTensor:
+        """Return the pooled ``column_shape`` column holding ``value``."""
+        value = float(value)
+        key = repr(value)
+        column = self._columns.get(key)
+        if column is None:
+            column = column_constant(value, self._shape)
+            self._columns[key] = column
+        return column
+
+
+def _uniform_value(values: Sequence[float]) -> float | None:
+    """The single value every entry of a per-column table holds, or ``None``.
+
+    Args:
+        values: One Python float per attribute column.
+
+    Returns:
+        ``values[0]`` when every entry is *bit-wise* the same number (compared through
+        ``repr``, so ``0.0`` and ``-0.0`` -- and two NaNs -- are not collapsed),
+        otherwise ``None``.
+    """
+    first = repr(float(values[0]))
+    for value in values[1:]:
+        if repr(float(value)) != first:
+            return None
+    return float(values[0])
 
 
 # --------------------------------------------------------------------------- #
@@ -128,7 +253,7 @@ def column_constant(value: float, column_shape: tuple[int, ...]) -> evoxc.Symbol
 
 
 def _parameter_table(
-    values: Sequence[float], block_shape: tuple[int, ...]
+    values: Sequence[float], block_shape: tuple[int, ...], scalars: "_ScalarPool"
 ) -> evoxc.SymbolicTensor:
     """Materialise a per-column parameter table at the full block shape.
 
@@ -138,13 +263,23 @@ def _parameter_table(
     so the table is expanded once as a graph constant.
     The values are host constants, hence ``evoxc.constant``.
 
+    When every column shares the same value (the only possibility for a single-column
+    gene, and the common case for a whole family's bounds) the table carries no
+    per-column information at all: a pooled rank-0 constant broadcasts to exactly the
+    same operand values in one op instead of a ``constant`` plus a ``broadcast``, and
+    bakes four bytes instead of ``prod(block_shape)``.
+
     Args:
         values: One Python float per attribute column, in ``attr_specs`` order.
         block_shape: ``(*batch_shape, attr_width)``, i.e. ``attrs.shape``.
+        scalars: The pass's rank-0 constant pool.
 
     Returns:
         ``block_shape`` float32 tensor holding ``values`` along the attribute axis.
     """
+    shared = _uniform_value(values)
+    if shared is not None:
+        return scalars.f32(shared)
     row = np.asarray(values, dtype=np.float32).reshape((1,) * (len(block_shape) - 1) + (len(values),))
     return enp.broadcast_to(evoxc.constant(evoxc.from_numpy(row)), tuple(block_shape))
 
@@ -165,6 +300,25 @@ def _assemble(
     if width == 1:
         return columns[0]
     return evoxc.concatenate(list(columns), axis=len(columns[0].shape) - 1)
+
+
+def _resolved(
+    columns: Sequence[evoxc.SymbolicTensor | None], pool: "_ColumnPool"
+) -> list[evoxc.SymbolicTensor]:
+    """Give every unobservable operand slot a column of the block's column shape.
+
+    A slot whose branch mask is statically empty never reaches the ``select`` that
+    would consume it, so it needs *some* tensor of the right shape and nothing else;
+    borrowing the pass's pooled zero column keeps one broadcast for all of them.
+
+    Args:
+        columns: One column (or ``None`` for "unobservable") per attribute spec.
+        pool: The pass's column pool.
+
+    Returns:
+        One concrete ``(*batch_shape, 1)`` column per spec, in column order.
+    """
+    return [pool.column(0.0) if column is None else column for column in columns]
 
 
 def _clip_bounds(
@@ -193,13 +347,91 @@ def _clip_bounds(
     return (lower, upper) if bounded else None
 
 
+def _common_window(specs: Sequence["GeneAttr"]) -> tuple[float, float] | None:
+    """The one ``(low, high)`` window that clips every column, or ``None``.
+
+    A per-column bound table costs a ``constant`` and a ``broadcast`` op; when one
+    window serves the whole block the two bounds are pooled rank-0 constants instead.
+    Two cases make that *exact* rather than merely cheaper:
+
+    * a ``"float"`` column must carry exactly the window's bounds -- nothing is known
+      about the values it can take, and a finite window would clip an unbounded column;
+    * an ``"int"`` column holds an option index in ``0 .. len(options) - 1`` (that is
+      the column's contract), so the window leaves it untouched whenever that whole
+      range is inside the window. The per-column table leaves an ``"int"`` column
+      unclipped, and clipping to a window that contains every reachable value is the
+      identity.
+
+    Args:
+        specs: The family's attribute specs, in column order.
+
+    Returns:
+        ``(low, high)`` when one window clips the whole block, else ``None`` (the
+        caller falls back to the per-column tables, which are always exact).
+    """
+    window: tuple[float, float] | None = None
+    for spec in specs:
+        if spec.kind != "float":
+            continue
+        if spec.lower_bound is None or spec.upper_bound is None:
+            return None
+        bounds = (float(spec.lower_bound), float(spec.upper_bound))
+        if window is None:
+            window = bounds
+        elif window != bounds:  # also False for a NaN bound: falls back to the table
+            return None
+    if window is None:
+        return None
+    low, high = window
+    for spec in specs:
+        if spec.kind != "int":
+            continue
+        if low > 0.0 or float(len(spec.options) - 1) > high:
+            return None
+    return window
+
+
+def _clip_block(
+    block: evoxc.SymbolicTensor,
+    specs: Sequence["GeneAttr"],
+    scalars: "_ScalarPool",
+) -> evoxc.SymbolicTensor:
+    """Clip the ``(*batch, attr_width)`` attribute block into its bounds.
+
+    Args:
+        block: The attribute block to clip.
+        specs: The family's attribute specs, in column order.
+        scalars: The pass's rank-0 constant pool.
+
+    Returns:
+        ``block`` clipped per column -- unchanged (and no op traced) when no column
+        of the family declares a bound.
+    """
+    bounds = _clip_bounds(specs)
+    if bounds is None:
+        return block
+    window = _common_window(specs)
+    if window is not None:
+        low, high = scalars.f32(window[0]), scalars.f32(window[1])
+    else:
+        lower, upper = bounds
+        block_shape = tuple(block.shape)
+        low = _parameter_table(lower, block_shape, scalars)
+        high = _parameter_table(upper, block_shape, scalars)
+    return enp.clip(block, low, high)
+
+
 # --------------------------------------------------------------------------- #
 # per-column draws
 # --------------------------------------------------------------------------- #
 
 
 def _initial_column(
-    spec: "GeneAttr", key: evoxc.SymbolicTensor, column_shape: tuple[int, ...]
+    spec: "GeneAttr",
+    key: evoxc.SymbolicTensor,
+    column_shape: tuple[int, ...],
+    scalars: "_ScalarPool",
+    columns: "_ColumnPool",
 ) -> evoxc.SymbolicTensor:
     """Draw the initial value of one attribute column.
 
@@ -215,6 +447,9 @@ def _initial_column(
         key: ``evoxc.random`` key of this column (one per column, so every column
             has an independent stream).
         column_shape: ``(*batch_shape, 1)`` shape of the column.
+        scalars: The pass's rank-0 constant pool (``low``/``high``/``mean``/``std``).
+        columns: The pass's column pool, so two single-option columns that re-draw the
+            same constant share one broadcast.
 
     Returns:
         ``column_shape`` float32 column.
@@ -222,18 +457,28 @@ def _initial_column(
     if spec.kind == "int":
         count = len(spec.options)
         if count == 1:
-            return column_constant(float(spec.options[0]), column_shape)
-        index = evoxc.random.randint(key, column_shape, 0, count, dtype=evoxc.int32)
+            return columns.column(float(spec.options[0]))
+        index = evoxc.random.randint(
+            key, column_shape, scalars.i64(0), scalars.i64(count), dtype=evoxc.int32
+        )
         return evoxc.cast(index, evoxc.float32)
     if float(spec.init_std) == 0.0:
-        return column_constant(float(spec.init_mean), column_shape)
+        return columns.column(float(spec.init_mean))
     return evoxc.random.normal(
-        key, column_shape, spec.init_mean, spec.init_std, dtype=evoxc.float32
+        key,
+        column_shape,
+        scalars.f64(float(spec.init_mean)),
+        scalars.f64(float(spec.init_std)),
+        dtype=evoxc.float32,
     )
 
 
 def _replacement_column(
-    spec: "GeneAttr", key: evoxc.SymbolicTensor, column_shape: tuple[int, ...]
+    spec: "GeneAttr",
+    key: evoxc.SymbolicTensor,
+    column_shape: tuple[int, ...],
+    scalars: "_ScalarPool",
+    columns: "_ColumnPool",
 ) -> evoxc.SymbolicTensor:
     """Draw the ``replace_rate`` re-draw of one attribute column.
 
@@ -245,32 +490,39 @@ def _replacement_column(
         spec: The column's attribute spec.
         key: ``evoxc.random`` key of this column's replacement stream.
         column_shape: ``(*batch_shape, 1)`` shape of the column.
+        scalars: The pass's rank-0 constant pool.
+        columns: The pass's column pool.
 
     Returns:
         ``column_shape`` float32 column.
     """
-    return _initial_column(spec, key, column_shape)
+    return _initial_column(spec, key, column_shape, scalars, columns)
 
 
 def _scaled(
-    sample: evoxc.SymbolicTensor, scale: float
+    sample: evoxc.SymbolicTensor, scale: float, scalars: "_ScalarPool"
 ) -> evoxc.SymbolicTensor:
     """Scale a standard-normal column (``1 * z`` is ``z``, exactly).
+
+    The scale is a pooled ``float32`` constant: an elementwise op weak-promotes a
+    Python scalar to its other operand's dtype, so the pooled operand is the same
+    ``float32`` value the promotion would have built, one op cheaper.
 
     Args:
         sample: ``(*batch_shape, 1)`` standard-normal columns.
         scale: Standard deviation to attach.
+        scalars: The pass's rank-0 constant pool.
 
     Returns:
         ``(*batch_shape, 1)`` float32 column ``scale * sample``.
     """
-    if scale == 1.0:
+    if float(scale) == 1.0:
         return sample
-    return evoxc.multiply(sample, scale)
+    return evoxc.multiply(sample, scalars.f32(scale))
 
 
 def _affine(
-    sample: evoxc.SymbolicTensor, mean: float, std: float
+    sample: evoxc.SymbolicTensor, mean: float, std: float, scalars: "_ScalarPool"
 ) -> evoxc.SymbolicTensor:
     """Turn a standard-normal column into ``N(mean, std)`` (``+ 0``/``* 1`` are exact).
 
@@ -278,14 +530,15 @@ def _affine(
         sample: ``(*batch_shape, 1)`` standard-normal columns.
         mean: Mean of the wanted Gaussian.
         std: Standard deviation of the wanted Gaussian.
+        scalars: The pass's rank-0 constant pool.
 
     Returns:
         ``(*batch_shape, 1)`` float32 column ``mean + std * sample``.
     """
-    scaled = _scaled(sample, std)
-    if mean == 0.0:
+    scaled = _scaled(sample, std, scalars)
+    if float(mean) == 0.0:
         return scaled
-    return evoxc.add(scaled, mean)
+    return evoxc.add(scaled, scalars.f32(mean))
 
 
 def _perturbs(spec: "GeneAttr") -> bool:
@@ -375,21 +628,15 @@ def init_attrs(
     if not specs:
         return enp.zeros((*shape, 0), dtype=evoxc.float32)
     column_shape = (*shape, 1)
+    scalars = _ScalarPool()
+    pool = _ColumnPool(column_shape)
     keys = evoxc.random.split_n(key, len(specs))
     columns = [
-        _initial_column(spec, column_key, column_shape)
+        _initial_column(spec, column_key, column_shape, scalars, pool)
         for spec, column_key in zip(specs, keys)
     ]
     block = _assemble(columns, len(specs))
-    bounds = _clip_bounds(specs)
-    if bounds is not None:
-        lower, upper = bounds
-        block = enp.clip(
-            block,
-            _parameter_table(lower, block.shape),
-            _parameter_table(upper, block.shape),
-        )
-    return block
+    return _clip_block(block, specs, scalars)
 
 
 def mutate_attrs(
@@ -406,6 +653,14 @@ def mutate_attrs(
     block against two per-column cutoff tables, so the same two ``select`` ops serve
     every column, and a ``NaN`` entry (absent gene row) is restored by the final
     ``isnan`` select -- mutation never revives padding.
+
+    Two of the three branches are dropped statically when no column can reach them:
+    a cutoff that is not positive is never above ``U[0, 1)`` (so the branch's mask is
+    all-``False`` and the ``select`` it feeds is the identity), and the ``isnan``
+    guard only protects the re-drawn branch, because a perturbed entry is ``NaN + x``
+    -- still ``NaN``. The draws are unchanged either way: the key split is fixed by
+    ``attr_width`` and a column whose gate or candidate cannot be observed traces no
+    draw, exactly like the full form.
 
     Args:
         key: Rank-0 ``evoxc.random`` key for the whole batch.
@@ -432,29 +687,42 @@ def mutate_attrs(
     if not any(perturb_flags) and not any(replace_flags):
         return attrs
     column_shape = (*shape[:-1], 1)
+    scalars = _ScalarPool()
+    pool = _ColumnPool(column_shape)
+    perturb_cutoff, replace_cutoff = _cutoffs(specs)
+    # ``U[0, 1)`` is never below a non-positive cutoff, so such a column's branch can
+    # never be selected; and the perturb branch wins wherever both masks fire, so a
+    # replacement is unobservable once its cutoff reaches the perturb one.
+    perturb_live = [cutoff > 0.0 for cutoff in perturb_cutoff]
+    replace_live = [
+        cutoff > 0.0 and cutoff > perturb_cutoff[index]
+        for index, cutoff in enumerate(replace_cutoff)
+    ]
     # One split for every draw of the pass, and every draw is *per column* (see the
     # module docstring: a block-sized draw is super-linear in the reference
     # interpreter). A rank-0 key is never split per row.
     keys = evoxc.random.split_n(key, 3 * width)
-    zero = None
-    replacements = []
-    noises = []
+    replacements: list[evoxc.SymbolicTensor | None] = []
+    noises: list[evoxc.SymbolicTensor | None] = []
     gates = []
     for index, spec in enumerate(specs):
         perturb = perturb_flags[index]
         replace = replace_flags[index]
-        zero = zero if zero is not None else column_constant(0.0, column_shape)
         gaussian_replace = replace and spec.kind == "float" and float(spec.init_std) > 0.0
         if perturb and gaussian_replace:
             # Both candidates are affine in one standard-normal sample: the entry
             # ends up on one of them, so the pair's joint dependence is unobservable
             # while its marginal law is the two-independent-draws law.
             sample = evoxc.random.normal(
-                keys[index], column_shape, 0.0, 1.0, dtype=evoxc.float32
+                keys[index],
+                column_shape,
+                scalars.f64(0.0),
+                scalars.f64(1.0),
+                dtype=evoxc.float32,
             )
-            noises.append(_scaled(sample, float(spec.mutate_power)))
+            noises.append(_scaled(sample, float(spec.mutate_power), scalars))
             replacements.append(
-                _affine(sample, float(spec.init_mean), float(spec.init_std))
+                _affine(sample, float(spec.init_mean), float(spec.init_std), scalars)
             )
         else:
             if perturb:
@@ -462,50 +730,59 @@ def mutate_attrs(
                     evoxc.random.normal(
                         keys[width + index],
                         column_shape,
-                        0.0,
-                        spec.mutate_power,
+                        scalars.f64(0.0),
+                        scalars.f64(float(spec.mutate_power)),
                         dtype=evoxc.float32,
                     )
                 )
+            elif perturb_live[index]:
+                # The gate can fire while the power is ``0``: the perturbation is then
+                # exactly ``attrs + 0``, so this slot needs a real zero.
+                noises.append(pool.column(0.0))
             else:
-                noises.append(zero)
-            if replace:
-                replacements.append(
-                    _replacement_column(spec, keys[index], column_shape)
-                )
-            else:
-                replacements.append(zero)
+                noises.append(None)  # statically never selected: borrow a column
+            replacements.append(
+                _replacement_column(spec, keys[index], column_shape, scalars, pool)
+                if replace
+                else None
+            )
         if perturb or replace:
             gates.append(
                 evoxc.random.uniform(
-                    keys[2 * width + index], column_shape, 0.0, 1.0, dtype=evoxc.float32
+                    keys[2 * width + index],
+                    column_shape,
+                    scalars.f64(0.0),
+                    scalars.f64(1.0),
+                    dtype=evoxc.float32,
                 )
             )
         else:
-            gates.append(zero)
-    replacement = _assemble(replacements, width)
-    noise = _assemble(noises, width)
+            # Nothing on this column can change, so the gate is not drawn (the draw
+            # would never be consulted) and a constant stands in for it.
+            gates.append(pool.column(0.0))
     gate = _assemble(gates, width)
-    perturb_cutoff, replace_cutoff = _cutoffs(specs)
-    replaced = evoxc.select(
-        evoxc.less(gate, _parameter_table(replace_cutoff, shape)),
-        replacement,
-        attrs,
-    )
-    mutated = evoxc.select(
-        evoxc.less(gate, _parameter_table(perturb_cutoff, shape)),
-        evoxc.add(attrs, noise),
-        replaced,
-    )
-    bounds = _clip_bounds(specs)
-    if bounds is not None:
-        lower, upper = bounds
-        mutated = enp.clip(
-            mutated,
-            _parameter_table(lower, shape),
-            _parameter_table(upper, shape),
+    mutated = attrs
+    if any(replace_live):
+        mutated = evoxc.select(
+            evoxc.less(gate, _parameter_table(replace_cutoff, shape, scalars)),
+            _assemble(_resolved(replacements, pool), width),
+            attrs,
         )
-    return evoxc.select(evoxc.isnan(attrs), attrs, mutated)
+    if any(perturb_live):
+        for index in range(width):
+            if noises[index] is None and replacements[index] is not None:
+                noises[index] = replacements[index]
+        mutated = evoxc.select(
+            evoxc.less(gate, _parameter_table(perturb_cutoff, shape, scalars)),
+            evoxc.add(attrs, _assemble(_resolved(noises, pool), width)),
+            mutated,
+        )
+    mutated = _clip_block(mutated, specs, scalars)
+    if any(replace_live):
+        # Only the re-drawn branch can revive a NaN row: a perturbed entry is
+        # ``NaN + x``, which stays NaN, and every other entry is ``attrs`` itself.
+        mutated = evoxc.select(evoxc.isnan(attrs), attrs, mutated)
+    return mutated
 
 
 def crossover_attrs(
