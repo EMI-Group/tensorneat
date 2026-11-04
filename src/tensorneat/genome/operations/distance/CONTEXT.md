@@ -25,9 +25,10 @@ This node therefore offers the same arithmetic in three shapes, all ending in on
 Both `prepare` and `measure` are **plain traced helpers**, never `@evoxc.defn` (a defn cannot call a defn), so the caller's own graph owns them; a digest is a pytree and may be captured in a closure across a trace.
 
 ## Rationale for `dense_single_centre=True` being the default
-`measure`'s only high-volume caller is speciation, which passes a **batch-1** centre (`DistanceRows.row`), so the fast path is the shipped route.
-Measured seed-42 XOR runs are **bit-identical** with the switch on and off: the five-generation `fitness_history` (per-generation max and mean) and the final population's SHA-256 match at pop 100, 500 and 1000, and `Pipeline.step` is 341 ms at pop 1000 with the fast path against 373 ms without it in the same five-generation run.
-Behaviour can differ from the row-wise merge only for payloads that carry gene keys **outside `[0, genome.key_span)`** (`algorithm/`'s structural-key allocator can produce them, see its own `CONTEXT.md`); the gate below measures that case explicitly.
+The switch is on by default because it is *free where it does not apply*: `measure` takes the dense route only for a batch-1 centre and falls back to the merge otherwise, so no caller pays for the option.
+**The live pipeline does not reach it today.** Speciation hands `measure` a population-shaped centre, tiled in `algorithm/neat/_kernels.py::single_payload` (`repeat_leading` on each of the four arrays), which is the merge's input shape; a batch-1 centre is what the tests pass.
+Measured on a real evolved payload, the two routes are **`tobytes()`-identical** for a tiled centre (the centre tiled to `P` rows measures the same vector as the batch-1 dense route, and both equal `execute_distance`), so the choice is a pure cost decision wherever keys stay inside `[0, genome.key_span)`.
+Behaviour can differ from the row-wise merge only for payloads that carry gene keys **outside `[0, genome.key_span)`** (`algorithm/`'s structural-key allocator produces them in the live pipeline today, see its own `CONTEXT.md` and `## Precondition` below); the equivalence matrix measures that case explicitly.
 `dense_single_centre=False` is the one-word escape hatch for a caller that sees that divergence.
 
 ## Dense single-centre route (`dense.py`)
