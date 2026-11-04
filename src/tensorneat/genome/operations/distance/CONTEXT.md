@@ -148,7 +148,7 @@ The rule a future agent needs: never build a `(P, M, A)`-shaped index block — 
 The two families' scalar tails cannot be traced once without stacking their inputs, and the three `concatenate`/`reshape` pairs that stacking needs cost more than the 1 op they save (measured: 22 → 21).
 The largest remaining block inside a `measure` call is `gene.distance` plus its column reads, which live in another node's files.
 Element volume on the merge route is already minimal (one `P × M` block per family), and the remaining per-call body is op-floor work, so the only lever left in this node's *own* files is the number of calls — see `## Dense versus merge at the live call site`.
-The body is at its dispatch floor: ~94 executed ops at ~0.056 ms each *is* the call's wall time, so a ≥5 % win needs ≥5 ops removed per call and no candidate that large remains (`## Known Issues` holds the two worth ~2 %).
+The body is at its dispatch floor: ~94 executed ops at ~0.056 ms each *is* the call's wall time, so a ≥5 % win needs ≥5 ops removed per call and no candidate that large remains — the whole remaining value-identical op diet measures −2.5…−2.8 % per call at pop 500 and is recorded in `## Rejected`.
 Both structural rewrites the op count invites — an elementwise centre fold and one sort fused across families — are refuted with numbers in `## Rejected`; the only ≥5 % lever on this route is the caller passing a batch-1 centre (`## Dense versus merge at the live call site`).
 
 ## Dense versus merge at the live call site (measured, `algorithm/` owns the switch)
