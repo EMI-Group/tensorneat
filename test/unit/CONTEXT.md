@@ -6,25 +6,26 @@ Each assertion compares against something independent of the implementation unde
 This directory is the whole content of the default gate; `./parity` (legacy JAX oracle) and `./integration` (whole `Pipeline`) are the two suites that go beyond it.
 
 ## Counts
-`./common` 155 passed, `./genome` 100, `./algorithm` 144, `./problem` 62 — 461 passed and 0 xfailed in the subdirectories, plus `./test_version.py` (2) at this node's root.
-`./genome` dominates the wall clock at ~52 s (one traced executable per graph), `./algorithm` takes ~28 s, `./common` ~12 s and `./problem` ~4 s.
+`./common` 155 passed, `./genome` 108, `./algorithm` 144, `./problem` 133 — 540 passed and 0 xfailed in the subdirectories, plus `./test_version.py` (2) at this node's root.
+`./genome` dominates the wall clock at ~9 s (one traced executable per graph), `./problem` ~5 s, `./algorithm` ~4 s and `./common` ~2.5 s.
 Everything in this node is green: there is no xfail and no skip.
 
 ## How to run
-`python -m pytest test/unit -m "not parity and not slow"` (or plain `pytest` from the repo root) — numpy backend, no optional dependency, ~95 s.
+`python -m pytest test/unit -m "not parity and not slow"` (or plain `pytest` from the repo root) — numpy backend, no optional dependency, ~19 s (542 passed).
 `pytest test/unit/<sub> -k <expr>` narrows the same gate while keeping the leak guard active.
-`test/unit/algorithm` and `test/unit/genome` are also comfortable alone (`~28 s` / `~52 s`); no module here needs a network, a GPU or parallelism.
+`test/unit/genome` and `test/unit/problem` are also comfortable alone (`~9 s` / `~5 s`, against `~4 s` for `./algorithm`); no module here needs a network, a GPU or parallelism.
 
 ## Layout
 `./common` — schedule (`tensorization`) derivation and validation, flat gather/scatter/mutation helpers, ACT/AGG dispatch, host graph walks, `State`.
 `./genome` — gene payloads, forward/recurrent/grad kernels, mutation/crossover/distance invariants, host-only introspection.
 `./algorithm` — NEAT `tell` algebra: speciation, stagnation, spawn allocation, parent selection.
-`./problem` — func-fit losses (`mse`/`rmse`/`mae`/`mape`) and the CartPole rollout.
+`./problem` — func-fit losses (`mse`/`rmse`/`mae`/`mape`), the `problem` protocol, and all three RL environments: CartPole, plus Pendulum and MountainCar with an in-file host-numpy oracle each; the RL suites pin pre-transition cost ordering, Pendulum's clip-before-integrate and floor-mod angle wrap, MountainCar's one-time goal bonus under the pre-step alive mask and its idle optimum of exactly `0.0`, individual-major `(P, R)` averaging and NaN poison by arithmetic.
 `./test_version.py` — the package's `__version__` metadata and its `PackageNotFoundError` fallback.
 Every directory here carries `__init__.py` (pytest's prepend import mode names a module by basename, so un-namespaced directories collide with `./parity`/`./integration`).
 
 ## Oracles
 `../support/oracle.py` holds the numpy reference implementations the suites compare against: the schedule derivation, a NaN-aware forward pass, the four func-fit losses, the CartPole Euler rollout.
+`./problem/test_pendulum.py` and `./problem/test_mountaincar.py` keep their own float32 op-for-op and float64 Gym-semantics rollouts in-file, because `../support/oracle.py` sits at its own size budget and the two dynamics differ.
 `../support/functions_ref.py` holds the 12 ACT and 6 AGG reference kernels the dispatch tests loop over.
 `../support/payloads.py` builds every `int32`/`float32` gene payload by hand (`node_keys`/`node_attrs`/`conn_keys`/`conn_attrs`, `I_INF`/`NaN` padding) plus the canonical small genomes, so no test draws a topology it could have written.
 A test that needs neither of those compares against a closed form written in the module itself (`np.where(fitness, -inf)`, the sigmoid chain, the species-count algebra).
@@ -60,7 +61,7 @@ A test may not edit `../../src`, `../../benchmarks` or `pyproject.toml`; a disco
 | `./common` | tensorization schedule invariants, flat gather/scatter/mutation helpers, ACT/AGG dispatch, host graph algorithms, `State`. |
 | `./genome` | payload layout, forward/recurrent/grad kernels, mutation/crossover/distance invariants, host introspection. |
 | `./algorithm` | NEAT `tell` algebra: speciation, stagnation, spawn allocation, parent selection. |
-| `./problem` | func-fit losses (`mse`/`rmse`/`mae`/`mape`) and the CartPole rollout. |
+| `./problem` | func-fit losses (`mse`/`rmse`/`mae`/`mape`), the `problem` protocol, and the CartPole / Pendulum / MountainCar rollouts against host-numpy oracles (Pendulum's and MountainCar's live in their own modules). |
 | `./test_version.py` | `tensorneat.__version__` against the distribution metadata, plus the `PackageNotFoundError` fallback. |
 | `./conftest.py` | session baseline + import recorder: the per-test optional-framework guard. |
 | `../support` | shared runner, hand-built payloads and numpy oracles used by every suite here. |
