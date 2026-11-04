@@ -74,7 +74,7 @@ A problem is pure host-side configuration (`StatefulBaseClass`) plus plain-Pytho
 - `gravity_term = 3*gravity/(2*length)` and `torque_term = 3/(mass*length**2)` are precomputed host-side into the `_PendulumConstants` bundle, so the body never divides; every field is an in-trace `enp.full((), v)` built once per rollout, outside the loop.
 - `angle_normalize(x) = x - 2*pi*floor((x + pi)/(2*pi))`, the floor-mod spelling of Gym's `((x + pi) % (2*pi)) - pi`, because `evoxc.remainder` is floor-mod on numpy but `fmod` on stablehlo/iree (see Constraints) while `evoxc.floor` is an exact IEEE op on both; `enp` has neither, which is why the top-level ops are the escape hatch.
 - `_advance` returns the cost already reshaped to `(B,)`, because `(B,) - (B,1)` would broadcast into a `(B, B)` buffer.
-- Return bounds: a per-step cost is at most `pi**2 + 0.1*max_speed**2 + 0.001*max_torque**2 = 16.29`, so an episode return lives in `[-max_step*max_cost, 0]` and so does the fitness; hence the `fitness_target > 0` rejection.
+- Return bounds: a per-step cost is at most `pi**2 + 0.1*max_speed**2 + 0.001*max_torque**2 = 16.2736`, so an episode return lives in `[-max_step*max_cost, 0]` and so does the fitness; hence the `fitness_target > 0` rejection.
 - NaN poisons through the action penalty rather than a census: `tanh(NaN) = NaN` makes `0.001*u**2` NaN, the step's cost NaN and the accumulator NaN for the rest of the episode, and `finalize_fitness` maps it to `-inf`.
 - `repeat_times` repeats are individual-major (`row p*R + r`), and `evaluate` means `returns_of(total, P, R)` over axis 1 before `finalize_fitness`.
 

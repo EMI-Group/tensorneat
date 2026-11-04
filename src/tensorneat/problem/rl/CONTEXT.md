@@ -48,7 +48,7 @@ Per timestep, all on the pre-transition state:
 `gravity_term = 3*gravity/(2*length)` and `torque_term = 3/(mass*length**2)` are precomputed host-side into the bundle, so the body never divides; the host oracle must use the same precomputed float32 values.
 `angle_normalize(x) = x - two_pi * floor((x + pi) / two_pi)`, the floor-mod spelling of Gym's `((x + pi) % (2*pi)) - pi` (see Notes for why `evoxc.remainder` is not usable).
 Reset: one `U(-1, 1)` block of shape `(B, 2)`, `theta = raw_theta * pi`, `theta_dot = raw_speed * max_speed`, recombined with `enp.concatenate(axis=1)`.
-No termination and no alive mask: every episode is scored over the whole horizon, so the return is in `[-max_step * max_cost, 0]` (per-step cost is at most `pi**2 + 0.1*max_speed**2 + 0.001*max_torque**2 = 16.29`), and `fitness_target` may only be `<= 0`.
+No termination and no alive mask: every episode is scored over the whole horizon, so the return is in `[-max_step * max_cost, 0]` (per-step cost is at most `pi**2 + 0.1*max_speed**2 + 0.001*max_torque**2 = 16.2736`), and `fitness_target` may only be `<= 0`.
 Carry `(obs (B,2), total (B,), step ())`; `_advance` returns the cost already reshaped to `(B,)`, because `(B,) - (B,1)` would broadcast into a `(B, B)` matrix.
 NaN: `tanh(NaN) = NaN` → `0.001*u**2` is NaN → `cost` is NaN → the accumulator is NaN → `finalize_fitness` gives `-inf`; verified empirically, so there is no NaN census.
 
