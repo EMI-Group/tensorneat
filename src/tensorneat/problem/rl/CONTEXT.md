@@ -108,7 +108,9 @@ Rejected variants, each reverted:
 - Reporting is finite-safe: a NaN-poisoned policy is a real outcome (its fitness is `-inf`), so no report may convert a return with `int()`/`round()` or test it against a bound without `math.isfinite` first — `CartPole` prints `survived n/a (NaN return)`, `MountainCarContinuous` prints `goal n/a (NaN return)`, and `Pendulum` prints `nan`, each with the return still formatted `{r:.2f}`.
 - Every numeric knob and every `fitness_target` goes through a `_common` validator (`require_positive_int`, `require_positive`, `require_non_negative`, `require_finite`), so a configuration error is always `TensorNEATError` with a `<Owner>: <name> must be ...` message; a bare `float(...)` and a bare `TypeError`/`ValueError` on the construction path are ruled out.
 - `returns_of` is the only place the `(P, R)` layout is assumed; adding an environment means a step helper + a `while_loop` + the same finish step, in one file per environment.
-- Files <= ~1000 lines (`cartpole.py` 693, `mountaincar.py` 829, `pendulum.py` 715, `_common.py` 214).
+- Files <= ~1000 lines (`cartpole.py` 693, `mountaincar.py` 833, `pendulum.py` 715, `_common.py` 214).
+- Per-timestep IREE dispatch inventory at the reference geometry (`L = 3`): `CartPole` `^bb5` 3 + 4·L + `^bb8` 12 = **27**, `Pendulum` 4 + 4·L + 3 = **23**, `MountainCarContinuous` 3 + 4·L + 4 = **19**, against 27 / 24 / 22 before the diets.
+  `^bb5` (the genome's per-query prelude) and `^bb7` (its level loop) are the sibling genome node's, so this node's whole remaining budget is `^bb8` 12 / 3 / 4.
 
 ## Measured cost
 Rollout component only (`evaluate` traced alone, no genome forward, toy policy — `1.5*sin(theta) + 0.5*theta_dot` for Pendulum, `3*position + 2*velocity + 1` for MountainCarContinuous, `(tanh(theta) - x, 2*theta + 3*theta_dot)` for CartPole), one `evoxc.build` then 7 `evoxc.run`, build excluded, **best median of 3 fresh processes**; evoxc 0.1.0, numpy 2.5.4, iree-base-compiler 3.11 (llvm-cpu), one 20-core box — the Pendulum/MountainCar rows on CPython 3.12, the CartPole rows on CPython 3.14 (an earlier session; the same box on 3.12 reads ≈7 % lower).
