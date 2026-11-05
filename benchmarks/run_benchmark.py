@@ -152,7 +152,18 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=(
             "re-render --out from an existing run-record JSON (recompute aggregated records "
-            "and the verdict, spawn no worker); the JSON is read, never rewritten"
+            "and the verdict, spawn no worker); the JSON is read, never rewritten unless "
+            "--persist-note asks for meta.report_note to be stored in it"
+        ),
+    )
+    parser.add_argument(
+        "--persist-note",
+        action="store_true",
+        dest="persist_note",
+        help=(
+            "with --render-from-json, write --report-note into the record's "
+            "meta.report_note so a later bare --render-from-json reproduces the note; "
+            "only meta is rewritten, never runs/aggregated/verdict/numbers"
         ),
     )
     parser.add_argument(
@@ -403,6 +414,12 @@ def execute_run(
             message = f"{message}: {tail}"
         print(f"ERROR: timeout after {args.timeout}s", flush=True)
         return _error_record(run, args, case_by_name, message)
+    except OSError as exc:
+        # ENOMEM/EMFILE/a bad interpreter must cost this run, not the whole matrix: the JSON
+        # and the report are written after every run has a record.
+        message = f"cannot spawn the worker: {exc}"
+        print(f"ERROR: {message}", flush=True)
+        return _error_record(run, args, case_by_name, message)
 
     record = _load_record(out_path)
     if proc.returncode != 0:
@@ -600,12 +617,50 @@ def _override(flag_value, stored_value):
     return flag_value if flag_value is not None else stored_value
 
 
+def _persist_report_note(path: Path, doc: dict, note: str) -> str | None:
+    """Store ``note`` in the record's ``meta.report_note``; return an error message or ``None``.
+
+    ``runs``/``aggregated``/``verdict`` and every number stay byte-identical: only ``meta`` is
+    replaced, and the write is verified by re-reading the file and comparing every other
+    top-level key against what was loaded. A failed verification leaves the file as written
+    and refuses to render, because a record whose runs moved is not evidence any more.
+    """
+    meta = doc.get("meta")
+    meta = dict(meta) if isinstance(meta, dict) else {}
+    meta["report_note"] = note
+    updated = dict(doc)
+    updated["meta"] = meta
+    _write_json(updated, path)
+
+    reloaded, error = _load_json_document(path)
+    if error:
+        return f"--persist-note wrote {path} but it cannot be re-read: {error}"
+    before = {key: value for key, value in doc.items() if key != "meta"}
+    after = {key: value for key, value in reloaded.items() if key != "meta"}
+    if before != after:
+        changed = sorted(
+            key for key in set(before) | set(after) if before.get(key) != after.get(key)
+        )
+        return (
+            f"--persist-note changed more than meta in {path} (top-level keys {changed}); "
+            "the record is no longer the measurement it was — restore it from git and do "
+            "not render it"
+        )
+    print(
+        f"persisted meta.report_note in {path}: only meta.report_note changed, "
+        "runs/aggregated/verdict/numbers untouched"
+    )
+    return None
+
+
 def _render_from_json(args: argparse.Namespace) -> int:
     """Render ``--out`` from an existing run record, recomputing aggregation and verdict.
 
-    No worker is spawned and the input JSON is only read: this is how the report text is
-    iterated without re-measuring. A wrong or missing schema, a missing ``runs`` list and an
-    unreadable file each fail loudly with exit code ``2`` instead of rendering a half report.
+    No worker is spawned and the input JSON is only read — except under ``--persist-note``,
+    which stores ``--report-note`` in the record's ``meta`` (nothing else) so the note
+    survives the next bare re-render. A wrong or missing schema, a missing ``runs`` list and
+    an unreadable file each fail loudly with exit code ``2`` instead of rendering a half
+    report.
     """
     protocol = _protocol()
     reporter = _reporter()
@@ -623,6 +678,12 @@ def _render_from_json(args: argparse.Namespace) -> int:
         return _fail(
             f"{path} has no 'runs' list; there is nothing to aggregate or judge"
         )
+    if args.persist_note and args.report_note is None:
+        return _fail("--persist-note without --report-note: nothing to persist")
+    if args.persist_note:
+        error = _persist_report_note(path, doc, args.report_note)
+        if error:
+            return _fail(error)
 
     records = _records_from_document(doc)
     aggregated = protocol.aggregate(records)
@@ -704,6 +765,12 @@ def main(argv=None) -> int:
     if args.list_cases:
         _print_case_matrix()
         return 0
+
+    if args.persist_note and not args.render_from_json:
+        return _fail(
+            "--persist-note needs --render-from-json: it writes --report-note into that "
+            "record's meta, so it cannot be used on the measurement path"
+        )
 
     if args.render_from_json:
         if args.dry_run:

@@ -18,7 +18,7 @@ The environment table is that session's: its `evoxc 0.1.0` is the installed dist
 This file replaces an earlier version that recorded 8/8 cases dying in `Pipeline.setup()` with
 `BackendError: stablehlo export: op 'scatter' ... rank-3 operand along axis 0`.
 That failure was real and is now fixed at its source in `src/` (section "The five gates, in the order they fired").
-`benchmarks/results/iree.json` and `benchmarks/iree.md` are the **historical** record of that pre-fix attempt (8/8 `error`); they were not re-rendered for this report.
+`benchmarks/results/iree.json` and `benchmarks/iree.md` are the **historical** record of that pre-fix attempt (8/8 `error`); they were not re-measured for this report.
 
 ## Environment (measured, not assumed)
 

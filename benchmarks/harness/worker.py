@@ -436,7 +436,10 @@ def main(argv: list[str] | None = None) -> int:
             rss_final_mb=rss_final,
             loadavg_start=loadavg_start,
             loadavg_end=_load_average(),
-            quality=protocol.quality_curve(fitness_curve, case.fitness_target),
+            quality=protocol.quality_curve(
+                fitness_curve,
+                case.fitness_target if case.gens_to_target else None,
+            ),
         ).to_dict()
         _write_json(record, out_path)
         return 0

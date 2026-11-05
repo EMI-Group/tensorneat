@@ -126,6 +126,10 @@ class Case:
         fitness_target: Best fitness that counts as solved.
         seed: Base seed; repeat ``r`` of a run uses ``seed + r``.
         notes: Free-form remark shown in the case matrix.
+        gens_to_target: Whether the case's fitness target is informative, i.e. not
+            already met by the initial population; ``False`` makes the worker
+            measure with no target (``quality_curve(target=None)``) so the report
+            renders ``n/a (no informative target)`` instead of a generation count.
         algorithm_config: NEAT keyword arguments plus a ``"class"`` key.
         genome_config: Genome keyword arguments plus a ``"class"`` key.
         problem_config: Problem keyword arguments plus a ``"class"`` key.
@@ -141,6 +145,9 @@ class Case:
     fitness_target: float
     seed: int = 42
     notes: str = ""
+    # A target the initial population already beats carries no information, so a case can
+    # declare that its metric is not measurable instead of publishing a meaningless count.
+    gens_to_target: bool = True
     algorithm_config: dict[str, Any]
     genome_config: dict[str, Any]
     problem_config: dict[str, Any]
@@ -286,6 +293,7 @@ class Case:
             "fitness_target": self.fitness_target,
             "seed": self.seed,
             "notes": self.notes,
+            "gens_to_target": self.gens_to_target,
             "algorithm": self.algorithm_config["class"],
             "genome": self.genome_config["class"],
             "problem": self.problem_config["class"],
@@ -456,6 +464,13 @@ _CASES_IN_ORDER: tuple[Case, ...] = (
         pop_size=100,
         generation_limit=150,
         fitness_target=180.0,
+        # CartPole fitness is the number of surviving steps, so the 200-step rollout horizon
+        # is a hard ceiling (the initial population already reaches 145/200/200 on seeds
+        # 42/43/44) and no target is both reachable and above it: that made
+        # generations-to-target read 2/1/1 and carry no information. ``fitness_target`` stays
+        # as the documented "solved" threshold the host-side Pipeline is constructed with
+        # (the harness never early-stops); only the recorded metric is suppressed.
+        gens_to_target=False,
         notes="new-only: the legacy library has no equivalent problem",
         algorithm_config={
             "class": "NEAT",

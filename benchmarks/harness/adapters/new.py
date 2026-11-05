@@ -41,12 +41,7 @@ class NewAdapter:
     """Measure the evoxc rewrite; its first ``step`` call performs the build."""
 
     impl = "new"
-    display = "tensorneat (evoxc)"
     backend_label = "numpy"
-
-    def __init__(self, backend: str = "numpy") -> None:
-        """Record the evoxc backend this adapter reports for itself."""
-        self.backend_label = backend
 
     def build(self, case: Any, backend: str, seed: int) -> Any:
         """Build the evoxc pipeline for ``case`` on ``backend``."""
