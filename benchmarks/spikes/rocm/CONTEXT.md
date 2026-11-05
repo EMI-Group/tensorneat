@@ -39,7 +39,7 @@ Per-generation host round trips cost `xor_p500` 0.69 ms for the four payload arr
 | `opt_level="O3"` | 46.14 | 60.22 | 8.5 / 13.0 | 5 664 / 6 409 |
 | `iree_compile_args=["--iree-dispatch-creation-enable-aggressive-fusion"]` | 46.09 | 59.90 | 8.6 / 13.0 | 5 664 / 6 409 |
 No flag moves wall time or build time, and none changes the executed dispatch count — the only ROCm lever that matters is the dispatch count, which these flags do not touch on these graphs.
-`opt_level` and `dispatch_formation` are compile-stage evoxc options (the installed v0.1.1 `KNOWN_OPTIONS` lists `dispatch_formation`, so the option spelling works as well as the raw flag); the lower stage rejects a `device` keyword.
+`opt_level` is a compile-stage evoxc option; `dispatch_formation` exists in the newer `/root/evoxc` checkout but **not** in the pinned v0.1.1 adapter the tree installs (its compile-stage set is `target_backends`/`iree_compile_args`/`opt_level`/`vulkan_target`), so aggressive fusion has to be passed as the raw `--iree-dispatch-creation-enable-aggressive-fusion` flag; the lower stage rejects a `device` keyword.
 Runtime flags are equally inert: `--hip_use_streams=true`, `--hip_allow_inline_execution=true`, `--hip_async_allocations=false` and their combination all leave `xor_p500` at 45.8–46.1 ms and `cartpole_p100` at 159–165 ms (`EVOXC_IREE_RUNTIME_ARGS`, load stage).
 ## Method and its traps
 The IREE 3.13 Python runtime has no execution-tracing switch: `iree.runtime.flags` exposes only `FUNCTION_INPUT_VALIDATION`/`parse_flags`, the wheel's `_runtime.abi3.so` contains no `trace_execution`/`execution_trace` string, and `--hip_tracing=true` prints nothing, so per-dispatch data has to come from `rocprofv3`.
