@@ -627,8 +627,11 @@ def _measured_section(document: dict[str, Any]) -> list[str]:
                 cross_summary(record),
             ]
         )
+    # The heading names the targets this record actually measured, in first-appearance order.
+    targets = list(dict.fromkeys(str(r["target"]) for r in document.get("records") or []
+                                 if r.get("target"))) or ["numpy", "iree llvm-cpu", "iree rocm"]
     return [
-        "## Measured: numpy vs iree llvm-cpu vs iree rocm",
+        f"## Measured: {' vs '.join(targets)}",
         "",
         "One row per planned `(case, target)`; `n/a` marks a metric the row does not "
         "have (an error row has no timings at all). `build` is the one-off "
@@ -932,9 +935,7 @@ def summary_line(index: int, total: int, record: dict[str, Any]) -> str:
 # --- The block and the markers ----------------------------------------------------------
 
 
-def render_block(
-    document: dict[str, Any], record_path: Path | str | None = None
-) -> str:
+def render_block(document: dict[str, Any], record_path: Path | str | None = None) -> str:
     """Render the measured block of ``GPU.md`` from a matrix document.
 
     Args:

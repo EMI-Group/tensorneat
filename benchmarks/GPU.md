@@ -117,7 +117,7 @@ The trace is part of the record (`trajectory` per row, `protocol.trajectory_gene
 | Git commit | `a5973c89bebf` (clean — generated report artifacts are not counted) |
 | Load average (1/5/15 min, document build) | 7.76 / 4.99 / 2.81 |
 
-## Measured: numpy vs iree llvm-cpu vs iree rocm
+## Measured: numpy vs iree-rocm
 
 One row per planned `(case, target)`; `n/a` marks a metric the row does not have (an error row has no timings at all). `build` is the one-off generation-graph compile and is excluded from every `ms/gen` sample; `peak RSS` is the process high-water mark of that single row, which is why each row runs in its own process.
 

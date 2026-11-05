@@ -40,11 +40,14 @@ forms: ``"O0"``..``"O3"``, ``"0"``..``"3"``, or ints 0..3; evoxc normalizes and
 translates it per backend). ``--opt-level`` passes it through unchanged as
 ``compile_options={"opt_level": <value>}``.
 
-Verified on this box with iree-base-compiler/-runtime 3.11.0 (llvm-cpu target):
-``O0`` and ``O1`` compile and run, while ``O2``/``O3`` currently fail *inside*
-iree-compile (a ``vector.gather`` lowering error) and surface as
-``evoxc.core.errors.BackendError`` -- the value is forwarded, the backend
-validates it, and nothing falls back to another backend.
+Verified on this box with iree-base-compiler/-runtime 3.13.0 (llvm-cpu target):
+the default opt level, ``O0`` and ``O1`` all compile and run, while ``O2``/``O3``
+SIGSEGV *inside* iree-compile (``Error code: -11`` with a ``libIREECompiler.so``
+frame dump and ``failed to move consumer into region`` warnings on
+``stablehlo.select``) and surface as ``evoxc.core.errors.BackendError`` -- the
+value is forwarded, the backend validates it, and nothing falls back to another
+backend. ``BACKENDS.md`` is the measured ``iree`` record for the numbers, so
+none are repeated here.
 
 Cases
 -----
