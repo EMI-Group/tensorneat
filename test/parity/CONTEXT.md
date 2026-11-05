@@ -5,7 +5,8 @@ Prove that the evoxc rewrite computes the *same numbers* as `../benchmarks/legac
 Parity compares **kernels on identical inputs only**: one hand-built genome, one hand-built input batch, two implementations.
 It never compares RNG draws, initial populations, mutations, crossovers or `genome.hash()` — those differ by construction (`evoxc.random` splitmix64 vs `jax.random`, float32 row hash vs the legacy encoding) and a test that compared them would be asserting on the wrong thing.
 The legacy library is the oracle; this directory is the only place in the repo allowed to import `jax`.
-All 53 tests here are real and green on the numpy backend: 18 `test_convert` + 12 `test_forward` + 5 `test_distance` + 13 `test_fitness` + 5 `test_grad`; the directory must report **zero skips**.
+All 60 tests here are real and green on the numpy backend: 18 `test_convert` + 13 `test_forward` + 5 `test_distance` + 13 `test_fitness` + 5 `test_grad` + 6 `test_oracle_integrity`; with the `bench` extra the directory must report **zero skips**.
+`test_oracle_integrity.py` guards the evidence itself: that the oracle is genuinely separate code, that the four `importorskip` modules are actually collected when `jax` is installed, and that the directory's collected count never silently shrinks.
 
 ## How to run
 - `pytest -m parity` from the repo root (needs the `bench` extra: `pip install -e ".[bench]"`); about 20 s, dominated by evoxc build/compile in `test_forward` and `test_grad`.
