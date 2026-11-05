@@ -12,10 +12,10 @@ Shape contract
 Every call this module makes to ``genome.measure_distance`` carries a
 **population-shaped** centre payload: exactly ``pop_size`` rows, row ``p`` being
 the centre measured against population member ``p``, next to the digest of the
-same batch width.  ``measure_distance`` accepts no other width besides a
-broadcastable ``1``, so the population-shaped form is the one shape that works
-for both a single centre and a whole species table without a second digest
-tiling.
+same batch width.  The genome also accepts a broadcastable ``1`` and a
+``group * pop_size`` batch against a ``group_digest``-tiled digest; this module
+asks for neither, so the population-shaped form is the one width that serves
+both a single centre and a whole species table without a second digest tiling.
 
 :meth:`DistanceRows.__call__` is single-valued: it accepts a centre payload of
 batch ``pop_size`` (measured as it stands) or batch ``1`` (tiled to
@@ -52,10 +52,12 @@ Measured cost
 -------------
 Numpy reference backend, ``species_size=20``, one configuration per fresh
 process, ``benchmarks/backend_measure.py --backend numpy --generations 20
---warmup 3`` (its numbers are ``Pipeline.step``): ``P = 500`` 164.2 ms mean,
-240.5 MiB peak RSS and 0.40 s of build; ``P = 1000`` 314.7 ms, 391.7 MiB and
-0.40 s.  The table costs exactly one ``measure_distance`` call per centre row;
-what the scan buys is the *region* around those calls, not fewer of them.
+--warmup 3`` (its numbers are ``Pipeline.step``): the dense cell dispatches
+7 592 ops per generation and reads 164.11 ms / 233.8 MiB peak RSS / 0.33 s
+build at ``P = 500``, and 314.7 ms / 391.7 MiB / 0.40 s at ``P = 1000``.  The
+table costs exactly one ``measure_distance`` call per centre row -- 40 calls per
+generation at ``species_size = 20``, 20 here and 20 in scan 2 -- and what the
+scan buys is the *region* around those calls, not fewer of them.
 
 Measuring the same rows at the top level of the generation graph instead reads
 199.8 ms / 454.4 MiB / 0.56 s at ``P = 500`` and 339.5 ms / 809.4 MiB / 0.65 s
@@ -64,13 +66,38 @@ at ``P = 1000``: slower and roughly twice the footprint, for the reason in
 
 Pre-measuring *both* speciation scans needs a ``cond`` for scan 2's
 data-dependent ``pop[seed]`` centre and costs ~50 % more peak RSS for no timed
-gain.  Grouping several centres into one ``measure_distance`` call (a tiled
-digest and a ``block * pop_size``-row centre batch) is ~12 % cheaper than one
-call per centre in isolation at ``P = 500`` (66.6 vs 75.4 ms for twenty rows),
-but *slower* end to end, because the wider batches materialise ``block`` times
-bigger temporaries and that costs more than the dispatch it saves; measured at
-2, 4, 10 and 20 centres per call, all upstream of this one-centre-per-call
-shape.
+gain.
+
+Grouping several centres into one ``measure_distance`` call is a measured
+rejection and an unwired option, not a shipped path: the genome's
+``tensorneat.genome.operations.distance.group_digest`` / ``GroupedDigest`` route
+is tested and bit-identical to the separate calls, and a dispatch-bound backend
+is where it belongs; on the numpy default the shipped wiring keeps one
+population-shaped call per centre.  Measured over the whole generation at
+``P = 500`` / ``species_size = 20``, scan 1 grouped two centres per call
+dispatches 6 589 ops (-13 %) at 253.2 MiB peak RSS (+8.3 %) against the
+ungrouped 7 592 at 233.8 MiB, and its wall time is bimodal at process level:
+152-165 ms (2-5 % below the ungrouped form) in the fast mode, 196-253 ms (30-45 %
+above it) in 7 of 13 fresh default-environment processes.  The slow mode is the
+allocator's rather than the kernel's -- with ``MALLOC_MMAP_THRESHOLD_`` and
+``MALLOC_TRIM_THRESHOLD_`` pinned to 1 GiB so glibc serves from the brk heap the
+grouped cell is stable at 152.2 / 152.2 ms against 158.9 / 162.1 ms for the
+ungrouped one, an intrinsic ~4 % win -- but it is triggered by the shipped code
+under the default environment in about half of runs, and numpy is the default
+and fastest leg.
+
+The mechanism is the row width: the compatibility kernel's ``(rows,
+2 * max_conns)`` intermediates double with ``k = 2`` and grow linearly beyond
+(the same sweep reads 273.8 MiB at ``k = 2``, 353.1 at ``k = 4`` and 593 / 753
+at ``k = 10`` / ``k = 20``), and the kernel is memory-bound there, so the wider
+call's per-element cost eats the dispatch it saves: at ``k = 4`` the per-op-name
+profile of one generation moves ``argsort`` 25.5 -> 37.0 ms, ``gather``
+21.5 -> 36.1 ms, ``cast`` 8.0 -> 17.7 ms and ``reshape`` 4.3 -> 8.9 ms while
+dispatches fall 8061 -> 4885 against a 28 % wall-time increase.
+The two other ways of shipping it lose on the dense cell as well: ``k = 4``
+reads +15 % wall time and +30.5 % peak RSS at 6 004 dispatched ops, and
+pre-measuring a second table for scan 2 at ``k = 2`` reads +58 % wall time at
+6 661 ops (258.96 ms / 274.0 MiB against 164.11 ms / 233.8 MiB).
 
 Peak memory
 -----------

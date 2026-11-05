@@ -692,6 +692,7 @@ def speciate(
     # ``constant`` op at the top level instead of one re-emitted on each of the
     # body's ``species_size`` iterations.
     iinf = int_const(I_INF)
+    inf_f32 = const(float("inf"))
     zero_i32 = int_const(0)
     zero_f32 = const(0.0)
     pop_index = iota_i32(pop_size)
@@ -808,10 +809,12 @@ def speciate(
         else:
             distances = evoxc.gather(rows1, slot, axis=0)
         # ``argmin_with_mask`` folds "nothing left to claim" into the ``I_INF``
-        # sentinel index, which is clamped to row ``0`` before it is used.
+        # sentinel index, which is clamped to row ``0`` before it is used.  Both
+        # sentinels are hoisted constants, so a body emits no ``constant`` op.
         closest = evoxc.reshape(
             argmin_with_mask(
-                enp.expand_dims(distances, 0), enp.expand_dims(pending, 0)
+                enp.expand_dims(distances, 0), enp.expand_dims(pending, 0),
+                filler=inf_f32, default=iinf,
             ),
             (),
         )
@@ -844,7 +847,10 @@ def speciate(
         counter = evoxc.gather(keys_ext, species_size, axis=0)
         # ``fetch_first`` reports ``I_INF`` when nothing is unassigned; the
         # gather below is unconditional, so the sentinel is clamped to row ``0``.
-        seed = evoxc.reshape(fetch_first(enp.expand_dims(unassigned, 0)), ())
+        # The hoisted constant keeps the ``constant`` op out of the body.
+        seed = evoxc.reshape(
+            fetch_first(enp.expand_dims(unassigned, 0), default=iinf), ()
+        )
         seed = evoxc.select(evoxc.equal(seed, iinf), zero_i32, seed)
         # Centre rows of this slot, selected before the ``cond`` so the branch
         # body exists once: ``pop[seed]`` for a creating slot, the (closed-over)
