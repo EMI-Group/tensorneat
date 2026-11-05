@@ -7,8 +7,8 @@ The post-fix case-scoped numbers live in `PERF_NUMPY.md`: `custom_pagie_p500` at
 Nothing here ships: the harness never imports both implementations in one process (JAX thread pools and evoxc/iree allocators would corrupt timings), it spawns one subprocess per run and renders `RESULTS.md` from the measured JSON.
 `RESULTS.md` is generated evidence, never hand-edited.
 ## Provenance: which artifact measures which tree
-No committed CPU artifact measures the merged tree; every number in this node belongs to the artifact, tree and session named below, and nothing here may be quoted as a statement about HEAD.
-The two compiled-backend artifacts are the ones whose fingerprints name the current `src/`: the accelerator record at `a5973c8` and the `iree` record at `6869a13` (same `src/`, later commit), and each speaks only for its own rows and session.
+No committed *old-vs-new* CPU artifact measures the merged tree; every number in this node belongs to the artifact, tree and session named below, and nothing here may be quoted as a statement about HEAD.
+The two compiled-backend artifacts are the ones whose fingerprints name the current `src/`: the accelerator record at `a5973c8` and the `iree` record at `6869a13` (same `src/`, later commit), so their per-generation CPU baselines are this tree's — and each still speaks only for its own rows and session.
 
 | Artifact | Measured on | What it can speak for |
 |---|---|---|
