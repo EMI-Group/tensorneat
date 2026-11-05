@@ -91,7 +91,8 @@ Counts: `matched` from the in-range mask, `cnt1` from the centre's present rows 
 Duplicate key rows inside one genome are outside the payload contract; the dump redirect makes them a last-writer-wins scatter instead of a crash.
 
 ## Static gate (never a runtime branch)
-`dense.enabled(gene, genome)` is `True` while the family's centre tables fit `_DENSE_MAX_BYTES = 8 MiB` of float32 (`width * 4 * (1 + attr_width + marker_columns)`) and the width stays inside `int32`.
+`dense.enabled(gene, genome)` is `True` while the family's merged centre table fits `_DENSE_MAX_BYTES = 8 MiB` of float32 (`width * 4 * (1 + attr_width)`) and the width stays inside `int32`.
+A trailing marker column costs no table cell, because markers are resolved by a gather over the centre's own key rows rather than by a table of their own.
 `S = 150` (`max_nodes = 50`, `max_conns = 100`) gives `22 501` connection cells (≈0.2 MB); `S = 500` (≈2 MB) qualifies; `S = 1000` (8 MB) is borderline and larger spans fall back to the merge — the dense table grows with `S²` while the merge grows with the gene axis `M`.
 **Both** families must qualify, or neither does: a partially dense `measure` would have to broadcast the centre payload for the other family, and the row-wise merge is then the honest route.
 The switch is on by default because it is *free where it does not apply*: `measure` takes the dense route only for a batch-1 centre and falls back to the merge otherwise.
