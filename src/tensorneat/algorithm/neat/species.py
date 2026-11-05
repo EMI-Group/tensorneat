@@ -500,12 +500,13 @@ class SpeciesController(StatefulBaseClass):
             fixed-length ``scan``, so each centre's kernel transients are scoped
             to one region) and each iteration reads its own row with a
             ``gather``, while scan 2 measures its selected centre per iteration
-            -- ``pop[seed]`` for a creating slot, the post-scan-1 carry row
-            otherwise.  Scan 1's centre for slot ``i`` is the carry row ``i`` and
-            no earlier iteration can rewrite it (every ``scatter`` writes index
-            ``slot`` and each slot is visited once), so the pre-scan table holds
-            exactly the centre every iteration reads and the rows are the same
-            floats (the compatibility kernel is row-independent).  Once the
+            -- ``pop[seed]`` for a creating slot, the row of the centre table
+            rebuilt after scan 1 otherwise.  Scan 1's centre for slot ``i`` is
+            the pre-scan centre row ``i`` and no earlier iteration can rewrite it
+            (every ``scatter`` there writes index ``slot`` and each slot is
+            visited once), so the pre-scan table holds exactly the centre every
+            iteration reads and the rows are the same floats (the compatibility
+            kernel is row-independent).  Once the
             species table is full every slot is live and nothing is skippable,
             so a lazy row's ``if`` region costs more than it saves (see
             ``_kernels.GATED_ROWS``).  The gate is a pure static predicate, so
