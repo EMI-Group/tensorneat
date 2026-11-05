@@ -130,6 +130,11 @@ _RUNTIME_KEYS: tuple[str, ...] = ("pop", "generation", "species", "randkey")
 # :mod:`tensorneat.host_payload` and are imported above.
 
 
+# --------------------------------------------------------------------------- #
+# the pipeline
+# --------------------------------------------------------------------------- #
+
+
 class Pipeline(StatefulBaseClass):
     """Drive one evolutionary algorithm over one problem and log the trajectory.
 

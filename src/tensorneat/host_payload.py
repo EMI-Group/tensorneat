@@ -262,11 +262,10 @@ def _slice_batch(tree: Any, start: int, stop: int, pop_size: int) -> Any:
     ``pop_size`` on axis 0, so a leaf whose leading dimension differs is not a
     population-major tensor (or the tree broke its own contract) and raises
     :class:`~tensorneat.common.errors.TensorNEATError` instead of being silently
-    passed through or sliced.  The old ``shape[0] == pop_size`` heuristic could
-    not tell a population row from a shared table of coincidentally equal length
-    and would mis-evaluate the group; only rank-0 leaves (a scalar, no axis at
-    all) are shared through untouched.  Bounds are static ints, so the slice is
-    one graph op per leaf.
+    passed through or sliced.  A shape-only check cannot tell a population row
+    from a shared table of coincidentally equal length and would mis-evaluate the
+    group; only rank-0 leaves (a scalar, no axis at all) are shared through
+    untouched.  Bounds are static ints, so the slice is one graph op per leaf.
 
     Args:
         tree (Any): A population-major pytree (schedule or gene payload).
