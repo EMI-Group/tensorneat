@@ -12,8 +12,9 @@ One *generation* of NEAT is a single ``evoxc`` graph:
   entry), so no concrete ``evoxc.Tensor`` is ever captured by a trace;
 * the compiled ``evoxc.Executable`` is cached in :attr:`Pipeline._executables`
   under ``(pop_size, max_nodes, max_conns, max_in_degree, max_depth, key_span)``
-  and reused verbatim while that signature does not change, so :meth:`auto_run`
-  pays the compile cost once and then only runs;
+  plus the substrate statics and the ``(distance_centre, distance_formulation)``
+  formulation pair, and reused verbatim while that signature does not change, so
+  :meth:`auto_run` pays the compile cost once and then only runs;
 * a *different* signature builds a second executable; a population whose shape
   does not match the cached signature is rejected by ``evoxc``'s own shape check,
   which is why nothing here ever reshapes a batch to make it fit.
@@ -112,6 +113,8 @@ from .host_payload import (
     _config_value,
     _declared_shape,
     _finite_fitness,
+    _formulation_signature,
+    _formulation_statics,
     _jsonable,
     _one_individual,
     _schedule_overflow,
@@ -217,6 +220,15 @@ class Pipeline(StatefulBaseClass):
         self.is_save = is_save
         self.is_detailed = is_detailed
         self.show_problem_details = show_problem_details
+
+        # Trace-time kernel formulation statics, derived from the device *kind*
+        # this run places on (``_formulation_statics``): plain strings registered
+        # on the state and baked into the generation graph's closure, never graph
+        # inputs.  They change how the distance kernels are formulated, so they
+        # are part of the executable-cache key (``_shape_signature``).
+        self.distance_centre, self.distance_formulation = _formulation_statics(
+            self.device
+        )
 
         self.pop_size = int(algorithm.pop_size)
         self.pop_batch_size = self._resolve_pop_batch_size(pop_batch_size)
@@ -383,6 +395,8 @@ class Pipeline(StatefulBaseClass):
                 "backend": self.backend,
                 "device": _jsonable(self.device),
                 "compile_options": _jsonable(self.compile_options),
+                "distance_centre": self.distance_centre,
+                "distance_formulation": self.distance_formulation,
                 "is_save": self.is_save,
                 "save_dir": _jsonable(self.save_dir),
                 "is_detailed": self.is_detailed,
@@ -400,7 +414,10 @@ class Pipeline(StatefulBaseClass):
         Order matters and follows the kernel contract: ``randkey`` first (the
         single source of randomness), then ``backend``/``device``/
         ``compile_options`` (every ``evoxc.build`` below reads them off the
-        state), then ``algorithm.setup`` (population, generation counter, species
+        state) together with the device-derived formulation statics
+        ``distance_centre``/``distance_formulation`` (plain strings the
+        generation graph bakes through its static-config closure), then
+        ``algorithm.setup`` (population, generation counter, species
         table; it advances ``randkey`` once), then ``problem.setup``.
 
         Device placement: the setup-time graphs are built and run **on CPU**
@@ -431,9 +448,19 @@ class Pipeline(StatefulBaseClass):
                 requested device cannot be reached (nothing falls back to CPU).
         """
         state = State() if state is None else state
+        # Re-derive the formulation statics from the device this run actually
+        # places on (a caller may reassign ``.device`` between construction and
+        # ``setup``), and register them with the build options: they are static
+        # strings the graph's closure reads, so they must be on the state before
+        # any ``step`` -- and the setup graphs below never need them.
+        self.distance_centre, self.distance_formulation = _formulation_statics(
+            self.device
+        )
         state = state.register(randkey=evoxc.random.key(self.seed))
         state = state.register(
             backend=self.backend,
+            distance_centre=self.distance_centre,
+            distance_formulation=self.distance_formulation,
             # Setup graphs stay on CPU: ``algorithm.setup`` runs its
             # initialisation graph on ``randkey``, which is host memory, and a
             # CPU run cannot execute an artifact compiled for the accelerator.
@@ -493,7 +520,11 @@ class Pipeline(StatefulBaseClass):
             max_depth, key_span)`` for the CPPN/genome payload, followed by
             :func:`~tensorneat.host_payload._substrate_signature`'s entries
             when the algorithm wraps a
-            fixed substrate -- a change in any of them forces a rebuild.
+            fixed substrate and by
+            :func:`~tensorneat.host_payload._formulation_signature`'s
+            ``(distance_centre, distance_formulation)`` pair -- a change in any of
+            them forces a rebuild, so a device/mode change can never reuse an
+            executable formulated for the other one.
 
         Raises:
             TensorNEATError: If ``state`` carries no four-array payload (it did
@@ -522,7 +553,11 @@ class Pipeline(StatefulBaseClass):
             static("max_depth", 0),
             static("key_span", 0),
         )
-        return payload_signature + _substrate_signature(self.algorithm)
+        return (
+            payload_signature
+            + _substrate_signature(self.algorithm)
+            + _formulation_signature(state)
+        )
 
     def _host_build_options(self) -> Optional[dict]:
         """The compile options the CPU-only setup graphs may see.
@@ -805,8 +840,10 @@ class Pipeline(StatefulBaseClass):
 
         Built on first use and then reused; the build is timed into
         :attr:`build_seconds` and counted in :attr:`builds`. A *different*
-        signature (population or genome geometry) is a second entry, so a shape
-        change can never silently reuse the previous graph.
+        signature (population or genome geometry, substrate geometry, or the
+        device-derived ``distance_centre``/``distance_formulation`` pair) is a
+        second entry, so a shape or device/mode change can never silently reuse
+        the previous graph.
         """
         signature = self._shape_signature(state)
         self.shape_signature = signature
