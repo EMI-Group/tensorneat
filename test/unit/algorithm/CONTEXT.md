@@ -77,5 +77,6 @@ Deterministic and fast: no timing, no network, no GPU, no `tmp_path` persistence
 | `./test_parent_selection.py` | survivor prefix, one-member species, elite pinning and `elite_mask`, father-wins-tie, per-block draws, RNG hygiene. |
 | `./test_neat_tell.py` | `_sanitize_fitness`, `tell` order/shape/determinism, stagnation, `ask`/`transform`/`forward`, chunking, constructor validation. |
 | `./test_exports.py` | `tensorneat.algorithm.__all__` and the documented spellings (`BaseAlgorithm`, `NEAT`, `HyperNEAT`, `HyperNEATFeedForward`), including the identity with the defining submodule. |
+| `./test_substrate.py` | HyperNEAT substrate geometry on plain host NumPy: `node_key_blocks`/`cartesian_product`/`layer_coors`/`as_coor_array`/`check_same_coordinate_dim`, `DefaultSubstrate` re-exposure and `__repr__`, `FullSubstrate` and `MLPSubstrate` row blocks plus both `analysis_substrate` functions, and the whole validation matrix. |
 | `./conftest.py` | module fixtures, table factories, `species_kernel`/`raw_kernel`. |
 | `../../../src/tensorneat/algorithm/neat` | code under test (`NEAT`, `SpeciesController`, `_kernels`, `_validation`) — read-only, escalate changes upward. |
