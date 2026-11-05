@@ -482,7 +482,13 @@ def incoming_table(order, cc, src, max_nodes, max_in_degree):
 
         ``trusted=True`` is legitimate on both blocks: a live cell's index is
         ``start[i] + i + k <= inv[C + i] - 1 <= C + N - 1``, i.e. inside ``order`` by
-        construction, and the ``in_conn`` row ids are connection rows of ``src``.
+        construction, and the ``in_conn`` row ids gathered out of it are connection
+        rows of ``src``. ``in_conn`` holds ``I_INF`` on the masked cells, and
+        :func:`~tensorneat.common.tools.prepare_flat_index` performs that ``I_INF ->
+        0`` sanitizing itself (its ``present = live`` / ``fallback = 0`` arguments)
+        before the flat index is formed, so ``trusted`` never has to cover an
+        escaping cell: those cells are read at column ``0`` and overwritten with
+        ``I_INF`` by the trailing ``select``.
 
         Why gathers and not a scatter: on ROCm ``evoxc`` lowers a scatter to a
         single-workgroup, single-thread kernel (an inherently serialized update),
@@ -529,11 +535,7 @@ def incoming_table(order, cc, src, max_nodes, max_in_degree):
     in_src = evoxc.select(
         live,
         flat_gather_prepared(
-            src,
-            prepare_flat_index(
-                src, evoxc.select(live, in_conn, zero), live, 0, trusted=True
-            ),
-            window,
+            src, prepare_flat_index(src, in_conn, live, 0, trusted=True), window
         ),
         iinf,
     )
