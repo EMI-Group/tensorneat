@@ -118,7 +118,7 @@ Raising `survival_threshold` to 0.1 or 0.5 and raising the survivor floor to `mi
 `genome/gene/conn`: `conn_gene.forward` receives a `ConnOperands` bundle (not a bare attribute tensor) from `BaseGenome`; genes read columns through `column_of(operands, name)`. See `./hyperneat`.
 Gene payload encoding is genome-owned and opaque here — in particular evoxc has **no bitcast/reinterpret op**, so how a float gene attribute travels inside an integer slot cannot be decided in this subtree.
 `common`: `State` (immutable, evoxc-flattenable), `errors.TensorNEATError`, `StatefulBaseClass` (extended by `SpeciesController`), `functions.{ACT, AGG, apply_activation, apply_aggregation}` (`AGG` members take `(z, mask)`), `tools.{rank_elements, fetch_first, argmin_with_mask, flat_gather, to_numpy}` in evoxc form.
-`pipeline`: creates `randkey`, calls `setup` on the host, drives `ask → transform → forward/evaluate → tell`, and calls `show_details` on host-readable values.
+`pipeline`: creates `randkey`, calls `setup` on the host, drives `transform → prepare_forward`/`forward_prepared` → `tell` (never `ask` or `forward`) and calls `show_details` on host-readable values.
 `problem`: `evaluate(state, keys, act_fn, transformed)` where `act_fn` is `algorithm.forward` partially applied — the problem owns the dataset tiling into the population axis.
 
 ## Measured Cost (numpy reference backend, real `DefaultGenome` + `XOR`)
