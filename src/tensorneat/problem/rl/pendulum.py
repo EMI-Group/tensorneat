@@ -22,9 +22,6 @@ __all__ = ["Pendulum"]
 
 #: Number of state variables in an observation ``(theta, theta_dot)``.
 _OBS_DIM = 2
-#: Width of the packed episode-state row the rollout carries: the observation
-#: columns plus the running cost accumulator (``theta, theta_dot, total``).
-_STATE_DIM = _OBS_DIM + 1
 #: Number of logits a policy must emit for this problem.
 _ACTION_DIM = 1
 
@@ -32,9 +29,13 @@ _ACTION_DIM = 1
 class _PendulumConstants(NamedTuple):
     """The physics bundle of one ``Pendulum`` configuration, as graph scalars.
 
-    Every field is a rank-0 ``SymbolicTensor`` created inside the active trace
-    with ``enp.full((), value)``, so no Python literal (a float would
-    materialize as f64 on the stablehlo/iree path) ever reaches an op.
+    Every *scalar* field is a rank-0 ``SymbolicTensor`` created inside the
+    active trace with ``enp.full((), value)``, so no Python literal (a float
+    would materialize as f64 on the stablehlo/iree path) ever reaches an op.
+    The two row-shaped fields (``obs_columns``, ``reset_scale``) are boolean /
+    float32 rows baked with ``evoxc.constant(evoxc.from_numpy(...))``, because
+    ``enp.full`` only fills a scalar; they are data, never arithmetic, so they
+    introduce no float64 constant.
 
     The bundle is built **once per rollout, outside the timestep loop**, so a
     constant the dynamics needs every step (``two_pi``, ``neg_max_speed``, the
@@ -60,6 +61,16 @@ class _PendulumConstants(NamedTuple):
         neg_one: ``-1``, the lower bound of the reset draw.
         one_step: The int32 ``1`` the loop counter advances by.
         horizon: The int32 ``max_step`` the loop counter is compared against.
+        obs_columns: The ``(1, 2)`` boolean ``[True, False]`` that assembles the
+            policy's observation row from the two carried state leaves; one
+            elementwise select against it is one dispatch, where an
+            ``enp.concatenate`` of two ``(B, 1)`` columns lowers to one strided
+            copy per column.
+        reset_scale: The ``(1, 2)`` float32 ``[pi, max_speed]`` the single
+            ``U(-1, 1)`` reset draw is scaled by, so the initial observation is
+            one elementwise multiply instead of a split, two multiplies and a
+            concatenate. Each element is ``raw * scale`` with the same operand
+            the per-column spelling used, so the draw is bit-identical.
     """
 
     gravity_term: Any
@@ -76,6 +87,8 @@ class _PendulumConstants(NamedTuple):
     neg_one: Any
     one_step: Any
     horizon: Any
+    obs_columns: Any
+    reset_scale: Any
 
 
 class Pendulum(BaseProblem):
@@ -352,22 +365,26 @@ class Pendulum(BaseProblem):
         Must be called inside the active trace: it draws the initial states with
         ``evoxc.random.uniform`` and runs one ``evoxc.while_loop`` over
         ``max_step`` timesteps, carry
-        ``(state (B, 3), step ())`` with ``B = pop_size * repeat_times`` in
-        individual-major order.
+        ``(theta (B, 1), theta_dot (B, 1), total (B, 1), step ())`` with
+        ``B = pop_size * repeat_times`` in individual-major order.
         The policy query is prepared once for the whole rollout, so the per-pass
         operands are not re-derived per timestep.
 
-        ``state`` is one packed row ``(theta, theta_dot, total)`` -- the two
-        observation columns followed by the running cost accumulator -- so a step
-        updates every quantity of an episode in a single ``(B, 3)`` elementwise
-        region (see :meth:`_loop_body`): a second carried leaf would be a second
-        region between which the step's torque -- computed once, consumed twice --
-        would have to be spilled to memory. The policy sees the leading
-        ``(B, 2)`` column slice of the row, which lowers to a strided read of it
-        rather than to a copy of its own, and the accumulator rides at the row's
-        ``(B, 1)`` column rank, so neither the observation row nor the cost needs
-        a ``reshape`` per step; ``total`` is flattened to ``(B,)`` once here,
-        after the loop.
+        The two state variables are carried as separate ``(B, 1)`` leaves rather
+        than as one ``(B, 2)`` observation row, which saves the two ``slice`` ops
+        a per-step ``enp.split`` costs: the row is only built where it is
+        actually consumed (the policy query), as one elementwise select against
+        the baked ``(1, 2)`` boolean ``obs_columns``. The accumulator is carried
+        at the same ``(B, 1)`` rank as the cost, so the step needs no ``reshape``
+        either; it is flattened to ``(B,)`` once here, after the loop.
+
+        That carry is the measured optimum under the numpy cost budget: a packed
+        ``(B, 3)`` row (``theta, theta_dot, total``) puts a whole step in one
+        IREE dispatch and drops the per-query prelude by two, but it has to split
+        the row back into its columns (``4`` slice ops) and assemble the next row
+        with two masked selects, i.e. ``5`` extra executed ops per timestep
+        (``+1 000`` per generation at ``max_step=200``) against a baseline of
+        27 422 -- so it is not shippable while numpy cost must not regress.
 
         Args:
             keys: One rank-0 evoxc key for the single reset draw.
@@ -385,23 +402,23 @@ class Pendulum(BaseProblem):
         consts = self._constants()
         batch = pop_size * self.repeat_times
         query = prepared_query(act_fn, batch)
+        obs0 = self._reset(keys, consts, batch)
+        theta0, theta_dot0 = enp.split(obs0, _OBS_DIM, axis=1)
         init = (
-            enp.concatenate(
-                (
-                    self._reset(keys, consts, batch),
-                    enp.zeros((batch, 1), dtype=evoxc.float32),
-                ),
-                axis=1,
-            ),
+            theta0,
+            theta_dot0,
+            enp.zeros((batch, 1), dtype=evoxc.float32),
             enp.zeros((), dtype=evoxc.int32),
         )
-        state, _ = evoxc.while_loop(
+        theta, theta_dot, total, _ = evoxc.while_loop(
             self._loop_cond(consts),
             self._loop_body(query, consts),
             init,
         )
-        obs, total = enp.split(state, (_OBS_DIM,), axis=1)
-        return enp.reshape(total, (batch,)), obs
+        return (
+            enp.reshape(total, (batch,)),
+            enp.concatenate((theta, theta_dot), axis=1),
+        )
 
     def _reset(
         self,
@@ -411,11 +428,13 @@ class Pendulum(BaseProblem):
     ) -> Any:
         """Draw the initial observations of ``batch`` episodes from one key.
 
-        The draw is a single ``U(-1, 1)`` block of shape ``(B, 2)``; the two
-        columns are then scaled by different factors (``pi`` for the angle,
-        ``max_speed`` for the angular velocity), which is done with
-        ``enp.split`` + ``enp.concatenate`` rather than by indexing, because a
-        traced tensor has no ``__getitem__``.
+        The draw is a single ``U(-1, 1)`` block of shape ``(B, 2)``, scaled per
+        column by the baked ``(1, 2)`` row ``reset_scale``: ``theta = raw_0 *
+        pi`` and ``theta_dot = raw_1 * max_speed``. One elementwise multiply
+        replaces the ``enp.split`` + two multiplies + ``enp.concatenate`` a
+        per-column spelling costs, because a traced tensor has no
+        ``__getitem__``; each element is ``raw * scale`` with exactly the
+        operand the per-column spelling used, so the draw is bit-identical.
 
         Args:
             keys: One rank-0 evoxc key.
@@ -432,14 +451,7 @@ class Pendulum(BaseProblem):
             low=consts.neg_one,
             high=consts.one,
         )
-        raw_theta, raw_speed = enp.split(raw, _OBS_DIM, axis=1)
-        return enp.concatenate(
-            (
-                raw_theta * consts.pi,
-                raw_speed * consts.max_speed,
-            ),
-            axis=1,
-        )
+        return raw * consts.reset_scale
 
     def _loop_cond(self, consts: _PendulumConstants) -> Callable:
         """Build the trip condition of the rollout loop.
@@ -459,12 +471,12 @@ class Pendulum(BaseProblem):
             """Test the loop counter against the static horizon.
 
             Args:
-                carry: ``(state (B, 3), step)``.
+                carry: ``(theta, theta_dot, total, step)``.
 
             Returns:
                 The rank-0 boolean ``step < max_step``.
             """
-            return enp.less(carry[1], consts.horizon)
+            return enp.less(carry[3], consts.horizon)
 
         return cond
 
@@ -485,11 +497,10 @@ class Pendulum(BaseProblem):
         into. There is no alive mask: Pendulum has no terminal state, so every
         episode is scored over the full horizon.
 
-        The state rides as one packed ``(B, 3)`` row
-        ``(theta, theta_dot, total)`` (see :meth:`_rollout`): the policy query
-        takes its leading ``(B, 2)`` column slice, and the next row is assembled
-        from the three updated ``(B, 1)`` columns with column masks, so the whole
-        step stays one elementwise region.
+        The state rides as two ``(B, 1)`` leaves instead of one ``(B, 2)``
+        observation row (see :meth:`_rollout`): the row is built for the policy
+        query and nowhere else, as one select against ``obs_columns``, and the
+        accumulator is carried at the cost's own rank.
 
         Args:
             query: The policy query, prepared once for the whole rollout by
@@ -499,49 +510,43 @@ class Pendulum(BaseProblem):
             consts: The bundle from :meth:`_constants`.
 
         Returns:
-            ``step(carry) -> (state (B, 3), step)`` -- the next carry.
+            ``step(carry) -> (theta, theta_dot, total, step)`` -- the next carry.
         """
-        # ``[True, False, False]`` (column 0) and ``[False, False, True]``
-        # (column 2): the two column masks the next row is assembled with. They
-        # are masks over the packed row, not ``(B, ...)`` data, so each costs one
-        # constant op per rollout and a step pays neither construction nor copy.
-        obs_cols = enp.equal(enp.arange(_STATE_DIM), enp.arange(1))
-        total_col = enp.greater(enp.arange(_STATE_DIM), consts.one_step)
 
         def step(carry):
             """Advance every episode by one timestep.
 
-            The policy consumes the leading ``(B, 2)`` column slice of the carried
-            row, and the transition works on the two ``(B, 1)`` state columns
-            (:meth:`_advance_rows`), which returns the next pair with the cost of
-            the state they came from.
-            The next row is assembled with two masked selects instead of an
-            ``enp.concatenate``: a concatenate of ``(B, 1)`` columns lowers to one
-            strided copy (one dispatch) per column on a compiled backend, while a
-            select over the columns the step just computed fuses into the step's
-            own region -- so the transition, the cost of the pre-transition state
-            and the row assembly are one dispatch, and the torque reaches both of
-            its consumers without being spilled.
+            The policy is the only consumer of the ``(B, 2)`` observation row, so
+            that row is built here, once, and handed straight to the query; the
+            transition works on the two ``(B, 1)`` state leaves
+            (:meth:`_advance_rows`) and returns the next pair, so no step ever
+            splits a row it just built.
+
+            The row is one elementwise select against the baked ``(1, 2)``
+            boolean ``obs_columns`` (``[True, False]``), which broadcasts the two
+            ``(B, 1)`` leaves into a ``(B, 2)`` row. That is the same op count as
+            the ``enp.concatenate`` it replaced -- one -- but a concatenate of two
+            columns lowers to one strided copy (one dispatch) per column on a
+            compiled backend, while the select fuses into the observation
+            producer and is a single dispatch (measured: the per-query region
+            around the policy drops from 5 dispatches to 4).
 
             Args:
-                carry: ``(state (B, 3), step ())``, with ``state`` holding
-                    ``(theta, theta_dot, total)``.
+                carry: ``(theta (B, 1), theta_dot (B, 1), total (B, 1),
+                    step ())``.
 
             Returns:
                 The next carry, same tree and leaf types.
             """
-            state, index = carry
-            obs, total = enp.split(state, (_OBS_DIM,), axis=1)
-            theta, theta_dot = enp.split(obs, _OBS_DIM, axis=1)
+            theta, theta_dot, total, index = carry
+            obs = enp.where(consts.obs_columns, theta, theta_dot)
             next_theta, next_theta_dot, cost = self._advance_rows(
                 theta, theta_dot, query(obs), consts
             )
             return (
-                enp.where(
-                    total_col,
-                    total - cost,
-                    enp.where(obs_cols, next_theta, next_theta_dot),
-                ),
+                next_theta,
+                next_theta_dot,
+                total - cost,
                 index + consts.one_step,
             )
 
@@ -563,8 +568,9 @@ class Pendulum(BaseProblem):
             A structure holding ``gravity_term`` (``3 * gravity / (2 * length)``)
             and ``torque_term`` (``3.0 / (mass * length**2)``) precomputed on the
             host, plus every other scalar the rollout needs as a float32 graph
-            value, and the int32 loop scalars ``one_step`` and ``horizon`` -- so
-            neither the reset draw nor the trip condition sees an f64 constant.
+            value, the int32 loop scalars ``one_step`` and ``horizon`` -- so
+            neither the reset draw nor the trip condition sees an f64 constant --
+            and the two baked rows ``obs_columns`` and ``reset_scale``.
         """
         return _PendulumConstants(
             gravity_term=enp.full((), 3.0 * self.gravity / (2.0 * self.length)),
@@ -581,6 +587,14 @@ class Pendulum(BaseProblem):
             neg_one=enp.full((), -1.0),
             one_step=enp.full((), 1, dtype=evoxc.int32),
             horizon=enp.full((), self.max_step, dtype=evoxc.int32),
+            obs_columns=evoxc.constant(
+                evoxc.from_numpy(np.asarray([[True, False]]))
+            ),
+            reset_scale=evoxc.constant(
+                evoxc.from_numpy(
+                    np.asarray([[np.pi, self.max_speed]], dtype=np.float32)
+                )
+            ),
         )
 
     def _advance(
@@ -598,9 +612,9 @@ class Pendulum(BaseProblem):
 
         The rollout loop never calls it -- its carry holds the two state
         variables separately, so it calls :meth:`_advance_rows` directly and
-        concatenates the row only for the policy query -- but the ``(B, 2)``
-        spelling is the environment's documented one-step contract (``obs``,
-        ``logit`` in; next ``obs``, cost out) and is exercised as such.
+        builds the row only for the policy query (one select) -- but the
+        ``(B, 2)`` spelling is the environment's documented one-step contract
+        (``obs``, ``logit`` in; next ``obs``, cost out) and is exercised as such.
 
         Args:
             obs: Current observations of shape ``(B, 2)``.
@@ -661,16 +675,16 @@ class Pendulum(BaseProblem):
         """
         torque = consts.max_torque * enp.tanh(logit)
         angle = self._angle_normalize(theta, consts)
-        next_speed = theta_dot + (
-            consts.gravity_term * enp.sin(theta) + consts.torque_term * torque
-        ) * consts.dt
-        next_speed = enp.clip(next_speed, consts.neg_max_speed, consts.max_speed)
-        next_theta = theta + next_speed * consts.dt
         cost = (
             enp.square(angle)
             + consts.speed_penalty * enp.square(theta_dot)
             + consts.torque_penalty * enp.square(torque)
         )
+        next_speed = theta_dot + (
+            consts.gravity_term * enp.sin(theta) + consts.torque_term * torque
+        ) * consts.dt
+        next_speed = enp.clip(next_speed, consts.neg_max_speed, consts.max_speed)
+        next_theta = theta + next_speed * consts.dt
         return next_theta, next_speed, cost
 
     def _angle_normalize(self, x: Any, consts: _PendulumConstants) -> Any:
