@@ -24,6 +24,16 @@ split (``eval_key, tell_key``), hands ``eval_key`` to the problem and
 resulting key on the returned state -- so exactly one key advance per generation
 reaches the caller and ``(seed, config, shape)`` reproduces a run.
 
+The ``ask`` hook is part of the graph: once the state's payload is registered,
+the kernel calls ``algorithm.ask(current)`` and hands its result to ``transform``
+and to the problem's ``evaluate``, so an algorithm that overrides ``ask`` is
+honoured instead of silently bypassed.  Every shipped ``ask`` returns
+``state.pop`` unchanged, which makes the call bit-identical to reading the
+payload straight off the state.  The host-side report is narrower by contract:
+``previous_pop``, the checkpointed genomes and ``tell`` all describe
+``state.pop``, so an ``ask`` that returns a *different* population must document
+that its evaluated phenotype is not the one reported.
+
 Overflow policy: an execution schedule is lossy when a node has more incoming
 edges than the static window ``max_in_degree`` can hold (``edge_overflow > 0``).
 The graph returns ``evoxc.max(edge_overflow)``; after the run a positive host
@@ -309,6 +319,11 @@ class Pipeline(StatefulBaseClass):
         genome = self._genome()
         algorithm: dict[str, Any] = {"class": type(self.algorithm).__name__}
         species = getattr(self.algorithm, "species", None)
+        if species is None:
+            # A wrapper algorithm (`HyperNEAT`) owns no species table of its own:
+            # the search law lives on the inner `NEAT`, exactly like the genome
+            # `_genome()` falls back to.
+            species = getattr(getattr(self.algorithm, "neat", None), "species", None)
         for name in (
             "pop_size", "pop_batch_size", "species_size", "max_stagnation",
             "species_elitism", "spawn_number_change_rate", "genome_elitism",
