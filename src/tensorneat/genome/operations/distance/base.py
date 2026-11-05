@@ -34,6 +34,7 @@ from ....common import (
 )
 from . import dense as _dense
 from . import digest as _digest
+from . import index_free as _index_free
 from .consts import ConstantPool
 from .digest import DistanceDigest
 from .grouped import GroupedDigest, validate_centre, validate_family
@@ -328,7 +329,10 @@ class BaseDistance(StatefulBaseClass):
             validate_centre(type(self).__name__, payload, digest)
             return self._merge_both(pool, state, genome, payload, digest)
         batch = _validate_digest(type(self).__name__, payload, digest)
-        if int(node_keys.shape[0]) == 1:
+        # The dense single-centre route is scatter-based and is a measured regression on the
+        # accelerator target the "index_free" formulation exists for, so that formulation
+        # never enters it: the centre is broadcast and measured row-wise like any other.
+        if int(node_keys.shape[0]) == 1 and not _index_free.selected(state):
             if self._single_centre_enabled(genome):
                 _validate_dense_keys(type(self).__name__, genome, payload, digest)
             fast = self._measure_single_centre(pool, state, genome, payload, digest)
@@ -544,9 +548,12 @@ class BaseDistance(StatefulBaseClass):
         Notes:
             The merge hands back the homology mask and both counts, so nothing downstream
             re-derives a mask from an ``I_INF`` row table or re-counts the centre's genes.
+            ``state.distance_formulation`` selects the formulation that produces it
+            (:func:`~.index_free.formulation_mode`); both hand
+            :meth:`distance_from_alignment` the same record, so they stay bit-identical.
         """
-        aligned = _digest.measure_alignment(
-            gene, keys, digest_keys, digest_key_cols, statics=statics, consts=pool
+        aligned = _index_free.alignment(
+            state, gene, keys, digest_keys, digest_key_cols, statics=statics, consts=pool
         )
         return self.distance_from_alignment(
             state,
