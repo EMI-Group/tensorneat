@@ -181,7 +181,7 @@ There is no pytest suite in this node (`test/` is a sibling, read-only); its ver
 | `./run_benchmark.py` | CLI: matrix planning, subprocess orchestration, JSON and `RESULTS.md` regeneration. |
 | `./cases.py` | Case matrix (problem + genome + NEAT config as data) and the per-implementation builders. |
 | `./harness` | Schema/aggregation/verdict, adapter contract, worker entry point, report writer and its presentation helpers (`./harness/CONTEXT.md`). |
-| `./spikes` | Measured formulation evidence for the depth-parallel design. |
+| `./spikes` | Measured formulation evidence for the depth-parallel design (`FORMULATION.md`) and the `iree_probe.py` gates, plus the ROCm cost model under `./spikes/rocm` (executed dispatch count, device-vs-host split, phase decomposition and the per-generation ceiling). |
 | `./legacy_jax` | Frozen pre-rewrite JAX implementation: timing baseline and numerical oracle (read-only). |
 | `./results` | Committed evidence records (`authoritative.json`, `threads1.json`, `iree.json`, `xor3d_quality_2026-11-04.json`, `gpu_2026-11-05.json`) beside scratch `*.json` (git-ignored, safe to delete). |
 | `./RESULTS.md` | Generated report of the pre-fix record (`results/authoritative.json`, measured at `ebeaf1f8`): environment fingerprint (with load), protocol, headline old-vs-new (median, per-repeat range, quality overlap), per-case tables, verdict, win/lose narrative with memory paragraph, per-repeat quality curves, non-comparisons, how to reproduce; its `--report-note` states that its rows carry pass 1 and predate the tiled-evaluate / RL-rollout-hoist pass (`90d97b4`) and the search-quality fixes. |
