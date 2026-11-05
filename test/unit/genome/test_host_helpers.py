@@ -10,9 +10,9 @@ What these five methods owe their consumers is a stable, documented shape:
   ``DefaultGenome`` (the three entries the code-generation and drawing paths read);
 * ``repr`` → a header line with the gene counts, then one line per node (annotated
   ``(input)``/``(output)``) and one per connection;
-* ``hash`` → an **in-graph** kernel (``(P,) uint32``) — the one helper of the five
-  that is traced — used for fast de-duplication, so it must be deterministic and
-  structure-sensitive while padding never distinguishes two payloads;
+* ``hash`` → a **host-only** numpy fold returning ``(P,)`` ``uint32``, used for
+  fast de-duplication: it must be deterministic, structure- and
+  attribute-sensitive, and padding must never distinguish two payloads;
 * ``sympy_func`` → the legacy **8-tuple**
   ``(symbols, args_symbols, input_symbols, nodes_exprs, output_exprs, forward_func,
   topo_order, useful_nodes)``, with the node expressions assembled into closed
@@ -41,10 +41,10 @@ Oracles used here (never the kernel itself)
 * the payload's own key/row invariant (``support.payloads``), which lets a test
   name the keys and attribute values it expects in ``network_dict``/``repr``
   without reading the implementation;
-* set algebra for ``hash``: equal payloads hash equal, a one-attribute change or a
-  different topology hashes differently, and two payloads whose *rows are
-  permuted* — so the padding sits on different rows — hash equal, because a row
-  hash depends on the gene's key/attributes only;
+* set algebra for ``hash``: equal payloads hash equal, a one-attribute change (on
+  a connection *or* on a node row) or a different topology hashes differently,
+  and two payloads whose *rows are permuted* — so the padding sits on different
+  rows — hash equal, because a row hash depends on the gene's key/attributes only;
 * the file system for ``visualize``, plus a spy on ``networkx.draw`` for the
   drawing options: the figure existing proves ``save_path`` was honoured, the
   recorded call proves the rest of the keyword arguments were not ignored.
@@ -76,10 +76,10 @@ Gotchas this module encodes
   is the documented behaviour, and the refusal is a ``common.TensorNEATError``
   naming the reason and pointing at ``network_dict()``/``DefaultGenome`` — not a
   bare ``NotImplementedError`` stub.
-* ``hash`` is in-graph and therefore runs through ``support.runner.run_defn`` with
-  the four payload arrays passed as data and ``GenomeTensors`` rebuilt inside the
-  traced closure (the shared runner hands only top-level arrays to
-  ``evoxc.build``; see ``./conftest.py``).
+* ``hash`` is host-only numpy, not a kernel: it folds the host rows with a
+  ``uint32`` mix, so a traced payload is refused loudly (a ``SymbolicTensor`` has
+  no host bit pattern yet) instead of being silently reinterpreted. The test
+  therefore calls it on plain numpy payloads and pins the refusal separately.
 
 Backend is ``"numpy"`` throughout, through the shared runner only; no
 ``jax``/``torch``, no network, no GPU, no display.
@@ -362,23 +362,26 @@ def test_repr_renders_a_header_and_one_line_per_gene(genome, payloads):
 
 
 # --------------------------------------------------------------------------- #
-# hash (the one traced helper)
+# hash (host-only numpy fold)
 # --------------------------------------------------------------------------- #
 
 
-def test_hash_is_deterministic_and_distinguishes_different_topologies(
-    genome, payloads, runner
-):
-    """Invariant: ``hash`` is a pure, structure-sensitive ``(P,) uint32`` kernel.
+def test_hash_is_deterministic_and_distinguishes_different_topologies(genome, payloads):
+    """Invariant: ``hash`` is a pure, structure- and attribute-sensitive ``(P,) uint32`` fold.
 
-    Oracle: set algebra on the returned vector — the same payload hashed twice gives
-    equal values; two payloads that differ in one connection key give different
-    values; two payloads that differ only in *which rows are padding* (the same
-    genes, permuted into other rows) give equal values, because a row hash depends
-    on the gene's key/attributes and the total is an xor over the rows; and the
-    dtype is ``uint32`` with one entry per individual. ``hash`` is in-graph, so it
-    runs through ``run_defn`` with the four arrays as data and
-    ``genome.GenomeTensors`` rebuilt inside the closure.
+    Oracle: set algebra on the returned vector. The same payload hashed twice
+    gives equal values; two payloads that differ in one connection key give
+    different values; two payloads that differ in one *node* attribute (the
+    activation id, or the bias) give different values; two payloads that differ
+    only in *which rows are padding* (the same genes, permuted into other rows)
+    give equal values, because a row hash depends on the gene's
+    key/attributes and the total is an xor over the rows; and the dtype is
+    ``uint32`` with one entry per individual.
+
+    ``hash`` is host-only numpy (``host.py``), so the test calls it on the plain
+    numpy payload — the value is a plain ``numpy`` array, never an ``evoxc``
+    tensor. No literal is pinned: the digest is documented as a *heuristic
+    de-duplication key*, so only the equality relations above are its contract.
     """
     import numpy as np
 
@@ -388,9 +391,7 @@ def test_hash_is_deterministic_and_distinguishes_different_topologies(
     payload = payloads.skip_payload()
 
     def hashes(one):
-        return runner.run_defn(
-            lambda *arrays: g.hash(genome.GenomeTensors(*arrays)), *one.args()
-        )
+        return g.hash(genome.GenomeTensors(*one.args()))
 
     def copy_of(one):
         return payloads.Payload(
@@ -401,6 +402,7 @@ def test_hash_is_deterministic_and_distinguishes_different_topologies(
         )
 
     first = hashes(payload)
+    assert isinstance(first, np.ndarray)
     assert first.shape == (1,)
     assert first.dtype == np.uint32
     assert np.array_equal(hashes(payload), first)
@@ -411,11 +413,26 @@ def test_hash_is_deterministic_and_distinguishes_different_topologies(
     retargeted.conn_keys[0, 0, 1] = 3
     assert not np.array_equal(hashes(retargeted), first)
 
-    # One changed attribute is a different genome too (the scale of
+    # One changed *connection* attribute is a different genome too (the scale of
     # ``HASH_QUANT_SCALE`` keeps a visible weight apart).
     reweighted = copy_of(payload)
     reweighted.conn_attrs[0, 0, 0] = 2.0
     assert not np.array_equal(hashes(reweighted), first)
+
+    # ... and so is one changed *node* attribute. ``skip_payload`` row 2 is the
+    # hidden node, so both these edits land on a present row: the bias column
+    # (float) and the activation id column (int-valued float).
+    rebiased = copy_of(payload)
+    rebias_node_row = 2
+    original_bias = float(rebiased.node_attrs[0, rebias_node_row, 0])
+    rebased = copy_of(payload)
+    rebased.node_attrs[0, rebias_node_row, 0] = np.float32(original_bias + 2.0)
+    assert not np.array_equal(hashes(rebased), first)
+
+    reactivated = copy_of(payload)
+    assert float(reactivated.node_attrs[0, rebias_node_row, 3]) == 0.0
+    reactivated.node_attrs[0, rebias_node_row, 3] = 1.0
+    assert not np.array_equal(hashes(reactivated), first)
 
     # The same genes on different rows — so the padding sits elsewhere — hash
     # identically: the padding rows contribute the same sentinel rows either way.
@@ -427,6 +444,14 @@ def test_hash_is_deterministic_and_distinguishes_different_topologies(
     assert moved.node_keys[0, 4] == 2 and moved.node_keys[0, 2] == payloads.I_INF
     assert np.array_equal(hashes(moved), first)
 
+    # An absent row is *only* padding: flipping the sentinel of one padding row
+    # to a real gene is a different topology, so the xor fold is not degenerate.
+    present = copy_of(payload)
+    present.node_keys[0, 2] = 4
+    present.node_attrs[0, 2] = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+    assert present.node_keys[0, 2] != payloads.I_INF
+    assert not np.array_equal(hashes(present), first)
+
     # Batched: one hash per individual, and the individuals are independent.
     batch = payloads.skip_payload(pop_size=2)
     batched = hashes(batch)
@@ -437,6 +462,38 @@ def test_hash_is_deterministic_and_distinguishes_different_topologies(
     mixed_hashes = hashes(mixed)
     assert mixed_hashes[0] == batched[0]
     assert mixed_hashes[1] != batched[1]
+
+
+def test_hash_refuses_a_traced_payload(genome, common, payloads, runner):
+    """Invariant: ``hash`` is host-only, so a traced payload raises ``TensorNEATError``.
+
+    Oracle: the method's documented contract — the fold uses numpy bit views,
+    which do not exist for an ``evoxc.SymbolicTensor``, so a traced call is a
+    usage error naming the field, the "host-only" rule and the in-graph
+    alternative. Silently tracing a reinterpretation (or returning a symbolic
+    value) is exactly what the guard prevents.
+
+    Assertion: building the call inside a trace raises ``TensorNEATError`` (not a
+    bare ``TypeError`` from ``np.asarray`` on a symbolic tensor), and the message
+    names ``node_keys`` — the first payload field — plus ``SymbolicTensor`` and
+    the ``evoxc.equal`` alternative.
+    """
+    g = payloads.default_genome(
+        num_inputs=2, num_outputs=1, max_nodes=8, max_conns=16, max_in_degree=4
+    )
+    payload = payloads.skip_payload()
+
+    def traced_hash(*arrays):
+        return g.hash(genome.GenomeTensors(*arrays))
+
+    with pytest.raises(common.TensorNEATError) as caught:
+        runner.run_defn(traced_hash, *payload.args())
+
+    message = str(caught.value)
+    assert "host-only" in message
+    assert "node_keys" in message
+    assert "SymbolicTensor" in message
+    assert "evoxc.equal" in message
 
 
 # --------------------------------------------------------------------------- #
