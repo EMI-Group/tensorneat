@@ -208,8 +208,9 @@ class DefaultGenome(BaseGenome):
            "at least one *live* slot" term is ANDed in inside ``_node_step``, so a node whose
            sources are all NaN keeps NaN and its descendants lose their only live source: the
            legacy NaN poisoning, reproduced exactly.
-        4. ``return self._output_values(values, self.output_transform)`` — rows
-           ``max_nodes-num_outputs..max_nodes-1``, then ``output_transform``.
+        4. ``return self._output_values(transformed, values, self.output_transform)`` — the
+           rows ``transformed.output_slot`` names (here ``max_nodes-num_outputs..
+           max_nodes-1``), then ``output_transform``.
 
         Cost is ``O(depth x N x K)`` elementwise work: proportional to the *real* depth and the
         real in-degree, never ``max_nodes**2`` per node and never ``max_depth`` levels of typed
@@ -386,7 +387,7 @@ class DefaultGenome(BaseGenome):
             return evoxc.add(level, one), updated
 
         _level, values = evoxc.while_loop(cond, body, (one, values))
-        return self._output_values(values, self.output_transform)
+        return self._output_values(transformed, values, self.output_transform)
 
     def _depth_limit(self, transformed: Transformed) -> evoxc.SymbolicTensor:
         """Deepest level this batch can reach, as a rank-0 loop bound in ``[1, max_depth]``.

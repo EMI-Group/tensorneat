@@ -13,10 +13,13 @@ Nothing here is per-generation work beyond one Python pass over the schedule:
 is cached by the Pipeline per shape signature like any other genome graph.
 
 A genome object is passed in rather than mixed in: these functions read its public statics
-(``num_inputs``, ``max_in_degree``, ``max_depth``, ``network_type``), its genes and transforms,
-plus the two output helpers ``_output_row_mask``/``_output_values`` that live in ``step.py``
-because the plain forward uses them too.  ``base.py`` imports this module; this module never
-imports ``base.py`` at runtime.
+(``num_inputs``, ``max_in_degree``, ``max_depth``, ``network_type``), its genes and transforms.
+The output rows are *host statics* here (the schedule's ``output_slot`` and the row mask it
+implies), because the dense pass has no tiling and can carry them as constants; the read-out
+itself is a static mask-and-reduce over those constants (never a ``gather``, whose transpose
+would poison a NaN row), while the plain forward gathers its slots in-graph
+(``step.py::_output_values``).
+``base.py`` imports this module; this module never imports ``base.py`` at runtime.
 
 Every kernel is batch-first (population on axis 0) and static in shape; the level loop is a
 plain Python ``for`` over the plan's level masks, never ``scan``/``while_loop``/``cond``,
@@ -85,6 +88,13 @@ class _DenseGradPlan(NamedTuple):
             ``node_exists`` & "the row has an incoming connection"); the dynamic "has a live
             slot" term is ANDed in per step. Deeper levels leave the values unchanged, so the
             shorter tuple reproduces the ``1..max_depth`` sweep exactly.
+        output_slot: ``(P, O) int32`` node slot of each output key, straight from the schedule
+            (``I_INF`` when no node carries that key); the read-out picks each column's row
+            with a static ``arange`` comparison against it.
+        output_present: ``(P, O) bool``, True where ``output_slot`` holds a real node, so the
+            read-out writes ``NaN`` for a missing output key instead of the neutral sum.
+        output_rows: ``(P, N) bool``, True on every row an output key resolved to — the mask
+            ``dense_node_step`` uses to keep the final activation for ``output_transform``.
     """
 
     mean: bool
@@ -93,6 +103,9 @@ class _DenseGradPlan(NamedTuple):
     live_matrix: np.ndarray
     input_rows: np.ndarray
     level_masks: tuple
+    output_slot: np.ndarray
+    output_present: np.ndarray
+    output_rows: np.ndarray
 
 
 def _graph_constant(value: Any) -> evoxc.SymbolicTensor:
@@ -155,9 +168,10 @@ def dense_grad_plan(genome: "BaseGenome", transformed: Transformed) -> _DenseGra
     """Derive and validate the host statics of the exact gradient path.
 
     Everything the dense pass needs beyond the payload — the scatter cell of every window
-    slot, the structural live-edge matrix, the input-row mask and the per-level update
-    masks — follows from the schedule alone, so it is computed here once, on the host, and
-    later embedded as graph constants (:func:`_graph_constant`).
+    slot, the structural live-edge matrix, the input-row mask, the per-level update masks and
+    the output read-out (slot, present mask, row mask) — follows from the schedule
+    alone, so it is computed here once, on the host, and later embedded as graph constants
+    (:func:`_graph_constant`).
 
     The three configuration refusals below are not conservative guesses: each one names a
     case where the dense pass would silently disagree with
@@ -175,9 +189,10 @@ def dense_grad_plan(genome: "BaseGenome", transformed: Transformed) -> _DenseGra
             is the level-synchronous sweep), if ``node_gene.aggregation_options`` is not
             exactly one ``AGG.sum`` or ``AGG.mean`` (only those two are a ``dot``), if the
             connection gene declares no ``weight`` attribute column (the dense matrix is
-            built from it), if the schedule violates its documented invariants, or if one
-            individual has two connections sharing a ``(destination, source)`` pair (the
-            scatter would keep one weight).
+            built from it), if the schedule violates its documented invariants, if its
+            ``output_slot`` names no output column, or if one individual has two
+            connections sharing a ``(destination, source)`` pair (the scatter would keep one
+            weight).
         ShapeBoundError: If an individual has an edge the schedule could not place in any
             incoming window, i.e. ``max_in_degree`` is too small for its in-degree: the
             dense matrix has no cell for it, so the host must rebuild before
@@ -264,6 +279,24 @@ def dense_grad_plan(genome: "BaseGenome", transformed: Transformed) -> _DenseGra
     finite = node_level != I_INF
     deepest = int(node_level[finite].max()) if finite.any() else 0
     has_slot = in_valid.any(axis=-1)
+
+    # The read-out follows the schedule's output slots, never a row position: a payload whose
+    # block order is not the plain template (inputs, hidden, outputs) keeps its output neurons
+    # wherever they sit, and an ``I_INF`` slot (a key no node holds) reads NaN. The mask and
+    # the NaN are applied in-graph by ``dense_forward``, which needs no gather index here.
+    output_slot = np.asarray(to_numpy(transformed.output_slot)).astype(np.int32, copy=False)
+    if output_slot.shape[1] <= 0:
+        raise ConfigError(
+            f"{type(genome).__name__}.grad reads the read-out from the schedule's "
+            f"output_slot, which names no output column here (shape "
+            f"{tuple(int(size) for size in output_slot.shape)}); a genome with no output "
+            "has nothing to differentiate"
+        )
+    present = output_slot != I_INF
+    output_rows = np.zeros((pop_size, max_nodes), dtype=np.bool_)
+    members, columns = np.nonzero(present)
+    output_rows[members, output_slot[members, columns]] = True
+
     return _DenseGradPlan(
         mean=options[0] is AGG.mean,
         cell_index=edge_cell,
@@ -274,6 +307,9 @@ def dense_grad_plan(genome: "BaseGenome", transformed: Transformed) -> _DenseGra
             (node_level == level) & node_exists & has_slot
             for level in range(1, min(deepest, genome.max_depth) + 1)
         ),
+        output_slot=output_slot,
+        output_present=present,
+        output_rows=output_rows,
     )
 
 
@@ -304,6 +340,18 @@ def dense_forward(
        ``node_gene.combine`` + ``apply_activation`` except on output rows; and
        ``values = select(level_mask & (live_count > 0), z, values)`` — a node without a live
        source keeps ``NaN``, so the legacy NaN poisoning is preserved node for node.
+    4. the read-out picks, per output column, the single row ``output_slot[:, column]`` names
+       with a static ``arange`` comparison and one sum over the row axis (the other rows are
+       ``select``-neutral-filled, so they neither contribute nor poison a NaN), and writes
+       ``NaN`` where ``output_present`` is false (an output key no node holds); then
+       ``output_transform``.
+
+    The read-out is deliberately gather-free: ``evoxc``'s gather transpose scatters into
+    ``zeros-of(source)``, which a ``NaN`` row of ``values`` (an unconnected node) turns back
+    into NaN and which would need a cleaned copy plus a second gather to restore the sentinel.
+    The mask-and-reduce form reads exactly ``values[p, output_slot[p, column]]``, so it agrees
+    bit for bit with :meth:`default.DefaultGenome`'s window read-out
+    (:meth:`step.NodeStepMixin._output_values`) and its VJP is shape-preserving.
 
     Args:
         genome: The genome whose genes and transforms the pass reads.
@@ -316,7 +364,8 @@ def dense_forward(
 
     Returns:
         ``(P, num_outputs) float32`` outputs after ``output_transform``, equal to
-        :meth:`base.BaseGenome.forward`'s for the same payload up to float32 summation order.
+        :meth:`base.BaseGenome.forward`'s for the same payload up to float32 summation order
+        (the read-out itself is bit-identical: one selected row, no reduction of real terms).
     """
     pop_size, max_nodes = plan.input_rows.shape
     max_conns = int(conn_attrs.shape[1])
@@ -360,6 +409,7 @@ def dense_forward(
     )
 
     live_matrix = _graph_constant(plan.live_matrix)
+    output_rows = _graph_constant(plan.output_rows)
     for level_mask in plan.level_masks:
         values = dense_node_step(
             genome,
@@ -369,9 +419,36 @@ def dense_forward(
             node_attrs,
             values,
             _graph_constant(level_mask),
+            output_rows,
             plan.mean,
         )
-    return genome._output_values(values, genome.output_transform)
+    # The read-out is a static mask-and-reduce, not a gather: for each output column the mask
+    # ``row == output_slot[:, column]`` selects exactly one row, a ``select`` neutral-fills every
+    # other row with ``0`` (never a ``multiply``, so a NaN value on a non-output row cannot poison
+    # the sum while a NaN output row still reads NaN) and one sum over the row axis reads it out.
+    # A gather would need ``zeros-of(values)`` in its transpose (``evoxc``'s gather VJP scatters
+    # into ``multiply(x, 0)``, which a NaN row turns back into NaN), i.e. a NaN-cleaned copy plus
+    # a second gather to restore the sentinel; the mask path needs neither and is shape-exact.
+    # Each column gets its own rank-0 neutral: ``select``'s VJP hands a broadcast operand the
+    # cotangent at the *output* shape, so one shared scalar used by selects of two different
+    # shapes would accumulate two incompatible cotangents into the same constant.
+    present = _graph_constant(plan.output_present)
+    slots = _graph_constant(plan.output_slot)
+    rows = _graph_constant(np.arange(max_nodes, dtype=np.int32).reshape(1, max_nodes))
+    columns = []
+    for column in range(int(present.shape[1])):
+        slot = evoxc.slice(slots, (0, column), (pop_size, 1))
+        neutral = enp.zeros((), dtype=evoxc.float32)
+        picked = evoxc.select(enp.equal(rows, slot), values, neutral)
+        columns.append(
+            evoxc.reshape(evoxc.reduce_sum(picked, axes=1), (pop_size, 1))
+        )
+    outputs = evoxc.select(
+        present,
+        evoxc.concatenate(columns, axis=1),
+        fill((), float("nan"), dtype=evoxc.float32),
+    )
+    return outputs if genome.output_transform is None else genome.output_transform(outputs)
 
 
 def dense_node_step(
@@ -382,6 +459,7 @@ def dense_node_step(
     node_attrs: evoxc.SymbolicTensor,
     values: evoxc.SymbolicTensor,
     update_mask: evoxc.SymbolicTensor,
+    output_rows: evoxc.SymbolicTensor,
     mean: bool,
 ) -> evoxc.SymbolicTensor:
     """Advance the node values by one dense level (the matmul twin of
@@ -397,6 +475,9 @@ def dense_node_step(
         values: ``(P, N) float32`` current node values, NaN where not yet computed.
         update_mask: ``(P, N) bool`` static level mask; the dynamic "has a live source"
             term is ANDed in here.
+        output_rows: ``(P, N) bool`` constant mask of the rows the schedule reads outputs
+            from (``plan.output_rows``); those keep the raw ``z``, every other row its
+            activation.
         mean: ``True`` to divide the aggregated sum by the live slot count.
 
     Returns:
@@ -426,7 +507,7 @@ def dense_node_step(
         genome.node_gene.attr_column(node_attrs, "activation"),
         genome.node_gene.activation_options,
     )
-    z = evoxc.select(genome._output_row_mask(pop_size, max_nodes), z, activated)
+    z = evoxc.select(output_rows, z, activated)
     update = evoxc.logical_and(update_mask, evoxc.greater(live_count, zero))
     return evoxc.select(update, z, values)
 

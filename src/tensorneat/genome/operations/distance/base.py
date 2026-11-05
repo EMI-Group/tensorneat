@@ -161,7 +161,9 @@ class BaseDistance(StatefulBaseClass):
             ``[0, genome.key_span)``.  A non-zero count is the documented precondition failure
             of the single-centre fast path (the dense table cannot address those genes and
             treats them as absent, while the merge matches them exactly); the pipeline cannot
-            raise on it, so a caller that relies on the fast path checks the leaves on the host,
+            raise on it, because inside a trace the counts are tensor values only, so
+            :meth:`measure`'s refusal is a host-only check that is skipped silently for a
+            traced call — a caller that relies on the fast path checks the leaves on the host,
             or configures ``DefaultDistance(dense_single_centre=False)``.
 
         Raises:
@@ -388,7 +390,10 @@ class BaseDistance(StatefulBaseClass):
             traced op — so :meth:`measure` can decide whether the dense route's
             ``[0, genome.key_span)`` precondition has to be validated *before* the hook emits
             its first op, which is what lets a host call answer a contract error instead of a
-            backend TypeError.  It must mirror the hook: the base contract has no
+            backend TypeError.  That validation is host-only: inside a trace every leaf is a
+            ``SymbolicTensor``, so it is skipped silently and the dense table simply treats an
+            unaddressable key as absent, which is the fast path's documented inexactness.
+            It must mirror the hook: the base contract has no
             single-centre route, so it answers ``False``, and a subclass that adds one
             overrides both together.
         """
@@ -779,6 +784,13 @@ def _reject_population_keys(name: str, family: str, key_span: int, counts) -> No
 
     Raises:
         TensorNEATError: If any individual carries at least one such gene.
+
+    Notes:
+        Host-only by construction: the only caller hands over the digest's
+        ``node_oor``/``conn_oor`` leaf read through :func:`_host_array`, which yields ``None``
+        for a traced ``SymbolicTensor`` and skips this refusal entirely, so the check is a
+        guarantee of a host call only — inside a trace the dense table treats the unaddressable
+        key as absent and that fast-path result is inexact.
     """
     offenders = np.flatnonzero(counts > 0)
     if offenders.size == 0:

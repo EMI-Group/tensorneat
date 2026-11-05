@@ -751,8 +751,8 @@ class SpeciesController(StatefulBaseClass):
         (``_sort_desc_legacy`` over ``select(membership, fitness, -inf)``,
         applied to the population index vector), the survivor count is
         ``clamp(floor(survival_threshold * member_count), 1,
-        min(member_count, pop_size))`` and the first ``survive_size`` ranks are
-        the candidate parents.  The tail of the ranking holds non-members (all
+        max(min(member_count, pop_size), 1))`` (a NaN ``member_count`` reads as
+        ``0``) and the first ``survive_size`` ranks are the candidate parents.  The tail of the ranking holds non-members (all
         ``-inf``); it is unreachable because the candidate count never exceeds
         the member count (and the extra ``pop_size`` cap keeps a stale count from
         indexing past the ``(S, P)`` ranking width).
@@ -831,11 +831,11 @@ class SpeciesController(StatefulBaseClass):
         (``E[i] = sum_{j < i} spawn[j]``) and ``K = sum(spawn) == pop_size``,
         population slot ``p`` belongs to
 
-        ``loc(p)      = the last i with spawn[i] > 0 and E[i] <= p``
+        ``loc(p)      = the last i with E[i] <= p``
         ``idx_in_block(p) = p - E[loc(p)]``
 
         Both are computed without a host loop: the ``(S, P)`` mask
-        ``spawn[i] > 0 and E[i] <= p`` is a broadcast comparison of the sparse
+        ``E[i] <= p`` is a broadcast comparison of the sparse
         block starts against the slot vector, ``loc`` is the index of the last
         ``True`` in each column (``argmax`` over the mask reversed along the
         species axis), and ``E[loc(p)]`` is one ``gather``.
@@ -848,9 +848,13 @@ class SpeciesController(StatefulBaseClass):
             tuple: ``(loc, idx_in_block)``, both ``(P,)`` int32.
 
         Note:
-            Requiring ``spawn > 0`` is what makes a zero-spawn (dead or empty)
-            species consume no population slot -- the same behaviour the legacy
-            ``argmax(p_idx < cumsum(spawn))`` produced.
+            The ``spawn > 0`` term the ``loc`` formula used to carry is
+            redundant and is not emitted: with ``sum(spawn) == pop_size`` (the
+            residual correction of ``_kernels.spawn_from_target``) the last
+            qualifying index always holds a positive spawn, while a zero-spawn
+            (dead or empty) species still consumes no population slot because
+            its prefix equals the end of the preceding live block -- the same
+            behaviour the legacy ``argmax(p_idx < cumsum(spawn))`` produced.
             The block index has to be the *last* qualifying block, not the
             *number* of qualifying blocks: after the species sort only dead
             slots are guaranteed to trail, so a live species can legitimately

@@ -9,15 +9,18 @@ NaN on absent rows.  The two sentinels never mix.
 family, per individual, so a caller never loops over the population in Python.
 ``re_cound_idx`` is host-only: it converts with ``Tensor.numpy()`` and never feeds its result
 back into a graph.
+The ``int32`` constant/column plumbing (``constant_int32``, ``schedule_key_column``, ``_i32``,
+``_key_column``) lives here too, so ``base.py`` stays inside its line budget.
 """
 
-from typing import NamedTuple
+from collections.abc import Sequence
+from typing import Any, NamedTuple
 
 import evoxc
 import evoxc.numpy as enp
 import numpy as np
 
-from ..common import I_INF, ConfigError, to_numpy
+from ..common import I_INF, ConfigError, TensorNEATError, to_numpy
 
 
 class GenomeTensors(NamedTuple):
@@ -63,6 +66,76 @@ class GenomeTensors(NamedTuple):
 # --------------------------------------------------------------------------- #
 # private plumbing: int32 constants, key columns
 # --------------------------------------------------------------------------- #
+
+
+def constant_int32(values: Sequence[int]) -> evoxc.SymbolicTensor:
+    """Embed a host integer sequence as an in-graph ``int32`` constant.
+
+    Args:
+        values: Static integers (node keys, column indices, ...).
+
+    Returns:
+        ``(len(values),)`` ``int32`` tensor. Genuinely static data (the initial key layout,
+        the input/output key vector), never per-generation payload.
+    """
+    array = np.ascontiguousarray(np.asarray(values, dtype=np.int32))
+    return evoxc.constant(evoxc.from_numpy(array))
+
+
+def schedule_key_column(
+    keys: Any, default: Sequence[int], static: str, name: str
+) -> tuple[Any, tuple[int, ...] | None]:
+    """Resolve one input/output key column of ``BaseGenome.transform``.
+
+    ``None`` reproduces the genome's own column (``input_idx``/``output_idx``), which is what
+    every caller but a substrate executor wants; a host integer sequence is embedded as a
+    constant *and* returned alongside its values, so the caller can compare it with the pinned
+    order; an ``evoxc`` ``int32`` tensor is accepted as given, and only its rank, dtype and
+    length can be checked there — a traced value may not drive a host-side test.
+
+    Args:
+        keys: ``None``, a Python integer sequence, or an ``evoxc`` rank-1 ``int32`` tensor.
+        default: The genome's own column.
+        static: Name of the genome static the length must equal (``"num_inputs"``).
+        name: Argument name used in the error messages.
+
+    Returns:
+        ``(column, values)``: the ``(len(default),) int32`` column, and the values when
+        ``keys`` was a host sequence (``None`` for ``None`` and for a tensor).
+
+    Raises:
+        TensorNEATError: If the column is not rank-1 ``int32`` or its length is not
+            ``len(default)``; the message names the expected length, the received shape and
+            the genome static.
+    """
+    if keys is None:
+        return constant_int32(default), tuple(default)
+    if isinstance(keys, (evoxc.Tensor, evoxc.SymbolicTensor)):
+        shape = tuple(int(size) for size in keys.shape)
+        if len(shape) != 1 or keys.dtype != evoxc.int32:
+            raise TensorNEATError(
+                f"{name} must be a rank-1 int32 key column, got {keys.dtype} {shape}"
+            )
+        if shape[0] != len(default):
+            raise TensorNEATError(
+                f"{name} must hold {len(default)} key(s) — this genome's {static} — "
+                f"got shape {shape}"
+            )
+        if isinstance(keys, evoxc.SymbolicTensor):
+            return keys, None
+        return evoxc.constant(keys), None
+    array = np.asarray(keys)
+    if array.ndim != 1 or array.dtype.kind not in "iu":
+        raise TensorNEATError(
+            f"{name} must be a rank-1 integer key column, got {array.dtype} {array.shape}"
+        )
+    if array.size != len(default):
+        raise TensorNEATError(
+            f"{name} must hold {len(default)} key(s) — this genome's {static} — "
+            f"got shape {array.shape}"
+        )
+    values = tuple(int(value) for value in array.tolist())
+    return constant_int32(values), values
 
 
 def _i32(value: int) -> evoxc.SymbolicTensor:

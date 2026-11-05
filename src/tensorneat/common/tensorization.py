@@ -623,6 +623,13 @@ def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=Non
         iteration ``N`` of a loop that may run ``2N`` separates those nodes from the
         acyclic ones, and a ``level`` still ``-1`` marks a node unreachable from the
         inputs. Both campaigns are one ``settle(cap, detect_cycles)``.
+
+        The ``edges`` guard compares ``dst``/``edge_valid`` against ``src``'s own
+        connection axis, so it rejects a ``dst``/``edge_valid`` that disagrees with
+        ``src`` but cannot detect a ``src`` *shorter* than the payload's connection
+        rows -- the function holds no reference count to compare against;
+        :func:`derive_schedule` passes the payload-shaped triple, so that agreement
+        is a caller contract.
     """
     max_nodes = _positive_static(max_nodes, "max_nodes")
     pop_size, nodes, width = in_conn.shape

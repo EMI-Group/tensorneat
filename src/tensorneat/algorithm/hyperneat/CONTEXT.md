@@ -23,6 +23,7 @@ Subclass hooks used by the feedforward variant: class attrs `_genome_cls` (execu
 `SubstrateSchedule(NamedTuple)` = `(schedule, node_keys, node_attrs, conn_keys, conn_attrs)`: the substrate genome's `Transformed` **plus** the dense gene payload it executes.
 It exists because `genome.forward` needs the payload while the algorithm protocol carries exactly one `transformed` object through `problem.evaluate`; the base protocol's `transform -> schedule` return alone cannot express it.
 Every leaf of the container keeps the population on axis 0, so `problem.static_batch_size` and any `evoxc.tree_map`/`tree_leaves` walk still see a plain batch-first pytree.
+`schedule.output_slot` is the read-out authority of the substrate phenotype: `transform` derives the schedule from the substrate's *actual* key vectors, so `output_slot` names the output neurons `I .. I+O-1` and `genome.forward` reads those slots (never "the last `O` payload rows", which are hidden rows whenever the substrate has hidden neurons).
 Properties `level` and `overflow` delegate to `self.schedule`, but nothing in the tree reads them: `host_payload._schedule_overflow` takes the nested `getattr(transformed.schedule, "edge_overflow")` fallback, so both are convenience aliases for direct callers only.
 
 ## CPPN → Substrate Decode Algebra
@@ -31,9 +32,9 @@ Every decode helper that tiles a batch takes `pop_size` as a static argument (`_
 `I` (substrate input neurons) and `C` (CPPN query width) are different numbers and must never be interchanged: `I` sizes the bias column of `forward`, `C` sizes the coordinate rows of `query_coors`.
 `HyperNEAT.transform(state, pop)` performs, in order:
 1. `query_res (P, Q) = _query_substrate(state, pop)` — `neat.transform(state, pop)` gives the CPPN schedule, `_expand_schedule` repeats every population-axis leaf `Q` times, `_query_coors` builds the `(P, Q, C)` grid, the grid is flattened to `(P * Q, C)`, and one `neat.genome.forward` call returns `(P * Q, 1)` reshaped to `(P, Q)`.
-2. `weights (P, Q) = _weights_from_query(query_res)` — dead zone, continuity shift and scaling into `[-max_weight, max_weight]`.
+2. `weights (P, Q) = _weights_from_query(query_res)` — dead zone, continuity shift and scaling by `max_weight / (1 - weight_threshold)`; the map is unclipped, so `max_weight` is reached at `|query| == 1` and a larger CPPN output grows proportionally beyond it.
 3. `payload = _assemble_substrate(weights)` — a `genome.utils.GenomeTensors` of the four split arrays: `node_keys (P, N)`, `node_attrs (P, N, 2)`, `conn_keys (P, Q, CK)`, `conn_attrs (P, Q, CA)`.
-4. `schedule = hyper_genome.transform(state, payload.node_keys, payload.conn_keys)` — the substrate genome derives its own schedule; its layout is genome-owned and opaque to this node.
+4. `schedule = hyper_genome.transform(state, payload.node_keys, payload.conn_keys, input_keys=tuple(range(I)), output_keys=tuple(range(I, I + O)))` — the substrate genome derives its schedule from the substrate's real key arrays (never from its default layout), which is exactly what makes `output_slot` name the output neurons; the rest of the schedule's layout is genome-owned and opaque to this node.
 5. `return SubstrateSchedule(schedule, *payload)`.
 `HyperNEAT.forward(state, transformed, inputs)` takes `(B, I - 1)`, appends a trailing column of ones (`B = inputs.shape[0]`, a static int — problems tile datasets over the population axis so `B` is `pop_size * samples`) and returns `(B, O)` from `hyper_genome.forward(state, schedule, node_keys, node_attrs, conn_keys, conn_attrs, biased)`.
 The bias is the **last** substrate input, which is why `num_inputs` reports `substrate.num_inputs - 1` upward.
@@ -62,7 +63,8 @@ Both genes implement the cheap host-only `repr`/`to_dict` hooks (`{"idx", "agg",
 ## Substrate Protocol (host-only, pinned in `./substrate`)
 `BaseSubstrate` is a plain host object — no `State`, no `setup`, never traced — exposing `connection_type` (`"feedforward"` / `"recurrent"`), `num_inputs` (input neurons *including* the trailing bias), `num_outputs`, `nodes_cnt`, `conns_cnt`, `query_coors (conns_cnt, 2*CD)` float32, `nodes (nodes_cnt,)` int32 and `conn_index (conns_cnt, 2)` int32.
 Row `q` of `query_coors` must correspond 1:1 with row `q` of `conn_index`; the substrate's `connection_type` selects the executor genome (`recurrent` → `HyperNEAT`, `feedforward` → `HyperNEATFeedForward`).
-Node keys must be the block order `inputs (0..I-1)`, `outputs (I..I+O-1)`, `hidden` — the genome's `is_output_node` test and `input_idx`/`output_idx` ranges depend on it, and `HyperNEAT._validate` re-checks it instead of letting it surface as a silently disabled activation.
+Node keys must be the block order `inputs (0..I-1)`, `outputs (I..I+O-1)`, `hidden` — `HyperNEAT._validate` re-checks it instead of letting it surface as a silently disabled activation.
+That block order is also the read-out invariant: it makes `I..I+O-1` the output keys, which `HyperNEAT.transform` hands to the executor genome's schedule derivation as `output_keys` (and `0..I-1` as `input_keys`), so `output_slot` names the substrate output neurons; the input rows stay `0..I-1` by the same validation, which keeps the genome's input-row seeding invariant intact.
 This node reads only those tables: it never calls `make_nodes`/`make_conns`, never inspects coordinate ordering, and never lets the substrate layer know a gene column order.
 
 ## Decode helpers (implemented surface of `hyperneat.py`)

@@ -364,24 +364,33 @@ def block_layout(spawn_number: Any, pop_size: int, species_size: int) -> Any:
     With the exclusive prefix sum ``E`` of ``spawn_number`` and
     ``K = sum(spawn) == pop_size``, slot ``p`` belongs to
 
-    ``loc(p)         = the last ``i`` with ``spawn[i] > 0`` and ``E[i] <= p````
+    ``loc(p)         = the last ``i`` with ``E[i] <= p````
     ``idx_in_block(p) = p - E[loc(p)]``
 
-    Counting only blocks with ``spawn > 0`` is what makes a zero-spawn (dead or
-    empty) species consume no population slot.  ``loc`` must be the *last*
-    qualifying block rather than the number of qualifying blocks: zero-spawn
-    species can sit in the middle of the table (after the sort only dead slots
-    are guaranteed to trail), so a count would point at the wrong block -- hence
-    the reversed ``argmax`` (``argmax`` returns the first maximum), with the
-    reversal spelled as a static-index ``gather`` (:func:`reversed_index`)
-    because ``evoxc.flip`` is a deferred op on the StableHLO exporter.
+    The ``spawn[i] > 0`` qualification needs no term of its own under that
+    invariant: ``spawn`` is non-negative, so ``E`` is non-decreasing and
+    ``E[0] == 0 <= p``; and for the last qualifying block ``i``,
+    ``E[i] + spawn[i] == E[i + 1] > p >= E[i]`` forces ``spawn[i] > 0``.  A
+    zero-spawn (dead or empty) species therefore still consumes no population
+    slot -- its prefix equals the end of the preceding live block, so either an
+    earlier live block is the last qualifying one or the invariant is violated.
+    The invariant is built by :func:`spawn_from_target` (non-negative entries,
+    residual correction making the total exactly ``pop_size``), and
+    :func:`pair_parents` is this kernel's only production caller.
+
+    ``loc`` must be the *last* qualifying block rather than the number of
+    qualifying blocks: zero-spawn species can sit in the middle of the table
+    (after the sort only dead slots are guaranteed to trail), so a count would
+    point at the wrong block -- hence the reversed ``argmax`` (``argmax``
+    returns the first maximum), with the reversal spelled as a static-index
+    ``gather`` (:func:`reversed_index`) because ``evoxc.flip`` is a deferred op
+    on the StableHLO exporter.
     """
     spawn = evoxc.cast(spawn_number, evoxc.int32)
     exclusive = prefix_sum_exclusive(evoxc.cast(spawn, evoxc.float32))
     slots = iota_f32(pop_size)
-    mask = evoxc.logical_and(
-        enp.expand_dims(evoxc.greater(spawn, int_const(0)), 1),
-        evoxc.less_equal(enp.expand_dims(exclusive, 1), enp.expand_dims(slots, 0)),
+    mask = evoxc.less_equal(
+        enp.expand_dims(exclusive, 1), enp.expand_dims(slots, 0)
     )
     reversed_loc = evoxc.cast(
         evoxc.argmax(
@@ -415,15 +424,20 @@ def pair_parents(
 
     Members are ranked by fitness descending (``sort_desc_legacy`` over
     ``select(membership, fitness, -inf)`` applied to the population index
-    vector), the survivor count is ``clamp(floor(survival_threshold *
-    member_count), 1, min(member_count, pop_size))`` and the first
-    ``survive_size`` ranks are the candidate parents.
+    vector), the survivor count is ``clamp(floor(survival_threshold * m), 1,
+    max(min(m, pop_size), 1))`` -- ``m`` being the species' ``member_count``
+    with a NaN count read as ``0`` -- and the first ``survive_size`` ranks are
+    the candidate parents.
 
     ``survive_size`` is floored at ``1`` *before* it becomes the ``randint``
     bound, which is the fix for the legacy zero-survivor division: a one-member
     species draws rank ``0`` twice, i.e. two identical parents, and
-    self-crossover is the identity.  The extra ``pop_size`` cap is a no-op for a
-    valid table and keeps the bound inside the ``(S, P)`` ranking width.
+    self-crossover is the identity.  The floor is spelled twice: the ``clamp``
+    low bound, and the outer ``max(..., 1)`` on the ceiling, which keeps the
+    clamp's two bounds ordered for an empty (``m == 0``) or NaN-count slot so
+    such a slot still leaves exactly one candidate parent.  The extra
+    ``pop_size`` cap is a no-op for a valid table and keeps the bound inside the
+    ``(S, P)`` ranking width.
 
     The winner decision is taken on the *species-space* draws (ties go to the
     father, ``>=``, matching the legacy comparison) before elite pinning, so it
