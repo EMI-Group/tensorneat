@@ -98,26 +98,6 @@ import evoxc.numpy as enp
 from tensorneat.common.errors import TensorNEATError
 
 
-def repeat_leading(x: Any, repeats: int) -> Any:
-    """Repeat every row of a batch-first tensor ``repeats`` times along axis 0.
-
-    Args:
-        x (Any): Traced tensor of shape ``(K, *rest)``.
-        repeats (int): Static repeat count, the population size.
-
-    Returns:
-        Any: ``(K * repeats, *rest)`` with rows ``k * repeats .. k * repeats +
-        repeats - 1`` all equal to ``x[k]`` -- so a ``(1, ...)`` input becomes a
-        population-shaped payload whose every row is that one centre.
-    """
-    shape = tuple(int(size) for size in x.shape)
-    spread = evoxc.reshape(x, (shape[0], 1) + shape[1:])
-    return evoxc.reshape(
-        enp.broadcast_to(spread, (shape[0], repeats) + shape[1:]),
-        (shape[0] * repeats,) + shape[1:],
-    )
-
-
 class DistanceRows:
     """Compatibility distances of species centres against one digested population.
 
@@ -266,17 +246,30 @@ class DistanceRows:
         return self.genome.measure_distance(state, prepared, self.digest)
 
     def population_shaped(self, centre: Any) -> Any:
-        """Tile a centre payload to exactly ``pop_size`` identical rows.
+        """Tile a one-row centre payload to exactly ``pop_size`` identical rows.
 
         Args:
-            centre (Any): Centre payload of ``K`` rows.
+            centre (Any): Centre payload of batch ``1``.
 
         Returns:
             Any: ``(pop_size, *rest)`` payload in which every row repeats the
             centre row, which is the shape ``measure_distance`` pairs against the
             digest.
+
+        Note:
+            One rank-raising ``evoxc.broadcast`` per field: its target rank is one
+            above a batch-``1`` field's, which is the form the emitter accepts, so
+            the whole tiling is a single IR op instead of a reshape/broadcast/
+            reshape triple.  A centre of any other batch width conflicts with the
+            target shape and raises ``evoxc``'s ``ShapeError`` at trace time --
+            a wider centre is never a legal ``measure_distance`` input either.
         """
-        return type(centre)(*(repeat_leading(field, self.pop_size) for field in centre))
+        return type(centre)(
+            *(
+                evoxc.broadcast(field, (self.pop_size,) + tuple(field.shape)[1:])
+                for field in centre
+            )
+        )
 
     def matrix(self, state: Any, centres: Any) -> Any:
         """``(S, P)`` distance matrix of a whole species table (explicit form).
