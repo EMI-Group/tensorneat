@@ -378,10 +378,10 @@ def apply(
             padded.
         conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection key rows.
         conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` connection attribute rows.
-        write_nodes (bool): Static flag; ``False`` skips both node-array ``select``s because
-            this stage writes no node row.
-        clear_conn (bool): Static flag; ``False`` skips the two connection clearing
-            ``select``s because this stage's slot 0 names no row.
+        write_nodes (bool): Static flag; ``False`` skips both node-array ``select`` calls
+            because this stage writes no node row.
+        clear_conn (bool): Static flag; ``False`` skips the two connection-clearing
+            ``select`` calls because this stage's slot 0 names no row.
 
     Returns:
         GenomeTensors: the four payload arrays after the plan, same shapes and dtypes.  An
