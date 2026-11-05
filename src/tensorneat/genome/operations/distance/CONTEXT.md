@@ -199,7 +199,7 @@ index_free_gen.mlir:4869:13: ... (the same pair)
 ```
 Both sites carry a **bare `stablehlo.iota`** as their body — `%4710 = stablehlo.iota dim = 2 : tensor<500x50x50xi64>` (`@main_dispatch_280_elementwise_broadcast_1250000_i64`) and `%4816 = stablehlo.iota dim = 2 : tensor<500x100x100xi64>` (`@main_dispatch_291_elementwise_broadcast_5000000_i64`), the `argmax` the body used to take over the `(P, M, M)` table.
 The `iota` has no operands, so the dispatch reaches the stream dialect without an execution region and the verifier rejects it: **a `(P, M, M)` `argmax` is not a portable op in this tree**, even though `ops.status("argmax")` reports `v1` and `lower()` sees nothing wrong.
-The fix this node ships keeps the comparison table and picks its column with an **operand-bearing** reduce — `columns = enp.arange(0, count, dtype=vertex int32)`, `no_match = count`, `col = reduce_min(select(table, columns, no_match), axes=2)`, `homologous = less(col, no_match)` — which lowers to `select` + `reduce_min` over the table and emits no `iota`.
+The fix this node ships keeps the comparison table and picks its column with an **operand-bearing** reduce — `columns = enp.arange(0, count, dtype=evoxc.int32)`, `no_match = count`, `col = reduce_min(select(table, columns, no_match), axes=2)`, `homologous = less(col, no_match)` — which lowers to `select` + `reduce_min` over the table and emits no `iota`.
 Both targets then exit 0.
 The generation graph still contains 13 `argmax` and 59 `iota` ops from `algorithm/`'s speciation scans; they are present in the merge graph too, i.e. outside this node and unchanged by this pass (`reduce_min` goes 1 → 9 and `dot` 1 → 5, which is the fix and the `_pack_centre` matvec).
 ### Full generation graph
