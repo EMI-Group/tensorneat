@@ -894,13 +894,10 @@ def speciate(
         live_slots = evoxc.logical_not(evoxc.isnan(species_state.species_keys))
         carry, closest_table = evoxc.scan(
             _scan_accelerator.reserve_step(operands, reserve_row),
-            (
-                enp.full((pop_size,), float("nan"), dtype=evoxc.float32),
-                enp.full((pop_size,), float("inf"), dtype=evoxc.float32),
-            ),
+            _scan_accelerator.reserve_carry(pop_size, gate),
             iota_i32(species_size),
         )
-        assign, dist = carry
+        assign, dist, *_ = carry
         # The raw minimal index is the sentinel exactly when the slot claimed
         # nothing, so the write mask needs no second reduction over ``pending``.
         claimed = evoxc.logical_and(live_slots, evoxc.not_equal(closest_table, iinf))
