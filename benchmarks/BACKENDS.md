@@ -1,11 +1,19 @@
 # The `iree` backend: it runs, and it is slower than numpy here
 
-**Verdict: `backend="iree"` now compiles and runs TensorNEAT end to end — every gate that used to kill it in `Pipeline.setup()` is gone — but on this box it is 9.3× (pop 100), 93.9× (pop 500) and 102.7× (pop 1000) slower per generation than the numpy reference interpreter; the gap jumps between pop 100 and pop 500 and then flattens rather than scaling with population.**
+**Verdict for the tree and session measured here: `backend="iree"` compiles and runs TensorNEAT end to end — every gate that used to kill it in `Pipeline.setup()` is gone — but on this box it is 9.3× (pop 100), 93.9× (pop 500) and 102.7× (pop 1000) slower per generation than the numpy reference interpreter; the gap jumps between pop 100 and pop 500 and then flattens rather than scaling with population.**
 The problem classes exercised on iree are `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum` and `MountainCarContinuous`, plus the `RecurrentGenome` and `HyperNEAT` paths: this pass re-ran every one of them for at least one full generation (configurations and outputs under "Measured: numpy vs iree").
 `CartPole` postdates the historical `iree.md`, whose `cartpole_p100 / iree` row is an `error` from the pre-fix record that file labels as historical.
 Each run pays one 7.0–10.4 s `iree-compile` per static shape.
 `xla` is not available here: the evoxc xla adapter needs a PJRT C API plugin `.so` (`EVOXC_PJRT_PLUGIN`, unset on this box) and nothing provides one. `tvm` was not attempted.
-The CPU performance contract therefore stays on the numpy backend (`RESULTS.md`, unchanged by this report).
+The CPU performance contract therefore stays on the numpy backend (`RESULTS.md`, a generated pre-fix record — the provenance of every report in this directory is tabulated in `CONTEXT.md`).
+
+## Provenance: which tree these numbers describe
+
+Every number here comes from one session of `benchmarks/backend_measure.py`, one fresh process per row, run 2026-11-04 19:36–19:59 UTC on the box and versions in the environment table below.
+That session's tree sits between `ce5bb88` (2026-11-04T19:30Z) and `90d97b4` (2026-11-04T21:51Z), so it carries the op-count performance pass and neither the tiled-evaluate / RL-rollout-hoist pass nor the search-quality fixes that the merged tree adds.
+The per-generation slowdown factors, the 7.0–10.4 s `iree-compile` per static shape and the numpy reference rows below are therefore measurements of that tree, not of HEAD, and the merged tree has no committed compiled-backend timing at all.
+What is re-verified on a later tree is durability, not speed: `PERF_NUMPY.md` "IREE" records that at `90d97b4` the generation graph still exports, one `custom_pagie_p500` generation agrees with numpy to 2.38e-07, and `pytest test/backends` passes 3/3 — later commits move the graph but have not been re-timed on iree.
+The environment table is that session's: its `evoxc 0.1.0` is the installed distribution's metadata, and `pyproject.toml` pins `evoxc` to the `v0.1.1` git tag, so the row is not a statement about which tag the merged tree resolves.
 
 This file replaces an earlier version that recorded 8/8 cases dying in `Pipeline.setup()` with
 `BackendError: stablehlo export: op 'scatter' ... rank-3 operand along axis 0`.
@@ -26,7 +34,7 @@ That failure was real and is now fixed at its source in `src/` (section "The fiv
 | iree-base-compiler / iree-base-runtime | 3.11.0 / 3.11.0 (what `evoxc[iree]` resolves) |
 | sympy / networkx / matplotlib / pytest | 1.14.0 / 3.7 / 3.11.2 / 9.2.0 |
 
-## What runs today
+## What runs
 
 | backend | install | what runs | compile needed |
 |---|---|---|---|
@@ -281,4 +289,4 @@ The minimal reproducers for gates 1–5 are ~20 lines of `evoxc` each; the recip
 ## What this does not change
 
 `RESULTS.md` is generated evidence for the old-vs-new CPU contract and was not regenerated or hand-edited for this report: the contract is measured on the numpy backend and that is still what it measures.
-`benchmarks/results/iree.json` + `benchmarks/iree.md` remain the historical pre-fix record (8/8 `error`); the numbers above supersede them for the *current* code.
+`benchmarks/results/iree.json` + `benchmarks/iree.md` remain the historical pre-fix record (8/8 `error`); the numbers above supersede them for the code as of this session, which is the tree the ratios in this file belong to.

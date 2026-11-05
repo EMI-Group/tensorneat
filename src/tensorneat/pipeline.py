@@ -53,62 +53,28 @@ in :func:`~tensorneat.common.tools.to_numpy`, the one host array accessor.
 
 ## Measured cost
 
-``backend="numpy"``, one configuration per fresh process, build excluded (one
-warmup step, then 6 timed :meth:`step` calls), ``seed=42``,
-``DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100,
-output_transform=ACT.sigmoid)``, ``NEAT(pop_size=P, species_size=20,
-survival_threshold=0.01)``, ``XOR()``:
+No timing is quoted here on purpose: each belongs to a record file that states
+its own protocol and names the tree it was measured on.
 
-| pop | build (one-off) | ms/generation (median / min) | legacy JAX | ratio |
-| --- | --- | --- | --- | --- |
-| 100 | 2.2 s | 54.7 / 51.3 | 51 | 1.07x |
-| 500 | 3.9 s | 352.5 / 343.7 | 109 | 3.2x |
-| 1000 | 4.5 s | 642.4 / 603.5 | 157 | 4.1x |
+* ``benchmarks/PERF_NUMPY.md`` -- the hand-maintained numpy per-generation
+  record of the two post-fix performance passes (op count, then the tiled
+  func-fit evaluate plus RL rollout hoist), with each before/after pair, its
+  protocol, peak RSS and reproduce commands: the current numpy cost evidence.
+* ``benchmarks/RESULTS.md`` -- the *generated* old-vs-new harness report,
+  rendered from ``benchmarks/results/authoritative.json``; it predates the
+  performance and search-quality work, so its new-side rows are pre-fix
+  evidence only and only ``benchmarks/run_benchmark.py`` may re-render it.
+* ``benchmarks/BACKENDS.md`` -- the measured ``numpy`` vs ``iree`` (llvm-cpu)
+  per-generation table, its protocol and the per-gate portability fix record.
+* ``benchmarks/results/xor3d_quality_2026-11-04.md`` -- the post-fix
+  search-quality record.
 
-This box drifts +-30 % between sessions: re-running the recipe moves the medians
-by that much while the ordering never changes, so the **ratio** against the
-frozen legacy baseline -- not the absolute millisecond count -- is the
-load-bearing number.  The committed old-vs-new harness record is
-``benchmarks/RESULTS.md``.
-
-Phases, same protocol but each phase traced as its **own** executable on one
-snapshot state (so the phase sum slightly over-counts a real generation):
-
-| pop | ``transform`` + ``forward`` on the tiled ``4P`` batch | ``tell`` | ``step`` |
-| --- | --- | --- | --- |
-| 100 | 11.6 ms | 48.4 ms | 59.4 ms |
-| 500 | 25.1 ms | 292.1 ms | 336.5 ms |
-| 1000 | 55.3 ms | 578.5 ms | 681.3 ms |
-
-* Inside ``tell``, **``speciate`` dominates**: two phases x 20 species slots x P
-  genome-distance measurements = 4 000 / 20 000 / 40 000 pairs per generation at
-  ~7.5 us/pair (pop 100) rising to ~13 us/pair (pop 1000) after the
-  population-digest API.  The pair count is irreducible under NEAT's assignment
-  semantics -- each phase needs genuinely different centres and a newly created
-  species takes the first unassigned genome as its centre, so its row depends on
-  every earlier assignment.
-* ``breed`` (crossover + mutation + elitism) is second: ~30 / ~76 / ~148 ms in
-  the same phase-sum protocol, roughly three quarters of its graph being
-  ``genome.execute_mutation`` (1360 traced ops) and the rest
-  ``genome.execute_crossover`` (433 traced ops; the two kernels alone are
-  65.7 ms + 30.5 ms at pop 1000).
-* ``evaluate`` -- ``transform`` plus ``forward`` on the tiled ``4P`` batch -- is
-  last.
-
-The numpy reference interpreter pays per traced op *and* per element, whereas the
-legacy baseline was the same work fused by XLA, so parity at ``pop >= 500`` is
-**not reachable on ``backend="numpy"``**.  The compiled route itself works:
-``evoxc.build(..., backend="iree")`` lowers, compiles and runs every shipped case
-end to end, it is just 5x (pop 100) / 24x (pop 500) / 23x (pop 1000) slower per
-generation than the reference interpreter on this CPU, and a compile costs
-~9-11 s per static shape.  The numbers, the measurement protocol and the per-gate
-fix record are in ``benchmarks/BACKENDS.md``.  ``"numpy"`` therefore stays the
-default and the measured backend: no compiled win is claimed on this hardware.
-
-Current per-generation op counts: ``forward`` 112 traced ops (749 before the
-level loop was reformulated), ``execute_mutation`` 1360 (3114), and
-``measure_distance`` 7.5 us/pair where the 40 000 pop-1000 pairs cost 25-48 us
-each before the digest API.
+Structurally, the numpy reference interpreter pays per traced op *and* per
+element while the legacy baseline was the same work fused by XLA, so executed
+op count and element volume -- not micro-tuning -- are the levers there; and no
+compiled backend is claimed to beat the numpy interpreter on this hardware, so
+``"numpy"`` stays the default while ``backend=`` is forwarded verbatim to
+``evoxc.build``.
 
 The build is one-off and *per shape*: a wider genome
 (``max_nodes``/``max_conns``) or a bigger population is a separate compile, which

@@ -48,7 +48,7 @@ Fitness is a pure negated loss, never an accuracy: the return for sigmoid-bounde
 - Fitness semantics are pinned: the four reductions, NaN → `-inf` (`finalize_fitness`) and `mape`'s zero-target `inf` all match the frozen legacy implementation.
 
 ## Measured cost
-numpy reference backend, one config per fresh process, build excluded; dev harness `/tmp/tnscratch/bench.py --problem-only` (times `problem.evaluate` alone with a genome-free `act_fn`, so it is this node's tiling + reduction, not the genome forward):
+numpy reference backend, one config per fresh process, build excluded; the numbers come from a scratch harness (not shipped) that times `problem.evaluate` alone with a genome-free `act_fn`, so it is this node's tiling + reduction, not the genome forward (its `--problem-only` mode):
 
 | case | cost | command |
 | --- | --- | --- |
@@ -73,7 +73,8 @@ So the dataset is never the constant problem here.
 - **Cross-node (common):** `common/tensorization.py` creates 104 `P`-scaled constants (e.g. `(P, max_nodes + 1)` zeros ×4) — the second-largest constant group at every population.
 - **Cross-node (problem/base):** `finalize_fitness` costs 3 ops (`not_equal` + `full` + `select`); `evoxc.nan_to_num(x, nan=float("-inf"))` is one op with the same semantics (posinf/neginf untouched), so that helper has a 2-op headroom this node cannot take.
 - `Pipeline.show` on HyperNEAT still fails before reaching this node (`HyperNEAT._query_substrate` derives the batch from `self.pop_size`); `FuncFit.show` itself handles the nested `SubstrateSchedule`.
-- The dev harness named above lives in `/tmp/tnscratch/` (not shipped) and is driven from the worktree root; `bench.py --problem-only` is the metric for this node, while `--share` only bounds the segment, because the zeros arm feeds degenerate fitness into `tell` and the two arms speciate differently.
+- The scratch harness named above is a throwaway driver kept outside the repository and run from the worktree root, so it is not shipped and no path to it should be relied on; re-create it if you need to re-measure, calling `problem.evaluate` alone with a genome-free `act_fn`.
+  Its `--problem-only` mode is the metric for this node, while its `--share` mode only bounds the segment, because the zeros arm feeds degenerate fitness into `tell` and the two arms speciate differently.
 
 ## Routing Table
 | Path | Responsibility |

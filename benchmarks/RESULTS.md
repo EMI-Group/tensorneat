@@ -1,8 +1,10 @@
 # TensorNEAT benchmark — evoxc rewrite vs frozen JAX baseline
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from `benchmarks/results/authoritative.json` at 2026-11-04T19:01:27+00:00.
-> Re-rendered from that same JSON at 2026-11-04T19:39:35+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-05T02:25:22+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > It must not be hand-edited: rerun the CLI instead, or the numbers below stop matching the recorded evidence.
+
+*Pre-fix record, not a description of the merged tree: measured at `ebeaf1f8` on 2026-11-04, before the tiled-evaluate / RL-rollout-hoist performance pass (`90d97b4`) and before the search-quality fixes, so the new-side rows below are the pre-fix cost (pagie 3156.73 ms/gen and 4577.1 MiB) and the pre-fix convergence — `PERF_NUMPY.md` carries the post-fix case-scoped numbers and `results/xor3d_quality_2026-11-04.md` the post-fix quality record.*
 
 ## Headline: old vs new
 
