@@ -30,8 +30,8 @@ A fully blocked form (block `subtract`/`abs`/indicator, static kind mask, one `s
 
 `GeneAttr` is a dataclass: `name`, `kind` (`"float"`/`"int"`), `init_mean`/`init_std` (floats) or `options` (ints), `mutate_power`, `mutate_rate`, `replace_rate`, optional `lower`/`upper`.
 
-Trace-time entry points of the families: `BaseNode.forward(state, attrs, messages, is_output_node, valid_mask) -> (P, N)` and `BaseConn.forward(state, attrs, source_values) -> (P, N, K)`.
-Family dispatch calls the authoritative `common.functions` signatures: `apply_aggregation(values, mask, agg_ids, agg_fns)` and `apply_activation(z, act_ids, act_fns)`.
+Trace-time entry points of the families: `BaseNode.prepare(state, attrs, is_output_rows) -> NodeOperands` plus `BaseNode.forward(state, operands, messages, is_output_node, valid_mask) -> (P, N)`, and `BaseConn.prepare(state, attrs) -> ConnOperands` plus `BaseConn.forward(state, operands, source_values) -> (P, N, K)`.
+Family dispatch builds its own `select` cascades (`option_masks`/`select_cascade`) instead of calling `common.functions.apply_aggregation`/`apply_activation`, because the per-level `equal`/cast hoists into `prepare`; the semantics (option `-1` = identity, one neutral-filling branch per aggregation option) are the same ones `common/functions` documents.
 
 ## Attribute column layout (binding for every consumer)
 `DefaultNode` / `OriginNode`: `bias, response, aggregation, activation` (`attr_width = 4`, ints in columns 2 and 3).
