@@ -3,7 +3,7 @@
 ## Intent
 Two host-only demos of genome introspection: turn one genome into sympy formulas / Python code / LaTeX, and draw its topology as an SVG.
 Neither script needs `Pipeline`; both are guarded by `if __name__ == "__main__":`.
-`genome_sympy.py` takes 0.85 s and `visualize_genome.py` 0.95 s on this CPU, wall clock including `uv run` startup.
+`genome_sympy.py` takes 0.9 s and `visualize_genome.py` 1.7–1.8 s on this CPU, wall clock including `uv run` startup.
 
 ## API Surface
 - `genome_sympy.py` — `DefaultGenome(num_inputs=3, num_outputs=1, max_nodes=10, max_conns=20, init_hidden_layers=(3,), output_transform=ACT.sigmoid, node_gene=BiasNode(activation_options=ACT.tanh, aggregation_options=AGG.sum))`; prints `g.repr(state, payload)`, then `res[4][0].subs(res[1])`, `to_python_code(*res)` and `to_latex_code(*res)` for `res = g.sympy_func(state, network, sympy_output_transform=ACT.obtain_sympy(ACT.sigmoid))`.
