@@ -1,13 +1,13 @@
 {
   "schema": "tensorneat-gpu/1",
   "meta": {
-    "command": "/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/bin/python benchmarks/gpu_measure.py matrix --cases xor_p100,xor_p500,xor3d_p500 --targets numpy,iree-llvm-cpu,iree-rocm --warmup 3 --generations 10 --seed 42 --json benchmarks/results/gpu_2026-11-05.json --out benchmarks/GPU.md",
+    "command": "/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/bin/python benchmarks/gpu_measure.py matrix --cases xor_p100,xor_p500,xor3d_p500 --targets numpy,iree-llvm-cpu,iree-rocm --warmup 3 --generations 10 --trace 14 --seed 42 --json benchmarks/results/gpu_2026-11-05.json --out benchmarks/GPU.md",
     "report_title": "TensorNEAT accelerator measurement \u2014 numpy / iree llvm-cpu / iree rocm",
     "report_note": null,
-    "created_utc": "2026-11-05T10:30:37+00:00",
+    "created_utc": "2026-11-05T11:14:24+00:00",
     "session_utc": {
-      "start": "2026-11-05T10:30:37+00:00",
-      "end": "2026-11-05T10:38:30+00:00"
+      "start": "2026-11-05T11:14:24+00:00",
+      "end": "2026-11-05T11:30:03+00:00"
     },
     "protocol": {
       "one_configuration_per_process": true,
@@ -22,6 +22,7 @@
       "logging_in_timed_region": false,
       "cross_check_enabled": true,
       "cross_check_reference": "numpy",
+      "trajectory_generations": 14,
       "float_rtol": 1e-05,
       "float_atol": 1e-06,
       "errors": "recorded as status='error' rows carrying the traceback, never dropped"
@@ -56,11 +57,11 @@
         "XLA_FLAGS": null
       },
       "loadavg": [
-        3.63,
-        2.67,
-        1.77
+        1.81,
+        2.31,
+        2.44
       ],
-      "git_commit": "d63b101452fbb748e790f0c346c3c38665a56d29",
+      "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
       "git_dirty": false,
       "git_dirty_paths": [],
       "probe_error": null,
@@ -110,13 +111,14 @@
         "logging_in_timed_region": false,
         "cross_check_enabled": true,
         "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
         "float_rtol": 1e-05,
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
       "status": "ok",
       "error": null,
-      "timestamp_utc": "2026-11-05T10:30:38+00:00",
+      "timestamp_utc": "2026-11-05T11:14:24+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -137,11 +139,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.91,
-          1.7,
-          1.07
+          4.02,
+          3.19,
+          2.53
         ],
-        "git_commit": "d63b101452fbb748e790f0c346c3c38665a56d29",
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -219,32 +221,40 @@
           "1000": 157.0
         }
       },
-      "setup_s": 0.015043,
-      "first_step_s": 0.326457,
-      "build_s": 0.282316,
-      "peak_rss_mib": 161.55,
+      "setup_s": 0.015081,
+      "first_step_s": 0.334931,
+      "build_s": 0.284492,
+      "peak_rss_mib": 161.68,
       "ms_per_generation": {
-        "mean": 42.8642,
-        "median": 41.292,
-        "min": 38.828,
-        "max": 48.7896,
+        "mean": 43.6986,
+        "median": 41.646,
+        "min": 40.368,
+        "max": 48.5054,
         "samples": [
-          38.9226,
-          38.9135,
-          39.1351,
-          38.9663,
-          38.828,
-          43.4488,
-          44.9139,
-          48.6955,
-          48.0288,
-          48.7896
+          40.445,
+          40.568,
+          40.368,
+          40.818,
+          40.9064,
+          42.3856,
+          46.8737,
+          47.9985,
+          48.1171,
+          48.5054
         ]
       },
-      "generations_per_second": 23.3295,
+      "generations_per_second": 22.884,
       "final_generation": 14,
       "final_max_fitness": -0.23382315039634705,
       "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
         "status": "skipped",
         "reason": "target is the numpy reference"
       }
@@ -276,13 +286,14 @@
         "logging_in_timed_region": false,
         "cross_check_enabled": true,
         "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
         "float_rtol": 1e-05,
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
       "status": "ok",
       "error": null,
-      "timestamp_utc": "2026-11-05T10:30:39+00:00",
+      "timestamp_utc": "2026-11-05T11:14:26+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -303,11 +314,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.83,
-          1.69,
-          1.07
+          4.02,
+          3.19,
+          2.53
         ],
-        "git_commit": "d63b101452fbb748e790f0c346c3c38665a56d29",
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -389,29 +400,29 @@
           "1000": 157.0
         }
       },
-      "setup_s": 0.959023,
-      "first_step_s": 8.541907,
-      "build_s": 8.325249,
-      "peak_rss_mib": 150.25,
+      "setup_s": 0.974089,
+      "first_step_s": 8.723703,
+      "build_s": 8.506463,
+      "peak_rss_mib": 150.35,
       "ms_per_generation": {
-        "mean": 580.9827,
-        "median": 403.1609,
-        "min": 362.3817,
-        "max": 943.551,
+        "mean": 608.4558,
+        "median": 428.8114,
+        "min": 363.0508,
+        "max": 1026.009,
         "samples": [
-          365.8073,
-          362.3817,
-          372.5794,
-          372.1591,
-          362.8219,
-          433.7424,
-          723.4101,
-          936.6715,
-          943.551,
-          936.7027
+          368.5902,
+          376.0781,
+          363.0508,
+          382.3213,
+          392.5784,
+          465.0444,
+          773.9097,
+          957.5983,
+          979.3775,
+          1026.009
         ]
       },
-      "generations_per_second": 1.7212,
+      "generations_per_second": 1.6435,
       "final_generation": 14,
       "final_max_fitness": -0.23382315039634705,
       "cross_check": {
@@ -525,7 +536,215 @@
             }
           }
         },
-        "reference_build_s": 0.299413
+        "reference_build_s": 0.332871
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "ok",
+        "generations": [
+          {
+            "generation": 1,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 2.384185791015625e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25321489572525024,
+            "max_fitness_accelerated": -0.25321489572525024,
+            "species_count_numpy": 1,
+            "species_count_accelerated": 1
+          },
+          {
+            "generation": 2,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25079455971717834,
+            "max_fitness_accelerated": -0.25079455971717834,
+            "species_count_numpy": 1,
+            "species_count_accelerated": 1
+          },
+          {
+            "generation": 3,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 6.705522537231445e-08,
+            "conn_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25010108947753906,
+            "max_fitness_accelerated": -0.25010108947753906,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 4,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.086162567138672e-07,
+            "conn_attrs_max_abs_diff": 1.341104507446289e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 2.9802322387695312e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2500501871109009,
+            "max_fitness_accelerated": -0.2500501871109009,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 5,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24991881847381592,
+            "max_fitness_accelerated": -0.2499188482761383,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 6,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24962933361530304,
+            "max_fitness_accelerated": -0.24962931871414185,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 7,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.7881393432617188e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2487148940563202,
+            "max_fitness_accelerated": -0.2487148940563202,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 8,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 2.384185791015625e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24767453968524933,
+            "max_fitness_accelerated": -0.24767453968524933,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 9,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24659186601638794,
+            "max_fitness_accelerated": -0.24659189581871033,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 10,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.7881393432617188e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24552729725837708,
+            "max_fitness_accelerated": -0.24552729725837708,
+            "species_count_numpy": 3,
+            "species_count_accelerated": 3
+          },
+          {
+            "generation": 11,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 2.384185791015625e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24367329478263855,
+            "max_fitness_accelerated": -0.24367330968379974,
+            "species_count_numpy": 6,
+            "species_count_accelerated": 6
+          },
+          {
+            "generation": 12,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.7881393432617188e-07,
+            "conn_attrs_max_abs_diff": 3.5762786865234375e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2412681132555008,
+            "max_fitness_accelerated": -0.2412681132555008,
+            "species_count_numpy": 6,
+            "species_count_accelerated": 6
+          },
+          {
+            "generation": 13,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.7881393432617188e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.23712937533855438,
+            "max_fitness_accelerated": -0.23712937533855438,
+            "species_count_numpy": 6,
+            "species_count_accelerated": 6
+          },
+          {
+            "generation": 14,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 2.384185791015625e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 2.9802322387695312e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.23382315039634705,
+            "max_fitness_accelerated": -0.23382315039634705,
+            "species_count_numpy": 6,
+            "species_count_accelerated": 6
+          }
+        ],
+        "first_key_divergence": null,
+        "first_float_exceedance": null,
+        "trace_s": 17.666685
       }
     },
     {
@@ -555,13 +774,14 @@
         "logging_in_timed_region": false,
         "cross_check_enabled": true,
         "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
         "float_rtol": 1e-05,
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
       "status": "error",
-      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 505, in measure_row\n    _measure(_tensorneat(), case, plan, args, record)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 422, in _measure\n    state = pipeline.setup()\n            ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/pipeline.py\", line 417, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/algorithm/neat/neat.py\", line 365, in setup\n    payload, next_key, generation, species_state = evoxc.run(\n                                                   ^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1467, in run\n    flat_tensors = _prepare_flat_inputs(\n                   ^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1286, in _prepare_flat_inputs\n    _check_run_device(tensor, expected_device, path)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1110, in _check_run_device\n    raise core.DeviceError(\nevoxc.core.errors.DeviceError: input at path [0] is on device Device(kind='cpu', index=0), but the executable runs on device Device(kind='rocm', index=0): no implicit device-to-host or host-to-device transfer happens at the run boundary \u2014 move the tensor to the executable's device explicitly via t.to(Device(kind='rocm', index=0))\n",
-      "timestamp_utc": "2026-11-05T10:30:57+00:00",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 580, in measure_row\n    _measure(_tensorneat(), case, plan, args, record)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 496, in _measure\n    state = pipeline.setup()\n            ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/pipeline.py\", line 417, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/algorithm/neat/neat.py\", line 365, in setup\n    payload, next_key, generation, species_state = evoxc.run(\n                                                   ^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1467, in run\n    flat_tensors = _prepare_flat_inputs(\n                   ^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1286, in _prepare_flat_inputs\n    _check_run_device(tensor, expected_device, path)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1110, in _check_run_device\n    raise core.DeviceError(\nevoxc.core.errors.DeviceError: input at path [0] is on device Device(kind='cpu', index=0), but the executable runs on device Device(kind='rocm', index=0): no implicit device-to-host or host-to-device transfer happens at the run boundary \u2014 move the tensor to the executable's device explicitly via t.to(Device(kind='rocm', index=0))\n",
+      "timestamp_utc": "2026-11-05T11:15:02+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -582,11 +802,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.65,
-          1.66,
-          1.07
+          3.06,
+          3.04,
+          2.51
         ],
-        "git_commit": "d63b101452fbb748e790f0c346c3c38665a56d29",
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -668,7 +888,7 @@
           "1000": 157.0
         }
       },
-      "setup_s": 1.181571,
+      "setup_s": 1.257297,
       "setup_failed": true
     },
     {
@@ -694,13 +914,14 @@
         "logging_in_timed_region": false,
         "cross_check_enabled": true,
         "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
         "float_rtol": 1e-05,
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
       "status": "ok",
       "error": null,
-      "timestamp_utc": "2026-11-05T10:30:59+00:00",
+      "timestamp_utc": "2026-11-05T11:15:03+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -721,11 +942,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.65,
-          1.66,
-          1.07
+          3.06,
+          3.04,
+          2.51
         ],
-        "git_commit": "d63b101452fbb748e790f0c346c3c38665a56d29",
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -803,32 +1024,40 @@
           "1000": 157.0
         }
       },
-      "setup_s": 0.015462,
-      "first_step_s": 0.544018,
-      "build_s": 0.340826,
-      "peak_rss_mib": 281.39,
+      "setup_s": 0.015908,
+      "first_step_s": 0.545622,
+      "build_s": 0.342612,
+      "peak_rss_mib": 281.56,
       "ms_per_generation": {
-        "mean": 172.2889,
-        "median": 171.5385,
-        "min": 163.4788,
-        "max": 184.0319,
+        "mean": 182.0658,
+        "median": 184.2224,
+        "min": 174.3565,
+        "max": 187.1588,
         "samples": [
-          163.4788,
-          170.6789,
-          165.1923,
-          172.3982,
-          184.0319,
-          176.7557,
-          172.821,
-          169.1015,
-          170.0809,
-          178.3498
+          174.9376,
+          184.3518,
+          185.3674,
+          174.3565,
+          184.093,
+          187.1031,
+          175.3892,
+          181.1065,
+          186.7943,
+          187.1588
         ]
       },
-      "generations_per_second": 5.8042,
+      "generations_per_second": 5.4925,
       "final_generation": 14,
       "final_max_fitness": -0.22459709644317627,
       "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
         "status": "skipped",
         "reason": "target is the numpy reference"
       }
@@ -860,13 +1089,14 @@
         "logging_in_timed_region": false,
         "cross_check_enabled": true,
         "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
         "float_rtol": 1e-05,
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
       "status": "ok",
       "error": null,
-      "timestamp_utc": "2026-11-05T10:31:02+00:00",
+      "timestamp_utc": "2026-11-05T11:15:07+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -887,11 +1117,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.6,
-          1.65,
-          1.07
+          2.89,
+          3.0,
+          2.5
         ],
-        "git_commit": "d63b101452fbb748e790f0c346c3c38665a56d29",
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -973,29 +1203,29 @@
           "1000": 157.0
         }
       },
-      "setup_s": 0.944506,
-      "first_step_s": 23.698659,
-      "build_s": 8.834665,
-      "peak_rss_mib": 194.58,
+      "setup_s": 1.02051,
+      "first_step_s": 23.700224,
+      "build_s": 9.045476,
+      "peak_rss_mib": 194.95,
       "ms_per_generation": {
-        "mean": 14762.3387,
-        "median": 14738.5412,
-        "min": 14668.1561,
-        "max": 14990.4689,
+        "mean": 14925.7706,
+        "median": 14912.7989,
+        "min": 14656.6265,
+        "max": 15199.4292,
         "samples": [
-          14721.0504,
-          14760.8752,
-          14990.4689,
-          14823.1761,
-          14758.048,
-          14706.8002,
-          14745.1037,
-          14731.9787,
-          14717.7296,
-          14668.1561
+          15094.6342,
+          15199.4292,
+          14972.5524,
+          15168.3053,
+          14774.7711,
+          14903.4193,
+          14827.72,
+          14922.1786,
+          14656.6265,
+          14738.0695
         ]
       },
-      "generations_per_second": 0.0677,
+      "generations_per_second": 0.067,
       "final_generation": 14,
       "final_max_fitness": -0.22459709644317627,
       "cross_check": {
@@ -1109,7 +1339,215 @@
             }
           }
         },
-        "reference_build_s": 0.345926
+        "reference_build_s": 0.366957
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "ok",
+        "generations": [
+          {
+            "generation": 1,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 4.76837158203125e-07,
+            "conn_attrs_max_abs_diff": 2.9383227229118347e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2502514719963074,
+            "max_fitness_accelerated": -0.2502514719963074,
+            "species_count_numpy": 1,
+            "species_count_accelerated": 1
+          },
+          {
+            "generation": 2,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 2.384185791015625e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25001654028892517,
+            "max_fitness_accelerated": -0.2500165104866028,
+            "species_count_numpy": 6,
+            "species_count_accelerated": 6
+          },
+          {
+            "generation": 3,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 3.5762786865234375e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 8.940696716308594e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25000709295272827,
+            "max_fitness_accelerated": -0.25000709295272827,
+            "species_count_numpy": 16,
+            "species_count_accelerated": 16
+          },
+          {
+            "generation": 4,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.086162567138672e-07,
+            "conn_attrs_max_abs_diff": 1.601874828338623e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25000128149986267,
+            "max_fitness_accelerated": -0.25000128149986267,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 5,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 0.4029029607772827,
+            "conn_attrs_max_abs_diff": 0.0030840933322906494,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 0.004423260688781738,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24982260167598724,
+            "max_fitness_accelerated": -0.24982257187366486,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 6,
+            "node_keys_mismatches": 31,
+            "conn_keys_mismatches": 66,
+            "node_attrs_max_abs_diff": 0.5083773136138916,
+            "conn_attrs_max_abs_diff": 1.9760410785675049,
+            "attr_nan_mask_mismatches": 7,
+            "fitness_max_abs_diff": 0.005131155252456665,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2487347573041916,
+            "max_fitness_accelerated": -0.2487347573041916,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 7,
+            "node_keys_mismatches": 159,
+            "conn_keys_mismatches": 439,
+            "node_attrs_max_abs_diff": 1.2457993030548096,
+            "conn_attrs_max_abs_diff": 1.0144026279449463,
+            "attr_nan_mask_mismatches": 444,
+            "fitness_max_abs_diff": 0.014755278825759888,
+            "fitness_mask_mismatches": 1,
+            "max_fitness_numpy": -0.24746105074882507,
+            "max_fitness_accelerated": -0.24746108055114746,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 8,
+            "node_keys_mismatches": 237,
+            "conn_keys_mismatches": 845,
+            "node_attrs_max_abs_diff": 1.4949676990509033,
+            "conn_attrs_max_abs_diff": 4.65156364440918,
+            "attr_nan_mask_mismatches": 843,
+            "fitness_max_abs_diff": 0.08244466781616211,
+            "fitness_mask_mismatches": 4,
+            "max_fitness_numpy": -0.24391770362854004,
+            "max_fitness_accelerated": -0.24391768872737885,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 9,
+            "node_keys_mismatches": 425,
+            "conn_keys_mismatches": 1436,
+            "node_attrs_max_abs_diff": 1.5959917306900024,
+            "conn_attrs_max_abs_diff": 4.251160621643066,
+            "attr_nan_mask_mismatches": 1282,
+            "fitness_max_abs_diff": 0.10029491782188416,
+            "fitness_mask_mismatches": 10,
+            "max_fitness_numpy": -0.24132028222084045,
+            "max_fitness_accelerated": -0.24132028222084045,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 10,
+            "node_keys_mismatches": 411,
+            "conn_keys_mismatches": 1302,
+            "node_attrs_max_abs_diff": 1.7725266218185425,
+            "conn_attrs_max_abs_diff": 4.653420925140381,
+            "attr_nan_mask_mismatches": 1056,
+            "fitness_max_abs_diff": 0.033620208501815796,
+            "fitness_mask_mismatches": 8,
+            "max_fitness_numpy": -0.24065667390823364,
+            "max_fitness_accelerated": -0.24065667390823364,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 11,
+            "node_keys_mismatches": 547,
+            "conn_keys_mismatches": 1944,
+            "node_attrs_max_abs_diff": 2.092477321624756,
+            "conn_attrs_max_abs_diff": 4.572396278381348,
+            "attr_nan_mask_mismatches": 1585,
+            "fitness_max_abs_diff": 0.09689486026763916,
+            "fitness_mask_mismatches": 13,
+            "max_fitness_numpy": -0.23786675930023193,
+            "max_fitness_accelerated": -0.23786678910255432,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 12,
+            "node_keys_mismatches": 558,
+            "conn_keys_mismatches": 1945,
+            "node_attrs_max_abs_diff": 2.593549966812134,
+            "conn_attrs_max_abs_diff": 3.371931552886963,
+            "attr_nan_mask_mismatches": 1761,
+            "fitness_max_abs_diff": 0.10794708132743835,
+            "fitness_mask_mismatches": 15,
+            "max_fitness_numpy": -0.23363052308559418,
+            "max_fitness_accelerated": -0.23363052308559418,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 13,
+            "node_keys_mismatches": 533,
+            "conn_keys_mismatches": 1782,
+            "node_attrs_max_abs_diff": 4.043320178985596,
+            "conn_attrs_max_abs_diff": 4.658003807067871,
+            "attr_nan_mask_mismatches": 1340,
+            "fitness_max_abs_diff": 0.13059911131858826,
+            "fitness_mask_mismatches": 14,
+            "max_fitness_numpy": -0.22862720489501953,
+            "max_fitness_accelerated": -0.22862720489501953,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 14,
+            "node_keys_mismatches": 486,
+            "conn_keys_mismatches": 1850,
+            "node_attrs_max_abs_diff": 1.7246984243392944,
+            "conn_attrs_max_abs_diff": 4.736943244934082,
+            "attr_nan_mask_mismatches": 1340,
+            "fitness_max_abs_diff": 0.09026885032653809,
+            "fitness_mask_mismatches": 9,
+            "max_fitness_numpy": -0.22459709644317627,
+            "max_fitness_accelerated": -0.22459709644317627,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          }
+        ],
+        "first_key_divergence": 6,
+        "first_float_exceedance": 5,
+        "trace_s": 224.445933
       }
     },
     {
@@ -1139,13 +1577,14 @@
         "logging_in_timed_region": false,
         "cross_check_enabled": true,
         "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
         "float_rtol": 1e-05,
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
       "status": "error",
-      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 505, in measure_row\n    _measure(_tensorneat(), case, plan, args, record)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 422, in _measure\n    state = pipeline.setup()\n            ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/pipeline.py\", line 417, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/algorithm/neat/neat.py\", line 365, in setup\n    payload, next_key, generation, species_state = evoxc.run(\n                                                   ^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1467, in run\n    flat_tensors = _prepare_flat_inputs(\n                   ^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1286, in _prepare_flat_inputs\n    _check_run_device(tensor, expected_device, path)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1110, in _check_run_device\n    raise core.DeviceError(\nevoxc.core.errors.DeviceError: input at path [0] is on device Device(kind='cpu', index=0), but the executable runs on device Device(kind='rocm', index=0): no implicit device-to-host or host-to-device transfer happens at the run boundary \u2014 move the tensor to the executable's device explicitly via t.to(Device(kind='rocm', index=0))\n",
-      "timestamp_utc": "2026-11-05T10:34:42+00:00",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 580, in measure_row\n    _measure(_tensorneat(), case, plan, args, record)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 496, in _measure\n    state = pipeline.setup()\n            ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/pipeline.py\", line 417, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/algorithm/neat/neat.py\", line 365, in setup\n    payload, next_key, generation, species_state = evoxc.run(\n                                                   ^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1467, in run\n    flat_tensors = _prepare_flat_inputs(\n                   ^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1286, in _prepare_flat_inputs\n    _check_run_device(tensor, expected_device, path)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1110, in _check_run_device\n    raise core.DeviceError(\nevoxc.core.errors.DeviceError: input at path [0] is on device Device(kind='cpu', index=0), but the executable runs on device Device(kind='rocm', index=0): no implicit device-to-host or host-to-device transfer happens at the run boundary \u2014 move the tensor to the executable's device explicitly via t.to(Device(kind='rocm', index=0))\n",
+      "timestamp_utc": "2026-11-05T11:22:33+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -1166,11 +1605,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.99,
-          1.94,
-          1.32
+          4.08,
+          3.04,
+          2.57
         ],
-        "git_commit": "d63b101452fbb748e790f0c346c3c38665a56d29",
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -1252,7 +1691,7 @@
           "1000": 157.0
         }
       },
-      "setup_s": 1.226993,
+      "setup_s": 1.199439,
       "setup_failed": true
     },
     {
@@ -1278,13 +1717,14 @@
         "logging_in_timed_region": false,
         "cross_check_enabled": true,
         "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
         "float_rtol": 1e-05,
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
       "status": "ok",
       "error": null,
-      "timestamp_utc": "2026-11-05T10:34:44+00:00",
+      "timestamp_utc": "2026-11-05T11:22:35+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -1305,11 +1745,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.91,
-          1.93,
-          1.32
+          3.75,
+          2.99,
+          2.55
         ],
-        "git_commit": "d63b101452fbb748e790f0c346c3c38665a56d29",
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -1383,32 +1823,40 @@
         },
         "reference_ms_per_generation": {}
       },
-      "setup_s": 0.015576,
-      "first_step_s": 0.54404,
-      "build_s": 0.339461,
-      "peak_rss_mib": 289.57,
+      "setup_s": 0.015443,
+      "first_step_s": 0.542153,
+      "build_s": 0.339243,
+      "peak_rss_mib": 289.64,
       "ms_per_generation": {
-        "mean": 175.2437,
-        "median": 174.1707,
-        "min": 166.1443,
-        "max": 190.4279,
+        "mean": 179.372,
+        "median": 180.0035,
+        "min": 164.2631,
+        "max": 187.2843,
         "samples": [
-          166.1443,
-          166.6819,
-          171.3205,
-          173.9963,
-          170.0442,
-          180.929,
-          178.1646,
-          174.345,
-          180.3836,
-          190.4279
+          164.2631,
+          172.4723,
+          186.368,
+          186.3097,
+          178.6067,
+          177.004,
+          179.6896,
+          180.3175,
+          181.4049,
+          187.2843
         ]
       },
-      "generations_per_second": 5.7063,
+      "generations_per_second": 5.575,
       "final_generation": 14,
       "final_max_fitness": -0.24787002801895142,
       "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
         "status": "skipped",
         "reason": "target is the numpy reference"
       }
@@ -1440,13 +1888,14 @@
         "logging_in_timed_region": false,
         "cross_check_enabled": true,
         "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
         "float_rtol": 1e-05,
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
       "status": "ok",
       "error": null,
-      "timestamp_utc": "2026-11-05T10:34:47+00:00",
+      "timestamp_utc": "2026-11-05T11:22:39+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -1467,11 +1916,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.91,
-          1.93,
-          1.32
+          3.75,
+          2.99,
+          2.55
         ],
-        "git_commit": "d63b101452fbb748e790f0c346c3c38665a56d29",
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -1549,29 +1998,29 @@
         },
         "reference_ms_per_generation": {}
       },
-      "setup_s": 0.942613,
-      "first_step_s": 24.072688,
-      "build_s": 9.242794,
-      "peak_rss_mib": 195.83,
+      "setup_s": 0.969538,
+      "first_step_s": 23.627886,
+      "build_s": 8.792136,
+      "peak_rss_mib": 197.15,
       "ms_per_generation": {
-        "mean": 14833.5814,
-        "median": 14804.6448,
-        "min": 14690.9917,
-        "max": 15069.8964,
+        "mean": 15022.0808,
+        "median": 15032.3699,
+        "min": 14637.2649,
+        "max": 15291.3366,
         "samples": [
-          14844.5302,
-          14823.3904,
-          14755.5154,
-          14746.7252,
-          15030.5596,
-          14820.0913,
-          14690.9917,
-          15069.8964,
-          14764.9155,
-          14789.1983
+          14807.791,
+          14637.2649,
+          15114.3064,
+          15220.665,
+          15291.3366,
+          15057.4576,
+          15007.2823,
+          15154.6806,
+          14934.1277,
+          14995.8963
         ]
       },
-      "generations_per_second": 0.0674,
+      "generations_per_second": 0.0666,
       "final_generation": 14,
       "final_max_fitness": -0.24726730585098267,
       "cross_check": {
@@ -1685,7 +2134,215 @@
             }
           }
         },
-        "reference_build_s": 0.361013
+        "reference_build_s": 0.35099
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "ok",
+        "generations": [
+          {
+            "generation": 1,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 4.76837158203125e-07,
+            "conn_attrs_max_abs_diff": 2.980232238769531e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2511712908744812,
+            "max_fitness_accelerated": -0.2511713206768036,
+            "species_count_numpy": 1,
+            "species_count_accelerated": 1
+          },
+          {
+            "generation": 2,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 3.5762786865234375e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25019359588623047,
+            "max_fitness_accelerated": -0.25019359588623047,
+            "species_count_numpy": 1,
+            "species_count_accelerated": 1
+          },
+          {
+            "generation": 3,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 3.5762786865234375e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2500112056732178,
+            "max_fitness_accelerated": -0.2500112056732178,
+            "species_count_numpy": 3,
+            "species_count_accelerated": 3
+          },
+          {
+            "generation": 4,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.086162567138672e-07,
+            "conn_attrs_max_abs_diff": 3.427267074584961e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 8.940696716308594e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25000402331352234,
+            "max_fitness_accelerated": -0.25000402331352234,
+            "species_count_numpy": 3,
+            "species_count_accelerated": 3
+          },
+          {
+            "generation": 5,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 3.129243850708008e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2500014901161194,
+            "max_fitness_accelerated": -0.2500014901161194,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 6,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 3.427267074584961e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2500004768371582,
+            "max_fitness_accelerated": -0.2500004470348358,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 7,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.5331974029541016e-07,
+            "conn_attrs_max_abs_diff": 3.2782554626464844e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 2.9802322387695312e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2500002384185791,
+            "max_fitness_accelerated": -0.2500002086162567,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 8,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 0.27203139662742615,
+            "conn_attrs_max_abs_diff": 0.0576595664024353,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 0.0005397498607635498,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.249998539686203,
+            "max_fitness_accelerated": -0.24999850988388062,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 9,
+            "node_keys_mismatches": 85,
+            "conn_keys_mismatches": 250,
+            "node_attrs_max_abs_diff": 2.416074752807617,
+            "conn_attrs_max_abs_diff": 1.3782817125320435,
+            "attr_nan_mask_mismatches": 103,
+            "fitness_max_abs_diff": 0.0024650394916534424,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24998027086257935,
+            "max_fitness_accelerated": -0.24998025596141815,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 10,
+            "node_keys_mismatches": 450,
+            "conn_keys_mismatches": 1679,
+            "node_attrs_max_abs_diff": 2.131389617919922,
+            "conn_attrs_max_abs_diff": 3.4452385902404785,
+            "attr_nan_mask_mismatches": 1607,
+            "fitness_max_abs_diff": 0.12881061434745789,
+            "fitness_mask_mismatches": 13,
+            "max_fitness_numpy": -0.24994337558746338,
+            "max_fitness_accelerated": -0.24994337558746338,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 11,
+            "node_keys_mismatches": 702,
+            "conn_keys_mismatches": 2619,
+            "node_attrs_max_abs_diff": 3.2134203910827637,
+            "conn_attrs_max_abs_diff": 3.4452385902404785,
+            "attr_nan_mask_mismatches": 2385,
+            "fitness_max_abs_diff": 0.08328017592430115,
+            "fitness_mask_mismatches": 22,
+            "max_fitness_numpy": -0.24983882904052734,
+            "max_fitness_accelerated": -0.24983884394168854,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 12,
+            "node_keys_mismatches": 788,
+            "conn_keys_mismatches": 2957,
+            "node_attrs_max_abs_diff": 3.9969482421875,
+            "conn_attrs_max_abs_diff": 3.178690195083618,
+            "attr_nan_mask_mismatches": 2214,
+            "fitness_max_abs_diff": 0.1122191846370697,
+            "fitness_mask_mismatches": 21,
+            "max_fitness_numpy": -0.24946224689483643,
+            "max_fitness_accelerated": -0.24946226179599762,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 13,
+            "node_keys_mismatches": 742,
+            "conn_keys_mismatches": 2850,
+            "node_attrs_max_abs_diff": 3.9969482421875,
+            "conn_attrs_max_abs_diff": 4.114693641662598,
+            "attr_nan_mask_mismatches": 2168,
+            "fitness_max_abs_diff": 0.09894931316375732,
+            "fitness_mask_mismatches": 29,
+            "max_fitness_numpy": -0.24900668859481812,
+            "max_fitness_accelerated": -0.24900668859481812,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 14,
+            "node_keys_mismatches": 879,
+            "conn_keys_mismatches": 3273,
+            "node_attrs_max_abs_diff": 4.208442687988281,
+            "conn_attrs_max_abs_diff": 3.6498236656188965,
+            "attr_nan_mask_mismatches": 2422,
+            "fitness_max_abs_diff": 0.060001105070114136,
+            "fitness_mask_mismatches": 18,
+            "max_fitness_numpy": -0.24787002801895142,
+            "max_fitness_accelerated": -0.24726730585098267,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          }
+        ],
+        "first_key_divergence": 9,
+        "first_float_exceedance": 8,
+        "trace_s": 219.992642
       }
     },
     {
@@ -1715,13 +2372,14 @@
         "logging_in_timed_region": false,
         "cross_check_enabled": true,
         "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
         "float_rtol": 1e-05,
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
       "status": "error",
-      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 505, in measure_row\n    _measure(_tensorneat(), case, plan, args, record)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 422, in _measure\n    state = pipeline.setup()\n            ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/pipeline.py\", line 417, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/algorithm/neat/neat.py\", line 365, in setup\n    payload, next_key, generation, species_state = evoxc.run(\n                                                   ^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1467, in run\n    flat_tensors = _prepare_flat_inputs(\n                   ^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1286, in _prepare_flat_inputs\n    _check_run_device(tensor, expected_device, path)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1110, in _check_run_device\n    raise core.DeviceError(\nevoxc.core.errors.DeviceError: input at path [0] is on device Device(kind='cpu', index=0), but the executable runs on device Device(kind='rocm', index=0): no implicit device-to-host or host-to-device transfer happens at the run boundary \u2014 move the tensor to the executable's device explicitly via t.to(Device(kind='rocm', index=0))\n",
-      "timestamp_utc": "2026-11-05T10:38:29+00:00",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 580, in measure_row\n    _measure(_tensorneat(), case, plan, args, record)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 496, in _measure\n    state = pipeline.setup()\n            ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/pipeline.py\", line 417, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/algorithm/neat/neat.py\", line 365, in setup\n    payload, next_key, generation, species_state = evoxc.run(\n                                                   ^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1467, in run\n    flat_tensors = _prepare_flat_inputs(\n                   ^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1286, in _prepare_flat_inputs\n    _check_run_device(tensor, expected_device, path)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1110, in _check_run_device\n    raise core.DeviceError(\nevoxc.core.errors.DeviceError: input at path [0] is on device Device(kind='cpu', index=0), but the executable runs on device Device(kind='rocm', index=0): no implicit device-to-host or host-to-device transfer happens at the run boundary \u2014 move the tensor to the executable's device explicitly via t.to(Device(kind='rocm', index=0))\n",
+      "timestamp_utc": "2026-11-05T11:30:01+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -1742,11 +2400,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          3.78,
-          2.68,
-          1.76
+          1.81,
+          2.31,
+          2.44
         ],
-        "git_commit": "d63b101452fbb748e790f0c346c3c38665a56d29",
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -1824,7 +2482,7 @@
         },
         "reference_ms_per_generation": {}
       },
-      "setup_s": 1.248075,
+      "setup_s": 1.408647,
       "setup_failed": true
     }
   ]
