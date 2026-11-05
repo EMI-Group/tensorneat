@@ -43,7 +43,7 @@ The `numpy` target records `{"status": "skipped", "reason": "target is the numpy
 
 | Item | Value |
 |---|---|
-| Date / session (UTC) | 2026-11-05T10:30:37+00:00 – 2026-11-05T10:38:30+00:00 |
+| Date / session (UTC) | 2026-11-05T11:14:24+00:00 – 2026-11-05T11:30:03+00:00 |
 | GPU model (gfx version) | AMD Instinct MI300X VF (gfx942) |
 | HIP devices (IREE runtime query) | device_id=1 AMD Instinct MI300X VF |
 | ROCm version | 7.1.0 |
@@ -56,8 +56,8 @@ The `numpy` target records `{"status": "skipped", "reason": "target is the numpy
 | CPU model / count | INTEL(R) XEON(R) PLATINUM 8568Y+ / 20 logical |
 | Memory | 241611 MiB |
 | Threads | runtime defaults (nothing exported; inherited environment recorded) |
-| Git commit | `d63b101452fb` (clean — generated report artifacts are not counted) |
-| Load average (1/5/15 min, document build) | 3.63 / 2.67 / 1.77 |
+| Git commit | `2d86a89ffd56` (clean — generated report artifacts are not counted) |
+| Load average (1/5/15 min, document build) | 1.81 / 2.31 / 2.44 |
 
 ## Measured: numpy vs iree llvm-cpu vs iree rocm
 
@@ -65,15 +65,15 @@ One row per planned `(case, target)`; `n/a` marks a metric the row does not have
 
 | Case | Target | Backend | Status | setup (s) | build (s) | ms/gen median | ms/gen mean | ms/gen min–max | gens/s | peak RSS (MiB) | final max fitness | cross-check |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| xor_p100 | `numpy` | `numpy` | ok | 0.015 | 0.282 | 41.292 | 42.864 | 38.828 – 48.790 | 23.329 | 161.6 | -0.233823 | skipped (target is the numpy reference) |
-| xor_p100 | `iree-llvm-cpu` | `iree` | ok | 0.959 | 8.325 | 403.161 | 580.983 | 362.382 – 943.551 | 1.721 | 150.2 | -0.233823 | pass |
-| xor_p100 | `iree-rocm` | `iree` | error | 1.182 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p500 | `numpy` | `numpy` | ok | 0.015 | 0.341 | 171.538 | 172.289 | 163.479 – 184.032 | 5.804 | 281.4 | -0.224597 | skipped (target is the numpy reference) |
-| xor_p500 | `iree-llvm-cpu` | `iree` | ok | 0.945 | 8.835 | 14738.541 | 14762.339 | 14668.156 – 14990.469 | 0.068 | 194.6 | -0.224597 | fail (final state: node_keys) |
-| xor_p500 | `iree-rocm` | `iree` | error | 1.227 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor3d_p500 | `numpy` | `numpy` | ok | 0.016 | 0.339 | 174.171 | 175.244 | 166.144 – 190.428 | 5.706 | 289.6 | -0.247870 | skipped (target is the numpy reference) |
-| xor3d_p500 | `iree-llvm-cpu` | `iree` | ok | 0.943 | 9.243 | 14804.645 | 14833.581 | 14690.992 – 15069.896 | 0.067 | 195.8 | -0.247267 | fail (final state: node_keys) |
-| xor3d_p500 | `iree-rocm` | `iree` | error | 1.248 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p100 | `numpy` | `numpy` | ok | 0.015 | 0.284 | 41.646 | 43.699 | 40.368 – 48.505 | 22.884 | 161.7 | -0.233823 | skipped (target is the numpy reference) |
+| xor_p100 | `iree-llvm-cpu` | `iree` | ok | 0.974 | 8.506 | 428.811 | 608.456 | 363.051 – 1026.009 | 1.643 | 150.3 | -0.233823 | pass |
+| xor_p100 | `iree-rocm` | `iree` | error | 1.257 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p500 | `numpy` | `numpy` | ok | 0.016 | 0.343 | 184.222 | 182.066 | 174.357 – 187.159 | 5.492 | 281.6 | -0.224597 | skipped (target is the numpy reference) |
+| xor_p500 | `iree-llvm-cpu` | `iree` | ok | 1.021 | 9.045 | 14912.799 | 14925.771 | 14656.627 – 15199.429 | 0.067 | 194.9 | -0.224597 | fail (final state: node_keys) |
+| xor_p500 | `iree-rocm` | `iree` | error | 1.199 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor3d_p500 | `numpy` | `numpy` | ok | 0.015 | 0.339 | 180.004 | 179.372 | 164.263 – 187.284 | 5.575 | 289.6 | -0.247870 | skipped (target is the numpy reference) |
+| xor3d_p500 | `iree-llvm-cpu` | `iree` | ok | 0.970 | 8.792 | 15032.370 | 15022.081 | 14637.265 – 15291.337 | 0.067 | 197.2 | -0.247267 | fail (final state: node_keys) |
+| xor3d_p500 | `iree-rocm` | `iree` | error | 1.409 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
 ## Numerical cross-check
 
@@ -88,6 +88,73 @@ Each non-numpy row is compared against a fresh `backend="numpy"` run of the same
 | xor3d_p500 | `iree-llvm-cpu` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000298 | 0.000000060 | 0 | fail | node_keys 850 mismatch(es); conn_keys 3155 mismatch(es) | node_attrs 3.936978817; conn_attrs 3.674550533 | 0.060001105 | 5844 |
 | xor3d_p500 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
+## Per-generation trajectory
+
+Every traced row was re-run after the timed region, with the peak-RSS sample already taken, as a lockstep pair: a fresh accelerated pipeline and a fresh `backend="numpy"` pipeline of the same case and seed, each paying its own build, compared per generation with the cross-check rules above. The trace touches neither the timings nor the recorded RSS.
+
+**xor_p100 / `iree-llvm-cpu`** — 14 generation(s) compared in lockstep; first node-key divergence: none within 14 generations; first float exceedance: none within 14 generations; wall time 17.667 s.
+
+*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
+
+| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.253215 / -0.253215 | 1 / 1 |
+| 2 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.250795 / -0.250795 | 1 / 1 |
+| 3 | 0 | 0 | 0.000000067 | 0.000000119 | 0 | 0.000000060 | 0 | -0.250101 / -0.250101 | 2 / 2 |
+| 4 | 0 | 0 | 0.000000209 | 0.000000134 | 0 | 0.000000030 | 0 | -0.250050 / -0.250050 | 2 / 2 |
+| 5 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.249919 / -0.249919 | 2 / 2 |
+| 6 | 0 | 0 | 0.000000238 | 0.000000119 | 0 | 0.000000060 | 0 | -0.249629 / -0.249629 | 2 / 2 |
+| 7 | 0 | 0 | 0.000000119 | 0.000000179 | 0 | 0.000000060 | 0 | -0.248715 / -0.248715 | 2 / 2 |
+| 8 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.247675 / -0.247675 | 2 / 2 |
+| 9 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.246592 / -0.246592 | 2 / 2 |
+| 10 | 0 | 0 | 0.000000119 | 0.000000179 | 0 | 0.000000060 | 0 | -0.245527 / -0.245527 | 3 / 3 |
+| 11 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.243673 / -0.243673 | 6 / 6 |
+| 12 | 0 | 0 | 0.000000179 | 0.000000358 | 0 | 0.000000060 | 0 | -0.241268 / -0.241268 | 6 / 6 |
+| 13 | 0 | 0 | 0.000000119 | 0.000000179 | 0 | 0.000000060 | 0 | -0.237129 / -0.237129 | 6 / 6 |
+| 14 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000030 | 0 | -0.233823 / -0.233823 | 6 / 6 |
+
+**xor_p500 / `iree-llvm-cpu`** — 14 generation(s) compared in lockstep; first node-key divergence: 6; first float exceedance: 5; wall time 224.446 s.
+
+*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
+
+| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 0 | 0 | 0.000000477 | 0.000000294 | 0 | 0.000000060 | 0 | -0.250251 / -0.250251 | 1 / 1 |
+| 2 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250017 / -0.250017 | 6 / 6 |
+| 3 | 0 | 0 | 0.000000238 | 0.000000358 | 0 | 0.000000089 | 0 | -0.250007 / -0.250007 | 16 / 16 |
+| 4 | 0 | 0 | 0.000000209 | 0.000000160 | 0 | 0.000000060 | 0 | -0.250001 / -0.250001 | 20 / 20 |
+| 5 | 0 | 0 | 0.402902961 | 0.003084093 | 0 | 0.004423261 | 0 | -0.249823 / -0.249823 | 20 / 20 |
+| 6 | 31 | 66 | 0.508377314 | 1.976041079 | 7 | 0.005131155 | 0 | -0.248735 / -0.248735 | 20 / 20 |
+| 7 | 159 | 439 | 1.245799303 | 1.014402628 | 444 | 0.014755279 | 1 | -0.247461 / -0.247461 | 20 / 20 |
+| 8 | 237 | 845 | 1.494967699 | 4.651563644 | 843 | 0.082444668 | 4 | -0.243918 / -0.243918 | 20 / 20 |
+| 9 | 425 | 1436 | 1.595991731 | 4.251160622 | 1282 | 0.100294918 | 10 | -0.241320 / -0.241320 | 20 / 20 |
+| 10 | 411 | 1302 | 1.772526622 | 4.653420925 | 1056 | 0.033620209 | 8 | -0.240657 / -0.240657 | 20 / 20 |
+| 11 | 547 | 1944 | 2.092477322 | 4.572396278 | 1585 | 0.096894860 | 13 | -0.237867 / -0.237867 | 20 / 20 |
+| 12 | 558 | 1945 | 2.593549967 | 3.371931553 | 1761 | 0.107947081 | 15 | -0.233631 / -0.233631 | 20 / 20 |
+| 13 | 533 | 1782 | 4.043320179 | 4.658003807 | 1340 | 0.130599111 | 14 | -0.228627 / -0.228627 | 20 / 20 |
+| 14 | 486 | 1850 | 1.724698424 | 4.736943245 | 1340 | 0.090268850 | 9 | -0.224597 / -0.224597 | 20 / 20 |
+
+**xor3d_p500 / `iree-llvm-cpu`** — 14 generation(s) compared in lockstep; first node-key divergence: 9; first float exceedance: 8; wall time 219.993 s.
+
+*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
+
+| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 0 | 0 | 0.000000477 | 0.000000298 | 0 | 0.000000060 | 0 | -0.251171 / -0.251171 | 1 / 1 |
+| 2 | 0 | 0 | 0.000000238 | 0.000000358 | 0 | 0.000000060 | 0 | -0.250194 / -0.250194 | 1 / 1 |
+| 3 | 0 | 0 | 0.000000238 | 0.000000358 | 0 | 0.000000060 | 0 | -0.250011 / -0.250011 | 3 / 3 |
+| 4 | 0 | 0 | 0.000000209 | 0.000000343 | 0 | 0.000000089 | 0 | -0.250004 / -0.250004 | 3 / 3 |
+| 5 | 0 | 0 | 0.000000238 | 0.000000313 | 0 | 0.000000060 | 0 | -0.250001 / -0.250001 | 20 / 20 |
+| 6 | 0 | 0 | 0.000000238 | 0.000000343 | 0 | 0.000000060 | 0 | -0.250000 / -0.250000 | 20 / 20 |
+| 7 | 0 | 0 | 0.000000253 | 0.000000328 | 0 | 0.000000030 | 0 | -0.250000 / -0.250000 | 20 / 20 |
+| 8 | 0 | 0 | 0.272031397 | 0.057659566 | 0 | 0.000539750 | 0 | -0.249999 / -0.249999 | 20 / 20 |
+| 9 | 85 | 250 | 2.416074753 | 1.378281713 | 103 | 0.002465039 | 0 | -0.249980 / -0.249980 | 20 / 20 |
+| 10 | 450 | 1679 | 2.131389618 | 3.445238590 | 1607 | 0.128810614 | 13 | -0.249943 / -0.249943 | 20 / 20 |
+| 11 | 702 | 2619 | 3.213420391 | 3.445238590 | 2385 | 0.083280176 | 22 | -0.249839 / -0.249839 | 20 / 20 |
+| 12 | 788 | 2957 | 3.996948242 | 3.178690195 | 2214 | 0.112219185 | 21 | -0.249462 / -0.249462 | 20 / 20 |
+| 13 | 742 | 2850 | 3.996948242 | 4.114693642 | 2168 | 0.098949313 | 29 | -0.249007 / -0.249007 | 20 / 20 |
+| 14 | 879 | 3273 | 4.208442688 | 3.649823666 | 2422 | 0.060001105 | 18 | -0.247870 / -0.247267 | 20 / 20 |
+
 ## Blocked rows
 
 The full traceback of every row below stays in the record; the cell prints its last non-empty line.
@@ -100,7 +167,7 @@ The full traceback of every row below stays in the record; the cell prints its l
 
 ## Provenance of this block
 
-This block is rendered from `benchmarks/results/gpu_2026-11-05.json`: 9 record(s), 6 ok and 3 error, measured in the session 2026-11-05T10:30:37+00:00 – 2026-11-05T10:38:30+00:00 (UTC) at git `d63b101452fb` (clean — generated report artifacts are not counted).
+This block is rendered from `benchmarks/results/gpu_2026-11-05.json`: 9 record(s), 6 ok and 3 error, measured in the session 2026-11-05T11:14:24+00:00 – 2026-11-05T11:30:03+00:00 (UTC) at git `2d86a89ffd56` (clean — generated report artifacts are not counted).
 `benchmarks/results/gpu_2026-11-05.json` is committed evidence (it is in the re-include list of `benchmarks/results/.gitignore`), so every cell above is traceable to the committed record.
 Nothing here is a statement about HEAD: every number belongs to that record and to the tree its fingerprint names.
 <!-- END MEASURED (gpu_measure.py) -->
