@@ -6,7 +6,8 @@ Every assertion is a structural invariant on a hand-written population — a con
 The oracles are formulas re-derived from the documentation (numpy loops and closed forms), never a second copy of the kernel's gather/mask data movement.
 The suite exists because these steps are the only ones rewritten from a data-dependent `evoxc.while_loop` into fixed-length `evoxc.scan`s: a mask that writes one slot too many, a sort tie-order or a residual correction changes every seeded run while the forward pass still looks correct.
 Comparison against the pre-rewrite operator is `../../parity`'s job, not this directory's.
-The package surface is pinned too: `test_exports.py` checks that every documented `tensorneat.algorithm.*` spelling resolves to the class its defining submodule exposes and is listed in `__all__`.
+The package surface is pinned too: `test_exports.py` checks that `__all__` is exactly the documented set, that every entry is a callable defined inside the package, and that each documented `tensorneat.algorithm.*` spelling resolves to the class its defining submodule exposes.
+The distance seam is pinned by `test_distance_dense.py`: the gated and dense `speciate` paths must produce one generation bit for bit, and the dense branch must be the branch a forced gate actually reaches.
 
 ## Layout and counts
 `test_spawn.py` (69) — both allocators and the two spawn building blocks.
@@ -35,6 +36,7 @@ Module-scope imports of `tensorneat`, `numpy` and `support.*` are the convention
 `expected_block_layout` (a local copy lives in `test_parent_selection.py`) uses the implementation's authoritative rule: `loc(p)` is the **last** `i` with `spawn[i] > 0` and `E[i] <= p`, and `idx_in_block(p) = p - E[loc(p)]`; the *count* of qualifying blocks is wrong whenever a live zero-spawn species sits mid-table (`[3,0,5,0]` is the regression).
 The residual lands on the first **live** slot (slot `0` only after the descending sort), so fixtures keep slot `0` live; the residual may also be negative when the `min_species_size` floor overflows the budget.
 `assign_by_hand` re-derives both speciation scans with Python loops over a controlled `(P, P)` distance table keyed by each genome's identity, so the threshold/steal/`argmin` cases are testable without the real compatibility metric.
+`test_distance_dense.py`'s `SpeciationCase` writes the whole `(P + S, P)` distance table by hand, row `r` belonging to the genome tagged `r` (population rows `0..P-1`, initial centre rows `P..P+S-1`); a fake `distance_fn` serves it through `matrix` (the initial centre rows, for the dense scan 1) and through `__call__` (a gather by the centre's gene tag, for scan 2). The expected `idx2species`, keys, `member_count`, centre-row identity and created-slot bookkeeping are derived from the documented scan rules, so the oracle never runs a second kernel.
 `stagnation_reference` and `sanitize_reference` are the documented closed forms.
 The father-wins-tie rule is pinned by *reproducing* the draw: the test runs the documented `evoxc.random.randint(key, (S,2,P), 0, survive)` plus `flat_gather` in its own one-op graph, then asserts `winner` is the father and `loser` the mother on an all-tied table.
 
