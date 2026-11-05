@@ -524,7 +524,11 @@ def flat_scatter_prepared(x, flat_idx, updates):
         ``flat_idx`` emit two scatters sharing one index value, which
         ``iree-compile`` rejects (see the module docstring). Two payloads that
         write the same cells go through one call on a buffer wide enough to
-        hold both (``tensorization._window_pair`` is the worked example).
+        hold both — and where the cells are cheap to *read* instead of write,
+        a gather is the better formulation: ``evoxc`` lowers ``scatter`` to one
+        workgroup of one thread on ROCm (~16-21 ns per updated cell), while
+        ``gather`` is parallel (``tensorization.incoming_table`` is the worked
+        example of replacing a write with a read).
     """
     pop_size, row_len = _flat_shape(x)
     out = evoxc.scatter(

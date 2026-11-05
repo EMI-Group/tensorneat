@@ -43,7 +43,6 @@ from .tools import (
     _scalar_constant,
     flat_gather_prepared,
     flat_scatter,
-    flat_scatter_prepared,
     masked_flat_scatter,
     prepare_flat_index,
     to_numpy,
@@ -246,9 +245,10 @@ def derive_schedule(
     Notes:
         One helper per step, each individually testable: :func:`key_slot_table`,
         :func:`slot_lookup` (an unmatched endpoint is ``I_INF`` and invalidates the
-        row), :func:`edge_order` (in-edge rank and the ``cumsum``-free per-node
-        prefix count from **one** stable sort), :func:`incoming_table` (``col = rank
-        - start[dst]``, after which ``in_valid`` is free) and :func:`node_levels`.
+        row), :func:`edge_order` (the stable entry order and the ``cumsum``-free
+        per-node in-degree prefix from **one** stable sort), :func:`incoming_table`
+        (the ``(P, N, K)`` window, gathered from that order, after which ``in_valid``
+        is free) and :func:`node_levels`.
         A key outside ``[0, key_span)`` and an input/output key no node holds cannot
         raise in-graph, so both surface as ``I_INF`` slots (a miss): the host that
         owns the payload refuses such a payload, this kernel reports, never guesses.
@@ -283,9 +283,9 @@ def derive_schedule(
     )
     input_slot = _slot_of(table, _row_broadcast(input_keys, pop_size), key_span)
     output_slot = _slot_of(table, _row_broadcast(output_keys, pop_size), key_span)
-    rank, cc = edge_order(dst, edge_valid, max_nodes, max_conns)
+    order, cc = edge_order(dst, edge_valid, max_nodes, max_conns)
     in_conn, in_src, edge_overflow = incoming_table(
-        rank, cc, dst, src, edge_valid, max_nodes, max_in_degree
+        order, cc, src, max_nodes, max_in_degree
     )
     in_valid = enp.not_equal(in_conn, _iinf_like(in_conn))
     node_level = node_levels(
@@ -379,7 +379,7 @@ def _slot_of(table, keys, key_span):
 
 
 def edge_order(dst, edge_valid, max_nodes, max_conns):
-    """In-edge rank of every connection row plus per-node in-degree prefixes.
+    """Stable entry order of the ``C + N`` combined entries plus in-degree prefixes.
 
     Args:
         dst: ``(P, C)`` ``int32`` destination slots; ``I_INF`` where the row is
@@ -387,22 +387,32 @@ def edge_order(dst, edge_valid, max_nodes, max_conns):
         max_nodes (int): ``N``; max_conns (int): ``C``.
 
     Returns:
-        tuple: ``(rank, cc)``. ``rank`` ``(P, C)`` ``int32`` is the number of valid
-        rows before row ``c`` in ``(dst, connection index)`` order (``I_INF`` on an
-        invalid row); ``cc`` ``(P, N)`` ``int32`` counts the valid rows whose
-        destination slot is ``<= i``, so node ``i``'s in-edge group starts at
-        ``cc[i - 1]`` (``0`` for ``i == 0``) and an edge's in-group column is
-        ``rank - start[dst]``.
+        tuple: ``(order, cc)``. ``order`` ``(P, C + N)`` ``int32`` is the stable
+        ``argsort`` **output** — position -> entry id, where entry ``c < C`` is
+        connection row ``c`` and entry ``C + i`` is the node slot ``i`` (invalid rows
+        sort last). ``cc`` ``(P, N)`` ``int32`` counts the valid rows whose
+        destination slot is ``<= i``, so ``inv[C + i] = cc[i] + i`` and node ``i``'s
+        in-edge group occupies sorted positions ``cc[i - 1] + i`` through ``cc[i] +
+        i - 1`` (``count = cc[i] - cc[i - 1]``) — the position range
+        :func:`incoming_table` gathers its window over.
 
     Notes:
         **One** stable ``argsort`` over the ``C + N`` combined entries — edge rows
-        keyed ``2 * dst``, node slots keyed ``2 * slot + 1`` — yields both answers
-        from its inverse ``inv``: ``rank[c] = inv[c] - dst[c]`` (exactly ``dst[c]``
-        node entries sort below an edge at slot ``dst[c]``, ``stable=True`` keeping
-        connection order inside a group) and ``cc[i] = inv[C + i] - i``. Keys stay in
-        ``[0, 2 * N + 2]`` (an edge key precedes its own node key, an invalid row is
-        keyed past the last one), so :func:`_narrow_int` picks a radix-sortable
-        carrier: ``int8`` for ``N <= 62``, ``int16`` for ``N <= 16382``, else ``int32``.
+        keyed ``2 * dst``, node slots keyed ``2 * slot + 1`` — answers both halves:
+        the returned ``order`` carries the connection ids in ``(dst, connection
+        index)`` order, and its inverse ``inv`` (one scatter, the ``cumsum``-free way
+        to turn a permutation into per-node prefixes) gives ``cc[i] = inv[C + i] -
+        i``, because exactly ``cc[i]`` valid edges and ``i`` node entries sort below
+        node entry ``C + i``. ``stable=True`` keeps connection order inside a
+        destination group; keys stay in ``[0, 2 * N + 2]`` (an edge key precedes its
+        own node key, an invalid row is keyed past the last one), so
+        :func:`_narrow_int` picks a radix-sortable carrier: ``int8`` for ``N <=
+        62``, ``int16`` for ``N <= 16382``, else ``int32``.
+
+        The ``int32`` permutation is cast **once** and returned as ``order``: it
+        feeds the inverse scatter and the ``order``/``src`` gathers of
+        :func:`incoming_table`, which is what makes the window a gather instead of
+        a scatter (see that function's ``Notes``).
     """
     max_nodes = _positive_static(max_nodes, "max_nodes")
     max_conns = _positive_static(max_conns, "max_conns")
@@ -423,8 +433,11 @@ def edge_order(dst, edge_valid, max_nodes, max_conns):
         evoxc.multiply(evoxc.cast(slots, key_dtype), two),
         _scalar_constant(1, key_dtype),
     )
-    order = evoxc.argsort(
-        evoxc.concatenate([edge_key, node_key], axis=1), axis=-1, stable=True
+    order = evoxc.cast(
+        evoxc.argsort(
+            evoxc.concatenate([edge_key, node_key], axis=1), axis=-1, stable=True
+        ),
+        evoxc.int32,
     )
     total = max_conns + max_nodes
     positions = _node_slots(pop_size, total)
@@ -432,53 +445,57 @@ def edge_order(dst, edge_valid, max_nodes, max_conns):
     # the inverse is written exactly once and the base can be plain zeros.
     inverse = flat_scatter(
         enp.zeros((pop_size, total), dtype=evoxc.int32),
-        evoxc.cast(order, evoxc.int32),
+        order,
         positions,
         trusted=True,
-    )
-    safe_dst = evoxc.select(edge_valid, dst, zero)
-    rank = evoxc.select(
-        edge_valid,
-        evoxc.subtract(evoxc.slice(inverse, (0, 0), (pop_size, max_conns)), safe_dst),
-        _iinf_like(dst),
     )
     cc = evoxc.subtract(
         evoxc.slice(inverse, (0, max_conns), (pop_size, max_nodes)), slots
     )
-    return rank, cc
+    return order, cc
 
 
-def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
-    """Pack each node's incoming edges into the static ``(P, N, K)`` table.
+def incoming_table(order, cc, src, max_nodes, max_in_degree):
+    """Gather each node's incoming edges into the static ``(P, N, K)`` table.
 
     Args:
-        rank: ``(P, C)`` ``int32`` in-edge rank from :func:`edge_order``; cc:
+        order: ``(P, C + N)`` ``int32`` stable entry order from :func:`edge_order`
+            (position -> entry id; entries ``< C`` are connection rows); cc:
             ``(P, N)`` ``int32`` cumulative in-degree from the same call.
-        dst: ``(P, C)`` ``int32`` destination slots; src: the source slots;
-            edge_valid: ``(P, C)`` ``bool``.
+        src: ``(P, C)`` ``int32`` source slots of the connection rows.
         max_nodes (int): ``N``; max_in_degree (int): ``K``.
 
     Returns:
         tuple: ``(in_conn, in_src, edge_overflow)`` — ``(P, N, K)`` ``int32``
         connection row indices, ``(P, N, K)`` ``int32`` source slots (``I_INF`` in
         the same positions) and ``(P,)`` ``int32`` counts of valid edges whose
-        column reached ``K``.
+        in-group rank reached ``K``.
 
     Notes:
-        ``start[i] = cc[i - 1]`` (``0`` for ``i == 0``) and ``col = rank -
-        start[dst]``; the flat scatter target ``dst * K + col`` lands in a ``(P, N *
-        K + 1)`` buffer whose trailing cell is the dump slot, so edges with ``col
-        >= K`` or an invalid row go there instead of raising. Both tables are
-        written by **one** scatter over a doubled buffer (:func:`_window_pair`),
-        because two scatters sharing one index block do not compile on IREE.
-        ``edge_overflow`` is a ``reduce_sum`` of ``(col >= K) & edge_valid``:
-        data, not an exception.
+        ``start[i] = cc[i - 1]`` (``0`` for ``i == 0``) and ``deg[i] = cc[i] -
+        start[i]``, so node ``i``'s edges sit at sorted positions ``start[i] + i + k``
+        for ``k < deg[i]`` (see :func:`edge_order`); the window is therefore one
+        ``(P, N, K)`` index block ``start[i] + i + k`` and two gathers, with ``live =
+        k < deg`` masking the padding to ``I_INF`` and ``in_src`` a gather of ``src``
+        at the ``in_conn`` row ids. ``edge_overflow`` is ``reduce_sum(max(deg - K,
+        0))``: data, not an exception.
+
+        ``trusted=True`` is legitimate on both blocks: a live cell's index is
+        ``start[i] + i + k <= inv[C + i] - 1 <= C + N - 1``, i.e. inside ``order`` by
+        construction, and the ``in_conn`` row ids are connection rows of ``src``.
+
+        Why gathers and not a scatter: on ROCm ``evoxc`` lowers a scatter to a
+        single-workgroup, single-thread kernel (an inherently serialized update),
+        measured at ~16-21 ns per update cell — ~1.6 ms of a 42.6 ms ``xor_p500``
+        generation at 100 000 cells — while ``gather`` lowers to a parallel
+        multi-workgroup kernel. The values are identical (``order`` is the same
+        permutation the scatter used to invert into ``dst * K + col`` cells), so
+        ``Transformed`` is unchanged and no forward-path consumer moves.
     """
     max_nodes = _positive_static(max_nodes, "max_nodes")
     max_in_degree = _positive_static(max_in_degree, "max_in_degree")
-    pop_size, max_conns = dst.shape
-    pop_size, max_conns = int(pop_size), int(max_conns)
-    zero = enp.zeros((pop_size, max_conns), dtype=evoxc.int32)
+    pop_size = int(order.shape[0])
+    slots = _node_slots(pop_size, max_nodes)
     if max_nodes > 1:
         start = evoxc.concatenate(
             [
@@ -489,96 +506,48 @@ def incoming_table(rank, cc, dst, src, edge_valid, max_nodes, max_in_degree):
         )
     else:
         start = enp.zeros((pop_size, 1), dtype=evoxc.int32)
-    safe_dst = evoxc.select(edge_valid, dst, zero)
-    column = evoxc.subtract(
-        rank,
+    degree = evoxc.subtract(cc, start)
+    # ``(1, 1, K)`` offsets broadcast against ``(P, N, 1)`` starts and degrees, so
+    # neither the index block nor the live mask needs a population-sized constant.
+    # The two sentinels are built once and reused: evoxc has no constant CSE.
+    offsets = evoxc.reshape(
+        enp.arange(0, max_in_degree, dtype=evoxc.int32), (1, 1, max_in_degree)
+    )
+    zero, iinf = _scalar_constant(0, evoxc.int32), _scalar_constant(I_INF, evoxc.int32)
+    window = (pop_size, max_nodes, max_in_degree)
+    index = evoxc.add(
+        evoxc.reshape(evoxc.add(start, slots), (pop_size, max_nodes, 1)), offsets
+    )
+    live = enp.less(offsets, evoxc.reshape(degree, (pop_size, max_nodes, 1)))
+    in_conn = evoxc.select(
+        live,
         flat_gather_prepared(
-            start, prepare_flat_index(start, safe_dst, trusted=True), safe_dst.shape
+            order, prepare_flat_index(order, index, live, 0, trusted=True), window
         ),
+        iinf,
     )
-    kept_column = evoxc.select(edge_valid, column, zero)
-    in_window = enp.logical_and(
-        enp.greater_equal(kept_column, 0), enp.less(kept_column, max_in_degree)
-    )
-    keep = enp.logical_and(edge_valid, in_window)
-    target = evoxc.add(
-        evoxc.multiply(safe_dst, _scalar_constant(max_in_degree, evoxc.int32)),
-        evoxc.select(keep, kept_column, zero),
-    )
-    in_conn, in_src = _window_pair(
-        target,
-        keep,
-        (_node_slots(pop_size, max_conns), src),
-        pop_size,
-        max_nodes,
-        max_in_degree,
+    in_src = evoxc.select(
+        live,
+        flat_gather_prepared(
+            src,
+            prepare_flat_index(
+                src, evoxc.select(live, in_conn, zero), live, 0, trusted=True
+            ),
+            window,
+        ),
+        iinf,
     )
     edge_overflow = evoxc.cast(
         evoxc.reduce_sum(
-            evoxc.cast(
-                enp.logical_and(edge_valid, enp.greater_equal(kept_column, max_in_degree)),
-                evoxc.int32,
+            evoxc.maximum(
+                evoxc.subtract(degree, _scalar_constant(max_in_degree, evoxc.int32)),
+                zero,
             ),
             axes=(1,),
         ),
         evoxc.int32,
     )
     return in_conn, in_src, edge_overflow
-
-
-def _window_pair(target, keep, updates, pop_size, max_nodes, max_in_degree):
-    """Scatter both window payloads into their ``(P, N, K)`` tables in **one** write.
-
-    Args:
-        target: ``(P, C)`` ``int32`` cell of every connection row,
-            ``dst * K + col``; provably inside ``[0, N * K)``.
-        keep: ``(P, C)`` ``bool`` — row lands in the window (``False`` routes it
-            to a dump cell instead).
-        updates: pair of ``(P, C)`` ``int32`` payloads, scattered through the
-            *same* cell block (connection row ids and source slots).
-        pop_size (int): ``P``; max_nodes (int): ``N``; max_in_degree (int): ``K``.
-
-    Returns:
-        tuple: two ``(P, N, K)`` ``int32`` tables, ``I_INF`` where no edge landed.
-
-    Notes:
-        **One scatter, never two.** Both payloads write the same cells, so a
-        per-payload scatter would reuse one index block for two ``scatter`` ops,
-        and that is not portable: IREE's StableHLO→Linalg conversion collapses a
-        rank-2 ``(K, 1)`` scatter index to rank 1 through a materialization it
-        cannot resolve while a second op still consumes the rank-2 value, and
-        ``iree-compile`` then fails with ``failed to legalize unresolved
-        materialization from ('tensor<Kx1xi32>') to ('tensor<Kxi32>')``.
-        The two payloads therefore share one ``(P, 2 * (N * K + 1))`` buffer —
-        the second half offset by one window-span — and one index block, so a
-        single scatter writes both tables; the cost is also one scatter instead
-        of two.
-        Every dropped write (``keep == False``, or ``col >= K``) goes to the
-        last cell of the second half, which is that half's dump column and is
-        sliced off with the rest of it.
-    """
-    width = max_nodes * max_in_degree
-    span = width + 1
-    first, second = updates
-    columns = evoxc.concatenate(
-        [target, evoxc.add(target, _scalar_constant(span, evoxc.int32))], axis=1
-    )
-    writes = evoxc.concatenate([keep, keep], axis=1)
-    block = prepare_flat_index(
-        (pop_size, 2 * span), columns, writes, 2 * span - 1, trusted=True
-    )
-    buffer = flat_scatter_prepared(
-        enp.full((pop_size, 2 * span), I_INF, dtype=evoxc.int32),
-        block,
-        evoxc.concatenate([first, second], axis=1),
-    )
-    return tuple(
-        evoxc.reshape(
-            evoxc.slice(buffer, (0, start), (pop_size, width)),
-            (pop_size, max_nodes, max_in_degree),
-        )
-        for start in (0, span)
-    )
 
 
 def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=None):
