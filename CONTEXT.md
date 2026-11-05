@@ -59,7 +59,7 @@ Every allocated node and connection key stays inside `key_span`: a key outside t
 |---|---|
 | `./src/tensorneat` | The package: pipeline (the single compile site), host payload helpers, genome/algorithm/problem/common subtrees. |
 | `./test` | Pytest suites: unit, parity vs the frozen legacy library, integration, compiled backends, release gates. |
-| `./benchmarks` | Old-vs-new harness + frozen JAX oracle; `RESULTS.md`/`THREADS.md`/`iree.md` are generated, `BACKENDS.md` is hand-written, `PERF_NUMPY.md` is the hand-measured op-count pass. |
+| `./benchmarks` | Old-vs-new harness + frozen JAX oracle; `RESULTS.md`/`THREADS.md`/`iree.md` are generated, `BACKENDS.md` is hand-written, `PERF_NUMPY.md` is the hand-measured op-count pass, `results/xor3d_quality_2026-11-04.md` is the post-fix search-quality record. |
 | `./examples` | Runnable scripts per problem family; six of twelve cross their fitness target inside the shipped demo budget (all twelve exit 0). |
 | `./docs` | Sphinx configuration, autodoc stubs (one per public module) and the built-site rules. |
 | `./tutorials` | `quickstart.ipynb` for the current API (`legacy_jax/` keeps the pre-rewrite notebooks, concepts only). |
