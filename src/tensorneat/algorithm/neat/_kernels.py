@@ -5,8 +5,8 @@ This private module holds the parts of the species algebra that are written
 
 * the graph-time constant/index helpers (``enp`` creation ops need a live trace,
   so nothing here may be precomputed on the host);
-* the shared building blocks ``sort_desc_legacy``, ``prefix_sum_exclusive``,
-  ``membership`` and ``scatter_row``;
+* the shared building blocks ``sort_desc_legacy``, ``prefix_sum_exclusive`` and
+  ``membership``;
 * spawn allocation (:func:`spawn_numbers_by_rank` / ``_by_fitness`` on top of
   :func:`spawn_from_target`), block flattening (:func:`block_layout`), parent
   pairing (:func:`pair_parents`);
@@ -105,25 +105,25 @@ def static_f32(values: Any) -> Any:
     return evoxc.constant(evoxc.from_numpy(array))
 
 
-def reversed_index(length: int) -> Any:
-    """``(length,)`` ``int32`` index vector ``[length - 1, ..., 1, 0]``.
-
-    The exportable replacement for ``evoxc.flip(x, 0)``, which the StableHLO
-    v1 exporter does not map: ``gather(x, reversed_index(n), axis=0)`` is the
-    same reversal, since a single-axis gather with static indices is
-    supported.
-    """
-    return static_i32(np.arange(length - 1, -1, -1))
-
-
 def scalar_f32(value: Any) -> Any:
-    """Normalise a traced value to a rank-0 ``float32``.
+    """Normalise a traced value to a rank-0 ``float32``, adding no op when it is.
 
     A 0-d tensor handed to a graph as an *input* can arrive with shape ``(1,)``,
-    so a scalar that is later broadcast against ``(S,)`` fields is reshaped here
-    instead of at every use site.
+    and a generation counter may travel in another float dtype, so a scalar that
+    is later broadcast against ``(S,)`` fields is normalised here instead of at
+    every use site -- but only as far as it needs to be: the ``cast`` is emitted
+    only when the static dtype differs and the ``reshape`` only when the static
+    rank differs, so a 0-d ``float32`` value (``state.generation``, which
+    :meth:`NEAT.setup` creates that way) costs zero dispatches.
+
+    Both branches hold the same value bit for bit: the static check is a Python
+    ``if`` over the trace-time dtype/shape, never a predicate on tensor contents.
     """
-    return evoxc.reshape(evoxc.cast(evoxc.reshape(value, (1,)), evoxc.float32), ())
+    if value.dtype != evoxc.float32:
+        value = evoxc.cast(value, evoxc.float32)
+    if tuple(value.shape) != ():
+        value = evoxc.reshape(value, ())
+    return value
 
 
 def payload_like(
@@ -176,28 +176,6 @@ def prefix_sum_exclusive(values: Any) -> Any:
     length = values.shape[0]
     triangular = static_f32(np.tril(np.ones((length, length), dtype=np.float32), -1))
     return evoxc.reshape(evoxc.dot(triangular, enp.expand_dims(values, 1)), (length,))
-
-
-def scatter_row(table: Any, slot: Any, update: Any) -> Any:
-    """Replace row ``slot`` of a ``(S, ...)`` table with ``update``.
-
-    ``evoxc.scatter`` writes the cells numpy's ``x[slot] = update`` writes, but
-    the StableHLO v1 exporter only supports ``scatter`` on a rank-1 ``axis=0``
-    operand and on rank-2 row/column writes -- a rank-3 gene table
-    (``(S, N, NA)`` node attrs, ``(S, E, CK)`` conn keys, ...) is rejected
-    outright.  Flattening the trailing axes into one row length ``R`` turns the
-    same write into a rank-2 ``axis=0`` row scatter, which exports; the
-    reshape round-trip is shape-only, so the written cells are identical.
-    """
-    shape = tuple(table.shape)
-    if len(shape) == 2:
-        return evoxc.scatter(table, slot, update)
-    row_len = 1
-    for dim in shape[1:]:
-        row_len *= dim
-    flat = evoxc.reshape(table, (shape[0], row_len))
-    written = evoxc.scatter(flat, slot, evoxc.reshape(update, (row_len,)))
-    return evoxc.reshape(written, shape)
 
 
 def first_centre_table(species_size: int, row: Any, fill: Any, dtype: Any) -> Any:
@@ -356,7 +334,7 @@ def spawn_numbers_by_fitness(
 # --------------------------------------------------------------------------- #
 
 
-def block_layout(spawn_number: Any, pop_size: int, species_size: int) -> Any:
+def block_layout(spawn_number: Any, pop_size: int) -> Any:
     """Map each population slot to its species block: ``(loc, idx_in_block)``.
 
     With the exclusive prefix sum ``E`` of ``spawn_number`` and
@@ -376,30 +354,28 @@ def block_layout(spawn_number: Any, pop_size: int, species_size: int) -> Any:
     residual correction making the total exactly ``pop_size``), and
     :func:`pair_parents` is this kernel's only production caller.
 
-    ``loc`` must be the *last* qualifying block rather than the number of
-    qualifying blocks: zero-spawn species can sit in the middle of the table
-    (after the sort only dead slots are guaranteed to trail), so a count would
-    point at the wrong block -- hence the reversed ``argmax`` (``argmax``
-    returns the first maximum), with the reversal spelled as a static-index
-    ``gather`` (:func:`reversed_index`) because ``evoxc.flip`` is a deferred op
-    on the StableHLO exporter.
+    ``loc`` is the *last* qualifying block rather than the number of qualifying
+    blocks: zero-spawn species can sit in the middle of the table (after the sort
+    only dead slots are guaranteed to trail).  The two forms coincide exactly
+    because ``spawn >= 0`` makes ``E`` its running sum, hence monotone
+    non-decreasing -- so the indices ``i`` with ``E[i] <= p`` are a *prefix* of
+    ``[0, S)``, and "the count of them minus one" IS the last one.  The count is
+    spelled ``sum(E[:, None] <= p, axis=0) - 1``: one comparison over the
+    ``(S, P)`` mask plus one reduction, with no reversal permutation, no
+    ``argmax`` and no ``reverse-index`` constant to bake.  The reduction needs the
+    trailing ``cast`` because an integer ``sum`` accumulates in the platform
+    integer (``int64``) while ``loc`` is an ``int32`` gather index.
     """
-    spawn = evoxc.cast(spawn_number, evoxc.int32)
-    exclusive = prefix_sum_exclusive(evoxc.cast(spawn, evoxc.float32))
+    spawn = evoxc.cast(spawn_number, evoxc.float32)
+    exclusive = prefix_sum_exclusive(spawn)
     slots = iota_f32(pop_size)
     mask = evoxc.less_equal(
         enp.expand_dims(exclusive, 1), enp.expand_dims(slots, 0)
     )
-    reversed_loc = evoxc.cast(
-        evoxc.argmax(
-            evoxc.gather(
-                evoxc.cast(mask, evoxc.int32), reversed_index(species_size), axis=0
-            ),
-            axis=0,
-        ),
+    loc = evoxc.cast(
+        evoxc.subtract(evoxc.sum(evoxc.cast(mask, evoxc.int32), axes=0), int_const(1)),
         evoxc.int32,
     )
-    loc = evoxc.subtract(int_const(species_size - 1), reversed_loc)
     idx_in_block = evoxc.cast(
         evoxc.subtract(slots, evoxc.gather(exclusive, loc, axis=0)), evoxc.int32
     )
@@ -448,12 +424,22 @@ def pair_parents(
     a sanitised ``-inf`` genome.
     """
     members = membership(species_keys, idx2species)
-    masked = evoxc.select(members, enp.expand_dims(fitness, 0), neg_inf())
+    # One graph constant per distinct scalar, built once and closed over: they are
+    # trace-time constants, so a shared binding is one ``constant`` op instead of
+    # one per use site.
+    minus_inf = neg_inf()
+    zero_f32 = const(0.0)
+    one_f32 = const(1.0)
+    pop_bound = const(float(pop_size))
+    pop_i32 = int_const(pop_size)
+    zero_i32 = int_const(0)
+    one_i32 = int_const(1)
+    masked = evoxc.select(members, enp.expand_dims(fitness, 0), minus_inf)
     ranking = evoxc.cast(sort_desc_legacy(masked, axis=1), evoxc.int32)
-    previous = evoxc.select(evoxc.isnan(member_count), const(0.0), member_count)
+    previous = evoxc.select(evoxc.isnan(member_count), zero_f32, member_count)
     floored = evoxc.floor(evoxc.multiply(previous, float(survival_threshold)))
-    ceiling = evoxc.maximum(evoxc.minimum(previous, const(float(pop_size))), const(1.0))
-    survive = evoxc.cast(evoxc.clamp(floored, const(1.0), ceiling), evoxc.int32)
+    ceiling = evoxc.maximum(evoxc.minimum(previous, pop_bound), one_f32)
+    survive = evoxc.cast(evoxc.clamp(floored, one_f32, ceiling), evoxc.int32)
     draws = evoxc.random.randint(
         selection_key,
         (species_size, 2, pop_size),
@@ -463,7 +449,11 @@ def pair_parents(
     )
     # ``evoxc.gather`` replaces its axis instead of indexing per row, so the
     # per-row draw must go through the flattened ``common.tools.flat_gather``.
-    parent = flat_gather(ranking, draws)
+    # ``trusted``: a draw is in ``[0, survive)`` and ``survive`` is clamped to
+    # ``[1, pop_size]`` (its ceiling is ``max(min(member_count, pop_size), 1)`` and
+    # ``floor(threshold * member_count) <= member_count`` for ``threshold <= 1``),
+    # so every index is inside the ranking's row length ``pop_size`` by construction.
+    parent = flat_gather(ranking, draws, trusted=True)
     width = species_size * pop_size
     father = evoxc.reshape(evoxc.gather(parent, 0, axis=1), (width,))
     mother = evoxc.reshape(evoxc.gather(parent, 1, axis=1), (width,))
@@ -473,20 +463,27 @@ def pair_parents(
     winner_species = evoxc.select(father_wins, father, mother)
     loser_species = evoxc.select(father_wins, mother, father)
 
-    loc, idx_in_block = block_layout(spawn_number, pop_size, species_size)
-    flat_slot = evoxc.add(evoxc.multiply(loc, int_const(pop_size)), idx_in_block)
+    loc, idx_in_block = block_layout(spawn_number, pop_size)
+    flat_slot = evoxc.add(evoxc.multiply(loc, pop_i32), idx_in_block)
     winner = evoxc.gather(winner_species, flat_slot, axis=0)
     loser = evoxc.gather(loser_species, flat_slot, axis=0)
     elite_mask = evoxc.less(idx_in_block, genome_elitism)
     # Elite slot ``c`` pins rank ``min(c, live_members - 1)``: the ranking is descending
     # and every finite fitness beats the ``-inf`` a sanitised genome maps to, so the
     # finite members head the row and the clamp stays on a live member.
-    alive = evoxc.cast(evoxc.greater(fitness, neg_inf()), evoxc.float32)
-    live = evoxc.sum(evoxc.select(members, enp.expand_dims(alive, 0), const(0.0)), axes=1)
-    cap = evoxc.maximum(evoxc.subtract(evoxc.cast(live, evoxc.int32), int_const(1)), int_const(0))
-    ranks = enp.reshape(enp.arange(pop_size, dtype=evoxc.int32), (1, pop_size))
+    alive = evoxc.cast(evoxc.greater(fitness, minus_inf), evoxc.float32)
+    live = evoxc.sum(evoxc.select(members, enp.expand_dims(alive, 0), zero_f32), axes=1)
+    cap = evoxc.maximum(evoxc.subtract(evoxc.cast(live, evoxc.int32), one_i32), zero_i32)
+    ranks = enp.reshape(iota_i32(pop_size), (1, pop_size))
     block_rank = evoxc.minimum(ranks, enp.expand_dims(cap, 1))
-    pinned = evoxc.gather(evoxc.reshape(flat_gather(ranking, block_rank), (width,)), flat_slot, axis=0)
+    # ``trusted``: ``block_rank = min(rank, cap)`` with ``rank`` in ``[0, P)`` and
+    # ``cap`` in ``[0, P - 1]`` (it is a member count minus one), so it never
+    # leaves the ranking's row length ``pop_size`` either.
+    pinned = evoxc.gather(
+        evoxc.reshape(flat_gather(ranking, block_rank, trusted=True), (width,)),
+        flat_slot,
+        axis=0,
+    )
     return (
         evoxc.select(elite_mask, pinned, winner),
         evoxc.select(elite_mask, pinned, loser),

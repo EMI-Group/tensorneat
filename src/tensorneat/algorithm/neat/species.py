@@ -632,16 +632,20 @@ class SpeciesController(StatefulBaseClass):
             evoxc.logical_and(evoxc.logical_not(improved), stale),
             evoxc.logical_not(exempt),
         )
+        # One ``NaN`` constant for the four dead-slot writes: they are the same
+        # sentinel and every reader either maps it to ``-inf`` or tests it with
+        # ``isnan``, so sharing the value is bit-identical to four copies.
+        dead = _nan()
         return (
             dataclass_replace(
                 species_state,
                 species_keys=evoxc.select(
-                    killed, _nan(), species_state.species_keys
+                    killed, dead, species_state.species_keys
                 ),
-                best_fitness=evoxc.select(killed, _nan(), best_fitness),
-                last_improved=evoxc.select(killed, _nan(), last_improved),
+                best_fitness=evoxc.select(killed, dead, best_fitness),
+                last_improved=evoxc.select(killed, dead, last_improved),
                 member_count=evoxc.select(
-                    killed, _nan(), species_state.member_count
+                    killed, dead, species_state.member_count
                 ),
             ),
             evoxc.select(killed, _neg_inf(), species_fitness),
@@ -837,9 +841,9 @@ class SpeciesController(StatefulBaseClass):
 
         Both are computed without a host loop: the ``(S, P)`` mask
         ``E[i] <= p`` is a broadcast comparison of the sparse
-        block starts against the slot vector, ``loc`` is the index of the last
-        ``True`` in each column (``argmax`` over the mask reversed along the
-        species axis), and ``E[loc(p)]`` is one ``gather``.
+        block starts against the slot vector, ``loc`` is the number of
+        ``True`` entries in each column minus one (count form), and ``E[loc(p)]``
+        is one ``gather``.
 
         Args:
             spawn_number (Tensor): ``(S,)`` int32, summing to ``pop_size``;
@@ -859,10 +863,10 @@ class SpeciesController(StatefulBaseClass):
             The block index has to be the *last* qualifying block, not the
             *number* of qualifying blocks: after the species sort only dead
             slots are guaranteed to trail, so a live species can legitimately
-            receive ``spawn == 0`` in the middle of the table and a count would
-            point at the wrong block.  ``argmax`` returns the first maximum, so
-            the mask is reversed first and the index mapped back with
-            ``S - 1 - argmax``.
+            receive ``spawn == 0`` in the middle of the table.  The count form is
+            still exact because ``spawn >= 0`` makes ``E`` its running sum, hence
+            monotone non-decreasing: the qualifying indices form a prefix of
+            ``[0, S)``, so "count minus one" IS the last one.
             Because ``sum(spawn) == pop_size`` and ``pop_size >= 1``, at least one
             block starts at or before every slot, so ``loc`` stays in
             ``[0, S - 1]``.
@@ -871,7 +875,7 @@ class SpeciesController(StatefulBaseClass):
             behavioural change belongs in ``_kernels.py`` and this wrapper only
             keeps the spawn algebra testable without a graph.
         """
-        return _kernels.block_layout(spawn_number, self.pop_size, self.species_size)
+        return _kernels.block_layout(spawn_number, self.pop_size)
 
     # ----------------------------------------------------------- membership
 
