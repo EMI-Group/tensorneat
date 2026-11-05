@@ -14,10 +14,10 @@ if __name__ == "__main__":
         algorithm=algorithm.NEAT(
             pop_size=300,
             species_size=10,
-            # 0.01 keeps a single parent per species, which on 3-input parity
-            # stays stuck on the linear optimum (loss 0.25) for hundreds of
-            # generations; 0.3 breeds from several parents per species and the
-            # search climbs out of it within the demo budget
+            # 0.01 floors to one parent per species, which does leave the ~0.25
+            # plateau but climbs too slowly to reach the target in 200
+            # generations (loss ~9e-04 at generation 200); 0.3 breeds from
+            # several parents per species and reaches -1e-4 at generation 72
             survival_threshold=0.3,
             genome=genome.RecurrentGenome(
                 num_inputs=3,
