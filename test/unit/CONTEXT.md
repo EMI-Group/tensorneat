@@ -2,35 +2,38 @@
 
 ## Intent
 Prove that every evoxc kernel in `../../src/tensorneat` computes what its docstring promises, on the reference numpy interpreter, with no optional framework imported by the tests themselves.
-Each assertion compares against something independent of the implementation under test: a closed-form value, a plain-numpy oracle, a hand-built payload, or a structural invariant (`sum(spawn) == pop_size`, "no NaN survives `tell`").
+Each assertion compares against something independent of the implementation under test: a closed-form value, a plain-numpy oracle, a hand-built payload, or a structural invariant (`sum(spawn) == pop_size`, "no NaN survives `tell`", a hand-derived substrate geometry).
 This directory is the whole content of the default gate; `./parity` (legacy JAX oracle) and `./integration` (whole `Pipeline`) are the two suites that go beyond it.
 
 ## Counts
-`./common` 155 passed, `./genome` 117, `./algorithm` 148, `./problem` 141, `./benchmarks` 16 — 577 passed and 0 xfailed in the subdirectories, plus `./test_version.py` (2) and `./test_host_payload.py` (12) at this node's root: 591 collected and 591 passing.
-`./genome` dominates the wall clock (one traced executable per graph), then `./problem`, `./algorithm`, `./benchmarks` and `./common`.
-Everything in this node is green: there is no xfail and no skip (the `./benchmarks` fingerprint tests skip only on a box without a `git` binary).
+`./common` 246, `./genome` 154, `./algorithm` 372 (+1 xfailed), `./problem` 367, `./benchmarks` 82 — 1221 passing cases in the subdirectories, plus `./test_version.py` (2) and `./test_host_payload.py` (12) at this node's root: **1235 passed, 1 xfailed, 0 failed, 0 skipped**.
+`pytest -m "not parity and not slow"` from the repo root: **1241 passed, 1 xfailed, 77 deselected** in ~43 s.
+`./algorithm` carries one strict `xfail` (the HyperNEAT read-out defect below); nothing in this node is skipped.
+`./genome` and `./algorithm` dominate the wall clock (one traced executable per graph), then `./problem`, `./common` and `./benchmarks`.
 
 ## How to run
-`python -m pytest test/unit -m "not parity and not slow"` (or plain `pytest` from the repo root) — numpy backend, no optional dependency, `591 passed in ~20 s`.
+`uv run pytest test/unit -o addopts="" -q` from the repo root (plain `pytest` also collects it, but the doubled `-q` from `addopts` hides the summary line) — numpy backend, no optional dependency, **1235 passed, 1 xfailed in ~35 s** after `uv sync --all-extras`.
 `pytest test/unit/<sub> -k <expr>` narrows the same gate while keeping the leak guard active.
-`test/unit/genome` and `test/unit/problem` are also comfortable alone (`~9 s` / `~5 s`, against `~4 s` for `./algorithm`); no module here needs a network, a GPU or parallelism.
+Per node: `./common` 5 s, `./genome` 11 s, `./algorithm` 11 s, `./problem` 6 s, `./benchmarks` 0.4 s; no module here needs a network, a GPU or parallelism.
 
 ## Layout
-`./common` — schedule (`tensorization`) derivation and validation, flat gather/scatter/mutation helpers, ACT/AGG dispatch, host graph walks, `State`.
-`./genome` — gene payloads, forward/recurrent/grad kernels, mutation/crossover/distance invariants, host-only introspection.
-`./algorithm` — NEAT `tell` algebra: speciation, stagnation, spawn allocation, parent selection.
-`./problem` — func-fit losses (`mse`/`rmse`/`mae`/`mape`), the `problem` protocol, and all three RL environments: CartPole, plus Pendulum and MountainCar with an in-file host-numpy oracle each; the RL suites pin pre-transition cost ordering, Pendulum's clip-before-integrate and floor-mod angle wrap, MountainCar's one-time goal bonus under the pre-step alive mask and its idle optimum of exactly `0.0`, individual-major `(P, R)` averaging and NaN poison by arithmetic.
-`./benchmarks` — the benchmark harness fingerprint (`git_report`, porcelain parsing) on a real temporary git repository.
+`./common` (10 modules) — schedule (`tensorization`) derivation/validation and its seams (`acyclic`, `trusted`, every refusal), flat gather/scatter/mutation helpers, ACT/AGG dispatch, host graph walks, `sympy_tools` code generation (`to_python_code`/`to_latex_code` for all 12 ACT and 6 AGG ids), `State` including its copy/deepcopy/pickle round-trips.
+`./genome` (13 modules) — gene payloads, forward/recurrent/grad kernels, the level-order-vs-row-order relabel proof, mutation/crossover/distance invariants, host-only introspection.
+`./algorithm` (11 modules + the `hyperneat_kernel.py` trace harness) — NEAT `tell` algebra (speciation, stagnation, spawn allocation, parent selection), the dense-vs-gated species-distance equivalence, and the whole HyperNEAT subtree: substrate geometry for all four substrates, `HyperNEATNode`/`HyperNEATConn`, the CPPN→weight map, `HyperNEAT`/`HyperNEATFeedForward`, and a pop-4 two-generation end-to-end run.
+`./problem` (8 modules) — func-fit losses (`mse`/`rmse`/`mae`/`mape`), dataset budget and `CustomFuncFit` bounds, the `problem` protocol (`build_options`, backend-honouring `show`), the RL knob validation matrix (`require_finite` and friends), and all three RL environments: CartPole, plus Pendulum and MountainCar with an in-file host-numpy oracle each and hand-derived one-step values at non-zero state.
+`./benchmarks` (6 modules) — the harness fingerprint (`git_report`, porcelain parsing), plus the protocol the benchmarks owner recorded: `aggregate` target/repeat bookkeeping, `report_format.reach` renderings, `speedup_bounds` best/worst, the case table's `gens_to_target` flags, and `--persist-note` on a `tmp_path` copy.
 `./test_version.py` — the package's `__version__` metadata and its `PackageNotFoundError` fallback.
 `./test_host_payload.py` — the `host_payload._one_individual` contract `Pipeline.show` depends on: the one-individual batch passes through, the bare per-individual rows are promoted to it, a `P > 1` payload and a missing (`None`) payload are `common.TensorNEATError` naming both accepted spellings, and every pre-existing malformed-input message (arity, rank-0, impossible rank, population-axis disagreement) is unchanged.
 Every directory here carries `__init__.py` (pytest's prepend import mode names a module by basename, so un-namespaced directories collide with `./parity`/`./integration`).
 
 ## Oracles
 `../support/oracle.py` holds the numpy reference implementations the suites compare against: the schedule derivation, a NaN-aware forward pass, the four func-fit losses, the CartPole Euler rollout.
-`./problem/test_pendulum.py` and `./problem/test_mountaincar.py` keep their own float32 op-for-op and float64 Gym-semantics rollouts in-file, because `../support/oracle.py` sits at its own size budget and the two dynamics differ.
-`../support/functions_ref.py` holds the 12 ACT and 6 AGG reference kernels the dispatch tests loop over.
+`./problem/test_pendulum.py` and `./problem/test_mountaincar.py` keep their own float32 op-for-op and float64 Gym-semantics rollouts in-file, plus a hand-written `_one_step_by_hand` that spells the published transition out in numeric literals at `theta != 0`, so a coefficient typo moves the kernel off a number that never touched the implementation.
+`../support/functions_ref.py` holds the 12 ACT and 6 AGG reference kernels the dispatch tests loop over; `./common/test_sympy_tools.py` additionally `exec`s the generated NumPy against the real graph for every option.
 `../support/payloads.py` builds every `int32`/`float32` gene payload by hand (`node_keys`/`node_attrs`/`conn_keys`/`conn_attrs`, `I_INF`/`NaN` padding) plus the canonical small genomes, so no test draws a topology it could have written.
-A test that needs neither of those compares against a closed form written in the module itself (`np.where(fitness, -inf)`, the sigmoid chain, the species-count algebra).
+`./genome/test_level_order.py` builds an isomorphic relabel whose edges point from a higher row to a lower one, so level-order execution is distinguished from row order.
+`./algorithm/hyperneat_kernel.py` is the HyperNEAT analogue of the shared runner: one helper that traces a single host method (`run_method`) and rebuilds `Transformed`/`SubstrateSchedule`/`GenomeTensors` inside the trace; the substrate oracles are literal arrays hand-computed from the documented row order.
+A test that needs none of those compares against a closed form written in the module itself (`np.where(fitness, -inf)`, the sigmoid chain, the species-count algebra).
 Kernels are built only through `../support/runner.py` (`run_defn`/`run_graph`/`to_numpy`), and `./genome/conftest.py` caches one `evoxc.Executable` per graph and replays it with `evoxc.run` because tracing costs about ten times a run.
 
 ## The optional-framework guard (`conftest.py`)
@@ -43,28 +46,33 @@ Each leak is reported once and forgotten, so one bad import does not turn every 
 Not covered: a dynamic `importlib.import_module` of an already-loaded framework, and anything a subprocess does — that is `../release_gate_no_jax.py`'s job, which checks the package itself in a clean interpreter.
 
 ## Known items
-`./genome/test_mutation.py` is 1007 lines, just over the ~1000-line concern threshold it is declared as in `./genome/CONTEXT.md`; split it by operation family (add-node / add-conn / mutate-weight / toggle / delete) if it grows further.
-No test in this node is xfailed or skipped.
+One strict `xfail` in this node: `./algorithm/test_hyperneat.py::test_forward_reads_the_substrate_output_neurons` pins a real source defect — `HyperNEAT._validate` (`hyperneat.py:491`) requires and `_assemble_substrate` (`:798`) broadcasts the node-key order inputs, outputs, hidden, while the executor genome reads its outputs from the **last** `num_outputs` rows (`genome/base.py:236` `output_idx`, `genome/step.py:439` `_output_values`), so with a hidden block the read-out row is a hidden neuron.
+The defect is inherited from `benchmarks/legacy_jax`, not a rewrite regression, and the xfail is strict: fixing `src/` turns it into an XPASS failure, at which point the marker is deleted, never weakened.
+The whole-node run emits 2 `RuntimeWarning: overflow encountered in exp` from the HyperNEAT end-to-end runs' `output_transform=ACT.sigmoid` on saturating weights; the suite deliberately does not silence them.
+Declared size exceptions (each one cohesive concern whose module-local helpers would be duplicated by a split): `./genome/test_forward.py` 1136, `./genome/test_grad.py` 1063, `./genome/test_mutation.py` 1050 — split trigger 1200 lines; `./algorithm/test_substrate.py`, `test_genes.py`, `test_hyperneat.py` and `test_hyperneat_feedforward.py` sit at 983–1000 and split if they grow.
+Remaining gaps, per node: `RecurrentMutation` and the `OriginNode`/`BiasNode` host hooks (`./genome`), `pipeline.py` (still only `./integration`), the substrate `_attr_columns` rejections that evoxc's static allowlist makes unreachable, and the untested `--list`/`--dry-run` CLI paths (`./benchmarks`); the child `CONTEXT.md` files carry the detail.
 
 ## Conventions
-One module per source module, named `test_<module>.py`; the directory tree mirrors `../../src/tensorneat/`.
-Shapes stay small (pop ≤ 16, `max_nodes` ≤ 16) except where a test exists specifically to trip a static bound.
+No test body is a placeholder: every test either asserts on a real kernel or, for a genuine source defect, is a strict `xfail(strict=True, reason="src defect: …")`.
+One module per source module, named `test_<module>.py`; the directory tree mirrors `../../src/tensorneat/`, and a concern that would push a module past ~1000 lines gets its own focused module (`test_mutation_weight.py`, `test_level_order.py`, `test_tensorization_seams.py`, `test_distance_dense.py`, `test_sympy_tools.py`).
+Shapes stay small (pop ≤ 16, `max_nodes` ≤ 16) except where a test exists specifically to trip a static bound or to run an end-to-end generation (pop 4–8).
 Backend is always `"numpy"`; a test that needs `evoxc[iree]` is marked `requires_iree` and belongs to no gate.
-A failure names the independent oracle it disagrees with, so a red test says which side of the comparison is wrong.
+An assertion must be able to fail and names the independent oracle it disagrees with, so a red test says which side of the comparison is wrong.
+`jax` is imported only inside `./parity` modules; the guard above enforces it here.
 
 ## Constraints
-No network, no GPU, no wall-clock or ordering dependence; `tmp_path` appears only in `./common/test_state.py` (the `State` save/load round-trip) and in `./benchmarks` (a temporary git repository for the fingerprint tests).
-A test may not edit `../../src`, `../../benchmarks` or `pyproject.toml`; a discovered defect is pinned by an xfail here and reported upward.
-`../conftest.py` puts `src/`, `benchmarks/legacy_jax` and `test/` on `sys.path`; `conftest.py` here has one process-wide side effect, the import recorder, and it uses nothing outside the standard library and pytest.
+No network, no GPU, no wall-clock or ordering dependence; `tmp_path` appears only in `./common/test_state.py` (the `State` save/load round-trip), `./benchmarks` (a temporary git repository and a `tmp_path` copy of a results record) and the e2e HyperNEAT/pipeline runs.
+A test may not edit `../../src`, `../../benchmarks` or `pyproject.toml`; a discovered defect is a strict xfail here and reported upward.
+`../conftest.py` puts `src/`, `benchmarks/legacy_jax` and `test/` on `sys.path`; `./benchmarks/conftest.py` additionally appends `benchmarks/` so the harness's bare `harness` sibling import resolves; `conftest.py` here has one process-wide side effect, the import recorder, and it uses nothing outside the standard library and pytest.
 
 ## Routing Table
 | Path | Purpose |
 |---|---|
-| `./common` | tensorization schedule invariants, flat gather/scatter/mutation helpers, ACT/AGG dispatch, host graph algorithms, `State`. |
-| `./genome` | payload layout, forward/recurrent/grad kernels, mutation/crossover/distance invariants, host introspection. |
-| `./algorithm` | NEAT `tell` algebra: speciation, stagnation, spawn allocation, parent selection. |
-| `./problem` | func-fit losses (`mse`/`rmse`/`mae`/`mape`), the `problem` protocol, and the CartPole / Pendulum / MountainCar rollouts against host-numpy oracles (Pendulum's and MountainCar's live in their own modules). |
-| `./benchmarks` | harness fingerprint: `git_report`/porcelain parsing against a real temporary git repository. |
+| `./common` | tensorization schedule derivation, its seams (`acyclic`/`trusted`/refusals) and validation, flat gather/scatter/mutation helpers, ACT/AGG dispatch, host graph algorithms, `sympy_tools` code generation for every option, `State`. |
+| `./genome` | payload layout, forward/recurrent/grad kernels, the level-order relabel proof, mutation/crossover/distance invariants, host introspection, `hash`. |
+| `./algorithm` | NEAT `tell` algebra, the dense-vs-gated species-distance equivalence, and the whole HyperNEAT subtree including a pop-4 end-to-end run. |
+| `./problem` | func-fit losses and dataset budget, `CustomFuncFit` bounds, the `problem` protocol, the RL knob matrix, and the CartPole / Pendulum / MountainCar rollouts against host-numpy and hand-derived oracles. |
+| `./benchmarks` | harness fingerprint plus the reporting protocol: `aggregate`, `report_format.reach`, `speedup_bounds`, the case table and `--persist-note`. |
 | `./test_version.py` | `tensorneat.__version__` against the distribution metadata, plus the `PackageNotFoundError` fallback. |
 | `./test_host_payload.py` | `host_payload._one_individual`: one-individual batch vs bare rows, the `P > 1` and `None` rejections naming both spellings, and the unchanged malformed-input messages. |
 | `./conftest.py` | session baseline + import recorder: the per-test optional-framework guard. |
