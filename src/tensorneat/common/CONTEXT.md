@@ -307,7 +307,7 @@ End-to-end on this box (`DefaultGenome(num_inputs=2, num_outputs=1, ..., output_
 ## Constraints
 - No `jax`/`torch`/`numpy.random` in graph code; randomness is `evoxc.random` stateless keys (`key(seed)`, `split`, `randint(key, shape, low, high)`, `uniform`, `normal`, `permutation`).
 - Files ≤ ~1000 lines; shared math lives here, never duplicated in `genome`/`algorithm`.
-- `tensorization.py` (977 lines) is one responsibility — derive the schedule — with the recipe, the contract and the measured-cost/rejected-lever record next to the kernels, because splitting it would separate the recipe from the code; condense prose before adding code.
+- `tensorization.py` (975 lines) is one responsibility — derive the schedule — with the recipe, the contract and the measured-cost/rejected-lever record next to the kernels, because splitting it would separate the recipe from the code; condense prose before adding code.
 - Inside this node one rule has one owner: `tools` owns `_positive_static` (every static in `batch_offsets`/`tensorization`), `_scalar_constant`, `_sentinel_constant` (the hoistable-sentinel resolver) and `to_numpy` (which `tensorization._host_array` converts through), imported and never re-written; `host_graph` keeps its own `_I_INF` literal on purpose, because `tools` pulls in `evoxc` and that module is deliberately backend-free.
 - Nothing in this node imports from `genome`, `algorithm`, `problem`, `pipeline`, `benchmarks`, or `test`.
 - Every public function carries a napoleon docstring stating shapes, dtypes, sentinels, and the invariances it relies on.
