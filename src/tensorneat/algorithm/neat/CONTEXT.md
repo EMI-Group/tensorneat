@@ -42,6 +42,7 @@ Module constant `SPAWN_MODES = ("rank", "fitness")`.
 
 `DistanceRows(genome, digest, population, pop_size)` — `_distance.py`, created per generation inside `NEAT.tell`:
 `__call__(state, centre, pop=None)` accepts a centre batch of exactly `pop_size` (measured as it stands) or `1` (tiled by `row`) and returns `(P,)`; any other batch raises `TensorNEATError` naming it.
+It is the route `_kernels.speciate` uses (`distance_fn(state, centre, pop)` from `compute_row`), so the tiling branch and both rejections are the part no in-package caller exercises.
 `row(state, centre)` is the single-row form and `matrix(state, centres)` the explicit by-name `(S, P)` whole-table form — `__call__` never dispatches to `matrix`, because a `species_size`-row table and a population-shaped centre are indistinguishable when `pop_size == species_size`.
 `matrix` runs one fixed-length `evoxc.scan` over the `S` centre rows and measures one population-shaped `genome.measure_distance` call per iteration; it returns the stacked `(S, P)` table, so its callers and its `(K, P)` contract are unchanged.
 It validates that the digest's population axis and the measured population's static shapes match `pop_size` (`TensorNEATError` otherwise).
@@ -113,6 +114,7 @@ Both phases need one `(P,)` compatibility row per species slot, and the same pop
 Call shape: the `distance_fn` contract is population-shaped — `(state, centre, pop) -> (P,)` with **both** payloads batched `P` — so `DistanceRows.row` tiles its one centre row to `P` rows with `repeat_leading` and makes exactly one `genome.measure_distance` call.
 The explicit tile is what makes one call per centre legal for every gene variant: `measure_distance` accepts a centre batch of `1` (internal broadcast) or `P` (row-wise) and rejects anything else, so a centre that is not already population-shaped is tiled rather than handed over as one row.
 `__call__` is single-valued: a batch of `P` is measured as it stands, a batch of `1` is tiled, and anything else raises — `speciate` always passes a population-shaped centre, so a whole centre table must be measured through `matrix` by name.
+`__call__` is the production route (`compute_row` in both gated scan bodies and in every dense `assign_members` iteration); the dense scan 1 is the only caller of `matrix`.
 The row of a slot is known before the iteration reads it, because every `scatter` in both scans writes its own slot only: scan 1's row for slot `i` is `distance(pre-scan centre i, pop)`, and scan 2's row for a **live** slot is `distance(post-scan-1 centre i, pop)`. Only a slot that *creates* a species has a carry-dependent centre (`pop[seed]`, `seed` = first unassigned genome).
 The dense path pre-measures **scan 1** outside the scan: `rows1 = distance_fn.matrix(state, centre_payload)` runs once before `evoxc.scan(reserve, …)` and each iteration reads `evoxc.gather(rows1, slot, axis=0)`.
 That is exactly the row the iteration would have measured, because scan 1's centre for slot `i` is the pre-scan carry row `i` (every `scatter` in `reserve` writes its own slot and `arange(S)` visits each once).
