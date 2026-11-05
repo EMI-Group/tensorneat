@@ -9,22 +9,30 @@ genome into one ``(P,)`` distance row without re-sorting the population.
 
 Shape contract
 --------------
-Every call this module makes to ``genome.measure_distance`` carries a
-**one-individual** centre payload: one row per field, ``(1, ...)``, next to the
-digest of the whole population's batch width.
-The genome measures that single centre against the digest's ``pop_size`` rows,
-on its dense single-centre route when the static gate on the genome holds and by
-broadcasting the centre internally otherwise; both spellings return the same row.
-That dense route is the one ``iree-compile`` cannot legalize yet (its computed
-``(K, 1)`` scatter index blocks), so a compiled backend needs
-``DefaultDistance(dense_single_centre=False)`` until the genome respells them --
-see the node ``CONTEXT.md`` `## Known Issues`.
+Every call this module makes to ``genome.measure_distance`` carries one centre
+spelled by ``state.distance_centre``: a host string read at trace time
+(``_validation.distance_centre_mode``), never a traced value.
+
+* ``"tiled"`` -- **the default when the entry is absent**, i.e. what a bare
+  ``State`` gets: the centre row repeated to ``pop_size`` identical rows (one
+  rank-raising ``evoxc.broadcast`` per field, built by ``_kernels.centre_payload``).
+  That is the population-shaped payload the genome's row-wise merge route takes,
+  so no call can select its dense single-centre route -- whose per-call scatters
+  a GPU lowers single-threaded, a measured 2x device-time regression.
+* ``"single"``: a one-individual payload (leading axis ``1``, one
+  ``evoxc.reshape`` per field), which selects that dense route.  It is the
+  cheaper spelling on the numpy interpreter and the dearer one on a GPU, so the
+  pipeline picks the mode from the device it runs on.
+
+Both spellings carry the same centre row and return the same ``(P,)`` floats.
 The ``group * pop_size`` batch the genome also accepts belongs to a
 ``group_digest``-tiled digest, which this module never builds.
 
 :meth:`DistanceRows.__call__` is single-valued: it accepts a centre payload of
-batch ``1`` (measured as it stands) or batch ``pop_size`` (measured row-wise as
-it stands) and rejects every other batch width.
+batch ``1`` or batch ``pop_size`` and rejects every other batch width; in
+``"tiled"`` mode a batch-``1`` centre is tiled to ``pop_size`` rows first, so the
+mode's contract holds for every caller, while in ``"single"`` mode both widths
+are measured as they stand.
 It **is** the production route: ``_kernels.speciate`` calls ``distance_fn(...)``
 from its per-iteration ``compute_row`` bodies for the gated ``reserve`` and
 ``assign_members`` scans, and unconditionally for every ``assign_members``
@@ -32,10 +40,6 @@ iteration on the dense path (a small ``Pipeline`` run traced 4 ``__call__``
 invocations on the gated path and 2 on the dense one, plus one :meth:`matrix`:
 ``evoxc.scan`` peels step 0 at the enclosing level and traces the body again, so
 each scan body is traced twice).
-Both scan bodies and :meth:`matrix` hand over a batch-``1`` centre, so the
-``pop_size``-wide branch and the batch-width rejection are the part no in-package
-caller reaches, and :meth:`_check_population`'s payload rejection is unexercised
-because every call site passes the four arrays the digest was prepared from.
 :meth:`DistanceRows.row` is the same measurement spelled explicitly for one
 centre, and :meth:`DistanceRows.matrix` is the explicit whole-table form: one
 such call per centre row, run as a single fixed-length ``evoxc.scan`` over the
@@ -124,6 +128,9 @@ import evoxc
 import evoxc.numpy as enp
 
 from tensorneat.common.errors import TensorNEATError
+
+from ._kernels import centre_payload
+from ._validation import distance_centre_mode
 
 
 class DistanceRows:
@@ -274,6 +281,15 @@ class DistanceRows:
                 f"DistanceRows: a distance row takes a centre payload of batch 1 "
                 f"or pop_size ({self.pop_size}), got batch {batch}"
             )
+        if batch == 1 and distance_centre_mode(state) == "tiled":
+            # The mode's contract is population-shaped, so a scale-by-one centre
+            # is tiled here rather than measured through the genome's dense route.
+            centre = centre_payload(
+                centre,
+                tuple(field[0] for field in centre),
+                self.pop_size,
+                True,
+            )
         return self.genome.measure_distance(state, centre, self.digest)
 
     def matrix(self, state: Any, centres: Any) -> Any:
@@ -305,16 +321,16 @@ class DistanceRows:
             `Peak memory` in the module docstring.
         """
         count = int(centres[0].shape[0])
+        tiled = distance_centre_mode(state) == "tiled"
 
         def body(carry: Any, slot: Any) -> Any:
             """One centre row of the table, measured inside the scan region."""
-            centre = type(centres)(
-                *(
-                    evoxc.gather(field, evoxc.reshape(slot, (1,)), axis=0)
-                    for field in centres
-                )
+            rows = tuple(evoxc.gather(field, slot, axis=0) for field in centres)
+            return carry, self.genome.measure_distance(
+                state,
+                centre_payload(self.population, rows, self.pop_size, tiled),
+                self.digest,
             )
-            return carry, self.genome.measure_distance(state, centre, self.digest)
 
         _, stacked = evoxc.scan(
             body,
