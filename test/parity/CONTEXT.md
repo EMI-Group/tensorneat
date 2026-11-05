@@ -115,6 +115,8 @@ Only `test_forward`'s random-DAG cases draw random numbers, from the `rng` fixtu
 `pytest`'s prepend import mode names a test module by its bare basename, so `test_forward.py`/`test_distance.py`/`test_grad.py` here collide with `../unit/genome/'s` modules of the same names and abort the whole session with `import file mismatch`; `__init__.py` makes pytest resolve this directory through its package path instead, and must not be deleted.
 `../src/tensorneat` and `../benchmarks/legacy_jax` are read-only inputs: a needed change there goes into the report to the parent, never into this directory's diff.
 `./convert.py` must stay plain Python — no `evoxc`, no `jax`, no tracing — so test collection never depends on either library.
+`./test_oracle_integrity.py` pins `EXPECTED_COLLECTED_TESTS = 60`, the count a real `pytest --collect-only -q` subprocess must report for this directory while `jax` is installed; update that constant when a parity test is added or removed, never lower it to make a skip pass.
+That module reads the oracle's sources with `ast` and never imports `jax` at module scope, so its four independence tests run in a bare environment.
 `../pyproject.toml` (markers, `testpaths`) is read-only; `parity` is already declared there.
 Suite output is deterministic: the only randomness is the `rng` fixture, seeded from the test id.
 Files stay under ~1000 lines.
