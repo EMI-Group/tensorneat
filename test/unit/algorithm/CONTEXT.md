@@ -51,6 +51,16 @@ Files stay under ~1000 lines (`test_neat_tell.py` sits at 993, `test_speciation.
 `HyperNEAT`'s `weight_threshold`/`max_weight` validation is **not** here: those are `HyperNEAT.__init__` arguments and belong to `../hyperneat/`.
 `test/release_gate_no_jax.py`'s resolved-surface list names `tensorneat.algorithm.NEAT`/`HyperNEAT` only, while `src/tensorneat/CONTEXT.md` documents `tensorneat.algorithm.HyperNEATFeedForward` as well; the package now re-exports it and `./test_exports.py` pins it, and the release-gate list is test-owned (reported upward).
 
+## Coverage gaps in this directory
+`../../../src/tensorneat/algorithm/hyperneat/**` has no behavioural test anywhere in the tree: `HyperNEAT`, `HyperNEATFeedForward`, `HyperNEATNode`, `HyperNEATConn`, `SubstrateSchedule` and the four substrate classes are touched only by `./test_exports.py` (identity and `__all__`) and by `../../release_gate_no_jax.py` (an attribute name), so their setup/transform/forward/tell and the substrate geometry are exercised only by `../../../examples/func_fit/xor_hyperneat.py` and `xor_hyperneat_feedforward.py`, which assert nothing.
+`_distance.DistanceRows` is never constructed here: `./test_speciation.py` hands `speciate` a fake table-reading `distance_fn`, so `matrix`, `population_shaped`, the batch-1 tiling, the digest/population checks and both `TensorNEATError` rejections are unverified except indirectly through the small `tell` runs of `./test_neat_tell.py` (which reach only the batch-`pop_size` route of `row`).
+The dense `speciate` branch is reachable from no test in the tree: `_kernels.GATED_ROWS` is `6000`, this directory tops out at `S * P = 32` and `../../integration` at `10 * 100`, so `distance_fn.matrix` and the "needs a digest-backed distance_fn" rejection at `_kernels.speciate` are untested although every real run at `pop 500`/`1000` takes that branch.
+`_keys.node_keys_for_split`/`first_free_keys`/`validate_key_space` have no assertion anywhere: the allocator runs inside `NEAT.tell`, but no test checks that offspring node keys are unique, inside `[0, key_span)` or produced by the fallback.
+`SpeciesController.update_species` is exercised only through `tell`, and `_gather_species`'s reorder of `species_keys` and the four centre arrays is never asserted; both spawn allocators and the block layout depend on that sorted slot order.
+`_sort_desc_legacy` is never run directly (no test calls it through `raw_kernel`): its reverse-index tie order is only pinned indirectly, through `_pair_parents`' population-axis ranking in `./test_parent_selection.py`.
+`NEAT.prepare_forward`/`forward_prepared` are not called here (the genome-level `prepare_pass` split lives in `../genome`), and `NEAT.show_details` is unasserted.
+`_validation`'s four helpers and `SpeciesController.__init__`'s own rejections are reached only through `NEAT.__init__` in `./test_neat_tell.py`.
+
 ## Constraints
 Backend is `"numpy"`; the per-test guard in `../conftest.py` fails any test that leaves `jax`/`torch`/`brax`/`gymnax`/`mujoco` in `sys.modules`.
 No test body may be a `pytest.skip` placeholder, and an assertion is never weakened to get green — a real source defect becomes a strict `xfail` with `reason="src defect: …"` instead.

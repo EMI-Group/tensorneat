@@ -20,6 +20,29 @@ Two modules pin a guard that a naive implementation would pass by accident: `tes
 `test_transform_validation.py` — `transform` rejects a per-individual node row, a `conn_keys` without a population axis and mismatched population sizes with `TensorNEATError`, and accepts both batched spellings.
 `conftest.py` — the five lazily resolved modules (`genome`, `common`, `payloads`, `oracle`, `runner`), the four graph-glue fixtures (`run_kernel`, `run_transform`, `run_forward`, `run_prepared`) and the module-scoped `evoxc.Executable` cache they share.
 
+## Known test gaps
+`RecurrentMutation` (`../../../src/tensorneat/genome/operations/mutation/recurrent.py`) has no reference in `test/`: `p_recur`/`max_conn_tries` validation, the cycle-forcing accept filter and the candidate-tableau path are unverified, and `RecurrentGenome` defaults to `DefaultMutation`, so nothing exercises it implicitly.
+`OriginNode.crossover` and `OriginConn.crossover`/`get_historical_marker` are never executed: `OriginConn` appears only as a three-column key layout, and every crossover assertion runs the per-attribute `DefaultNode`/`DefaultConn` path.
+`BiasNode`'s host hooks (`repr`, `to_dict`, `sympy_func`) and its `new_identity_attrs` are never called; its only use is the CartPole golden run, which asserts fitness/population hashes.
+`max_conn_marker`'s `uses_historical_marker` branch is dead in the suite: the algorithm tests build `DefaultConn`, so a marker-carrying genome inside `NEAT.tell` is untested.
+`window.any_slot`'s wide-window fallback (`width > _WINDOW_FOLD_LIMIT`) is untested — every genome here uses `max_in_degree <= 5`.
+`in_degree`/`max_in_degree`/`violation` (`operations/mutation/degree.py`, re-exported from `operations.mutation`) have no caller in `src/` and no test.
+`test_grad.py` never builds a non-default node gene: the `AGG.mean` divide (`grad.py:421`), the activation derivative and the output-row mask (`grad.py:429`) are unexercised, and none of `dense_grad_plan`'s refusals (`grad.py:186-249`) is asserted.
+No grad test configures `input_transform`/`output_transform` or a network deeper than `max_depth`, so a dense pass that dropped a transform or over-ran the depth bound passes.
+`test_recurrent.py::test_raw_inputs_are_reinjected_on_every_tick` cannot fail for its claim: no `in_valid` window covers an input row, so hoisting the re-injection out of the tick loop yields the same read-out.
+`test_payload.py:180` asserts `not np.isnan(node_keys).any()` on an `int32` array, which is always true; `initialize`'s attribute *values* are never asserted, so a swapped `bias`/`response` spec in `new_random_attrs` passes.
+`test_host_helpers.py`'s `hash` test changes a connection attribute but never a node attribute, so a fold that ignores `node_attrs` passes.
+Mutation is pinned at invariant level only: no test asserts a `weight_mutate_power` magnitude, the replace distribution, or which connection a delete drops.
+`test_crossover.py` writes the *same* genes for every row of the population axis (`_payload`), so no test can detect a cross-individual alignment collapse; `test_distance.py` and `test_distance_digest.py` do vary pairs within a batch.
+`test_crossover.py`'s "per-attribute 50/50" is only checked as elementwise membership in `{parent1, parent2}` with identical parent-2 rows per family, so a whole-gene pick, a wrongly-thresholded pick, or a neighbouring-row gather all pass; `gene/blocks.py::crossover_attrs` has no direct test.
+The two `(child == parent2).any()` assertions are draw-based and coupled to the internal RNG consumption order; a legitimate change to `BaseCrossover`'s key split can flip them.
+Connection-gene attribute values are never mapping-checked on homozygous rows (only the lonely row is), and `crossover.find_homologous` — the function the tests pin exactly — is not the function `__call__` uses (`align_gene_rows` → `alignment.homologous_pair`).
+`digest.node_oor`/`conn_oor` are only asserted zero on a payload with no out-of-range key, so a hard-coded zero passes; no fixture carries a key outside `key_span`.
+No assertion proves the dense single-centre route ran: if `dense.measure_centre` bailed, the "dense" and "merge" labels name the same merge and the bit-identity tests still pass.
+The digest's bit-identity rests on a *shared* scalar tail (`_scalar_distance`) and the same gene hook, so it proves alignment agreement only, not the formula.
+The node family's float attribute term (`|delta|` over bias/response) has no numeric oracle; only the connection weight and the activation int column are pinned.
+`test_distance_is_deterministic` replays one cached executable, not two independent builds.
+
 ## Conventions
 Inputs are `scope="module"` fixtures resolved through `support.lazy.require`, so no module-scope `tensorneat`/`support` import; `pytest`, `numpy` and (in `test_payload.py`) `evoxc.random` are the only module-scope imports.
 Every graph runs through `support.runner`'s fixtures; `runner.run_defn(closure, *args)` is the escape hatch for a kernel that takes no `state` (`g.hash`, `find_homologous`).
@@ -41,7 +64,7 @@ Whole node: 117 passed in ≈9 s on the numpy backend, with about one `evoxc.bui
 The guard in `test/unit/conftest.py` is the test-side counterpart of `test/release_gate_no_jax.py`: it freezes a session baseline at session start and records every import statement of `jax`/`jaxlib`/`torch`/`brax`/`gymnax`/`mujoco`, attributed to the file that executed it.
 It therefore catches any import of an optional framework executed from `test/unit/**`, whether at module scope or inside a test body.
 It excuses the imports originating in `src/` or in `pytest.importorskip`.
-`pytest.mark.slow` is reserved for the oversized-population cases; the default gate is `pytest -m "not parity and not slow"`.
+No test here carries a `slow` marker, including `test_distance_digest.py`'s pop-100, two-generation XOR fixture, so the whole node runs in the default gate (`pytest -m "not parity and not slow"`).
 
 ## Notes for Agents
 `hash` is an **in-graph** kernel (no `state`, returns a symbolic `(P,) uint32`, traced via `runner.run_defn`), although `src/tensorneat/genome/CONTEXT.md` still lists it among the host-only helpers — trust the code.
