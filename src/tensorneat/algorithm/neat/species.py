@@ -853,8 +853,8 @@ class SpeciesController(StatefulBaseClass):
             tuple: ``(loc, idx_in_block)``, both ``(P,)`` int32.
 
         Note:
-            The ``spawn > 0`` term the ``loc`` formula used to carry is
-            redundant and is not emitted: with ``sum(spawn) == pop_size`` (the
+            The ``loc`` formula carries no ``spawn > 0`` term: with
+            ``sum(spawn) == pop_size`` (the
             residual correction of ``_kernels.spawn_from_target``) the last
             qualifying index always holds a positive spawn, while a zero-spawn
             (dead or empty) species still consumes no population slot because
