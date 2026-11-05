@@ -22,7 +22,8 @@ test/parity/
   conftest.py       lazy legacy/new imports + the fixture set that builds one genome in both libraries
   convert.py        the two-way column-layout conversion and the max_in_degree / hidden-layer rules
   test_convert.py   real tests of convert.py (18)
-  test_forward.py   forward values + NaN pattern: chain, skipped node, isolated node, 5 random DAGs, 3-individual batch, input/output transform, lossless-schedule guard (12)
+  test_oracle_integrity.py  oracle independence + collection guard + collected-count ratchet (6)
+  test_forward.py   forward values + NaN pattern: chain, skipped node, isolated node, 5 random DAGs, 3-individual batch, matching output keys, input/output transform, lossless-schedule guard (13)
   test_distance.py  execute_distance: exact 0, 0.125, attribute-only 0.4/0.45, batch-vs-pairwise, empty pair (5)
   test_fitness.py   problem.XOR / XOR3d fitness, all four error_method values, mape denominator, the NaN divergence (13)
   test_grad.py      gradient values against jax.grad of the same loss, single-option ACT/AGG (5)
