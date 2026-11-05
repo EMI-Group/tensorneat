@@ -1,6 +1,12 @@
 # Accelerator measurement: `numpy`, `iree` llvm-cpu and `iree` rocm on one MI300X VF
 
-**Verdict for the tree this file ships with: the two CPU legs measure green through this protocol, and the ROCm device path is blocked before the first generation — `numpy` and `iree-llvm-cpu` run the canonical case matrix end to end and agree numerically at generation 1, while every `iree-rocm` row is an `error` row whose message is a device-placement refusal in `Pipeline.setup()`, not a compile failure and not a number.**
+**Verdict for the record this file renders: both CPU legs measure green across a 3 × 3 matrix — six `ok` rows and three blocked `iree-rocm` rows — `numpy` and `iree-llvm-cpu` run the canonical case matrix end to end and agree bit-for-bit on the integer genes at generation 1, while every `iree-rocm` row is an `error` row whose message is a device-placement refusal in `Pipeline.setup()`, not a compile failure and not a number.**
+On the canonical matrix (`xor_p100`, `xor_p500`, `xor3d_p500`; seed 42; 3 warmup + 10 timed generations) the numpy medians are 41.646 / 184.222 / 180.004 ms per generation against 428.811 / 14912.799 / 15032.370 ms for `iree-llvm-cpu`, so the compiled leg is ≈10.3x (428.811 / 41.646) / ≈81.0x (14912.799 / 184.222) / ≈83.5x (15032.370 / 180.004) slower per generation on this box.
+Each static shape pays one `iree-compile` of 8.506 / 9.045 / 8.792 s (the `build` column), which is 2.0x the whole 10-generation timed region at pop 100 (8.506 s against 4.288 s) and ≈6 % of it on the two pop-500 rows (9.045 s against 149.128 s, 8.792 s against 150.324 s).
+Peak RSS runs the other way: the compiled leg's per-process high-water mark is 150.3 MiB against 161.7 MiB at pop 100 (7.0 % lower), 194.9 against 281.6 MiB on `xor_p500` (30.8 % lower) and 197.2 against 289.6 MiB on `xor3d_p500` (31.9 % lower) — driver RSS, never device memory, and the interpreter's retained intermediates are the larger footprint.
+Numerically the two CPU legs agree where the gate is hard: generation 1 has bit-identical `node_keys`/`conn_keys` on all three compiled rows, attributes within 4.8e-7, fitness within 6.0e-8 and zero NaN-mask mismatches.
+On the two pop-500 cases a 14-generation lockstep trace then drifts structurally (first float exceedance at generation 5 / 8, first key divergence at 6 / 9) while the population's best fitness stays identical for all 14 traced generations on `xor_p500` and within 6.0e-4 on `xor3d_p500`, which is a measured near-tie selection flip amplified by the ranking, not a kernel defect; at pop 100 all 14 traced generations stay key-identical.
+Nothing below states or implies a GPU speed-up, a GPU compile time or a GPU fitness: the `iree-rocm` path never reached generation 1, so it has none of the three.
 The refusal is `evoxc.core.errors.DeviceError: input at path [0] is on device Device(kind='cpu', index=0), but the executable runs on device Device(kind='rocm', index=0): no implicit device-to-host or host-to-device transfer happens at the run boundary — move the tensor to the executable's device explicitly via t.to(Device(kind='rocm', index=0))`.
 Its cause is on the TensorNEAT side, not in IREE: the pipeline hands its initial tensors to `evoxc.run` on the host while the executable was compiled for the ROCm device, so the initial-tensor device placement that `src/tensorneat` is gaining in parallel is the missing piece.
 The one-off generation-graph compile for `rocm` is a *later* step of this protocol and cannot be reached until that placement exists: `build_s` is filled by the first `Pipeline.step()`, and the first step needs a state that `Pipeline.setup()` never returns on this target.
@@ -9,10 +15,13 @@ No accelerator row is part of the numpy-only verdict in `RESULTS.md`; this file 
 
 ## Provenance: which tree and which session
 
-Every number in the measured block below belongs to the record that block names and to the git commit its fingerprint names; no sentence here is a statement about HEAD, and no committed artifact in this directory measures an accelerator row yet.
-The block is rendered from `benchmarks/results/gpu_2026-11-05.json`, the record of one `gpu_measure.py matrix` session, and that record carries its own command, its session timestamps, its environment fingerprint and the `protocol` block it was measured under.
+Every number in the measured block below belongs to `benchmarks/results/gpu_2026-11-05.json` and to the git commit its fingerprint names — `2d86a89ffd56` — and no sentence here is a statement about HEAD.
+That record is the accelerator evidence this directory now commits: one `gpu_measure.py matrix` session, 2026-11-05T11:14:24Z – 2026-11-05T11:30:03Z (15 min 39 s wall clock), 9 rows over the cases `xor_p100,xor_p500,xor3d_p500` × the targets `numpy,iree-llvm-cpu,iree-rocm`, seed 42, 3 warmup and 10 timed generations, `--trace 14`, one repeat, one fresh process per row — 6 `ok` rows and 3 `error` rows, the three `iree-rocm` ones.
+The block is rendered from that record, which carries its own command, its session timestamps, its environment fingerprint and the `protocol` block it was measured under (`trajectory_generations: 14` included).
 If that file is absent or is still the git-ignored scratch default (`benchmarks/results/gpu.json`), the provenance paragraph inside the block says so and the block describes one session only, never "the GPU performance of TensorNEAT".
-The machinery was smoke-tested before this file shipped: one row per CPU target at small settings (`--warmup 1`, two to three timed generations) to prove the protocol, the rocm `error` row and the cross-check verdict; those smoke records are scratch, are not committed, and their timings are deliberately not quoted here because two generations are not a benchmark.
+The record stores the recording worker's absolute interpreter path in `meta.command`; the portable form of the same argv is step 4 of `## Reproduce`, and that is the command to regenerate it with.
+The environment table's `evoxc 0.1.0` row is the installed distribution's metadata — PyPI's newest release — while `pyproject.toml` pins the `v0.1.1` git tag through `[tool.uv.sources]`: the measured tree is the tag, the table row is what a version query reports.
+The machinery was smoke-tested before this record was measured: one row per CPU target at small settings (`--warmup 1`, two to three timed generations) to prove the protocol, the rocm `error` row and the cross-check verdict; those smoke records are scratch, are not committed, and their timings are deliberately not quoted here because two generations are not a benchmark.
 The CPU compiled-backend record is `BACKENDS.md` (llvm-cpu, its own session), and the numpy-only old-vs-new contract is `RESULTS.md` (its own record); both stay what they are, and neither is re-rendered from this protocol.
 
 ## Protocol
@@ -22,8 +31,10 @@ The CPU compiled-backend record is `BACKENDS.md` (llvm-cpu, its own session), an
 Per row: `Pipeline.setup()` is timed into `setup_s`; the first `Pipeline.step()` is timed into `first_step_s` and its build cost, `Pipeline.build_seconds`, is reported as `build_s` — the build is never charged to a generation and that step is excluded from every timing sample; then `--warmup` untimed generations and `--generations` timed ones, with stdout/stderr redirected to `os.devnull` for the whole warmup + timed region.
 Each timed generation is `time.perf_counter()` wall clock around one `step()` call, which includes the host materialisation of the result; the row keeps mean, median, min, max and every sample, plus `generations_per_second = 1000 / mean`.
 `peak_rss_mib` is sampled immediately after the timed region, then `final_generation`, `final_max_fitness`, `device_info` (the target's `backend`/`device`/`compile_options` plus the IREE HIP device query) and the exact `protocol` block are recorded.
+`--trace N` (default `0`, off) adds a lockstep trajectory *after* the timed region and after the `peak_rss_mib` sample: one fresh pair of legs — the accelerated target and a fresh `backend="numpy"` pipeline, each paying its own build — driven generation by generation, so it costs `N × (accelerated generation + numpy generation)` and can never enter a timing sample or the RSS figure.
+A failing trace leg is recorded as `trajectory.status == "error"` *inside* an otherwise `ok` row (the row keeps its timings), `--trace 0` records `skipped` with a reason, and the committed matrix ran with `--trace 14`.
 `--json` writes the row; its `status` is `ok` or `error`, and any exception during the measurement becomes an `error` row carrying the full traceback plus whatever was already measured, with the last traceback line printed to stderr and exit code 1 — a failed row is recorded, never dropped, and a hard crash that kills the process is turned into an `error` row by the matrix driver (returncode plus stderr tail).
-The defaults are the canonical matrix of `benchmarks/cases.py` (`xor_p100`, `xor_p500`, `xor3d_p500`), all three targets, seed 42, three warmup and ten timed generations, one repeat: the case table is imported, never duplicated here.
+The defaults are the canonical matrix of `benchmarks/cases.py` (`xor_p100`, `xor_p500`, `xor3d_p500`), all three targets, seed 42, three warmup and ten timed generations, one repeat, no trajectory (`--trace 0`): the case table is imported, never duplicated here.
 Targets are data, and the raw flags override a named target for hardware this file does not name: `--device KIND` with `--device-index N` (together they build `evoxc.Device(KIND, N)`), `--target-backends a,b`, `--rocm-target ARCH` (appends `--iree-rocm-target=ARCH` to the `iree_compile_args` compile option, overriding the adapter's auto-detected arch) and `--iree-compile-arg FLAG` (repeatable). `device` and `target_backends` must stay aligned: a combination that pairs a host device with a device-only target becomes an `error` row instead of being repaired silently.
 Nothing falls back to another backend: if a target cannot run, the exception is the row, and `matrix` exits 0 only when every planned row is `ok` — a blocked device path is loud by construction, which is exactly the state the ROCm rows are in today.
 
@@ -37,6 +48,15 @@ Unlike the old-vs-new harness, which compares two different PRNGs (JAX `PRNGKey`
 The tolerances are the ones `test/backends/test_iree_pipeline.py` documents: float32 addition is not associative, so a reduction that IREE reassociates differs from the numpy interpreter's order by about one ulp (~1.19e-7 at unit magnitude) per reordering, the error grows with the reduction depth but stays a small multiple of eps (~6e-8 measured on small populations), and 1e-5 keeps two orders of magnitude of headroom for a box- or build-dependent reordering while still failing on any real divergence; `1e-6` is the absolute floor for attributes that sit near zero, where a pure relative bound is meaningless.
 Every row records the max absolute difference over entries finite on both sides, every mask-mismatch count and the first failing field, so a `fail` names the field instead of the row.
 The `numpy` target records `{"status": "skipped", "reason": "target is the numpy reference"}`, `--no-cross-check` records `{"status": "skipped", "reason": "--no-cross-check"}`, and a reference leg that cannot run records `status="error"` with its traceback while the measured row keeps its timings — missing numerical evidence stays visible instead of silently green.
+What that contract measured on the committed record: generation 1 passes on all three compiled rows — `node_keys` and `conn_keys` bit-identical, attributes within 4.8e-7 (2.38e-7 at pop 100, 4.77e-7 on both pop-500 rows), fitness within 6.0e-8 and no NaN-mask mismatch — so the gate that is hard is the gate that is green.
+The final state passes at pop 100 and fails on both pop-500 rows (`fail (final state: node_keys)`), which is the observation the `--trace 14` trajectory answers: over 14 lockstep generations `xor_p100` has no key divergence and no float exceedance at all (attribute difference ≤ 3.6e-7, species count growing 1 → 6), `xor_p500` first exceeds the float tolerance at generation 5 (node-attribute max absolute difference 0.403, fitness 4.4e-3) and first diverges in the keys at generation 6 (31 node-key and 66 conn-key mismatches), and `xor3d_p500` does the same at generation 8 (0.272) and 9 (85 / 250), its species count reaching the 20-slot cap by generation 5.
+The order is identical on both pop-500 cases — attributes first, structural genes one generation later — and that is what a selection near-tie looks like: a difference worth a few float32 ulps at generation 1 only becomes visible in the payload once it flips which row wins a rank comparison.
+The mechanism, read from the code rather than inferred: generation 1's integer keys are identical and its attribute payload is *drawn*, not computed, so the 2.38e-7–4.77e-7 spread is the backend-specific float32 Box–Muller tail of `evoxc.random.normal` (the numpy kernel's float32 transcendentals against the StableHLO export's, the documented f32 fast-path deviation at the ~1e-6 relative scale) and the 6.0e-8 fitness spread is that payload passed through the forward graph.
+It is then amplified by fitness ranking in `src/tensorneat/algorithm/neat/_kernels.py`: `sort_desc_legacy` (`:151`) is a stable ascending argsort gathered through the reversal permutation, i.e. a strict total order in which an exact tie is broken by row index, and `pair_parents` (`:411`) ranks with it at `:454`, draws parents at `:459` and pins elite slot *k* to that block's rank *k* at `:482-491`.
+The benchmark cases carry `survival_threshold = 0.01` and `species_size = 20` (`benchmarks/cases.py`), so the survivor count `clamp(floor(0.01 × members), 1, …)` leaves every species under 200 members exactly one breeding parent while the pop-500 tells fill all 20 species slots: that is 20 independent rank-0 decisions per generation, and one ulp-level tie flip changes a species' pinned elites and its single parent one generation before it can change the structural genes — precisely the 5 → 6 and 8 → 9 order the trace shows.
+At pop 100 only 1–6 species exist per tell inside the 14 traced generations and nothing flips, which is why the pop-100 row stays key-identical and the pop-500 rows do not.
+So generation 1 is the equality gate and nothing else is: every later generation is a search-trajectory observation, and the entity to compare over a long horizon is the fitness view — identical on `xor_p500` for all 14 traced generations, within 6.0e-4 on `xor3d_p500` at generation 14 — never the key arrays.
+The trace is part of the record (`trajectory` per row, `protocol.trajectory_generations: 14`), so the table re-renders from it without re-measuring and `--trace N` reproduces it.
 
 <!-- BEGIN MEASURED (gpu_measure.py) -->
 ## Environment (measured, not assumed)
@@ -181,6 +201,8 @@ Transfer cost is inside `ms/generation` and not separated from it: the host mate
 `peak RSS` is per process and is the driver's resident memory, not the device's; no device-memory figure is recorded, so a row says nothing about VRAM occupancy.
 No per-generation dispatch or op count is instrumented here — `PERF_NUMPY.md` is where executed-op counts live for the CPU interpreter — so an accelerator row gives wall clock and nothing about what the device was asked to do.
 Timing is wall clock with a warmup, one repeat, one seed: repeat spread is not measured by this protocol, and a single run of a row is not a distribution.
+The cross-check's later-generation divergence makes a long-horizon accelerator-vs-numpy *population* comparison a trajectory comparison, not an equality test: the committed trace's first key divergence lands at generation 6 on `xor_p500` and 9 on `xor3d_p500`, so the fitness (and species-count) view is what to compare across many generations, and the key arrays are not.
+`--trace 14` is why the committed matrix took 15 min 39 s on this box: the three trajectory legs alone cost 17.667 s, 224.446 s and 219.993 s (≈7.7 min), each one re-paying a full build for both of its legs on top of the 14 generations.
 
 ## Reproduce
 
@@ -196,20 +218,27 @@ python3 benchmarks/gpu_measure.py --list
 uv run --extra iree python benchmarks/gpu_measure.py run \
     --case xor_p100 --target iree-rocm --json $TMPDIR/row.json
 
-# 3. the full matrix: cases x targets, strictly sequential, one process per row
+# 3. one compiled row with the lockstep trajectory the committed record carries
+uv run --extra iree python benchmarks/gpu_measure.py run \
+    --case xor_p500 --target iree-llvm-cpu \
+    --warmup 3 --generations 10 --trace 14 --seed 42 --json $TMPDIR/trace_row.json
+
+# 4. the full matrix: cases x targets, strictly sequential, one process per row
 uv run --extra iree python benchmarks/gpu_measure.py matrix \
     --cases xor_p100,xor_p500,xor3d_p500 --targets numpy,iree-llvm-cpu,iree-rocm \
-    --warmup 3 --generations 10 --seed 42 \
+    --warmup 3 --generations 10 --trace 14 --seed 42 \
     --json benchmarks/results/gpu_2026-11-05.json --out benchmarks/GPU.md
 
-# 4. re-render the measured block from the existing record: no measurement, no JSON rewrite
+# 5. re-render the measured block from the existing record: no measurement, no JSON rewrite
 uv run --extra iree python benchmarks/gpu_measure.py render \
     --json benchmarks/results/gpu_2026-11-05.json --out benchmarks/GPU.md
 ```
 
-`matrix` exits 0 only when every planned row is `ok`, and 1 as soon as any row is `error` (it prints a `BLOCKED: …` line per blocked row) — with the ROCm rows blocked today, step 3 therefore exits 1 while still writing the record and refreshing the block, which is the intended loud failure and not a broken run.
+Step 4 is the exact argv the record stores, with the recording worker's absolute interpreter path replaced by the portable `uv run --extra iree python`.
+It is a ~15.6-minute job on this box (15 min 39 s for the committed record, of which the three trajectory legs are ≈7.7 min), so run it in the background rather than under a short foreground timeout.
+`matrix` exits 0 only when every planned row is `ok`, and 1 as soon as any row is `error` (it prints a `BLOCKED: …` line per blocked row) — with the three ROCm rows blocked today, step 4 therefore exits 1 by design while still writing the record and refreshing the block, which is the intended loud failure and not a broken run.
 `render` and `matrix --out` replace only the interior of this file's two markers (the pair above, exactly one of each in the file) and exit 2 with a named error on a missing marker, an unreadable record, a wrong schema or a missing `records` list.
-A single row is cheap on the CPU legs and pays the compile on the compiled ones: budget the iree legs at roughly the `iree-compile` cost of the shape plus the timed region, and run the matrix as a background job rather than under a short foreground timeout.
+A single row is cheap on the CPU legs and pays the compile on the compiled ones: budget an `iree-*` row at the 8.5–9.0 s `iree-compile` of its shape plus its timed region, and a traced row at that plus `N × (accelerated + numpy generation)`.
 The IREE runtime can print `nanobind: leaked …` lines to stderr when the interpreter exits; that is a binding teardown message emitted *after* the row is written, never a failure and never an `error` row.
 The Python-free paths are `--list`, `--help` and nothing else: `run` and `matrix` need `numpy` and `tensorneat`, and the `iree-*` targets need the `iree` extra.
 
