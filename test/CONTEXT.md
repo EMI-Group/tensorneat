@@ -70,6 +70,17 @@ The legacy RL problems are gone, so CartPole, Pendulum and MountainCar have no p
 `mape` with a zero target is `1` for a zero prediction but `NaN` (`0/0`) when prediction and target are both exactly zero on the legacy side; parity genomes are chosen to avoid that corner.
 A NaN *source slot* is dropped when the destination also has a live source, so an isolated node poisons only a read-out that has no other live input; both halves of that rule are pinned in `./parity` and `./unit/genome`.
 
+## Coverage and integrity (measured audit)
+`pytest -o addopts="" -q` under `uv sync --all-extras` is **674 passed, 0 skipped, 0 xfailed, 3 warnings** — the suite contains no `skip`/`skipif`/`xfail` in any test body; the only skip channel is optional-dependency machinery.
+Measured skip sets: `--extra bench` without iree → 671 passed, **1** skipped (`test/backends` module-level `importorskip`, hiding its 3 tests); bare `uv sync` → 636 passed, **5** skipped (the four `jax` parity modules + `test/backends`), i.e. the parity gate degenerates to `test_convert.py`'s 18 library-free tests.
+Line coverage of `src/tensorneat` from the whole suite: 84 % (6389 statements); the hole concentrates in `algorithm/hyperneat/**` (21–28 % — `HyperNEAT`, `HyperNEATFeedForward` and every substrate have no behavioural test anywhere) and `genome/operations/mutation/recurrent.py` (23 %, zero references to `RecurrentMutation`).
+No test exceeds `algorithm/neat/_kernels.GATED_ROWS = 6000`, so the dense species-distance path (`_kernels.py:949`, `_distance.DistanceRows.matrix`) is dead in CI and live only at pop ≳ 300.
+No test evaluates a genome with an edge from a higher node row to a lower one (every payload builder and both random-DAG generators emit `source < target`), so the level-synchronous sweep is exercised only where level order and row order agree.
+`pipeline.py` has no unit test module; `./integration` is its entire surface, and that directory's autouse guard converts a `Pipeline.__init__` regression (any of `backend`/`device`/`compile_options`/`is_detailed` missing, or a re-appearing `jax` binding) into 23 silent skips rather than failures.
+Compiled backends are one file: `xla`, `tvm`, an unknown backend name and the documented "no silent fallback" path have no test, and the CI `iree` job is `continue-on-error: true`.
+`pyproject.toml` sets no `filterwarnings`, so the divide-by-zero `RuntimeWarning`s the run emits are informational; three test modules additionally `filterwarnings("ignore")` their own bodies.
+Per-subtree detail lives in the child `CONTEXT.md` files' `Known gaps`/`Coverage gaps` sections.
+
 ## Conventions
 No test body is a placeholder: every test either asserts on a real kernel or is skipped because an optional dependency is absent (`./parity` without `jax`).
 `jax` is imported only inside `./parity` modules, and only after `pytest.importorskip("jax")`; no other test may import it at module scope, and `test/unit/conftest.py` enforces that with a session-baseline `sys.modules` diff plus an import recorder that attributes the offending file.
