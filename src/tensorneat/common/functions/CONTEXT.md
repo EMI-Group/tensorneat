@@ -178,7 +178,7 @@ The aggregation combine axis is the last axis of `(P, N, K)` (the pre-rewrite li
 ## Consumers (the API sibling nodes may rely on)
 `from tensorneat.common import ACT, AGG, apply_activation, apply_aggregation` is the only public surface of this package (`__all__` is exactly those five names, `FunctionManager` included).
 Node genes: `apply_aggregation(z, mask, agg_ids, self.aggregation_options)` then `apply_activation(z, act_ids, self.activation_options)`; the option lists are plain tuples of kernels, normalised once in the gene constructor, and an id column that is already `int32` (as produced by `gene/node/base.prepare`) reaches the dispatchers without a traced cast.
-Configs reference an option by name through attribute access (`AGG.sum`, `ACT.sigmoid`) and resolve ids through `ACT.name2index` / `ACT.get_evoxc_func`; `ACT.random_index(key)` samples an id in-graph from a stateless evoxc key.
+Configs reference an option by name through attribute access (`AGG.sum`, `ACT.sigmoid`) and resolve ids through `ACT.name_of` / `ACT.obtain_sympy`; `ACT.random_index(key)` samples an id in-graph from a stateless evoxc key — but nothing in `src/` calls it (ids are drawn per attribute column by `genome/gene/blocks.py`), and `get_evoxc_func` / `index2name` likewise have only test callers, so they are a documented surface, not a proven path.
 Interpretability: `ACT.obtain_sympy(name_or_id_or_func)` / `AGG.obtain_sympy(...)` return the sympy class for a `to_dict`-style name.
 The parent `common/__init__.py` imports exactly `ACT, AGG, apply_activation, apply_aggregation` (plus optionally `FunctionManager`); there is no `get_func_name` symbol in this package, so `repr` / `to_dict` code takes names from `ACT.name_of` / `AGG.name_of`.
 
