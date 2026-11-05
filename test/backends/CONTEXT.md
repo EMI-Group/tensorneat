@@ -28,6 +28,14 @@ Markers: `requires_iree` is declared in `../conftest.py` (`pyproject.toml` is re
 So a test that drives several generations does not pay the compile per generation, and any timing claim must state which of the two it measures.
 The standalone CLI for that is `../benchmarks/backend_measure.py` (`--backend numpy|iree`, `--case xor|xor3d`, `--pop N`, 3 warmup + 20 timed generations, `--opt-level` forwarded as `compile_options={"opt_level": ...}`, `--json out.json`), and its peak-RSS column is a process-lifetime high-water mark, so each `(case, backend)` must be measured in a fresh process.
 
+## Coverage gaps (what this suite does not prove)
+`"xla"` and `"tvm"` are claimed backends with **no test anywhere** in `./test` (no test file mentions either name), so their support rests on `../benchmarks/BACKENDS.md` hand-measurements only.
+The no-fallback case is pinned only for a bad *compile option* on `iree`; nothing tests an unknown backend *name* (`backend="nope"`), a kernel `iree` cannot lower, or the claim that a failing backend never retries on numpy.
+The numpy-vs-iree comparison takes `numpy` (another `evoxc` backend) as its oracle, so a defect shared by evoxc's frontend/lowering is invisible here; the independent JAX oracle in `../parity` covers the numpy leg only.
+Only XOR (`func_fit`) is exercised: no `scan`/`while_loop` rollout (`CartPole`/`Pendulum`/`MountainCarContinuous`), no `RecurrentGenome` tick loop, no `HyperNEAT` — the control-flow shapes most likely to differ per backend.
+Generation 1's payload is the host-seeded `setup()` population, so it is identical across backends by construction; only generation 2's payload exercises iree-built mutation/crossover.
+`../.github/workflows/ci.yaml` runs this leg with `continue-on-error: true`, so a red iree job does not fail CI.
+
 ## Constraints
 `importorskip("iree")` is the first executable statement after `import pytest`; every other import of the file is below it, so a missing extra can never surface as a collection error.
 No test here imports `jax`; the `iree` import is the only optional-dependency coupling, and it does not pull JAX in.
