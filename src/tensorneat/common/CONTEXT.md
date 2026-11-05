@@ -260,7 +260,8 @@ The `equal`+`select` of a one-option dispatch is not removable: the `-1` identit
 
 ### `host_graph.py`
 Host-only, pure Python (stdlib + `errors.GraphError`), never traced: `decode_graph(nodes, conns, node_attrs=1, conn_attrs=2)` → `(dict[int, tuple[float, ...]], set[tuple[int, int]])`; `topological_sort(nodes, conns)` → `(topo_order, topo_layers)` (Kahn, layers ascending, `GraphError` on a cycle); `find_useful_nodes(nodes, conns, output_idx)` → `set[int]`; `check_cycles(nodes, conns, from_idx, to_idx)` → `bool`; `node_depth(nodes, conns, input_idx)` → `dict[int, int]`, which must equal `Transformed.node_level` for a well-formed feedforward genome.
-`common.__init__` re-exports `decode_graph`, `topological_sort` and `find_useful_nodes`.
+`common.__init__` re-exports `decode_graph`, `topological_sort` and `find_useful_nodes`; `host_graph.__all__` also lists `check_cycles` and `node_depth`.
+`decode_graph` and `check_cycles` have no production caller: they are the legacy mixed-dtype adapter and a host cycle probe, exported for tests and legacy parity (the in-graph mutation cycle test is `genome/operations/mutation/cycle.py::closes_cycle`).
 
 ### `sympy_tools.py`
 Host-only (`re` + `sympy` + a `numpy` import deferred to the printer, no evoxc): `analysis_nodes_exprs`, `round_expr`, `replace_variable_names`, `to_latex_code`, `to_python_code` — the 8-tuple contract of `Genome.sympy_func` is unchanged from the pre-rewrite library.
