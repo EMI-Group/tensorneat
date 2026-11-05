@@ -35,10 +35,10 @@ because every call site passes the four arrays the digest was prepared from.
 :meth:`DistanceRows.row` is the same measurement spelled explicitly for one
 centre, and :meth:`DistanceRows.matrix` is the explicit whole-table form: one
 such call per centre row, run as a single fixed-length ``evoxc.scan`` over the
-``S`` centre rows, so an ``(S, P)`` table is ``S`` calls of ``pop_size`` rows
+``S`` centre rows, so an ``(S, P)`` table is ``S`` calls of one centre row
 rather than one ``S * P`` batch.  The rows are identical either way, because the
 compatibility kernel is row-independent, and one centre per call keeps the
-kernel's transient footprint at one population instead of ``S`` of them, which
+kernel's transient footprint at one centre instead of ``S`` of them, which
 the scan body then releases again before the next iteration.  ``matrix`` is
 never selected by ``__call__``: a caller that wants a whole table asks for it by
 name, which is what the dense path's scan 1 does.
@@ -51,18 +51,24 @@ population.
 Measured cost
 -------------
 Numpy reference backend, ``species_size=20``, one configuration per fresh
-process, ``benchmarks/backend_measure.py --backend numpy --generations 20
---warmup 3`` (its numbers are ``Pipeline.step``): the dense cell dispatches
-7 592 ops per generation and reads 164.11 ms / 233.8 MiB peak RSS / 0.33 s
-build at ``P = 500``, and 314.7 ms / 391.7 MiB / 0.40 s at ``P = 1000``.  The
-table costs exactly one ``measure_distance`` call per centre row -- 40 calls per
+process, 3 warmup + 20 timed ``Pipeline.step`` after the build step, interleaved
+rounds alternating a tree that tiles the centre to ``pop_size`` rows (and so
+takes the genome's row-wise merge) against this one, medians of 8 rounds at
+``P = 500`` and of 4 at ``P = 1000`` / ``P = 100``, ``XOR``, seed 42,
+``is_detailed=False``: ``P = 500`` **157.5 -> 111.4 ms** per generation and
+222.3 -> 198.5 MiB peak RSS, ``P = 1000`` **278.4 -> 172.3 ms** and
+352.0 -> 304.1 MiB, and the gated ``P = 100`` cell 42.6 -> 40.7 ms at
+113.4 -> 112.3 MiB.
+The dispatch count moves the other way: 7 678.7 -> 7 958.7 executed ops per
+generation at ``P = 500`` (7 682.0 -> 7 962.0 at ``P = 1000``, 5 335.7 -> 5 497.7
+on the gated cell), i.e. +7 per compatibility call, because the dense
+single-centre route is 102 ops against the merge's 94 while being about twice as
+cheap per op spent (genome-side record: 1.35 vs 2.39 ms per call at ``P = 500``).
+At these populations the interpreter's per-op cost is not the binding term; the
+row width of the merge's ``(rows, 2 * max_conns)`` intermediates is.
+The table costs exactly one ``measure_distance`` call per centre row -- 40 calls per
 generation at ``species_size = 20``, 20 here and 20 in scan 2 -- and what the
 scan buys is the *region* around those calls, not fewer of them.
-
-Measuring the same rows at the top level of the generation graph instead reads
-199.8 ms / 454.4 MiB / 0.56 s at ``P = 500`` and 339.5 ms / 809.4 MiB / 0.65 s
-at ``P = 1000``: slower and roughly twice the footprint, for the reason in
-`Peak memory` below.
 
 Pre-measuring *both* speciation scans needs a ``cond`` for scan 2's
 data-dependent ``pop[seed]`` centre and costs ~50 % more peak RSS for no timed
@@ -71,46 +77,36 @@ gain.
 Grouping several centres into one ``measure_distance`` call is a measured
 rejection and an unwired option, not a shipped path: the genome's
 ``tensorneat.genome.operations.distance.group_digest`` / ``GroupedDigest`` route
-is tested and bit-identical to the separate calls, and a dispatch-bound backend
-is where it belongs; on the numpy default the shipped wiring keeps one
-one-individual call per centre.  Measured over the whole generation at
-``P = 500`` / ``species_size = 20``, scan 1 grouped two centres per call
-dispatches 6 589 ops (-13 %) at 253.2 MiB peak RSS (+8.3 %) against the
-ungrouped 7 592 at 233.8 MiB, and its wall time is bimodal at process level:
-152-165 ms (2-5 % below the ungrouped form) in the fast mode, 196-253 ms (30-45 %
-above it) in 7 of 13 fresh default-environment processes.  The slow mode is the
-allocator's rather than the kernel's -- with ``MALLOC_MMAP_THRESHOLD_`` and
-``MALLOC_TRIM_THRESHOLD_`` pinned to 1 GiB so glibc serves from the brk heap the
-grouped cell is stable at 152.2 / 152.2 ms against 158.9 / 162.1 ms for the
-ungrouped one, an intrinsic ~4 % win -- but it is triggered by the shipped code
-under the default environment in about half of runs, and numpy is the default
-and fastest leg.
-
-The mechanism is the row width: the compatibility kernel's ``(rows,
-2 * max_conns)`` intermediates double with ``k = 2`` and grow linearly beyond
-(the same sweep reads 273.8 MiB at ``k = 2``, 353.1 at ``k = 4`` and 593 / 753
-at ``k = 10`` / ``k = 20``), and the kernel is memory-bound there, so the wider
-call's per-element cost eats the dispatch it saves: at ``k = 4`` the per-op-name
-profile of one generation moves ``argsort`` 25.5 -> 37.0 ms, ``gather``
-21.5 -> 36.1 ms, ``cast`` 8.0 -> 17.7 ms and ``reshape`` 4.3 -> 8.9 ms while
-dispatches fall 8061 -> 4885 against a 28 % wall-time increase.
-The two other ways of shipping it lose on the dense cell as well: ``k = 4``
-reads +15 % wall time and +30.5 % peak RSS at 6 004 dispatched ops, and
-pre-measuring a second table for scan 2 at ``k = 2`` reads +58 % wall time at
-6 661 ops (258.96 ms / 274.0 MiB against 164.11 ms / 233.8 MiB).
+is tested and bit-identical to the separate calls, and it is a row-wise-merge
+option only (the tiled digest carries no dense table), so it competes with the
+merge, not with the shipped one-individual call.
+Measured against that merge over the whole generation at ``P = 500`` /
+``species_size = 20``, scan 1 grouped two centres per call dispatched 6 589 ops
+(-13 %) at 253.2 MiB peak RSS (+8.3 %) against the ungrouped 7 592 at 233.8 MiB,
+and its wall time was bimodal at process level: 152-165 ms in the fast mode,
+196-253 ms in 7 of 13 fresh default-environment processes, an intrinsic ~4 % win
+only with glibc's mmap/trim thresholds pinned to 1 GiB.
+The mechanism is the row width: the kernel's ``(rows, 2 * max_conns)``
+intermediates double at ``k = 2`` and grow linearly beyond (273.8 MiB, 353.1 at
+``k = 4``, 593 / 753 at ``k = 10`` / ``k = 20``), so a wider call's per-element
+cost eats the dispatch it saves -- at ``k = 4`` the per-op-name profile moved
+``argsort`` 25.5 -> 37.0 ms, ``gather`` 21.5 -> 36.1 ms, ``cast`` 8.0 -> 17.7 ms
+and ``reshape`` 4.3 -> 8.9 ms while dispatches fell 8061 -> 4885 against a 28 %
+wall-time increase, and a second pre-measured table for scan 2 at ``k = 2`` read
++58 % wall time (258.96 ms at 6 661 ops).
 
 Peak memory
 -----------
 ``evoxc``'s numpy interpreter keeps every SSA result of a block in that block's
 environment until the block returns, and pops a nested region's environment per
 iteration.  A kernel inside a ``scan`` body therefore pays one region's
-transients at a time, while a kernel at the top level keeps its ``(pop_size,
-2 * max_conns, ...)`` intermediates alive for the rest of the generation.  The
-whole-table scan adds ~12 MiB over the floor of a generation with no distance
-kernel at all at ``P = 500`` (228.2 -> 240.5 MiB) and ~24 MiB at ``P = 1000``
-(368.2 -> 391.7 MiB), where the top-level form adds 226 / 441 MiB.  Build
-follows the same split, because a loop body is traced once and a static loop
-over ``S`` centres traces ``S`` copies of the kernel.
+transients at a time, while a kernel at the top level keeps them alive for the
+rest of the generation -- which is what the whole-table scan is for, and why the
+top-level spelling of the same rows is never used.
+The measured footprint of the shipped arrangement is the A/B's 198.5 MiB at
+``P = 500`` and 304.1 MiB at ``P = 1000``; build follows the same split, because
+a loop body is traced once while a static loop over ``S`` centres traces ``S``
+copies of the kernel.
 Any future hoist out of the region has to report peak RSS and build next to its
 wall time.
 """
@@ -142,8 +138,8 @@ class DistanceRows:
             is checked against its static shape, so a payload from a different
             generation or population size is rejected instead of silently
             measuring against a stale digest.
-        pop_size (int): Static population size ``P`` (the digest's batch and the
-            row count of every centre payload this class builds).
+        pop_size (int): Static population size ``P`` -- the digest's batch, and
+            the row count each measured centre is paired with.
 
     Raises:
         TensorNEATError: If the digest's population axis is not ``pop_size``.
