@@ -11,7 +11,9 @@ All 60 tests here are real and green on the numpy backend: 18 `test_convert` + 1
 ## How to run
 - `pytest -m parity` from the repo root (needs the `bench` extra: `pip install -e ".[bench]"`); about 20 s, dominated by evoxc build/compile in `test_forward` and `test_grad`.
 - `pytest test/parity -q` — the same suite by path; the four oracle modules call `pytest.importorskip("jax")` at module scope, so a bare environment skips rather than errors.
+- A bare `uv sync` environment (no `bench` extra) reports **22 passed, 6 skipped**: the 18 `test_convert` tests plus the 4 always-run independence tests of `test_oracle_integrity.py` pass, the four oracle modules skip at import, and the two guards that need a live oracle (`test_the_four_oracle_modules_import`, `test_collected_parity_tests_are_ratcheted`) skip with a reason naming the four uncollected modules; exit status is 0 and nothing fails.
 - `pytest test/parity/test_convert.py -q` — the only module that needs neither `jax` nor `tensorneat`: `convert.py` is plain host Python.
+- `pytest test/parity/test_oracle_integrity.py -q` — the independence checks run in any environment; the two collection guards need `jax`.
 
 ## Layout
 ```
