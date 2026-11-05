@@ -36,6 +36,12 @@ import evoxc.numpy as enp
 import numpy as np
 
 from .errors import ConfigError
+from .schedule_accelerator import (
+    cumulative_indegree,
+    is_accelerator,
+    key_template,
+    resolve_mode,
+)
 from .tools import (
     I_INF,
     KEY_MAX,
@@ -214,6 +220,7 @@ def derive_schedule(
     max_in_degree,
     key_span,
     acyclic=False,
+    kernel_mode="host",
 ):
     """Derive the execution schedule of one whole population (one evoxc graph).
 
@@ -233,6 +240,20 @@ def derive_schedule(
             in ``evoxc.cond`` only where a cycle exists. ``True`` asserts a cycle-free
             population and drops both, so a cyclic genome then gets a saturated level
             instead of ``I_INF`` (feed-forward may pass ``True``, recurrent may not).
+        kernel_mode (str): ``"host"`` (default) or ``"accelerator"`` — the formulation of
+            the schedule's two **writes**, selected at trace time on the generic
+            formulation static ``state.kernel_mode``
+            (:func:`~tensorneat.common.schedule_accelerator.kernel_mode`). ``"host"``
+            builds the dense key→slot table (:func:`key_slot_table`) and inverts the
+            entry order (:func:`edge_order`); ``"accelerator"`` resolves keys with an
+            equality template (:func:`~tensorneat.common.schedule_accelerator.key_template`)
+            and counts ``cc`` directly
+            (:func:`~tensorneat.common.schedule_accelerator.cumulative_indegree`), which
+            drops both flat ``scatter`` calls — on a compiled backend a ``scatter`` is one
+            workgroup of one thread, and those two writes are ~1.95 ms of a ``xor_p500``
+            ROCm generation while the reference interpreter pays the replacement's
+            element volume. Both formulations return **byte-identical** ``Transformed``
+            values; the returned schedule never depends on the mode.
 
     Returns:
         Transformed: the schedule described by :class:`Transformed` — arrays only,
@@ -240,7 +261,8 @@ def derive_schedule(
 
     Raises:
         tensorneat.common.errors.ConfigError: At trace time, for a non-positive or
-            shape-inconsistent static, or for key arrays of differing dtypes.
+            shape-inconsistent static, for key arrays of differing dtypes, or for a
+            ``kernel_mode`` outside ``{"host", "accelerator"}``.
 
     Notes:
         One helper per step, each individually testable: :func:`key_slot_table`,
@@ -252,12 +274,15 @@ def derive_schedule(
         A key outside ``[0, key_span)`` and an input/output key no node holds cannot
         raise in-graph, so both surface as ``I_INF`` slots (a miss): the host that
         owns the payload refuses such a payload, this kernel reports, never guesses.
+        The formulation switch is a host ``if`` on a static string, never on a traced
+        value, so a graph holds exactly one of the two routes.
     """
     pop_size = _positive_static(pop_size, "pop_size")
     max_nodes = _positive_static(max_nodes, "max_nodes")
     max_conns = _positive_static(max_conns, "max_conns")
     max_in_degree = _positive_static(max_in_degree, "max_in_degree")
     key_span = _positive_static(key_span, "key_span")
+    kernel_mode = resolve_mode(kernel_mode)
     _check_shape(node_keys, (pop_size, max_nodes), "node_keys")
     _check_shape(conn_in, (pop_size, max_conns), "conn_in")
     _check_shape(conn_out, (pop_size, max_conns), "conn_out")
@@ -275,15 +300,15 @@ def derive_schedule(
                 f"{name} dtype {tensor.dtype} must match node_keys dtype {node_keys.dtype}"
             )
 
-    table = key_slot_table(node_keys, key_span)
-    src = _slot_of(table, conn_in, key_span)
-    dst = _slot_of(table, conn_out, key_span)
+    resolve = _key_resolver(node_keys, key_span, kernel_mode)
+    src = resolve(conn_in)
+    dst = resolve(conn_out)
     edge_valid = enp.logical_and(
         enp.not_equal(src, _iinf_like(src)), enp.not_equal(dst, _iinf_like(dst))
     )
-    input_slot = _slot_of(table, _row_broadcast(input_keys, pop_size), key_span)
-    output_slot = _slot_of(table, _row_broadcast(output_keys, pop_size), key_span)
-    order, cc = edge_order(dst, edge_valid, max_nodes, max_conns)
+    input_slot = resolve(_row_broadcast(input_keys, pop_size))
+    output_slot = resolve(_row_broadcast(output_keys, pop_size))
+    order, cc = edge_order(dst, edge_valid, max_nodes, max_conns, kernel_mode)
     in_conn, in_src, edge_overflow = incoming_table(
         order, cc, src, max_nodes, max_in_degree
     )
@@ -316,6 +341,48 @@ def derive_schedule(
 
 
 # ===================================================================== the steps
+def _key_resolver(node_keys, key_span, kernel_mode):
+    """Pick the ``(P, L)`` key → node-slot resolver of one population.
+
+    Args:
+        node_keys: ``(P, N)`` node key column, ``int32`` with ``I_INF`` padding or
+            ``float32`` with ``NaN`` padding.
+        key_span (int): ``S``, the static key-magnitude bound.
+        kernel_mode (str): ``"host"`` builds :func:`key_slot_table` once and gathers
+            through it; ``"accelerator"`` builds the scatter-free equality template of
+            :func:`~tensorneat.common.schedule_accelerator.key_template`.
+
+    Returns:
+        A callable ``resolve(keys)`` returning ``(P, L) int32`` slots in ``[0, N)`` with
+        ``I_INF`` on a miss — :func:`_slot_of`'s contract, whichever route is selected.
+
+    Notes:
+        The single selection point of the schedule's key-resolution formulation, and the
+        one place the two routes share their inputs: both are addressed by
+        :func:`_key_indices`'s sanitized ``int32`` cells, so the routes cannot disagree
+        about which keys are visible. The host route is *built* lazily here (the table is
+        one traced scatter) and the accelerator route derives no table at all.
+    """
+    pop_size, max_nodes = (int(size) for size in node_keys.shape)
+    if is_accelerator(kernel_mode):
+        cells, visible = _key_indices(node_keys, key_span)
+        resolve = key_template(cells, visible, _node_slots(pop_size, max_nodes))
+
+        def slot_of(keys):
+            """Resolve one key block through the equality template."""
+            query_cells, query_visible = _key_indices(keys, key_span)
+            return resolve(query_cells, query_visible)
+
+        return slot_of
+    table = key_slot_table(node_keys, key_span)
+
+    def slot_of(keys):
+        """Resolve one key block through the dense table."""
+        return _slot_of(table, keys, key_span)
+
+    return slot_of
+
+
 def key_slot_table(node_keys, key_span):
     """Build the dense per-genome key→node-slot table.
 
@@ -378,13 +445,17 @@ def _slot_of(table, keys, key_span):
     return evoxc.select(in_range, values, _scalar_constant(I_INF, evoxc.int32))
 
 
-def edge_order(dst, edge_valid, max_nodes, max_conns):
+def edge_order(dst, edge_valid, max_nodes, max_conns, kernel_mode="host"):
     """Stable entry order of the ``C + N`` combined entries plus in-degree prefixes.
 
     Args:
         dst: ``(P, C)`` ``int32`` destination slots; ``I_INF`` where the row is
             absent or unmatched; edge_valid: ``(P, C)`` ``bool`` from the lookup.
         max_nodes (int): ``N``; max_conns (int): ``C``.
+        kernel_mode (str): ``"host"`` (default) inverts the entry order with one flat
+            ``scatter``; ``"accelerator"`` counts ``cc`` directly with
+            :func:`~tensorneat.common.schedule_accelerator.cumulative_indegree`. Both
+            return the same ``(order, cc)`` byte for byte.
 
     Returns:
         tuple: ``(order, cc)``. ``order`` ``(P, C + N)`` ``int32`` is the stable
@@ -396,26 +467,35 @@ def edge_order(dst, edge_valid, max_nodes, max_conns):
         i - 1`` (``count = cc[i] - cc[i - 1]``) — the position range
         :func:`incoming_table` gathers its window over.
 
+    Raises:
+        tensorneat.common.errors.ConfigError: At trace time, for a non-positive static,
+            a ``dst`` whose connection axis is not ``max_conns``, or a ``kernel_mode``
+            outside ``{"host", "accelerator"}``.
+
     Notes:
         **One** stable ``argsort`` over the ``C + N`` combined entries — edge rows
         keyed ``2 * dst``, node slots keyed ``2 * slot + 1`` — answers both halves:
         the returned ``order`` carries the connection ids in ``(dst, connection
-        index)`` order, and its inverse ``inv`` (one scatter, the ``cumsum``-free way
-        to turn a permutation into per-node prefixes) gives ``cc[i] = inv[C + i] -
-        i``, because exactly ``cc[i]`` valid edges and ``i`` node entries sort below
-        node entry ``C + i``. ``stable=True`` keeps connection order inside a
-        destination group; keys stay in ``[0, 2 * N + 2]`` (an edge key precedes its
-        own node key, an invalid row is keyed past the last one), so
-        :func:`_narrow_int` picks a radix-sortable carrier: ``int8`` for ``N <=
-        62``, ``int16`` for ``N <= 16382``, else ``int32``.
+        index)`` order, and ``cc`` is the number of valid edges sorting below node
+        entry ``C + i`` (exactly ``cc[i]`` valid edges and ``i`` node entries do).
+        ``stable=True`` keeps connection order inside a destination group; keys stay in
+        ``[0, 2 * N + 2]`` (an edge key precedes its own node key, an invalid row is
+        keyed past the last one), so :func:`_narrow_int` picks a radix-sortable
+        carrier: ``int8`` for ``N <= 62``, ``int16`` for ``N <= 16382``, else
+        ``int32``.
 
-        The ``int32`` permutation is cast **once** and returned as ``order``: it
-        feeds the inverse scatter and the ``order``/``src`` gathers of
-        :func:`incoming_table`, which is what makes the window a gather instead of
-        a scatter (see that function's ``Notes``).
+        The ``int32`` permutation is cast **once** and returned as ``order``: it feeds
+        the ``order``/``src`` gathers of :func:`incoming_table`, which is what makes the
+        window a gather instead of a scatter (see that function's ``Notes``). Only the
+        **inverse** permutation is formulation-dependent: the host route inverts with a
+        ``(P, C + N)`` flat ``scatter`` (75 000 serialised writes at ``xor_p500``,
+        measured at 1.40 ms of a ROCm generation) and the accelerator route counts the
+        same predicate over a ``(P, N, C)`` table instead. The ``argsort`` and the
+        returned ``order`` are identical on both routes.
     """
     max_nodes = _positive_static(max_nodes, "max_nodes")
     max_conns = _positive_static(max_conns, "max_conns")
+    kernel_mode = resolve_mode(kernel_mode)
     pop_size, width = dst.shape
     pop_size, width = int(pop_size), int(width)
     if width != max_conns:
@@ -439,6 +519,8 @@ def edge_order(dst, edge_valid, max_nodes, max_conns):
         ),
         evoxc.int32,
     )
+    if is_accelerator(kernel_mode):
+        return order, cumulative_indegree(dst, edge_valid, max_nodes)
     total = max_conns + max_nodes
     positions = _node_slots(pop_size, total)
     # ``order`` is a permutation of ``0..total-1`` on every row, so every cell of

@@ -16,7 +16,10 @@ Public surface:
   plus :func:`~tensorneat.common.tools.to_numpy`, the host-side array accessor
   every logging/checkpoint path uses.
 * :class:`Transformed`, :func:`derive_schedule`, :func:`validate_schedule` —
-  the execution schedule that makes a ragged evolution problem static-shape.
+  the execution schedule that makes a ragged evolution problem static-shape,
+  plus :func:`kernel_mode` — the resolver of the generic formulation static
+  ``state.kernel_mode`` that selects the schedule's host or accelerator
+  spellings (:mod:`~tensorneat.common.schedule_accelerator`).
 * :func:`~tensorneat.common.host_graph.decode_graph`,
   :func:`~tensorneat.common.host_graph.topological_sort` and
   :func:`~tensorneat.common.host_graph.find_useful_nodes` — the host-only graph
@@ -60,6 +63,7 @@ from .tools import (
 )
 
 from .tensorization import Transformed, derive_schedule, validate_schedule
+from .schedule_accelerator import kernel_mode
 
 from .host_graph import decode_graph, find_useful_nodes, topological_sort
 
@@ -100,6 +104,7 @@ __all__ = [
     "Transformed",
     "derive_schedule",
     "validate_schedule",
+    "kernel_mode",
     # host-only graph walks
     "decode_graph",
     "topological_sort",
