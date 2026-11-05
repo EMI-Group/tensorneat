@@ -14,8 +14,9 @@ The package surface is pinned too: `test_exports.py` checks that every documente
 `test_parent_selection.py` (22) — survivor prefix, elite pinning, father-wins-tie, per-block draws, `elite_mask`.
 `test_neat_tell.py` (37) — `_sanitize_fitness`, `tell` order/determinism/shape preservation, stagnation, `ask`/`transform`/`forward` wiring, `_batched` chunking, constructor validation.
 `test_exports.py` (4) — the `tensorneat.algorithm` public surface: each documented spelling resolves to the class its defining submodule exposes, appears in `__all__`, and every `__all__` entry resolves via `getattr`.
+`test_substrate.py` (114) — the HyperNEAT substrate geometry and its validation matrix, on plain host NumPy: no graph, no runner, no `State`.
 `conftest.py` — module fixtures, the `SpeciesState`/`State` table factories, and the two graph runners.
-Whole directory: 148 passed, 0 xfailed, 0 failed, 0 skipped in ~4 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
+Whole directory: 262 passed, 0 xfailed, 0 failed, 0 skipped in ~4 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
 
 ## Fixtures (`conftest.py`)
 Module fixtures return modules only: `species` (`tensorneat.algorithm.neat.species`), `neat_module` (`neat.py`), `common`, `errors`, `payloads` (`support.payloads`).
@@ -52,7 +53,7 @@ Files stay under ~1000 lines (`test_neat_tell.py` sits at 993, `test_speciation.
 `test/release_gate_no_jax.py`'s resolved-surface list names `tensorneat.algorithm.NEAT`/`HyperNEAT` only, while `src/tensorneat/CONTEXT.md` documents `tensorneat.algorithm.HyperNEATFeedForward` as well; the package now re-exports it and `./test_exports.py` pins it, and the release-gate list is test-owned (reported upward).
 
 ## Coverage gaps in this directory
-`../../../src/tensorneat/algorithm/hyperneat/**` has no behavioural test anywhere in the tree: `HyperNEAT`, `HyperNEATFeedForward`, `HyperNEATNode`, `HyperNEATConn`, `SubstrateSchedule` and the four substrate classes are touched only by `./test_exports.py` (identity and `__all__`) and by `../../release_gate_no_jax.py` (an attribute name), so their setup/transform/forward/tell and the substrate geometry are exercised only by `../../../examples/func_fit/xor_hyperneat.py` and `xor_hyperneat_feedforward.py`, which assert nothing.
+`../../../src/tensorneat/algorithm/hyperneat/**` is still mostly untested: `HyperNEAT`, `HyperNEATFeedForward`, `HyperNEATNode`, `HyperNEATConn` and `SubstrateSchedule` are touched only by `./test_exports.py` (identity and `__all__`) and by `../../release_gate_no_jax.py` (an attribute name), so their setup/transform/forward/tell are exercised only by `../../../examples/func_fit/xor_hyperneat.py` and `xor_hyperneat_feedforward.py`, which assert nothing; the substrate geometry (helpers, `DefaultSubstrate`, `FullSubstrate`, `MLPSubstrate`, both `analysis_substrate` functions and the validation matrix) is covered by `./test_substrate.py`.
 `_distance.DistanceRows` is never constructed here: `./test_speciation.py` hands `speciate` a fake table-reading `distance_fn`, so `matrix`, `population_shaped`, the batch-1 tiling, the digest/population checks and both `TensorNEATError` rejections are unverified except indirectly through the small `tell` runs of `./test_neat_tell.py` (which reach only the batch-`pop_size` route of `row`).
 The dense `speciate` branch is reachable from no test in the tree: `_kernels.GATED_ROWS` is `6000`, this directory tops out at `S * P = 32` and `../../integration` at `10 * 100`, so `distance_fn.matrix` and the "needs a digest-backed distance_fn" rejection at `_kernels.speciate` are untested although every real run at `pop 500`/`1000` takes that branch.
 `_keys.node_keys_for_split`/`first_free_keys`/`validate_key_space` have no assertion anywhere: the allocator runs inside `NEAT.tell`, but no test checks that offspring node keys are unique, inside `[0, key_span)` or produced by the fallback.
@@ -76,5 +77,6 @@ Deterministic and fast: no timing, no network, no GPU, no `tmp_path` persistence
 | `./test_parent_selection.py` | survivor prefix, one-member species, elite pinning and `elite_mask`, father-wins-tie, per-block draws, RNG hygiene. |
 | `./test_neat_tell.py` | `_sanitize_fitness`, `tell` order/shape/determinism, stagnation, `ask`/`transform`/`forward`, chunking, constructor validation. |
 | `./test_exports.py` | `tensorneat.algorithm.__all__` and the documented spellings (`BaseAlgorithm`, `NEAT`, `HyperNEAT`, `HyperNEATFeedForward`), including the identity with the defining submodule. |
+| `./test_substrate.py` | HyperNEAT substrate geometry on plain host NumPy: `node_key_blocks`/`cartesian_product`/`layer_coors`/`as_coor_array`/`check_same_coordinate_dim`, `DefaultSubstrate` re-exposure and `__repr__`, `FullSubstrate` and `MLPSubstrate` row blocks plus both `analysis_substrate` functions, and the whole validation matrix. |
 | `./conftest.py` | module fixtures, table factories, `species_kernel`/`raw_kernel`. |
 | `../../../src/tensorneat/algorithm/neat` | code under test (`NEAT`, `SpeciesController`, `_kernels`, `_validation`) — read-only, escalate changes upward. |
