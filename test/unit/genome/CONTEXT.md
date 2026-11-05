@@ -40,9 +40,6 @@ The digest's bit-identity rests on a *shared* scalar tail (`_scalar_distance`) a
 The node family's float attribute term (`|delta|` over bias/response) has no numeric oracle; only the connection weight and the activation int column are pinned.
 `test_distance_is_deterministic` replays one cached executable, not two independent builds.
 `measure_distance`'s key-span guard is a *host* guard: inside a trace every field is a `SymbolicTensor`, `_host_array` returns `None`, and the dense route then measures the unaddressable key as if it were absent instead of raising, so only the host entry point (`test_distance.py`) pins the refusal.
-Nothing here prices the forward pass: the only traced-op budget is `test_distance_digest.py`'s `MEASURE_OP_CEILING`/`PREPARE_OP_CEILING` (over `prepare_distance`/`measure_distance`), so added or removed ops in the level loop or in the value seed pass the suite unpriced.
-`test_forward.py::test_a_network_deeper_than_max_depth_leaves_its_tail_nan` pins the depth bound only at `max_depth=2`, so a loop whose last iteration reaches past `limit` (an unrolled body whose masks run `level .. level+U-1`) still passes there whenever `U <= limit`; no test clamps the bound at a deeper `max_depth`.
-The `nan_pad is None` value-seed branch (a payload with no non-input row) is never taken: every constructive path has `max_nodes >= num_inputs + num_outputs` with `num_outputs >= 1`, so the tail is at least one column wide.
 
 ## Conventions
 Inputs are `scope="module"` fixtures resolved through `support.lazy.require`, so no module-scope `tensorneat`/`support` import; `pytest`, `numpy` and (in `test_payload.py`) `evoxc.random` are the only module-scope imports.
