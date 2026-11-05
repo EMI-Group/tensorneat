@@ -5,7 +5,7 @@ Everything in a NEAT generation that is neither network mathematics (genome) nor
 `NEAT` (`neat.py`) is the algorithm the pipeline drives; `SpeciesController` + `SpeciesState` (`species.py`) own the species algebra; `_distance.py` owns the compatibility-distance rows over one generation's population digest.
 Every kernel here is batch-first over `P = pop_size` and compiled by `pipeline.py` into the single per-generation evoxc graph, so no function may branch on a traced value or read the host.
 Current per-generation cost is recorded in `benchmarks/PERF_NUMPY.md` and under `## Measured Cost`: the interpreter, not the data, dominates, and the padded gene axis is what multiplies every per-pair op.
-The dense distance table is 2 755 of the `xor_p500` generation's 6 589 dispatched ops, the rest being evaluation and breeding, and the layer's own work is one population digest plus those distance calls in `speciate` and `O(pop_size)` selection/crossover/mutation; it never materialises a `max_nodes × max_nodes` tensor (`## Executed-Op Inventory`, `## Distance Rows`).
+The dense distance table is 3 675 of the `xor_p500` generation's 7 592 dispatched ops, the rest being evaluation and breeding, and the layer's own work is one population digest plus those distance calls in `speciate` and `O(pop_size)` selection/crossover/mutation; it never materialises a `max_nodes × max_nodes` tensor (`## Executed-Op Inventory`, `## Distance Rows`).
 
 ## Layout (six files, all near the ~1000-line baseline)
 `species.py` — `SpeciesState` plus `SpeciesController`: the species algebra, each method delegating its tensor body to `_kernels.py`.
