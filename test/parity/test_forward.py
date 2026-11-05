@@ -307,6 +307,41 @@ def test_batch_of_individuals_matches_legacy_per_individual(
     )
 
 
+# --------------------------------------------------------------------------- layout
+def test_output_indices_agree_between_libraries(genome_pair):
+    """Invariant: both genomes name the same node keys as outputs (the row/key invariant).
+
+    Oracle: the two host-side accessors — the rewrite's ``get_output_idx`` pins the
+    output keys to rows ``max_nodes - num_outputs .. max_nodes - 1``
+    (``src/tensorneat/genome/host.py``), the legacy one returns the last dense
+    layer of ``[num_inputs] + init_hidden_layers + [num_outputs]``
+    (``benchmarks/legacy_jax/tensorneat_legacy/genome/base.py``).
+    ``./conftest.genome_pair`` sets ``init_hidden_layers`` from
+    :func:`convert.legacy_init_hidden_layers` precisely so the two agree; if they
+    ever disagreed, "the output node" would mean a different key on each side and
+    every value comparison below would be reading different rows.
+
+    Assertion: on the default layout (2 inputs, 1 output, ``max_nodes=8``, hidden
+    layer 5) ``pair.new_genome.get_output_idx() == pair.legacy_genome.get_output_idx()``
+    and both equal ``list(range(max_nodes - num_outputs, max_nodes))``.
+    """
+    max_nodes, num_inputs, num_outputs = 8, 2, 1
+    pair = genome_pair(
+        num_inputs=num_inputs, num_outputs=num_outputs, max_nodes=max_nodes
+    )
+
+    new_idx = pair.new_genome.get_output_idx()
+    legacy_idx = pair.legacy_genome.get_output_idx()
+    assert new_idx == legacy_idx, (
+        f"output keys disagree: rewrite {new_idx}, legacy {legacy_idx} "
+        f"(max_nodes={max_nodes}, num_inputs={num_inputs}, num_outputs={num_outputs})"
+    )
+    assert new_idx == list(range(max_nodes - num_outputs, max_nodes)), (
+        f"output keys {new_idx} are not the last {num_outputs} rows of "
+        f"{max_nodes} node rows"
+    )
+
+
 # --------------------------------------------------------------------------- transforms
 def test_input_transform_matches_legacy(payloads, genome_pair, new_forward, legacy_forward):
     """Invariant: ``input_transform`` is applied to ``inputs`` *before* the input rows are seeded.

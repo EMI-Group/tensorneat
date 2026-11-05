@@ -5,12 +5,15 @@ Prove that the evoxc rewrite computes the *same numbers* as `../benchmarks/legac
 Parity compares **kernels on identical inputs only**: one hand-built genome, one hand-built input batch, two implementations.
 It never compares RNG draws, initial populations, mutations, crossovers or `genome.hash()` — those differ by construction (`evoxc.random` splitmix64 vs `jax.random`, float32 row hash vs the legacy encoding) and a test that compared them would be asserting on the wrong thing.
 The legacy library is the oracle; this directory is the only place in the repo allowed to import `jax`.
-All 53 tests here are real and green on the numpy backend: 18 `test_convert` + 12 `test_forward` + 5 `test_distance` + 13 `test_fitness` + 5 `test_grad`; the directory must report **zero skips**.
+All 60 tests here are real and green on the numpy backend: 18 `test_convert` + 13 `test_forward` + 5 `test_distance` + 13 `test_fitness` + 5 `test_grad` + 6 `test_oracle_integrity`; with the `bench` extra the directory must report **zero skips**.
+`test_oracle_integrity.py` guards the evidence itself: that the oracle is genuinely separate code, that the four `importorskip` modules are actually collected when `jax` is installed, and that the directory's collected count never silently shrinks.
 
 ## How to run
 - `pytest -m parity` from the repo root (needs the `bench` extra: `pip install -e ".[bench]"`); about 20 s, dominated by evoxc build/compile in `test_forward` and `test_grad`.
 - `pytest test/parity -q` — the same suite by path; the four oracle modules call `pytest.importorskip("jax")` at module scope, so a bare environment skips rather than errors.
+- A bare `uv sync` environment (no `bench` extra) reports **22 passed, 6 skipped**: the 18 `test_convert` tests plus the 4 always-run independence tests of `test_oracle_integrity.py` pass, the four oracle modules skip at import, and the two guards that need a live oracle (`test_the_four_oracle_modules_import`, `test_collected_parity_tests_are_ratcheted`) skip with a reason naming the four uncollected modules; exit status is 0 and nothing fails.
 - `pytest test/parity/test_convert.py -q` — the only module that needs neither `jax` nor `tensorneat`: `convert.py` is plain host Python.
+- `pytest test/parity/test_oracle_integrity.py -q` — the independence checks run in any environment; the two collection guards need `jax`.
 
 ## Layout
 ```
@@ -19,14 +22,16 @@ test/parity/
   conftest.py       lazy legacy/new imports + the fixture set that builds one genome in both libraries
   convert.py        the two-way column-layout conversion and the max_in_degree / hidden-layer rules
   test_convert.py   real tests of convert.py (18)
-  test_forward.py   forward values + NaN pattern: chain, skipped node, isolated node, 5 random DAGs, 3-individual batch, input/output transform, lossless-schedule guard (12)
+  test_oracle_integrity.py  oracle independence + collection guard + collected-count ratchet (6)
+  test_forward.py   forward values + NaN pattern: chain, skipped node, isolated node, 5 random DAGs, 3-individual batch, matching output keys, input/output transform, lossless-schedule guard (13)
   test_distance.py  execute_distance: exact 0, 0.125, attribute-only 0.4/0.45, batch-vs-pairwise, empty pair (5)
   test_fitness.py   problem.XOR / XOR3d fitness, all four error_method values, mape denominator, the NaN divergence (13)
   test_grad.py      gradient values against jax.grad of the same loss, single-option ACT/AGG (5)
 ```
 
 ## What each oracle module pins
-- `test_forward.py` — values within `rtol=1e-5, atol=1e-6` **and** identical NaN positions, on payloads one edge set wide of the legacy dense column; the skipped-node perturbation leaves both read-outs bit-identical; the 3-individual batch proves the population axis is a pure batch axis (`P` rows in one call == `P` legacy calls); `input_transform`/`output_transform` are shown to be applied (they match the legacy run *and* differ from / relate to the untransformed one).
+- `test_forward.py` — values within `rtol=1e-5, atol=1e-6` **and** identical NaN positions, on payloads one edge set wide of the legacy dense column; the skipped-node perturbation leaves both read-outs bit-identical; the 3-individual batch proves the population axis is a pure batch axis (`P` rows in one call == `P` legacy calls); `pair.new_genome.get_output_idx() == pair.legacy_genome.get_output_idx() == list(range(max_nodes - num_outputs, max_nodes))` on the default layout; `input_transform`/`output_transform` are shown to be applied (they match the legacy run *and* differ from / relate to the untransformed one).
+- `test_oracle_integrity.py` — the differential evidence itself: the frozen tree `../../benchmarks/legacy_jax/tensorneat_legacy` exists with `__init__.py` and at least 20 `.py` files; an AST scan of every `.py` there finds real `import jax` / `from jax… import` statements (jax is never imported to prove it); no file in that tree imports the top name `tensorneat` and no `benchmarks/legacy_jax/tensorneat` directory shadows it; `importlib.util.find_spec("tensorneat")` resolves under `../../src/tensorneat` and outside the oracle tree; each of the four `importorskip` modules imports cleanly while `jax` is installed (a module-scope skip then fails naming the module and reason); and a `pytest --collect-only` subprocess over this directory reports exactly the documented number of collected tests.
 - `test_distance.py` — identical payloads give exactly `0` with `==` (what speciation depends on); one extra connection gives `0.125`; doubled weights give `0.4`; a node-attribute shift adds `1.0*0.4/8 = 0.05`; the four-value batch is pairwise distinct so a cross-population reduction cannot pass; two empty genomes give `0`, not `NaN`.
 - `test_fitness.py` — `mse`/`rmse`/`mae`/`mape` on XOR and XOR3d match the legacy problem layer; `mape` divides by the target so a zero target is `-inf` on both sides (asserted with `==`); the rewrite's NaN → `-inf` mapping is pinned as the one deliberate divergence.
 - `test_grad.py` — the differentiated loss matches at forward tolerance; `sum(conn_grad, axis=0)[:, 0]` matches the legacy weight column and `sum(node_grad, axis=0)[:, :2]` the legacy bias/response columns (`rtol=1e-4, atol=1e-5`); integer id columns and the legacy key column are exactly `0`; absent rows carry exactly `0`, never `NaN`; the two edges into a bypassed node carry `0`.
@@ -77,8 +82,7 @@ Only `activation="sigmoid"` / `aggregation="sum"` are ever configured (`./confte
 `_assert_matches` compares values only where both sides are finite (`./test_forward.py:81-82`) and the five random-DAG cases never assert finiteness (`./test_forward.py:258`), so a case whose output row is unreachable compares NaN patterns only.
 Never parity-compared at all: `initialize`, mutation, crossover, `NEAT.tell`/speciation, the `Pipeline`, `RecurrentGenome`, HyperNEAT, the three RL problems, `network_dict`/`sympy_func`/`visualize`; `execute_distance` is the only genetic-operator kernel with an oracle.
 Parity runs on the numpy interpreter only (`../../support/runner.py` `DEFAULT_BACKEND`); a compiled backend's agreement with the oracle is inferred from its agreement with numpy (`../backends`).
-Without `jax` or `benchmarks/legacy_jax` the four oracle modules skip at module scope (`./test_forward.py:50`, `./test_distance.py:57`, `./test_fitness.py:49`, `./test_grad.py:58`, `./conftest.py:141-145`) and `pytest -m parity` exits 0 with `18 passed` — nothing asserts that 53 tests ran.
-`./test_convert.py:275-301`'s docstring claims `new_genome.get_output_idx() == legacy_genome.get_output_idx()`, but no test in this directory calls `get_output_idx`; the layout rule is only validated indirectly through forward values.
+The four oracle modules still skip at module scope when `jax` is absent (`./test_forward.py:50`, `./test_distance.py:57`, `./test_fitness.py:49`, `./test_grad.py:58`), so that environment compares no kernel; `./test_oracle_integrity.py` makes that state explicit (a skip reason naming the four uncollected modules) instead of silent, and fails when a module skips although `jax` is installed.
 
 ## Tolerances
 `forward` values — `np.allclose(rtol=1e-5, atol=1e-6)` on `float32`, **plus** `np.isnan(new) == np.isnan(old)` elementwise: `NaN` is data here, so a matching `NaN` is as binding as a matching number.
@@ -101,6 +105,7 @@ RNG, `initialize`, mutation and crossover are never compared, at any tolerance.
 `pytestmark = [pytest.mark.parity]` at module scope in every module here, so `-m parity` selects the directory and `-m "not parity"` excludes it.
 The four oracle modules call `pytest.importorskip("jax", reason=...)` at module scope immediately after `pytestmark`; `jax` is otherwise imported only inside fixture/test bodies, always after that guard.
 Every test here is a real assertion: no `pytest.skip` body remains, and a module that unexpectedly skips is a defect in the module.
+The only skips are the four module-scope `importorskip` guards and the two `jax`-dependent guards of `./test_oracle_integrity.py`, all with a reason naming what is not collected.
 Docstrings state invariant / oracle / assertion for each test and are kept free of history wording.
 No network, no GPU, `backend="numpy"` everywhere (`support.runner`'s default).
 Shapes stay small (`max_nodes == 8`, `max_conns == 16`, `pop <= 8`).
@@ -110,6 +115,8 @@ Only `test_forward`'s random-DAG cases draw random numbers, from the `rng` fixtu
 `pytest`'s prepend import mode names a test module by its bare basename, so `test_forward.py`/`test_distance.py`/`test_grad.py` here collide with `../unit/genome/'s` modules of the same names and abort the whole session with `import file mismatch`; `__init__.py` makes pytest resolve this directory through its package path instead, and must not be deleted.
 `../src/tensorneat` and `../benchmarks/legacy_jax` are read-only inputs: a needed change there goes into the report to the parent, never into this directory's diff.
 `./convert.py` must stay plain Python — no `evoxc`, no `jax`, no tracing — so test collection never depends on either library.
+`./test_oracle_integrity.py` pins `EXPECTED_COLLECTED_TESTS = 60`, the count a real `pytest --collect-only -q` subprocess must report for this directory while `jax` is installed; update that constant when a parity test is added or removed, never lower it to make a skip pass.
+That module reads the oracle's sources with `ast` and never imports `jax` at module scope, so its four independence tests run in a bare environment.
 `../pyproject.toml` (markers, `testpaths`) is read-only; `parity` is already declared there.
 Suite output is deterministic: the only randomness is the `rng` fixture, seeded from the test id.
 Files stay under ~1000 lines.
@@ -120,7 +127,8 @@ Files stay under ~1000 lines.
 | `./conftest.py` | Lazy legacy/new imports and the fixture set that builds one genome in both libraries. |
 | `./convert.py` | Column-layout conversion, `max_in_degree` and hidden-layer rules (plain Python, no libraries). |
 | `./test_convert.py` | Real tests of `convert.py`: layouts, round trip, rejections, layout rules (18). |
-| `./test_forward.py` | `forward` parity: values + NaN pattern on chains, skipped/isolated nodes, random DAGs, transforms, the lossless-schedule guard (12). |
+| `./test_forward.py` | `forward` parity: values + NaN pattern on chains, skipped/isolated nodes, random DAGs, matching output keys, transforms, the lossless-schedule guard (13). |
+| `./test_oracle_integrity.py` | Oracle independence (AST scan of the legacy tree, import-origin check), the four modules' collection guard, and the 60-test collected-count ratchet (6). |
 | `./test_distance.py` | `execute_distance` parity: exact `0`, `0.125`, `0.4`/`0.45`, batch-vs-pairwise, empty pair (5). |
 | `./test_fitness.py` | `problem.XOR`/`XOR3d` parity for the four `error_method` values + the NaN divergence (13). |
 | `./test_grad.py` | `grad` parity against `jax.grad` of the same loss, single-option ACT/AGG (5). |

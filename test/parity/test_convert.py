@@ -279,17 +279,15 @@ def test_legacy_layout_puts_the_outputs_at_the_end(
 
     Oracle: the legacy ``BaseGenome.__init__`` layer construction
     (``[num_inputs] + init_hidden_layers + [num_outputs]``) against the rewrite's
-    row/key invariant (output keys are the last ``num_outputs`` rows).  The
-    rewrite's ``get_output_idx()`` must equal the legacy ``get_output_idx()`` for
-    that layout, and the legacy constructor's capacity requirement is
-    ``I * H + H * O`` edges.
+    row/key invariant (output keys are the last ``num_outputs`` rows); the legacy
+    constructor's capacity requirement is ``I * H + H * O`` edges.
 
     Assertion: ``legacy_init_hidden_layers(...) == (H,)``,
-    ``legacy_initial_edge_count(...) == I * H + H * O``, and — once the two genomes
-    are importable — ``pair.new_genome.get_output_idx() ==
-    pair.legacy_genome.get_output_idx()`` (the last half is covered by
-    ``./conftest.genome_pair``, which uses exactly this layout).  ``ValueError``
-    when ``I + O > N``.
+    ``legacy_initial_edge_count(...) == I * H + H * O``, and ``ValueError`` when
+    ``I + O > N``.  The resulting equality of the two ``get_output_idx()`` lists
+    needs both genomes and is therefore asserted in ``./test_forward.py``
+    (``test_output_indices_agree_between_libraries``): this module stays
+    library-free.
     """
     assert convert.legacy_init_hidden_layers(max_nodes, num_inputs, num_outputs) == (hidden,)
     assert (

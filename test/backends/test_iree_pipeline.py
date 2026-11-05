@@ -26,14 +26,19 @@ configuration, after which a generation is milliseconds; the whole module stays
 well under two minutes. The three tests share one iree and one numpy run through
 module-scoped fixtures, so the iree compile happens once.
 
-Run it (the extra is optional; without it the module skips):
+Run it:
 
-    uv pip install "evoxc[iree]"          # iree-base-compiler + iree-base-runtime
-    pytest -q test/backends               # or: pytest -m requires_iree
+    uv sync --extra iree                  # or: uv pip install "evoxc[iree]"
+    pytest -q test/backends               # or: pytest -q -m requires_iree
 
-``pytest.importorskip("iree")`` below is a structural skip, not a disabled test:
-the import exists only when the extra is installed, and the same file then runs
-its assertions for real.
+``pytest.importorskip("iree")`` below is a structural optional-dependency skip,
+not a disabled test: the import exists only when the extra is installed, and the
+same file then runs its assertions for real.  The two ways of reaching this
+module have deliberately different consequences when the extra is absent, and
+``conftest.py`` enforces the difference: a whole-tree/default run (or merely
+naming this directory) keeps the one structural skip, while ``-m requires_iree``
+-- a run that explicitly asks for the compiled-backend leg -- fails with the
+install command instead of reporting a green "1 skipped".
 """
 
 from __future__ import annotations
@@ -46,8 +51,12 @@ import pytest
 pytest.importorskip(
     "iree",
     reason=(
-        "the iree backend is an optional extra; install it with "
-        '`uv pip install "evoxc[iree]"` (iree-base-compiler + iree-base-runtime)'
+        "structural optional-dependency skip: the compiled-backend suite needs "
+        "the optional iree extra, which is not installed; install it with "
+        '`uv sync --extra iree` (equivalently `uv pip install "evoxc[iree]"`: '
+        "iree-base-compiler + iree-base-runtime). A default or whole-tree run "
+        "skips this module on purpose; an explicit `pytest -m requires_iree` run "
+        "fails in ./conftest.py instead of skipping silently."
     ),
 )
 
@@ -230,8 +239,40 @@ def test_iree_matches_numpy_on_the_same_seed(
     equal (key generation is integer-only: randint, comparison, select, so no
     backend may differ there); the float32 attribute payloads and the fitness
     vectors agree to :data:`FLOAT_RTOL` / :data:`FLOAT_ATOL`, never to ``==``.
+    Both fixtures are also pinned to the *same* configuration and seed first, and
+    every float comparison must see a finite, non-zero entry, so agreement can
+    never be established by comparing padding against padding.
     """
     assert len(iree_run.trace) == len(numpy_run.trace) == GENERATIONS
+
+    # A comparison is only meaningful between the same run configuration, so pin
+    # the values both fixtures were built from before looking at a number.
+    iree_config = (
+        iree_run.pipeline.backend,
+        iree_run.pipeline.seed,
+        iree_run.pipeline.algorithm.pop_size,
+        iree_run.pipeline.algorithm.genome.num_inputs,
+        iree_run.pipeline.algorithm.genome.num_outputs,
+        iree_run.pipeline.algorithm.genome.max_nodes,
+        iree_run.pipeline.algorithm.genome.max_conns,
+    )
+    numpy_config = (
+        numpy_run.pipeline.backend,
+        numpy_run.pipeline.seed,
+        numpy_run.pipeline.algorithm.pop_size,
+        numpy_run.pipeline.algorithm.genome.num_inputs,
+        numpy_run.pipeline.algorithm.genome.num_outputs,
+        numpy_run.pipeline.algorithm.genome.max_nodes,
+        numpy_run.pipeline.algorithm.genome.max_conns,
+    )
+    assert iree_config == ("iree", SEED, POP_SIZE, 2, 1, MAX_NODES, MAX_CONNS), (
+        "the iree fixture must be the shared tiny XOR configuration, got "
+        f"{iree_config}"
+    )
+    assert numpy_config == ("numpy", SEED, POP_SIZE, 2, 1, MAX_NODES, MAX_CONNS), (
+        "the numpy reference run must be the *same* configuration and seed, got "
+        f"{numpy_config}"
+    )
 
     for index, (iree_gen, numpy_gen) in enumerate(zip(iree_run.trace, numpy_run.trace)):
         (iree_payload, iree_fitness, iree_counter) = iree_gen
@@ -259,6 +300,12 @@ def test_iree_matches_numpy_on_the_same_seed(
                     ),
                 )
             else:
+                finite = left[np.isfinite(left)]
+                assert finite.size > 0 and np.count_nonzero(finite) > 0, (
+                    f"{name} at step {index} carries no finite, non-zero entry on "
+                    "the iree side: comparing an all-padding payload would make "
+                    "the allclose below vacuous"
+                )
                 np.testing.assert_allclose(
                     left,
                     right,
@@ -281,6 +328,11 @@ def test_iree_matches_numpy_on_the_same_seed(
                 f"fitness at step {index} diverged: iree {iree_fitness!r} vs "
                 f"numpy {numpy_fitness!r}"
             ),
+        )
+        assert len(np.unique(iree_fitness)) > 1 and len(np.unique(numpy_fitness)) > 1, (
+            "both backends must evaluate a population with more than one distinct "
+            f"fitness, otherwise the agreement above is trivial: iree "
+            f"{iree_fitness!r} vs numpy {numpy_fitness!r}"
         )
 
 
