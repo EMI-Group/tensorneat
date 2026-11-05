@@ -2,63 +2,44 @@
 
 What this module proves
 -----------------------
-Mutation is stochastic and batch-wide, so the tests assert the *invariants* an
-operator must keep rather than a particular outcome (the exact draws differ from
-the legacy library by construction — ``evoxc.random`` vs ``jax.random`` — and are
-covered by parity only where they are deterministic):
+Mutation is stochastic and batch-wide, so the tests assert the *invariants* an operator
+must keep rather than a particular outcome (the exact draws differ from the legacy
+library by construction — ``evoxc.random`` vs ``jax.random`` — and are covered by parity
+only where they are deterministic):
 
-* capacity is hard: ``max_nodes``, ``max_conns`` and the genome's
-  ``max_in_degree`` are never exceeded. A refused add is a *no-op for that
-  individual*, never a silent repair and never a raised error;
-* at most **one** structural change per individual per generation (the four
-  probabilities gate one shared draw), while value mutation always runs
-  afterwards on every existing attribute row;
-* keys stay unique and ``I_INF``-padded; structural keys are **caller-allocated**
-  and honoured verbatim (``new_node_keys (P,)``, ``new_conn_keys (P, 3)``), so
-  ``(seed, config, shape)`` — not an internal counter — decides the innovation
-  numbers;
-* rows the operator did not touch are bit-identical: no accidental rewrite of an
-  attribute or a key column, which is what makes a mutation diff reviewable;
-* a probability of ``0`` removes the operation entirely — the identity kernel.
+* capacity is hard: ``max_nodes``, ``max_conns`` and the genome's ``max_in_degree`` are
+  never exceeded, and a refused add is a *no-op for that individual* — never a silent
+  repair, never a raised error;
+* the four structural probabilities are **independent** per-individual Bernoulli gates
+  (add-node ``0.1``, delete-node ``0.1``, add-conn ``0.2``, delete-conn ``0.2``), so one
+  individual may both gain and lose a node in one generation — but no operation fires
+  twice, and the stages compose sequentially (add-node → delete-node → add-conn →
+  delete-conn), each planning against the payload the previous stage left, so a refused
+  stage is a bit-exact no-op; value mutation always runs afterwards on every attribute
+  row;
+* keys stay unique and ``I_INF``-padded; structural keys are **caller-allocated** and
+  honoured verbatim (``new_node_keys (P,)``, ``new_conn_keys (P, 3)``), so
+  ``(seed, config, shape)`` — not an internal counter — decides the innovation numbers;
+* rows the operator did not touch are bit-identical (no accidental rewrite of an
+  attribute or a key column), and a probability of ``0`` removes the operation entirely.
 
-Oracles used here (never the kernel itself)
--------------------------------------------
-* counting and set algebra on the returned payload: node/connection counts before
-  and after, per-individual ``(in_key, out_key)`` set membership, ``len(set(keys))``,
-  ``isnan`` on the attribute rows and ``== I_INF`` on the key rows;
-* hand-built topologies from ``support.payloads`` (dense chain, isolated node,
-  ring) whose edge sets are known exactly, so "did the add-connection step
-  duplicate an edge?" is a set question, not a statistical one;
-* ``support.payloads``' padding convention (``I_INF`` for keys, ``NaN`` for
-  attributes), which every operator must leave intact;
-* a Python reachability walk over the returned edge set, so "is the graph still
-  acyclic?" does not consult the ``closes_cycle`` predicate under test.
+Oracles and gotchas
+-------------------
+Every assertion is counting or set algebra on the returned payload — node/connection
+counts, ``(in_key, out_key)`` membership, ``len(set(keys))``, ``isnan`` on attribute rows,
+``== I_INF`` on key rows — over hand-built ``support.payloads`` topologies whose edge sets
+are known exactly, plus a Python reachability walk for "is the graph still acyclic?" that
+never consults the ``closes_cycle`` predicate under test.
+``validate_schedule``-style reasoning does not apply: a mutation may leave a genome
+temporarily inconsistent *as a network* (a node with no edges), which is legal and which
+the forward pass handles through ``NaN``, so the invariants are the payload's, not the
+topology's. Value mutation is unconditional — the four probabilities gate only
+``mutate_structure`` — so a test that wants the *whole* kernel to be the identity also
+builds the node/conn genes with every ``*_mutate_rate``/``*_replace_rate`` at ``0``
+(:func:`_genome` does that by default).
 
-Gotchas this module encodes
----------------------------
-* ``validate_schedule``-style reasoning does not apply here: a mutation may leave
-  a genome temporarily inconsistent *as a network* (a node with no edges) — that
-  is legal, and the forward pass handles it through ``NaN``. The invariants are
-  the payload's, not the topology's.
-* ``node_add`` consumes **two** connection rows (the identity edge and the copy
-  edge) plus one node row, so it must be refused when only one connection row is
-  free. The free-row pick (``first_row`` over the free-row mask) reporting no hit
-  is the signal, and the operator is documented to gate the result with
-  ``select`` — writing garbage into a padded row is the failure mode the tests
-  look for.
-* ``node_delete`` must never remove an input or output row; those are the
-  genome's external interface and the row/key invariant depends on them. A
-  mutation that deleted one would still pass a "count decreased" assertion, so
-  the test checks the surviving key set explicitly.
-* ``max_in_degree`` is enforced *per destination node*, not per genome: the check
-  is "this destination would gain one more incoming edge than ``K``".
-* value mutation is unconditional — the four structural probabilities gate only
-  ``mutate_structure``. A test that wants the *whole* kernel to be the identity
-  therefore also has to build the node/conn genes with every ``*_mutate_rate`` and
-  ``*_replace_rate`` at ``0`` (:func:`_genome` does that by default).
-
-Backend is ``"numpy"`` throughout, through the shared runner only; no
-``jax``/``torch``, no network, no GPU.
+Backend is ``"numpy"`` throughout, through the shared runner only; no ``jax``/``torch``,
+no network, no GPU.
 """
 
 from __future__ import annotations
@@ -103,9 +84,8 @@ def _genome(
 ):
     """Build a genome of the tested family around one mutation operator.
 
-    The node/conn genes have their value-mutation rates at ``0`` unless a test
-    passes a gene explicitly, so "the operator touched only this row" is a bitwise
-    statement. ``key_span=_KEY_SPAN`` leaves room for the allocated keys below.
+    The node/conn genes mutate values only if a test passes a gene explicitly, so "the
+    operator touched only this row" is a bitwise statement.
     """
     builder = genome.DefaultGenome if cls is None else cls
     return builder(
@@ -124,11 +104,8 @@ def _genome(
 
 
 def _keys(seed: int, count: int):
-    """``count`` distinct rank-0 ``evoxc`` keys derived from the per-test ``seed``.
-
-    Several generations are always a *small fixed loop* over this list, so a
-    failure stays reproducible and the run stays cheap.
-    """
+    """``count`` distinct rank-0 ``evoxc`` keys from the per-test ``seed``; a small fixed
+    loop over them keeps a failure reproducible and the run cheap."""
     import evoxc
 
     return [evoxc.random.key(int(seed) + offset) for offset in range(count)]
@@ -342,14 +319,14 @@ def test_shapes_and_dtypes_are_preserved(genome, payloads, run_kernel, evoxc_key
 
     Oracle: shape and dtype equality with the input for all four arrays —
     ``node_keys (P, N) int32``, ``node_attrs (P, N, NA) float32``,
-    ``conn_keys (P, E, CK) int32``, ``conn_attrs (P, E, CA) float32``. Shapes are
-    static at build time, so an operator that grew an array would force a rebuild
-    (and break the pipeline's per-shape executable cache); dtypes are part of the
-    payload contract, so a float key column is a failure even at the right shape.
-    The operator is configured to actually add a node, so the shapes are checked on
-    a payload that changed.
+    ``conn_keys (P, E, CK) int32``, ``conn_attrs (P, E, CA) float32``. Shapes are static
+    at build time, so an operator that grew an array would force a rebuild (and break the
+    pipeline's per-shape executable cache), and dtypes are part of the payload contract.
+    Only add-node is open, so the check runs on a payload that really changed: in the
+    full four-stage configuration a later stage may undo an earlier one, which would make
+    the non-vacuity check fail for a correct kernel.
     """
-    mutation = genome.DefaultMutation(conn_add=1.0, conn_delete=1.0, node_add=1.0, node_delete=1.0)
+    mutation = genome.DefaultMutation(conn_add=0.0, conn_delete=0.0, node_add=1.0, node_delete=0.0)
     genome_object = _genome(genome, mutation)
     state = payloads.genome_state(genome_object)
     payload = _small_payload(payloads, pop_size=3)
@@ -726,13 +703,20 @@ def test_value_mutation_never_touches_key_columns(genome, payloads, run_kernel, 
     assert (mutated[3][conn_present] != payload.conn_attrs[conn_present]).any()
 
 
-def _classify_change(payload, mutated, new_node_keys, sentinel):
-    """Assert "one structural change" per individual; return per-kind counts.
+def _classify_change(payload, mutated, new_node_keys, sentinel, interface):
+    """Assert the per-operation mutation law; return ``(gained, lost, both, extra_added,
+    unexplained_removed)`` totals over the population.
 
-    Exhaustive on purpose: with one shared draw an individual either gains a split
-    node, loses a hidden node, gains or loses one connection, or is unchanged.
+    The four gates are independent Bernoullis and the stages compose sequentially, so one
+    individual may gain **and** lose a node in the same generation; what is bounded is the
+    change *per operation*: at most one node added (carrying the caller-allocated
+    ``new_node_keys[p]``), at most one node deleted (never an interface key), the split's
+    two edges plus at most one added connection, and the lost node's edges plus the
+    split's consumed edge plus at most one removed connection. ``extra_added`` counts the
+    added edges touching no gained node (the add-conn ones) and ``unexplained_removed``
+    the removals no lost node explains.
     """
-    gained_count = lost_count = added_count = removed_count = 0
+    totals = [0, 0, 0, 0, 0]
     for p in range(payload.pop_size):
         nodes_before = _nodes(payload.node_keys[p], sentinel)
         nodes_after = _nodes(mutated[0][p], sentinel)
@@ -743,80 +727,80 @@ def _classify_change(payload, mutated, new_node_keys, sentinel):
         added = edges_after - edges_before
         removed = edges_before - edges_after
 
+        # add-node: one node, carrying the one key the caller allocated for it.
         assert len(gained) <= 1, f"individual {p} gained {gained}"
+        assert gained <= {int(new_node_keys[p])}, f"individual {p} gained {gained}"
+        # delete-node: one node, and the interface rows are never candidates.
         assert len(lost) <= 1, f"individual {p} lost {lost}"
-        assert not (gained and lost), "a node was added and deleted in one generation"
+        assert not (lost & interface), f"individual {p} lost {lost}"
 
-        if gained:
-            (new_key,) = gained
-            assert new_key == int(new_node_keys[p])
-            assert len(removed) == 1 and len(added) == 2
-            (source, target) = removed.pop()
-            assert added == {(source, new_key), (new_key, target)}
-            gained_count += 1
-        elif lost:
-            (lost_key,) = lost
-            assert added == set()
-            assert removed == {edge for edge in edges_before if lost_key in edge}
-            lost_count += 1
-        else:
-            assert len(added) <= 1
-            assert len(removed) <= 1
-            assert not (added and removed), "two connection edits in one generation"
-            added_count += len(added)
-            removed_count += len(removed)
-    return gained_count, lost_count, added_count, removed_count
+        entering = {edge for edge in added if edge[1] in gained}
+        leaving = {edge for edge in added if edge[0] in gained}
+        assert len(added) <= 3, f"individual {p} added {added}"
+        assert len(entering) <= 2 and len(leaving) <= 2, f"individual {p} added {added}"
+        assert len(added - entering - leaving) <= 1, f"individual {p} added {added}"
+        if not gained:  # a deleted split node takes both of its edges with it
+            assert len(added) <= 1, f"individual {p} added {added}"
+
+        dangling = {edge for edge in edges_before if lost.intersection(edge)}
+        assert dangling <= removed, f"individual {p} kept an edge of {lost}"
+        assert len(removed - dangling) <= 2, f"individual {p} removed {removed}"
+
+        totals[0] += bool(gained)
+        totals[1] += bool(lost)
+        totals[2] += bool(gained and lost)
+        totals[3] += len(added - entering - leaving)
+        totals[4] += len(removed - dangling)
+    return tuple(totals)
 
 
-def test_at_most_one_structural_change_per_individual(genome, payloads, run_kernel, seed):
-    """Invariant: the four gates share one draw, so at most one structural change applies.
+def test_one_change_per_operation_type_but_several_per_individual(
+    genome, payloads, run_kernel, seed
+):
+    """Invariant: each operation fires at most once, yet one individual may run several.
 
-    Oracle: per-individual counts and set algebra — a node count that moved by at
-    most ``1``, and a connection set difference that is either the two edges of one
-    split (add-node), the edges touching one deleted key (delete-node), or a single
-    edge in or out (add/delete connection) — never two operations in one individual.
-    With all four probabilities at ``1.0`` a per-operation draw would make each
-    individual change several times per generation; the documented "independent
-    probabilities, one shared draw" rule forbids that.
+    Oracle: set algebra on the returned payload (:func:`_classify_change`). With all four
+    probabilities at ``1.0`` every gate is open, so the payload alone decides the outcome:
+    an individual gains the allocated node *and* loses a hidden one in the same
+    generation, which is exactly what four independent Bernoullis running in sequence
+    allow. The per-operation bounds still hold, and the totals show add-conn landing
+    beside the split instead of replacing it.
     """
     sentinel = payloads.I_INF
     keys = _keys(seed, 4)
     new_node_keys = _node_slots(4)
-
-    # (a) every gate open: the first one (add-node) wins, or nothing happens.
-    mutation = genome.DefaultMutation(conn_add=1.0, conn_delete=1.0, node_add=1.0, node_delete=1.0)
-    genome_object = _genome(genome, mutation)
-    state = payloads.genome_state(genome_object)
     payload = _small_payload(payloads, pop_size=4)
+    interface_rows = list(range(_NUM_INPUTS)) + list(range(_OUTPUT_ROW, _MAX_NODES))
+    interface = _nodes(payload.node_keys[:, interface_rows].ravel(), sentinel)
 
-    gained_total = 0
-    for key in keys:
-        mutated = _mutate(
-            run_kernel, genome_object, state, payload, key, new_node_keys=new_node_keys
-        )
-        gained, lost, _, _ = _classify_change(payload, mutated, new_node_keys, sentinel)
-        assert lost == 0
-        gained_total += gained
-    assert gained_total > 0
+    def totals(mutation):
+        genome_object = _genome(genome, mutation)
+        state = payloads.genome_state(genome_object)
+        result = [0, 0, 0, 0, 0]
+        for key in keys:
+            mutated = _mutate(
+                run_kernel, genome_object, state, payload, key, new_node_keys=new_node_keys
+            )
+            for index, value in enumerate(
+                _classify_change(payload, mutated, new_node_keys, sentinel, interface)
+            ):
+                result[index] += value
+        return result
 
-    # (b) a mixture: every operation becomes reachable, still one per individual.
-    mutation = genome.DefaultMutation(conn_add=0.5, conn_delete=0.5, node_add=0.5, node_delete=0.5)
-    genome_object = _genome(genome, mutation)
-    state = payloads.genome_state(genome_object)
-    payload = _small_payload(payloads, pop_size=4)
+    # (a) every gate open: the same individual both gains and loses a node.
+    gained, lost, both, extra_added, _ = totals(
+        genome.DefaultMutation(conn_add=1.0, conn_delete=1.0, node_add=1.0, node_delete=1.0)
+    )
+    assert gained > 0 and lost > 0
+    assert both > 0, "no individual both gained and lost a node"
+    assert extra_added > 0  # an add-conn edge landed beside the split
 
-    totals = [0, 0, 0, 0]
-    for key in keys:
-        mutated = _mutate(
-            run_kernel, genome_object, state, payload, key, new_node_keys=new_node_keys
-        )
-        for index, value in enumerate(
-            _classify_change(payload, mutated, new_node_keys, sentinel)
-        ):
-            totals[index] += value
-    gained, lost, added, removed = totals
+    # (b) a mixture: every operation is reachable, and the same bounds still hold.
+    gained, lost, _, extra_added, unexplained = totals(
+        genome.DefaultMutation(conn_add=0.5, conn_delete=0.5, node_add=0.5, node_delete=0.5)
+    )
     assert gained > 0 and lost > 0  # both node operations were reached
-    assert added + removed > 0  # and the connection operations too
+    assert extra_added > 0 and unexplained > 0  # the connection operations too
 
 
 def test_add_connection_never_duplicates_an_existing_edge(genome, payloads, run_kernel, seed):
