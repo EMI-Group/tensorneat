@@ -38,9 +38,12 @@ The three assertions and their oracles
   ``Pipeline._analyse`` builds the problem's diagnostics arguments -- the
   constant ``act_fn`` and the host schedule -- regardless of what the hook does,
   so a run with the flag on exercises that path once per generation. The oracle
-  is the pipeline's own contract: a failing diagnostics hook is *printed* as
+  is the pipeline's own hook contract, observed by wrapping the two instance
+  methods: ``algorithm.show_details`` once with ``(state, (pop_size,) fitness)``
+  and ``problem.show_details`` once with ``(state, key, act_fn, schedule)``, with
+  ``detail_failures`` empty. A failing diagnostics hook is *printed* as
   ``<label> failed (...); continuing the run`` rather than raised, so the run
-  must finish, print ``Generation: 1,`` and print no such line.
+  must also finish, print ``Generation: 1,`` and print no such line.
 * **A missing payload is a ``TensorNEATError``, not a ``TypeError``.**
   ``auto_run`` documents ``best_genome`` as a payload *or* ``None`` when no
   generation produced a finite fitness, so ``show(state, None)`` is a real caller
@@ -375,24 +378,92 @@ def test_show_problem_details_reports_every_generation_without_aborting(
     *printed* as ``<label> failed (...); continuing the run`` instead of
     propagating, so a silent failure is visible in the captured report.
 
-    Assertion: the one-generation ``auto_run`` completes and reports
-    ``Generation: 1,``; it reaches ``Generation limit reached!`` (so exactly one
-    generation was consumed); no line matches the documented failure format; and
-    the run still returns a best genome, i.e. the diagnostics did not disturb the
-    evolution loop.
+    Assertion: each of the two documented hooks is called **exactly once** for the
+    one consumed generation, recorded by wrapping the instance methods
+    (``pipeline.algorithm.show_details`` / ``pipeline.problem.show_details``) and
+    delegating to the originals: the algorithm hook receives ``(state, fitness)``
+    with a ``(pop_size,)`` fitness, and the problem hook receives four positional
+    arguments ``(state, key, act_fn, schedule)`` with a callable ``act_fn`` — the
+    positive witness that :meth:`Pipeline._analyse`'s ``show_problem_details``
+    branch, ``_constant_act_fn`` and ``_schedule_of`` really ran.
+    ``pipeline.detail_failures`` stays empty. The one-generation ``auto_run`` also
+    reports ``Generation: 1,`` and reaches ``Generation limit reached!`` (so
+    exactly one generation was consumed), no line matches the documented failure
+    format, and the run still returns a best genome, i.e. the diagnostics did not
+    disturb the evolution loop.
 
     Notes:
         The flag is the only difference from the other pipelines here, so a
         failure can only come from the diagnostics path. The target is
         unreachable (``fitness_target=1.0``) so the loop is not cut short by
-        convergence.
+        convergence. Wrapping the hooks is legal host-side instrumentation: the
+        hooks are reporting-only Python callables, never graph operations.
 
     Owner: ``pipeline.Pipeline._analyse`` (the ``show_problem_details`` branch),
     ``pipeline.Pipeline._constant_act_fn``, ``pipeline.Pipeline._details``.
     """
     pipeline = tiny_pipeline(show_problem_details=True, **ONE_GENERATION)
+
+    # Positive witness that the diagnostics branch really ran: wrap the two
+    # instance hooks (host-side objects, no graph involved) and record every
+    # invocation before delegating to the original.
+    calls: dict[str, list[tuple[tuple[object, ...], dict[str, object]]]] = {
+        "algorithm.show_details": [],
+        "problem.show_details": [],
+    }
+    original_algorithm_show_details = pipeline.algorithm.show_details
+    original_problem_show_details = pipeline.problem.show_details
+
+    def recording_algorithm_show_details(*args: object, **kwargs: object) -> object:
+        calls["algorithm.show_details"].append((args, kwargs))
+        return original_algorithm_show_details(*args, **kwargs)
+
+    def recording_problem_show_details(*args: object, **kwargs: object) -> object:
+        calls["problem.show_details"].append((args, kwargs))
+        return original_problem_show_details(*args, **kwargs)
+
+    pipeline.algorithm.show_details = recording_algorithm_show_details
+    pipeline.problem.show_details = recording_problem_show_details
+
     state, best = run_pipeline(pipeline)
     report = capsys.readouterr().out
+
+    algorithm_calls = calls["algorithm.show_details"]
+    assert len(algorithm_calls) == 1, (
+        "the one consumed generation must call algorithm.show_details exactly "
+        f"once, got {len(algorithm_calls)} call(s)"
+    )
+    algorithm_args, algorithm_kwargs = algorithm_calls[0]
+    assert not algorithm_kwargs and len(algorithm_args) == 2, (
+        "algorithm.show_details must be called as (state, fitness), got "
+        f"{len(algorithm_args)} positional and {sorted(algorithm_kwargs)} keyword "
+        "argument(s)"
+    )
+    algorithm_fitness = np.asarray(algorithm_args[1])
+    assert algorithm_fitness.shape == (pipeline.pop_size,), (
+        f"algorithm.show_details must receive the ({pipeline.pop_size},) fitness "
+        f"of the evaluated generation, got shape {algorithm_fitness.shape}"
+    )
+
+    problem_calls = calls["problem.show_details"]
+    assert len(problem_calls) == 1, (
+        "the one consumed generation must call problem.show_details exactly once, "
+        f"got {len(problem_calls)} call(s)"
+    )
+    problem_args, problem_kwargs = problem_calls[0]
+    assert not problem_kwargs and len(problem_args) == 4, (
+        "problem.show_details must be called as (state, key, act_fn, schedule), "
+        f"got {len(problem_args)} positional and {sorted(problem_kwargs)} keyword "
+        "argument(s)"
+    )
+    assert callable(problem_args[2]), (
+        "the third problem.show_details argument must be the _constant_act_fn "
+        f"callable, got {type(problem_args[2]).__name__}"
+    )
+    assert pipeline.detail_failures == {}, (
+        "neither diagnostics hook may raise: detail_failures must stay empty, got "
+        f"{pipeline.detail_failures}"
+    )
 
     assert "Generation: 1," in report, (
         "show_problem_details=True must still print the one consumed generation "

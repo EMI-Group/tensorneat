@@ -105,20 +105,98 @@ def _payload_fields(runner: Any, state: Any) -> dict[str, np.ndarray]:
         assertion message still says which array differed.
 
     Raises:
-        AssertionError: If the payload does not have :data:`POP_FIELDS` four arrays;
-            comparing a differently shaped payload field by field would be a
-            contract change, not a reproducibility failure.
+        AssertionError: If the payload is not the documented
+        ``GenomeTensors`` contract: the field names must be exactly
+        :data:`POP_FIELDS` in that order, ``node_keys``/``conn_keys`` must be
+        ``int32`` and ``node_attrs``/``conn_attrs`` ``float32``, the ranks must be
+        ``2/3/3/3``, ``conn_keys`` must carry a trailing ``(src, dst)`` pair, the
+        attribute arrays must share the key arrays' first two axes, and all four
+        must have the same population length on axis 0. Comparing a differently
+        named, typed or shaped payload field by field would be a contract change,
+        not a reproducibility failure.
     """
     pop = runner.to_numpy(state.pop)
     arrays = tuple(pop)
-    names = getattr(pop, "_fields", None) or tuple(
-        f"pop[{index}]" for index in range(len(arrays))
+    declared = getattr(pop, "_fields", None)
+    names = (
+        tuple(declared)
+        if declared
+        else tuple(f"pop[{index}]" for index in range(len(arrays)))
     )
-    assert len(arrays) == len(POP_FIELDS), (
+    assert names == POP_FIELDS, (
         f"state.pop must carry the {len(POP_FIELDS)} GenomeTensors fields "
-        f"{POP_FIELDS}, got {len(arrays)} array(s) named {tuple(names)}"
+        f"{POP_FIELDS} in documented order, got {names}"
     )
-    return dict(zip(names, arrays))
+    fields = dict(zip(names, arrays))
+    _assert_payload_contract(fields)
+    return fields
+
+
+def _assert_field_contract(
+    name: str, array: np.ndarray, dtype: np.dtype, rank: int
+) -> None:
+    """Assert one ``state.pop`` field has the documented dtype and rank.
+
+    Args:
+        name: The field name, quoted in a failure message.
+        array: The host numpy array of that field.
+        dtype: The documented dtype of the field.
+        rank: The documented number of axes of the field.
+
+    Raises:
+        AssertionError: If the dtype or rank differs, with a message naming the
+            offending field.
+    """
+    assert array.dtype == np.dtype(dtype), (
+        f"state.pop field {name!r} must be {np.dtype(dtype)}, got {array.dtype}"
+    )
+    assert array.ndim == rank, (
+        f"state.pop field {name!r} must be rank {rank}, got shape {array.shape}"
+    )
+
+
+def _assert_payload_contract(fields: dict[str, np.ndarray]) -> None:
+    """Assert a ``state.pop`` mapping satisfies the documented ``GenomeTensors`` geometry.
+
+    Args:
+        fields: The ``{field_name: ndarray}`` mapping of :func:`_payload_fields`,
+            keyed by :data:`POP_FIELDS`.
+
+    Raises:
+        AssertionError: If a dtype, rank, connection-key width, attribute prefix or
+            population length disagrees with the documented batch-first payload
+            (``node_keys (P, N) int32``, ``node_attrs (P, N, A) float32``,
+            ``conn_keys (P, C, 2) int32``, ``conn_attrs (P, C, W) float32``); the
+            message names the offending field.
+    """
+    node_keys = fields["node_keys"]
+    node_attrs = fields["node_attrs"]
+    conn_keys = fields["conn_keys"]
+    conn_attrs = fields["conn_attrs"]
+
+    _assert_field_contract("node_keys", node_keys, np.int32, 2)
+    _assert_field_contract("node_attrs", node_attrs, np.float32, 3)
+    _assert_field_contract("conn_keys", conn_keys, np.int32, 3)
+    _assert_field_contract("conn_attrs", conn_attrs, np.float32, 3)
+
+    assert conn_keys.shape[-1] == 2, (
+        "state.pop field 'conn_keys' must carry the (src, dst) key pair on its "
+        f"last axis, got shape {conn_keys.shape}"
+    )
+    assert node_attrs.shape[:2] == node_keys.shape, (
+        "state.pop field 'node_attrs' must have the node_keys prefix "
+        f"{node_keys.shape}, got {node_attrs.shape}"
+    )
+    assert conn_attrs.shape[:2] == conn_keys.shape[:2], (
+        "state.pop field 'conn_attrs' must have the conn_keys prefix "
+        f"{conn_keys.shape[:2]}, got {conn_attrs.shape}"
+    )
+
+    lengths = {name: array.shape[0] for name, array in fields.items()}
+    assert len(set(lengths.values())) == 1, (
+        "every state.pop field must share the population length on axis 0, got "
+        f"{lengths}"
+    )
 
 
 def _arrays_equal(left: np.ndarray, right: np.ndarray) -> bool:

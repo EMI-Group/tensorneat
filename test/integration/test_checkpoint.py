@@ -39,7 +39,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from integration.conftest import LOG_COLUMNS, TINY_CONFIG, fitness_history
+from integration.conftest import LOG_COLUMNS, TINY_CONFIG, step_loop
 
 pytestmark = [pytest.mark.slow]
 
@@ -244,17 +244,22 @@ def test_a_short_run_logs_one_line_per_generation(
     (``src/tensorneat/algorithm/CONTEXT.md``, step 1 of the generation algebra), so
     the logged ``Generation`` column is a run of consecutive integers ending at
     ``int(state.generation)`` — compared against that identity rather than against a
-    hard-coded starting number.
+    hard-coded starting number. The logged ``Max`` values are compared against a
+    second, checkpoint-free pipeline of the same seed driven by
+    :func:`integration.conftest.step_loop`, which never reads the pipeline's own
+    history.
 
     Assertion: after ``generation_limit=2`` the log holds a header plus exactly two
     data lines, every line splits into six comma-separated cells, the ``Generation``
     cells increase by one and the last equals ``int(to_numpy(state.generation))``,
     and the ``Max`` cells parse as floats and never decrease — elitism keeps the
-    population maximum non-decreasing. :func:`integration.conftest.fitness_history`
-    must report the same generation sequence and the same maxima, so the log and the
-    stepped run cannot disagree. A run whose log line count drifts from its
-    generation count is the failure this catches (a line appended twice per step, or
-    a missing final line when the loop breaks on the target).
+    population maximum non-decreasing. The ``Max`` column is then checked against an
+    *independent* oracle: a second pipeline of the same seed and configuration is
+    driven through :func:`integration.conftest.step_loop` (the documented
+    ``pipeline.step``), and its per-generation maxima must reproduce the logged
+    numbers within ``rtol=1e-6, atol=1e-6``. A run whose log line count or ``Max``
+    values drift from an independent trajectory is the failure this catches (a line
+    appended twice per step, a missing final line, or a wrong statistic).
 
     Notes:
         The ``Cost Time`` column is parsed but never asserted on: it is wall-clock by
@@ -302,17 +307,30 @@ def test_a_short_run_logs_one_line_per_generation(
     # non-numeric cell still fails here with ``ValueError``.
     _cost_times = [float(row[5]) for row in rows]
 
-    recorded = fitness_history(pipeline)
-    assert [generation for generation, _ in recorded] == generations, (
-        "fitness_history must report the same generation sequence the log records, "
-        f"got {[generation for generation, _ in recorded]} vs {generations}"
+    # Independent oracle: a *second* pipeline of the same seed and configuration,
+    # driven only through the documented ``pipeline.step`` (:func:`step_loop`).
+    # It shares no state with the checkpointing run, so a disagreement is a
+    # logging defect rather than two reads of the same ``max_f``.
+    second = tiny_pipeline(**TWO_GENERATIONS)
+    _, independent = step_loop(
+        second,
+        second.setup(),
+        generations=TWO_GENERATIONS["generation_limit"],
+    )
+    assert len(independent) == len(maxima), (
+        f"an independent run of the same seed must consume the {len(maxima)} "
+        f"generation(s) the log records, got {len(independent)}: {independent}"
     )
     np.testing.assert_allclose(
-        [best for _, best in recorded],
+        independent,
         maxima,
         rtol=1e-6,
         atol=1e-6,
-        err_msg="the logged Max column and the run's fitness history disagree",
+        err_msg=(
+            "the logged Max column must equal the per-generation maximum of an "
+            "independent run of the same seed and configuration; the checkpoint's "
+            f"log {maxima} disagrees with the trajectory {independent}"
+        ),
     )
 
 
@@ -331,7 +349,8 @@ def test_the_best_genome_npz_round_trips_into_a_payload(
     ``conn_keys``/``conn_attrs``) and a scalar ``fitness``; the node arrays have
     ``max_nodes`` rows, the connection arrays ``max_conns``, with per-row widths
     ``(NODE_ATTR_WIDTH,)`` and ``(CONN_ATTR_WIDTH,)``; the recorded ``fitness`` is
-    finite, equals the best value of the run's fitness history, and is reproduced by
+    finite, equals the best value of an *independent* run of the same seed and
+    configuration (:func:`integration.conftest.step_loop`), and is reproduced by
     re-scoring the loaded payload within ``rtol=1e-5, atol=1e-6`` — so the file
     round trip preserves the genome and not merely its name.
 
@@ -402,19 +421,29 @@ def test_the_best_genome_npz_round_trips_into_a_payload(
         ),
     )
 
-    history = fitness_history(pipeline)
-    assert history, (
-        "the run recorded no per-generation fitness, so the checkpoint's fitness "
-        "cannot be checked against the log it claims to summarise"
+    # Independent oracle: a second, checkpoint-free run of the same seed and
+    # configuration, driven through ``pipeline.step`` by ``step_loop``. Its
+    # trajectory never reads ``pipeline.fitness_history``, so the recorded scalar
+    # has to agree with a number the checkpointing run did not produce.
+    independent_pipeline = tiny_pipeline(**TWO_GENERATIONS)
+    _, independent_history = step_loop(
+        independent_pipeline,
+        independent_pipeline.setup(),
+        generations=TWO_GENERATIONS["generation_limit"],
+    )
+    assert independent_history, (
+        "the independent run recorded no per-generation fitness, so the "
+        "checkpoint's fitness cannot be checked against a trajectory it does not "
+        "share"
     )
     np.testing.assert_allclose(
         recorded,
-        max(best for _, best in history),
+        max(independent_history),
         rtol=1e-6,
         atol=1e-6,
         err_msg=(
-            f"{npz_path}['fitness'] must be the best fitness the run logged; the "
-            f"checkpoint and the log disagree (history maxima: "
-            f"{[best for _, best in history]})"
+            f"{npz_path}['fitness'] must be the best fitness of an independent run "
+            f"of the same seed and configuration; the checkpoint and the trajectory "
+            f"disagree (independent maxima: {independent_history})"
         ),
     )
