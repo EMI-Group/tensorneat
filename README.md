@@ -184,7 +184,7 @@ Not in the library any more (they required JAX): the Brax/Gymnax/mujoco RL envir
 | backend | install | status on this box | compile |
 |---|---|---|---|
 | `numpy` | always available (default) | everything runs; fastest CPU option measured here | 0.26–0.40 s to build the interpreter graph |
-| `iree` (llvm-cpu) | `uv sync --extra iree` | runs end to end for every shipped problem family (recorded in [`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md)); `test/backends` → **3 passed** here | 7.0–10.4 s of `iree-compile` per generation graph, one-off per static shape (8.4–8.8 s on the timed XOR rows, in the session BACKENDS.md records — see its provenance section) |
+| `iree` (llvm-cpu) | `uv sync --extra iree` | runs end to end for every shipped problem family (recorded in [`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md)); `test/backends` → **3 `iree` tests (+10 marker-guard) passed** here | 7.0–10.4 s of `iree-compile` per generation graph, one-off per static shape (8.4–8.8 s on the timed XOR rows, in the session BACKENDS.md records — see its provenance section) |
 | `xla` | needs a PJRT C API plugin `.so` via `EVOXC_PJRT_PLUGIN` | not available here (no plugin) | — |
 | `tvm` | `uv sync --extra tvm` | not attempted | — |
 
@@ -350,19 +350,19 @@ uv run pytest test/release_gate_no_jax.py test/test_release_gate_surface.py
 Measured on this box with every extra installed (`uv sync --all-extras`):
 
 ```
-$ uv run pytest -o addopts="" -q
-1359 passed, 1 xfailed, 5 warnings in 90.21s (0:01:30)
+$ uv run pytest
+1370 passed, 3 warnings in 86.91s (0:01:26)
 ```
 
-(`-o addopts=""` is needed because `pyproject.toml` sets `addopts = "-q"` and a doubled `-q` suppresses the summary line.) The tree collects 1360 tests: `test/unit` 1236, `test/parity` 60, `test/integration` 43, `test/backends` 3, `test/support` 9, and 9 release gates (4 in `test/release_gate_no_jax.py` + 5 in `test/test_release_gate_surface.py`). The one `xfail` is `test/unit/algorithm/test_hyperneat.py::test_forward_reads_the_substrate_output_neurons`, which pins a known `src/` defect rather than passing: `HyperNEAT.forward` reads its output rows from the node window `max_nodes-num_outputs..max_nodes-1`, while the substrate is assembled in inputs, outputs, hidden order, so with a hidden block the read-out row is a hidden neuron. The parity tests need the `bench` extra (`jax`) and the backend tests need `--extra iree`; without those extras the parity modules and `test/backends` skip at import instead of failing, and everything else runs on a bare `uv sync`.
+All 1370 collected tests pass: `test/unit` 1236, `test/parity` 60, `test/integration` 43, `test/backends` 13 (3 `iree` compiled-backend cases plus the 10 marker-guard cases in `test/backends/test_conftest.py`), `test/support` 9, and 9 release gates (4 in `test/release_gate_no_jax.py` + 5 in `test/test_release_gate_surface.py`). The parity tests need the `bench` extra (`jax`) and the backend tests need `--extra iree`; without those extras the parity modules and the `iree` cases skip at import instead of failing, and everything else runs on a bare `uv sync`.
 
 | suite | tests | extra needed | proves |
 |---|---|---|---|
 | `test/unit/` | 1236 | none | kernels against numpy oracles: schedule derivation, forward/NaN rules, mutation/crossover invariants, speciation (both `GATED_ROWS` paths), distance, parent selection and spawn, `grad` vs finite differences, ACT/AGG tables, the three RL problems against host oracles, HyperNEAT substrates/weights/genes plus a two-generation end-to-end run, version metadata, and the benchmark harness's own protocol/report/fingerprint |
 | `test/parity/` | 60 | `--extra bench` | the same kernels on identical payloads against `benchmarks/legacy_jax` (rtol 1e-5 forward, 1e-4 gradients), marker `parity`; `test_oracle_integrity.py` additionally pins that the oracle stays a separate implementation, that its four modules are actually collected, and that the directory still collects 60 tests |
 | `test/integration/` | 43 | none | whole-pipeline XOR evolution, per-seed determinism, rebuild on shape change, checkpoint round-trip, `show(state, best)`, the `ask`/`tell` diagnostics hook, chunked evaluate and its guard, `auto_run` stopping, HyperNEAT end to end, RL golden returns, marker `slow` |
-| `test/backends/` | 3 | `--extra iree` | `backend="iree"` end to end, its agreement with numpy, and an unknown compile option raising instead of falling back, marker `requires_iree` (optional CI `iree` job; not part of the numpy gate) |
-| `test/support/` | 9 | none | `test_lazy.py` pins the lazy-import helper (`support/lazy.py`) that turns a missing optional dependency into a named skip; the rest of the directory (`runner.py`, `payloads.py`, `oracle.py`, `functions_ref.py`) is imported by the other suites rather than collected |
+| `test/backends/` | 13 | `--extra iree` for 3 of them | `backend="iree"` end to end, its agreement with numpy, and an unknown compile option raising instead of falling back (3 cases, marker `requires_iree`, optional CI `iree` job, not part of the numpy gate), plus the marker-guard suite `test_conftest.py` (10 cases, no extra): `conftest.py`'s `implies_requires_iree` `-m` truth table and the announced `git+https://github.com/EMI-Group/evoxc@v0.1.1` install command |
+| `test/support/` | 9 | none | `test_lazy.py` pins the lazy-import helper (`support/lazy.py`): it imports a suite's package when the fixture runs, propagates every error by default (`NotImplementedError` included — a pending implementation is a defect), and skips only an explicit `allow_pending=True` `NotImplementedError` raised inside `src/tensorneat`; the rest of the directory (`runner.py`, `payloads.py`, `oracle.py`, `functions_ref.py`) is imported by the other suites rather than collected |
 | `test/release_gate_no_jax.py` + `test/test_release_gate_surface.py` | 4 + 5 | none | import hygiene — `import tensorneat` leaves `jax`, `jaxlib`, `torch`, `brax`, `gymnax`, `mujoco` out of `sys.modules`, even under an import hook that raises for them, and a tiny XOR run still evolves — plus the package surface: every module imports in a fresh subprocess, every `__all__` name resolves, and no `src/` file imports a forbidden framework |
 
 ## Citation

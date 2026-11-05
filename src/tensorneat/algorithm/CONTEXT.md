@@ -15,7 +15,7 @@ The bounded structural-key allocator costs ~+4 / ~+8 / ~+33 ms per generation (`
 ## Kernel Contract (binding for this subtree)
 Batch-first: population is axis 0, always; a kernel is written once over the whole batch.
 `vmap` is never used — evoxc refuses to vectorize region-bearing control flow, so per-individual work would have to be rewritten anyway; the batch axis is spelled out explicitly instead.
-Control flow (`evoxc.scan` / `evoxc.while_loop` / `evoxc.cond`) runs over static axes only, and the generation graph keeps a single level of it; every operation inside a loop body is a whole-batch tensor op.
+Control flow (`evoxc.scan` / `evoxc.while_loop` / `evoxc.cond`) runs over static axes only, i.e. every loop has a static trip count and a branch set built at trace time; the only nesting in the generation graph is the `cond`-inside-`scan` form admitted next, and every operation inside a loop body is a whole-batch tensor op.
 An `evoxc.cond` may nest inside an `evoxc.scan` body when (a) its predicate is a traced mask over branches that are both built statically — a static Python decision lowered to a traced `cond`, never host control flow on a traced value, (b) the nested form has been proven to compile on `iree`-llvm-cpu, and (c) the numpy backend stays the reference; `vmap` is never applied over control flow.
 The shipped instance is `_kernels.speciate`'s gated path: `gated_row` builds one `cond` per scan iteration inside both `reserve` and `assign_members` whenever `gated(species_size, pop_size)` holds (`species_size * pop_size <= GATED_ROWS = 6 000`).
 Species loops are fixed-length `evoxc.scan`s over the static `species_size` axis with per-slot masks; no loop trip count is data-dependent.

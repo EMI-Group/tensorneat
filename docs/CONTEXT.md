@@ -44,8 +44,8 @@ Verification is the build itself: `rm -rf docs/_build && uv run --extra docs sph
 Spot-check the rendered API: `grep -o 'id="tensorneat.pipeline.Pipeline"' docs/_build/source/tensorneat.pipeline.html`, `grep -o 'id="tensorneat.genome.host.BaseGenomeHost"' docs/_build/source/tensorneat.genome.host.html`, and confirm `docs/_build/index.html` shows the quickstart without leaking literal RST markup.
 Spot-check the RL pages the same way: `id="tensorneat.problem.rl.pendulum.Pendulum"`, `id="tensorneat.problem.rl.mountaincar.MountainCarContinuous"`, `id="tensorneat.problem.rl.cartpole.CartPole"`, and all three modules listed by `docs/_build/source/tensorneat.problem.rl.html`.
 `uv sync --extra docs` must be run first; `uv` lives at `~/.local/bin/uv` and may not be on `PATH`.
-The docs gate is one job of the suite: with `uv sync --all-extras`, `uv run pytest -o addopts="" -q` gives `1359 passed, 1 xfailed` in ~90 s (1360 collected: `test/unit` 1236, `test/parity` 60, `test/integration` 43, `test/backends` 3, `test/support` 9, release gates 9).
-The single xfail is `test/unit/algorithm/test_hyperneat.py::test_forward_reads_the_substrate_output_neurons`, a documented `src/` defect: `HyperNEAT.forward` reads the output rows `max_nodes-num_outputs..max_nodes-1` while the substrate node order is inputs, outputs, hidden.
+The docs gate is one job of the suite: with `uv sync --all-extras`, `uv run pytest` gives `1370 passed` in ~90 s (1370 collected: `test/unit` 1236, `test/parity` 60, `test/integration` 43, `test/backends` 13, `test/support` 9, release gates 9).
+Nothing in the suite `xfail`s: `test/unit/algorithm/test_hyperneat.py::test_forward_reads_the_substrate_output_neurons` passes, because `HyperNEAT.forward` reads its output rows from `Transformed.output_slot` (the substrate's output keys `I .. I+O-1`), not from the last `num_outputs` node rows.
 
 ## Routing Table
 | Path | Purpose |

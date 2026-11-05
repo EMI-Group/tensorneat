@@ -282,7 +282,7 @@ PY
 The end-to-end backend test (`test/backends/test_iree_pipeline.py`) skips cleanly without the extra and runs a real XOR generation with it:
 
 ```bash
-pytest -q test/backends            # 3 passed, or 1 skipped when evoxc[iree] is absent
+pytest -q test/backends            # 13 passed (3 iree + 10 marker-guard), or 10 passed + 1 skipped when evoxc[iree] is absent
 pytest -m requires_iree test/backends
 ```
 
