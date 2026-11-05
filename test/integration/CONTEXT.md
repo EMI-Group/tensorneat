@@ -80,7 +80,7 @@ The autouse probe (`conftest.py:111-192`) turns a source regression into a skip 
 `GOLDEN` (`test_rl_golden.py:66-70`) is a recording of this tree's own output, not an independent oracle: 9 of the module's 17 executed checks compare against recorded magic numbers and must be re-recorded on any intended search/RNG change.
 
 ## Conventions
-Every test has a real body and none skips; the structural probe stays armed but no longer fires, and the compile-count test finds a real entry point.
+Every test has a real body; the autouse probe (`conftest.py:184-192`) and the shape-rebuild compile probe (`test_shape_rebuild.py:320-326`) are the only skip paths, neither fires on this tree, and the compile-count test finds a real entry point.
 Assertions are never weakened to get green: a genuine `src/` defect is reported (or pinned with `xfail(strict=True)` and a one-line reason), never hidden behind a tolerance or a skip.
 Shapes stay small (`pop_size` 8/16, `max_nodes ≤ 16`), checkpoint tests always pass `save_dir=tmp_path`, and `log.txt`'s `Cost Time` column is parsed but never asserted on.
 Files stay under ~1000 lines; one test module per documented behaviour area, module basenames unique across the tree.
