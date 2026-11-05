@@ -358,6 +358,85 @@ def build_statics(
     )
 
 
+def build_grouped_statics(
+    base: MeasureStatics,
+    *,
+    rows: int,
+    count: int,
+    attr_width: int,
+    attrs: "evoxc.SymbolicTensor | None" = None,
+) -> MeasureStatics:
+    """Rebuild one family's :class:`MeasureStatics` at a grouped row count (once per generation).
+
+    Args:
+        base (MeasureStatics): The ungrouped scaffold of the same family, straight off the
+            population digest — the source of every rank-0 scalar, of the fold weights and of
+            the attribute tail.
+        rows (int): Row count of the grouped digest, ``group * pop_size``.
+        count (int): Static gene count ``M`` of the family (unchanged by the grouping).
+        attr_width (int): Static attribute width ``A``; ``0`` keeps the base's empty attribute
+            base.
+        attrs (evoxc.SymbolicTensor | None): ``(rows, M, A) float32`` *tiled* attribute block
+            whose ``(rows * M, A)`` row view the aligned-attribute gather indexes.
+
+    Returns:
+        MeasureStatics: the same scalars as ``base`` with the three rows-scaled tables built at
+        ``rows`` rows, so a ``rows``-row centre merges against a ``rows``-row digest.
+
+    Notes:
+        Only five fields depend on the row count, and only those are rebuilt:
+        ``offsets``, ``offsets_plus_one`` (both ``(rows, 1)``), ``pad_column_i64`` (``(rows, 1)``)
+        and the two attribute tables of :class:`AttrStatics`.
+        Everything else — ``iinf_i32``, ``zero_i32``, ``key_base_i64``, ``tag_scale_i64``,
+        ``one_i64``, ``pad_centre_i64``, ``fold_i64``, ``AttrStatics.zero_f32`` and
+        ``AttrStatics.tail`` — is rank 0 or ``(2, 1)``, i.e. independent of the batch, so the
+        grouped digest hands the base digest's own tensors on and emits **no** fresh
+        ``constant`` op for any of them.
+        The trailing padding column is one ``broadcast`` of the existing rank-0 sentinel (a
+        rank may be added, so no ``reshape`` is needed) rather than a
+        :func:`~tensorneat.genome.window.fill`, which would bake a second constant op for the
+        same value.
+        The two ``arange`` tables are static index blocks, not data buffers, so they keep their
+        direct ``enp.arange`` and none of them is population-scaled data.
+        Nothing here is per ``measure`` call: this runs once per generation, next to the tile it
+        belongs to (:func:`~.grouped.group_digest`), and the per-call body stays the plain
+        merge, which reads no table but the ones carried in this bundle.
+    """
+    merged_width = 2 * count + 1
+    offsets = evoxc.reshape(
+        enp.arange(0, rows * merged_width, merged_width, dtype=evoxc.int32),
+        (rows, 1),
+    )
+    return MeasureStatics(
+        base.iinf_i32,
+        base.zero_i32,
+        base.key_base_i64,
+        base.tag_scale_i64,
+        base.one_i64,
+        base.pad_centre_i64,
+        base.fold_i64,
+        evoxc.broadcast(base.pad_centre_i64, (rows, 1)),
+        offsets,
+        evoxc.add(offsets, enp.full((), 1, dtype=evoxc.int32)),
+        AttrStatics(
+            (
+                evoxc.reshape(
+                    enp.arange(0, rows * count, count, dtype=evoxc.int32), (rows, 1)
+                )
+                if attr_width
+                else base.attr.base
+            ),
+            base.attr.zero_f32,
+            (
+                evoxc.reshape(attrs, (rows * count, attr_width))
+                if attrs is not None and attr_width
+                else attrs
+            ),
+            base.attr.tail,
+        ),
+    )
+
+
 class DenseLayout(NamedTuple):
     """Static scaffold of one gene family's dense single-centre route.
 
@@ -636,6 +715,7 @@ __all__ = [
     "MeasureStatics",
     "build",
     "build_attr_statics",
+    "build_grouped_statics",
     "build_statics",
     "dense_rows",
     "dense_slot",
