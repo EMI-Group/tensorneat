@@ -261,7 +261,8 @@ A **scatter-derived inverse permutation**: 7 vs 2 ops and 1.05 vs 0.29 ms.
 **`evoxc.tile(x, (k, 1, …))` as the grouped tiling spelling**: it exists and is `v1`, but `concatenate` of `k` repeats is also exactly one op, so `tile` buys nothing.
 
 ## Known Issues
-No open correctness or contract issue in this node: `measure` (all four routes) is bit-identical to `execute_distance` on every payload, the generation graph's StableHLO export carries no deferred op and no unsigned dtype, and the shipped suites are green.
+No open correctness or contract issue in this node: `measure` (all four routes) is bit-identical to `execute_distance` on every payload, every graph's StableHLO export carries no deferred op and no unsigned dtype, and the shipped suites are green.
+The one open *portability* issue is the dense route's graph, which fails `iree-compile` on its `i64` scatter index (see `## Test Strategy`, `iree` compile status); the numpy reference is unaffected and the merge route compiles on every backend measured.
 The route, not the kernel, holds this node's remaining cost: the live call site tiles each species centre to `pop_size` rows, so all ~40 `measure` calls per generation take the sort-bound merge instead of the sort-free dense route.
 The grouped form removes the per-call scaffolding but not the sort, and it is wired into no production path: at `k = 2` on `xor_p500` the dispatch win (−13 %) is outweighed by +8.3 % peak RSS and a wall-time mode that is 30–45 % slower in 7 of 13 fresh numpy processes (see `## Grouped route`), so a caller must measure its own arrangement rather than assume `k > 1` is a speed-up.
 The grouped route has no shipped unit test (see `## Test Strategy`), and neither `grouped.py` nor its two entry points appear in `docs/source/` yet.
