@@ -100,6 +100,7 @@ No compiled backend beats the numpy interpreter on this box, so the reference in
 `benchmarks/RESULTS.md` is the *generated* old-vs-new harness report, rendered from `benchmarks/results/authoritative.json` (2026-11-04T19:01Z, report git `ebeaf1f`, worker commit `95701646`, 3 repeats, seeds 42/43/44, jax 0.10.2); it was measured after the op-count pass (pass 1, `a697531` → `f619f46`) and before the tiled-evaluate/RL-rollout-hoist pass (pass 2, `90d97b4`) and the search-quality pass, so its new-side rows are never the current cost, and only `benchmarks/run_benchmark.py` may re-render it.
 Its committed verdict is `FAIL` on timing and quality for the tree it measured, and the figures it labels the legacy baseline (51 / 109 / 157 ms per generation at pop 100 / 500 / 1000) are the *declared* contract, against a measured frozen-JAX side of 38.99 / 295.33 / 807.30 ms in that same record.
 Executed ops per generation on the current tree: `xor_p500` 8 263, `custom_pagie_p500` 11 490, `cartpole_p100` 31 604 (`benchmarks/PERF_NUMPY.md` pass 2, `### Value identity`).
+Those counts exclude the `output_slot` read-out, which adds one gather plus `O` mask comparisons once per pass and never per level, so the current graph is a few ops above each figure.
 
 ## Network-Evaluation Cost When a Problem Tiles the Population (func-fit)
 `act_fn` receives the whole tiled batch: a problem tiles its dataset or rollout over the population axis, so the network is asked for `P * S` rows while the schedule and the payload stay at their native `P` rows.
