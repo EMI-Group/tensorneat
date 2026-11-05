@@ -163,7 +163,7 @@ The evidence for each rule, including the exact failures that forced it, is in `
 Every item below is backed by a file in this tree and, where a test exists, by that test.
 
 - **Batched topology inference** — a whole population of different topologies in one forward pass (`genome/step.py`, `genome/grad.py`; `test/unit/genome/test_forward.py`).
-- **Gradient descent through evolved topologies** — `genome.BaseGenome.grad(...)` is a **graph factory** returning an `evoxc.Graph` that maps `(node_keys, node_attrs, conn_keys, conn_attrs, inputs)` to gradients w.r.t. the float attribute tensors; `loss_fn` is scalarised as `sum(loss_fn(outputs))` because `evoxc.grad` needs one scalar output (`src/tensorneat/genome/grad.py`). The differentiated pass is a dense-weight twin of the window forward, because evoxc transposes `gather` with *put* semantics and would keep only one cotangent where a node fans out. Verified against central finite differences in `test/unit/genome/test_grad.py` and against the legacy JAX gradients in `test/parity/test_grad.py`. **There is no shipped example script for it** — the two test suites are the working reference.
+- **Gradient descent through evolved topologies** — `genome.BaseGenome.grad(...)` is a **graph factory** returning an `evoxc.Graph` that maps `(node_keys, node_attrs, conn_keys, conn_attrs, inputs)` to gradients w.r.t. the float attribute tensors; `loss_fn` is scalarised as `sum(loss_fn(outputs))` because `evoxc.grad` needs one scalar output (`src/tensorneat/genome/grad.py`). The differentiated pass is a dense-weight twin of the window forward, because evoxc transposes `gather` with *put* semantics and would keep only one cotangent where a node fans out. The host-side convenience wrapper is `genome.DefaultGenome.grad_from_payload(state, payload, inputs, loss_fn)` (the `BaseGenomeHost` mixin in `src/tensorneat/genome/host.py`): it derives the schedule on the host, builds and compiles the gradient graph and returns `(node_attr_grads, conn_attr_grads)` for one batch-first payload. Verified against central finite differences in `test/unit/genome/test_grad.py` and against the legacy JAX gradients in `test/parity/test_grad.py`; the runnable reference is `examples/interpret_visualize/grad_descent.py`, which differentiates one evolved topology and checks the result against finite differences.
 - **HyperNEAT** with substrates — `algorithm.HyperNEAT` (recurrent, `activate_time` tick-unroll) and `HyperNEATFeedForward` over `MLPSubstrate`, plus `FullSubstrate` (`algorithm/hyperneat/`, examples `xor_hyperneat*.py`).
 - **Recurrent genomes** — `genome.RecurrentGenome` with a static `activate_time` unroll (`genome/recurrent.py`).
 - **Speciation and distance kernels** — compatibility distance with node/connection gene digests, species assignment, stagnation, spawn allocation (`algorithm/neat/species.py`, `genome/operations/distance/`).
@@ -297,7 +297,7 @@ Caveats, both verified on 2026-11-04:
 
 ## Examples
 
-The ten pipeline scripts use the public API only and print a per-generation log; the two `interpret_visualize` scripts are host-only introspection and import `evoxc` directly for that. Wall times below are from this box, one fresh process per script, `uv run` startup included (0.8–20.6 s end to end).
+The ten pipeline scripts use the public API only and print a per-generation log; the three `interpret_visualize` scripts are host-only introspection and import `evoxc` directly for that. Wall times below are from this box, one fresh process per script, `uv run` startup included (0.6–20.6 s end to end).
 
 | script | what it demonstrates | command | verified |
 |---|---|---|---|
@@ -312,9 +312,10 @@ The ten pipeline scripts use the public API only and print a per-generation log;
 | `examples/rl/pendulum.py` | `problem.Pendulum(max_step=200)`, `init_hidden_layers=(6,)`, pop 100, 20 gens, target `-300` | `uv run python examples/rl/pendulum.py` | ran, 2.7-3.0 s; **converges** at generation 5 (training max -271.30; `show` reports one episode at -595.12) |
 | `examples/rl/mountaincar.py` | `problem.MountainCarContinuous()`, 999-step default, pop 100, 10 gens, `fitness_target=float("inf")` | `uv run python examples/rl/mountaincar.py` | ran, 11.9-12.5 s; no fitness target (never stops early), demo return -0.00, goal not reached |
 | `examples/interpret_visualize/genome_sympy.py` | sympy formula + Python code + LaTeX of one genome (host only) | `uv run python examples/interpret_visualize/genome_sympy.py` | ran, 0.8-1.1 s |
+| `examples/interpret_visualize/grad_descent.py` | exact gradients through one evolved topology, checked against finite differences | `uv run python examples/interpret_visualize/grad_descent.py` | ran, 0.62-0.65 s, prints PASS (worst discrepancy 8.33e-06 against the 1e-3 tolerance) |
 | `examples/interpret_visualize/visualize_genome.py` | draw one genome as SVG (host only) | `uv run python examples/interpret_visualize/visualize_genome.py` | ran, 0.95-1.9 s (the first run in a session pays a matplotlib font-cache build); writes an untracked, git-ignored `network.svg` next to the script |
 
-The ten pipeline scripts use demo budgets on `backend="numpy"` (pop 100–400, 10–250 generations): the seven `func_fit` scripts mark theirs with a `# Demo budget:` comment, `rl/cartpole.py` marks its reduced `max_step` with `# Small budget:`, and `rl/pendulum.py` / `rl/mountaincar.py` size theirs through `pop_size` and `generation_limit` alone. Six of them reach their fitness target on seed 42 — `xor.py`, `xor3d.py`, `xor_origin.py`, `xor_recurrent.py`, `cartpole.py`, `pendulum.py`; three (`custom_func_fit.py`, the two HyperNEAT scripts) stop at the generation limit with a visibly falling loss and claim no convergence, and `mountaincar.py` sets `fitness_target=float("inf")`, so it has no target to cross. A real run raises `pop_size` into the thousands and the generation limit into the hundreds. The two `interpret_visualize` scripts are host-only (no `Pipeline`, under 2 s). Fitness is maximised everywhere, so a function-fitting `fitness_target` is a negative error bound. The Brax/Gymnax/mujoco examples of 0.1.x no longer exist.
+The ten pipeline scripts use demo budgets on `backend="numpy"` (pop 100–400, 10–250 generations): the seven `func_fit` scripts mark theirs with a `# Demo budget:` comment, `rl/cartpole.py` marks its reduced `max_step` with `# Small budget:`, and `rl/pendulum.py` / `rl/mountaincar.py` size theirs through `pop_size` and `generation_limit` alone. Six of them reach their fitness target on seed 42 — `xor.py`, `xor3d.py`, `xor_origin.py`, `xor_recurrent.py`, `cartpole.py`, `pendulum.py`; three (`custom_func_fit.py`, the two HyperNEAT scripts) stop at the generation limit with a visibly falling loss and claim no convergence, and `mountaincar.py` sets `fitness_target=float("inf")`, so it has no target to cross. A real run raises `pop_size` into the thousands and the generation limit into the hundreds. The three `interpret_visualize` scripts are host-only (no `Pipeline`, under 2 s). Fitness is maximised everywhere, so a function-fitting `fitness_target` is a negative error bound. The Brax/Gymnax/mujoco examples of 0.1.x no longer exist.
 ## Tutorials
 
 - `tutorials/quickstart.ipynb` — the current-API notebook, executed top to bottom: build a genome/algorithm/problem, `Pipeline.setup`/`step`/`auto_run`, the batch-first `best` payload, backend *selection* (documented with an `iree` install probe; the notebook itself only ever builds and runs `backend="numpy"`), and inspecting the built `evoxc` executable.
@@ -330,7 +331,7 @@ The ten pipeline scripts use demo budgets on `backend="numpy"` (pop 100–400, 1
 | `src/tensorneat/problem/` | `XOR`, `XOR3d`, `FuncFit`/`CustomFuncFit`, `CartPole`, `Pendulum`, `MountainCarContinuous` |
 | `src/tensorneat/common/` | `State`, error types, tensorization/schedule, ACT/AGG registries, sympy codegen |
 | `benchmarks/` | old-vs-new harness, the frozen legacy JAX implementation, `RESULTS.md`, `BACKENDS.md` |
-| `test/` | `unit/`, `parity/` (vs legacy JAX), `integration/`, `backends/` (iree), release gate |
+| `test/` | `unit/`, `parity/` (vs legacy JAX), `integration/`, `backends/` (iree), `support/` (shared fixtures), the two release gates |
 | `examples/` | the runnable scripts above |
 | `docs/` | Sphinx configuration and autodoc stubs |
 | `tutorials/` | the quickstart notebook and the JAX-era notebooks |
@@ -343,25 +344,26 @@ uv run pytest -m "not parity and not slow"   # numpy backend only, no optional d
 uv run pytest -m parity                # needs: uv sync --extra bench (frozen JAX oracle)
 uv run pytest -m slow                  # integration: evolution, determinism, rebuild, checkpoints
 uv run pytest -m requires_iree         # needs: uv sync --extra iree
-uv run pytest test/release_gate_no_jax.py
+uv run pytest test/release_gate_no_jax.py test/test_release_gate_surface.py
 ```
 
 Measured on this box with every extra installed (`uv sync --all-extras`):
 
 ```
 $ uv run pytest -o addopts="" -q
-674 passed, 3 warnings in 62.12s (0:01:02)
+1359 passed, 1 xfailed, 5 warnings in 90.21s (0:01:30)
 ```
 
-(`-o addopts=""` is needed because `pyproject.toml` sets `addopts = "-q"` and a doubled `-q` suppresses the summary line.) The counts come apart as `test/unit` 591, `test/parity` 53, `test/integration` 23, `test/backends` 3 and `test/release_gate_no_jax.py` 4. The parity tests need the `bench` extra (`jax`) and the backend tests need `--extra iree`; without those extras the parity modules and `test/backends` skip at import instead of failing, and everything else runs on a bare `uv sync`.
+(`-o addopts=""` is needed because `pyproject.toml` sets `addopts = "-q"` and a doubled `-q` suppresses the summary line.) The tree collects 1360 tests: `test/unit` 1236, `test/parity` 60, `test/integration` 43, `test/backends` 3, `test/support` 9, and 9 release gates (4 in `test/release_gate_no_jax.py` + 5 in `test/test_release_gate_surface.py`). The one `xfail` is `test/unit/algorithm/test_hyperneat.py::test_forward_reads_the_substrate_output_neurons`, which pins a known `src/` defect rather than passing: `HyperNEAT.forward` reads its output rows from the node window `max_nodes-num_outputs..max_nodes-1`, while the substrate is assembled in inputs, outputs, hidden order, so with a hidden block the read-out row is a hidden neuron. The parity tests need the `bench` extra (`jax`) and the backend tests need `--extra iree`; without those extras the parity modules and `test/backends` skip at import instead of failing, and everything else runs on a bare `uv sync`.
 
 | suite | tests | extra needed | proves |
 |---|---|---|---|
-| `test/unit/` | 591 | none | kernels against numpy oracles: schedule derivation, forward/NaN rules, mutation/crossover invariants, speciation bookkeeping, distance, `grad` vs finite differences, ACT/AGG tables, CartPole vs a host Euler rollout |
-| `test/parity/` | 53 | `--extra bench` | the same kernels on identical payloads against `benchmarks/legacy_jax` (rtol 1e-5 forward, 1e-4 gradients), marker `parity` |
-| `test/integration/` | 23 | none | whole-pipeline XOR evolution, per-seed determinism, rebuild on shape change, checkpoint round-trip, `show(state, best)`, marker `slow` |
-| `test/backends/` | 3 | `--extra iree` | `backend="iree"` end to end and its agreement with numpy, marker `requires_iree` (optional CI `iree` job; not part of the numpy gate) |
-| `test/release_gate_no_jax.py` | 4 | none | `import tensorneat` leaves `jax`, `jaxlib`, `torch`, `brax`, `gymnax`, `mujoco` out of `sys.modules` — even under an import hook that raises for them — and a tiny XOR run still evolves |
+| `test/unit/` | 1236 | none | kernels against numpy oracles: schedule derivation, forward/NaN rules, mutation/crossover invariants, speciation (both `GATED_ROWS` paths), distance, parent selection and spawn, `grad` vs finite differences, ACT/AGG tables, the three RL problems against host oracles, HyperNEAT substrates/weights/genes plus a two-generation end-to-end run, version metadata, and the benchmark harness's own protocol/report/fingerprint |
+| `test/parity/` | 60 | `--extra bench` | the same kernels on identical payloads against `benchmarks/legacy_jax` (rtol 1e-5 forward, 1e-4 gradients), marker `parity`; `test_oracle_integrity.py` additionally pins that the oracle stays a separate implementation, that its four modules are actually collected, and that the directory still collects 60 tests |
+| `test/integration/` | 43 | none | whole-pipeline XOR evolution, per-seed determinism, rebuild on shape change, checkpoint round-trip, `show(state, best)`, the `ask`/`tell` diagnostics hook, chunked evaluate and its guard, `auto_run` stopping, HyperNEAT end to end, RL golden returns, marker `slow` |
+| `test/backends/` | 3 | `--extra iree` | `backend="iree"` end to end, its agreement with numpy, and an unknown compile option raising instead of falling back, marker `requires_iree` (optional CI `iree` job; not part of the numpy gate) |
+| `test/support/` | 9 | none | `test_lazy.py` pins the lazy-import helper (`support/lazy.py`) that turns a missing optional dependency into a named skip; the rest of the directory (`runner.py`, `payloads.py`, `oracle.py`, `functions_ref.py`) is imported by the other suites rather than collected |
+| `test/release_gate_no_jax.py` + `test/test_release_gate_surface.py` | 4 + 5 | none | import hygiene — `import tensorneat` leaves `jax`, `jaxlib`, `torch`, `brax`, `gymnax`, `mujoco` out of `sys.modules`, even under an import hook that raises for them, and a tiny XOR run still evolves — plus the package surface: every module imports in a fresh subprocess, every `__all__` name resolves, and no `src/` file imports a forbidden framework |
 
 ## Citation
 
