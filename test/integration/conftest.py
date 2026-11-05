@@ -189,7 +189,7 @@ def _evoxc_pipeline_required(tn):
 
     The probe is structural and self-flipping, and it raises rather than skips:
     losing a documented compile keyword or re-binding ``jax`` in
-    ``tensorneat.pipeline`` must turn this directory red, never green with 23
+    ``tensorneat.pipeline`` must turn this directory red, never green with 43
     silent skips.
     """
     require_evoxc_pipeline(tn)

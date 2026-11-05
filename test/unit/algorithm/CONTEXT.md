@@ -20,12 +20,12 @@ The distance seam is pinned by `test_distance_dense.py`: the gated and dense `sp
 `test_substrate.py` (123) — the HyperNEAT substrate geometry and its validation matrix, on plain host NumPy: no graph, no runner, no `State`.
 `test_genes.py` (18) — `HyperNEATNode` (option tables, `combine`, masked aggregation, output rows unactivated) and `HyperNEATConn` (weight column by name, raw rows and the prepared `ConnOperands` bundle, no kernel-side NaN guard).
 `test_hyperneat_weights.py` (10) — the CPPN→weight map at `0`, the threshold tie, just-above-threshold, large magnitude and NaN, plus the batch/shape contract.
-`test_hyperneat.py` (52, 1 xfail) — the decode algebra (`_query_coors`, `_expand_leaf`/`_expand_schedule` row order `p*Q+q`, `_assemble_substrate`, `_static_bounds`, the whole `_validate` matrix), the protocol surface, `transform`'s batch independence, and `forward`/`prepare_forward`/`forward_prepared`.
+`test_hyperneat.py` (52) — the decode algebra (`_query_coors`, `_expand_leaf`/`_expand_schedule` row order `p*Q+q`, `_assemble_substrate`, `_static_bounds`, the whole `_validate` matrix), the protocol surface, `transform`'s batch independence, and `forward`/`prepare_forward`/`forward_prepared`.
 `test_hyperneat_feedforward.py` (11) — the variant delta, its rejection of a recurrent substrate, payload equality with the base decode, `forward` on a depth-1 substrate where the single tick is the same arithmetic, and the `max_depth` it passes.
 `test_hyperneat_e2e.py` (4) — pop-4 two-generation `Pipeline` runs of both variants over `CustomFuncFit`, determinism per seed, and a `network_dict`/`show` report on the best CPPN.
 `hyperneat_kernel.py` — the shared trace harness (not a test module, not collected): `make_hyper`, `make_state`, `cppn_payload`, `make_substrate`, `make_cppn_genome`, `make_neat`, `run_method`, and the small default geometry constants.
 `conftest.py` — module fixtures, the `SpeciesState`/`State` table factories, and the two graph runners.
-Whole directory: 373 collected — 372 passed, 1 xfailed, 0 failed, 0 skipped in ~11 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
+Whole directory: 373 collected — 373 passed, 0 failed, 0 skipped in ~10 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
 Coverage of `src/tensorneat/algorithm/hyperneat/` from this directory alone: 99 % (618/620 statements) — `genes.py`, `hyperneat_feedforward.py`, both `__init__.py`, `substrate/base.py`, `substrate/default.py`, `substrate/full.py` and `substrate/mlp.py` at 100 %, `hyperneat.py` missing only `_attr_columns`' two unreachable rejections (`hyperneat.py:842`, `:848`).
 
 ## Fixtures and the trace harness
@@ -55,9 +55,10 @@ The substrate oracles are literal arrays hand-computed from the documented row o
 The node/conn gene oracles are left-to-right float32 folds (`+0.0` start, `1/(1+exp(-z))`) and per-individual Python loops over a `(P, N, K)` batch.
 The `test_hyperneat.py` forward oracle is a hand phenotype evaluation on hand-set `conn_attrs` weights and all-zero option columns, with the bias column appended last.
 
-## Known issues (pinned, not fixed here)
-A strict xfail `test_hyperneat.py::test_forward_reads_the_substrate_output_neurons` pins a real source defect: `HyperNEAT._validate` requires (and `_assemble_substrate` broadcasts) the node-key block order inputs, outputs, hidden, while the executor genome reads its outputs from the **last** `num_outputs` rows (`genome/base.py:236` `output_idx`, `genome/step.py:439` `_output_values`). With a hidden block the read-out row is therefore a hidden neuron and the real output neuron is activated but never read; the test asserts the documented value and both symptoms, and it is expected to XPASS once the source is fixed (then delete the xfail, never weaken it).
-The legacy `benchmarks/legacy_jax` substrate uses the same inputs/outputs/hidden node order, so this is inherited behaviour rather than a rewrite regression; it still contradicts the substrate contract ("the block order exists because `input_idx`/`output_idx` ranges depend on it").
+## Read-out contract (source fixed, pinned by a passing test)
+`test_hyperneat.py::test_forward_reads_the_substrate_output_neurons` pins the read-out on a substrate whose node order is inputs, outputs, hidden: `Transformed.output_slot` must name the output block's node (harness key `2`), and `forward` must return that neuron's documented `sigmoid(w3 * tanh(w0*a + w1 + w2*tanh(w0*a + w1)))` value instead of a hidden row's unactivated self-loop sum.
+That is what the tree does now — the executor genome reads `transformed.output_slot` — so the test passes and the module carries no `xfail`; the defect it used to pin (outputs read from the last `num_outputs` node rows, which with a hidden block is a hidden neuron) must not come back silently.
+## Known issues (reported, not fixed here)
 `src/` documentation drift reported upward: `_weights_from_query`'s docstring claims the weights land in `[-max_weight, max_weight]`, which only holds for `|w| <= 1` (an unbounded CPPN output scales past `max_weight`); `_kernels.pair_parents` caps the survivor count as `max(min(member_count, pop_size), 1)`, which differs from the documented `min(...)` only for an unreachable live species with `member_count == 0`; `_kernels.block_layout`'s `spawn > 0` mask term is redundant under the last-qualifying-block rule.
 `test/release_gate_no_jax.py`'s resolved-surface list names `tensorneat.algorithm.NEAT`/`HyperNEAT`/`HyperNEATFeedForward`, matching this directory's `__all__` pin in `./test_exports.py`.
 

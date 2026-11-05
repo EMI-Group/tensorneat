@@ -18,8 +18,9 @@ Kernels go through ``./hyperneat_kernel.run_method``; the one exception is
 :func:`_run_prepared_pair`, explained there. The harness geometry is 2 inputs (input 0 and
 the trailing bias) and one hidden neuron: ``N = 4`` nodes (keys ``0, 1`` inputs, ``2``
 output, ``3`` hidden) and ``Q = 4`` connections.
-:func:`test_forward_reads_the_substrate_output_neurons` pins a source defect (strict
-xfail). No network, no GPU, ``backend="numpy"``."""
+:func:`test_forward_reads_the_substrate_output_neurons` pins that the read-out follows
+``Transformed.output_slot``, so a substrate with a hidden block still returns its output
+neurons. No network, no GPU, ``backend="numpy"``."""
 
 from __future__ import annotations
 
@@ -834,7 +835,7 @@ def test_transform_schedule_implies_the_substrate_topology(decoded):
 
     Per connection row ``q``: ``src[q] = index(source)`` and ``dst[q] = index(target)`` in
     ``DEFAULT_NODES``, plus ``input_slot`` naming the slots of keys ``0, 1``. ``output_slot``'s
-    *value* is the defect pinned in the forward section."""
+    *value* is pinned in the forward section."""
     schedule = decoded.schedule
     slots = {int(key): slot for slot, key in enumerate(DEFAULT_NODES)}
     expected_src = np.array([slots[int(source)] for source, _ in DEFAULT_CONN_INDEX])
@@ -959,17 +960,6 @@ def test_forward_tiles_the_population_axis_individual_major(flat, flat_state, fl
     npt.assert_array_equal(prepared, got, err_msg="the prepared pair at a tiled width too")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "src defect: HyperNEAT.forward reads the node rows max_nodes-num_outputs..max_nodes-1 "
-        "(genome/base.py output_idx, genome/step.py _output_values), but HyperNEAT._validate "
-        "(hyperneat.py:491) requires the substrate node order inputs, outputs, hidden and "
-        "_assemble_substrate (hyperneat.py:798) broadcasts that order verbatim -- so with a "
-        "hidden block the read-out row is a hidden neuron, the real output neuron is "
-        "activated like a hidden one, and the last connection's weight never reaches the output"
-    ),
-)
 def test_forward_reads_the_substrate_output_neurons(hyper, state, decoded):
     """``forward`` must return the substrate's output neurons (keys ``I .. I+O-1``).
 
@@ -981,7 +971,7 @@ def test_forward_reads_the_substrate_output_neurons(hyper, state, decoded):
     npt.assert_array_equal(
         np.asarray(decoded.schedule.output_slot)[0],
         np.array([slots[2]]),
-        err_msg="root cause: output_slot must name the output block's node (key 2), not a hidden row",
+        err_msg="output_slot must name the output block's node (key 2), not a hidden row",
     )
     got = run_method(hyper, "forward", payload, inputs, state=state)
     npt.assert_allclose(
@@ -990,8 +980,8 @@ def test_forward_reads_the_substrate_output_neurons(hyper, state, decoded):
         rtol=1e-6,
         atol=0,
         err_msg=(
-            "forward must read out the substrate output neuron (key 2). Observed instead the "
-            "hidden row's unactivated self-loop sum w0*a + w1 + w2*(w0*a + w1 + w2*(w0*a + w1)) "
-            "-- sigmoid(-1.3125) = 0.2120688 at a = 0 -- with w3 never applied"
+            "forward must read out the substrate output neuron (key 2), i.e. "
+            "sigmoid(w3 * tanh(w0*a + w1 + w2*tanh(w0*a + w1))), not the hidden row's "
+            "unactivated self-loop sum w0*a + w1 + w2*(w0*a + w1 + w2*(w0*a + w1))"
         ),
     )

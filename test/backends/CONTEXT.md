@@ -20,10 +20,12 @@ Both backends are driven once per module through module-scoped fixtures, so the 
 The module-level `importorskip` is correct for a whole-tree run and wrong for a run that explicitly asks for the compiled-backend leg, because a bare "1 skipped" reads as success either way.
 `iree_available()` decides availability with `importlib.util.find_spec("iree")`, so the guard never imports the optional extension and never pays its ~80 MB import.
 `explicit_marker_expressions(config)` reads only `config.invocation_params.args` (an `-m` arriving through `addopts` is configuration, not a request) and recognises `-m EXPR`, `-m=EXPR` and `-mEXPR`.
-`implies_requires_iree(expression)` compiles the selector with pytest's own `_pytest.mark.expression.Expression` and evaluates it against a matcher that accepts only the bare `requires_iree` marker: `requires_iree` and `requires_iree or parity` imply the leg, while `not requires_iree`, `requires_iree and slow` and `parity` do not, and a malformed expression is left to pytest's own `-m` validation.
+`implies_requires_iree(expression)` compiles the selector with pytest's own `_pytest.mark.expression.Expression` and evaluates it **twice** against the same synthetic test that carries only the `requires_iree` marker: once with a matcher that accepts that marker, once with a matcher that accepts nothing (the same test as if it lacked the marker).
+The expression implies the leg only when the first selects the test and the second does not, so a marker-free selector cannot masquerade as a request: `requires_iree` and `requires_iree or parity` imply it, while `not requires_iree`, `requires_iree and slow`, `parity` and `not parity and not slow` do not, and a malformed expression is left to pytest's own `-m` validation.
+This is what keeps the documented default gate (`-m "not parity and not slow"`) green in an environment without the extra: it selects the bare-marker test twice, with and without the marker, so it is not a capability request.
 `names_the_backends_directory(config)` resolves each non-option command-line token and accepts only this directory or a path inside it, so an option value such as `-o addopts=` or `-k iree` is never mistaken for a path and a broad `pytest test` is not a request for this suite.
 `pytest_configure` is a historic hook, so it also runs for this sub-directory conftest when pytest reaches `test/backends` during collection, before the module-level skip can be produced.
-An explicit marker request with iree absent stops the session through `pytest.exit(..., returncode=1)` and names both install spellings (`uv sync --extra iree`, i.e. `uv pip install "evoxc[iree]"`); no skip is collected.
+An explicit marker request with iree absent stops the session through `pytest.exit(..., returncode=1)` and announces the install step (`uv sync --extra iree`, or the git-pinned `pip install "evoxc[iree] @ git+https://github.com/EMI-Group/evoxc@v0.1.1"`; the bare PyPI spelling is never offered because it resolves `evoxc` 0.1.0, which `pyproject.toml` forbids); no skip is collected.
 Naming the directory without a marker request and with iree absent keeps the single structural skip and exit code 0, and announces the install command through `config.issue_config_time_warning`, because a scope request is not a capability request.
 With iree importable the guard returns immediately and the module runs its assertions for real.
 
@@ -32,13 +34,13 @@ A default or whole-tree run (or one that merely names this directory) skips beca
 A run whose `-m` selector implies `requires_iree` treats the same absence as "the requested leg is unavailable", which is never a skip: it exits non-zero with the install command.
 
 ## How to run
-`uv sync --extra iree` installs `iree-base-compiler` + `iree-base-runtime` (equivalent: `uv pip install "evoxc[iree]"`).
-`uv run --extra bench --extra iree pytest test/backends -q -o addopts=""` — this suite alone with the extra installed: **3 passed in ~9–10 s**.
-`uv run --extra bench --extra iree pytest test/backends -q -o addopts="" -m requires_iree` — the same three cases selected by marker (registered in `../conftest.py`, in no gate): **3 passed**.
-`-m "not requires_iree"` deselects all three (`3 deselected`) in a run that installed the extra but does not want the compile cost.
-Without the extra (bare `uv sync`), `uv run pytest test/backends -q -o addopts=""` reports **1 skipped, 1 warning in ~0.05 s, exit 0**, the warning naming the install command.
-Without the extra, `uv run pytest -m requires_iree -q -o addopts="" test/backends` reports **exit 1** and the message `test/backends: this run explicitly requests the compiled-backend leg (-m 'requires_iree') but the optional iree backend is not installed.` followed by the install command.
-Without the extra, `uv run pytest` (whole tree) stays green and this directory contributes one structural skip; that bare environment's total is 5 skips, the other four being the `jax` parity modules.
+`uv sync --extra iree` installs `iree-base-compiler` + `iree-base-runtime` (the git-pinned equivalent is `pip install "evoxc[iree] @ git+https://github.com/EMI-Group/evoxc@v0.1.1"`; plain `uv pip install "evoxc[iree]"` resolves the forbidden PyPI 0.1.0 and is never suggested).
+`uv run pytest test/backends -q -o addopts=""` — this suite alone with the extra installed: **13 passed in ~9 s** (3 iree cases plus the 10 guard cases of `./test_conftest.py`, which need no extra).
+`uv run pytest test/backends -q -o addopts="" -m requires_iree` — the three compiled-backend cases selected by marker (registered in `../conftest.py`, in no gate): **3 passed, 10 deselected**.
+`-m "not requires_iree"` deselects those three (`10 passed, 3 deselected`) in a run that installed the extra but does not want the compile cost.
+Without the extra (bare `uv sync`), `uv run pytest test/backends -q -o addopts=""` reports **10 passed, 1 skipped, 1 warning in ~0.1 s, exit 0**: the guard's own tests run, the iree module contributes the one structural skip, and the warning names the install step.
+Without the extra, `uv run pytest -m requires_iree -q -o addopts="" test/backends` reports **exit 1** and the message `test/backends: this run explicitly requests the compiled-backend leg (-m 'requires_iree') but the optional iree backend is not installed.` followed by the install step; naming the directory keeps that exit code, while a whole-tree `-m requires_iree` (no path) exits 2 because the same `pytest.exit` fires during collection — non-zero either way.
+Without the extra, the documented default gate `uv run pytest -m "not parity and not slow"` stays green (`not parity and not slow` does not imply the marker) and this directory contributes one structural skip: a bare `uv sync` gives **1263 passed, 5 skipped, 68 deselected**, the other four skips being the `jax` parity modules.
 Markers: `requires_iree` is declared in `../conftest.py` (`pyproject.toml` is read-only for this node).
 
 ## Compile time is separate from per-generation time
@@ -53,7 +55,7 @@ The numpy-vs-iree comparison takes `numpy` (another `evoxc` backend) as its orac
 Only XOR (`func_fit`) is exercised: no `scan`/`while_loop` rollout (`CartPole`/`Pendulum`/`MountainCarContinuous`), no `RecurrentGenome` tick loop, no `HyperNEAT` — the control-flow shapes most likely to differ per backend.
 Generation 1's payload is the host-seeded `setup()` population, so it is identical across backends by construction; only generation 2's payload exercises iree-built mutation/crossover.
 `../.github/workflows/ci.yaml` runs this leg with `continue-on-error: true`, so a red iree job does not fail CI.
-The guard has no committed test of its own: its absent-extra behaviour is evidenced by the two-environment commands above, and its helpers are exercised by a direct throwaway call with a fake config and a monkeypatched `find_spec` (not committed).
+`./test_conftest.py` pins the guard's two pure helpers (`implies_requires_iree`'s whole truth table and the git-pinned install string), but the absent-extra *hook* itself — `pytest_configure` calling `pytest.exit` — is still evidenced by the two-environment commands above rather than by a committed test, because it needs a process whose `iree` is genuinely absent.
 
 ## Constraints
 `./conftest.py` imports nothing optional and decides availability with `find_spec`; it reads `_pytest.mark.expression` (pytest's own `-m` parser — private, but stable and the only way to reuse that grammar exactly) and `pytest` itself.
@@ -68,5 +70,6 @@ This directory writes nothing outside `test/backends`; `../src`, `../benchmarks`
 |---|---|
 | `./conftest.py` | the request guard: hard error for an explicit `-m requires_iree` request with iree absent, announced structural skip when the directory is merely named. |
 | `./test_iree_pipeline.py` | iree execution, iree-vs-numpy same-seed equality, and the no-silent-fallback option check (marker `requires_iree`). |
+| `./test_conftest.py` | the guard's truth table: which `-m` expressions imply `requires_iree`, plus the git-pinned install string (no optional dependency, collected in every gate). |
 | `../conftest.py` | registers the `requires_iree` marker and puts `src/` on `sys.path`. |
 | `../../benchmarks/backend_measure.py` | build time vs per-generation time vs peak RSS for one `(case, backend)`. |
