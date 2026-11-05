@@ -88,7 +88,7 @@ final loss: 8.68e-04 after 67 generations
 ```
 
 That is the whole quickstart: seed 42 converges at generation 67 in about 4 s on this box, so the demo budget is pop 200 with at most 150 generations and `fitness_target=-1e-3` (`fitness_target` is in fitness space and fitness is maximised, so "error below 1e-3" is `-1e-3`).
-The script itself is `examples/func_fit/xor.py`, 35 lines including comments; a real run raises `pop_size` into the thousands and the generation limit into the hundreds.
+The script itself is `examples/func_fit/xor.py`, 41 lines including comments; a real run raises `pop_size` into the thousands and the generation limit into the hundreds.
 `compile finished` is the one-off evoxc build of the generation graph: `Pipeline.setup()` only prepares host state, the build happens inside the first `step` (that is, inside `auto_run`), and the resulting executable is then reused for every generation of that shape.
 
 After evolution the best individual is available host-side, with no graph involved (`pipeline` is the one built by `examples/func_fit/xor.py`):
