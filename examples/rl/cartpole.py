@@ -6,8 +6,8 @@ Run with::
 
 Backend note: the rollout is a fixed-horizon loop, so evaluation cost grows
 linearly with ``max_step``. On this CPU the numpy reference interpreter spends
-roughly 0.9 s per generation at ``pop_size=100`` with the default
-``max_step=500`` (measured), and about 0.45 s per generation for the budget
+roughly 0.38 s per generation at ``pop_size=100`` with the default
+``max_step=500`` (measured), and about 0.21–0.28 s per generation for the budget
 below (``pop_size=200``, ``max_step=200``). This script therefore keeps
 ``backend="numpy"`` and a reduced ``max_step`` so it finishes in seconds without
 any optional extra installed; a compiled backend pays a one-off compile per
@@ -50,7 +50,7 @@ neat = algorithm.NEAT(
 # ceiling: the problem raises TensorNEATError if fitness_target > max_step.
 cartpole = problem.CartPole(max_step=200, repeat_times=1, fitness_target=200)
 
-# Small budget: about half a second per generation on the reference backend.
+# Small budget: about a quarter second per generation on the reference backend.
 pipeline = Pipeline(
     algorithm=neat,
     problem=cartpole,

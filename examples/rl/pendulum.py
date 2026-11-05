@@ -12,8 +12,8 @@ positive (``fitness_target`` may only be ``<= 0``).
 
 Backend note: the rollout is a fixed-horizon loop, so evaluation cost grows
 with ``max_step``; at ``pop_size=100`` / ``max_step=200`` a generation costs
-0.34–0.53 s on this CPU (measured) and the 0.29 s build is one-off, so the
-run below (5 generations) takes 3.8 s wall including interpreter startup
+0.23–0.40 s on this CPU (measured) and the 0.28–0.30 s build is one-off, so the
+run below (5 generations) takes 2.7–2.9 s wall including interpreter startup
 (measured). All these figures come from the numpy reference interpreter, which
 needs no optional extra, so this script keeps ``backend="numpy"``. A compiled
 backend pays a one-off
