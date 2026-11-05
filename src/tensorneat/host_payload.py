@@ -337,18 +337,21 @@ def _finite_fitness(fitnesses: Any) -> np.ndarray:
 #: population-shaped centre batch.
 _GPU_DEVICE_KINDS: tuple[str, ...] = ("rocm", "hip", "hips", "cuda", "vulkan", "gpu")
 
-#: ``(distance_centre, distance_formulation)`` a GPU-class kind registers.
-_GPU_FORMULATION: tuple[str, str] = ("tiled", "index_free")
+#: The three trace-time statics a GPU-class kind registers, in registration order:
+#: ``(distance_centre, distance_formulation, kernel_mode)``.
+_GPU_FORMULATION: tuple[str, str, str] = ("tiled", "index_free", "accelerator")
 
-#: The pair every other kind registers -- the host leg where the merge kernel is
-#: the measured winner and one centre per call keeps element volume down.
-_HOST_FORMULATION: tuple[str, str] = ("single", "merge")
+#: The triple every other kind registers -- the host leg where the merge kernel is
+#: the measured winner, one centre per call keeps element volume down and every
+#: kernel takes its legacy formulation.
+_HOST_FORMULATION: tuple[str, str, str] = ("single", "merge", "host")
 
 #: What a *missing* formulation static means: the kernels themselves fall back to
-#: this pair, so a hand-built ``State`` (one no ``Pipeline.setup`` produced) keeps
-#: the legacy contract.
+#: these values, so a hand-built ``State`` (one no ``Pipeline.setup`` produced)
+#: keeps the legacy contract.
 _DEFAULT_DISTANCE_CENTRE = "tiled"
 _DEFAULT_DISTANCE_FORMULATION = "merge"
+_DEFAULT_KERNEL_MODE = "host"
 
 
 def _device_kind(device: Any) -> Optional[str]:
@@ -369,15 +372,17 @@ def _device_kind(device: Any) -> Optional[str]:
     return kind if isinstance(kind, str) else None
 
 
-def _formulation_statics(device: Any) -> tuple[str, str]:
-    """The ``(distance_centre, distance_formulation)`` statics ``device`` selects.
+def _formulation_statics(device: Any) -> tuple[str, str, str]:
+    """The trace-time kernel statics ``device`` selects, as one triple.
 
     These are trace-time kernel selections, not tensors: they are registered on the
     state as plain strings and baked into the generation graph by the pipeline's
-    static-config pass.  A GPU-class kind (:data:`_GPU_DEVICE_KINDS`) asks for the
-    index-free formulation over the population-shaped centre batch
-    (:data:`_GPU_FORMULATION`); every other kind -- including ``None`` -- keeps the
-    host pair (:data:`_HOST_FORMULATION`).  The comparison is case-insensitive
+    static-config pass.  They all follow from one decision -- whether the resolved
+    kind is GPU-class (:data:`_GPU_DEVICE_KINDS`) -- so they are derived here once
+    rather than by each kernel table lookup: a GPU-class kind gets
+    :data:`_GPU_FORMULATION` (index-free distance over the population-shaped centre
+    batch, accelerator formulations elsewhere), every other kind -- including
+    ``None`` -- :data:`_HOST_FORMULATION`.  The comparison is case-insensitive
     because ``evoxc`` stores a kind string verbatim.
 
     Args:
@@ -385,7 +390,8 @@ def _formulation_statics(device: Any) -> tuple[str, str]:
             an ``evoxc.Device``.
 
     Returns:
-        tuple: ``("tiled" | "single", "index_free" | "merge")``.
+        tuple: ``(distance_centre, distance_formulation, kernel_mode)`` --
+        ``("tiled" | "single", "index_free" | "merge", "accelerator" | "host")``.
     """
     kind = _device_kind(device)
     if isinstance(kind, str) and kind.lower() in _GPU_DEVICE_KINDS:
@@ -393,24 +399,26 @@ def _formulation_statics(device: Any) -> tuple[str, str]:
     return _HOST_FORMULATION
 
 
-def _formulation_signature(state: Any) -> tuple[str, str]:
+def _formulation_signature(state: Any) -> tuple[str, str, str]:
     """The formulation statics of ``state``, defaulted to the legacy contract.
 
-    Part of the executable-cache key: the pair changes which kernels the graph
+    Part of the executable-cache key: the triple changes which kernels the graph
     formulates, so reusing an executable across a device/mode change would run the
     wrong formulation.  A state no ``Pipeline.setup`` produced falls back to the
-    same pair the kernels themselves fall back to
-    (:data:`_DEFAULT_DISTANCE_CENTRE` / :data:`_DEFAULT_DISTANCE_FORMULATION`).
+    same values the kernels themselves fall back to
+    (:data:`_DEFAULT_DISTANCE_CENTRE` / :data:`_DEFAULT_DISTANCE_FORMULATION` /
+    :data:`_DEFAULT_KERNEL_MODE`).
 
     Args:
         state (Any): A state carrying the statics, or any object without them.
 
     Returns:
-        tuple: ``(distance_centre, distance_formulation)``.
+        tuple: ``(distance_centre, distance_formulation, kernel_mode)``.
     """
     return (
         getattr(state, "distance_centre", _DEFAULT_DISTANCE_CENTRE),
         getattr(state, "distance_formulation", _DEFAULT_DISTANCE_FORMULATION),
+        getattr(state, "kernel_mode", _DEFAULT_KERNEL_MODE),
     )
 
 
