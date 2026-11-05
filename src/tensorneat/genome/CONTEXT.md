@@ -55,6 +55,7 @@ With `acyclic=True` the cycle-detection relaxation, its in-graph test and the `e
   `HASH_QUANT_SCALE` (1e6) reaches the `int32` range at `|attr| ≈ 2147.48` and wraps beyond it, so the hash is a heuristic de-duplication key, never an identity test anywhere.
 `GenomeTensors` is a namedtuple-like pytree of exactly the four payload arrays, always taken and returned by field.
 Structural mutation keys (`new_node_keys`, `new_conn_keys`) are **allocated by the caller** (globally unique across the population) and passed in as int32 tensors — they are not RNG draws.
+`_check_key_shapes` (`base.py`) refuses any other dtype with a `TensorNEATError` naming the tensor and the required `int32` (a cast would be a traced op for a host-side contract violation), so a widened or float key tensor cannot reach `enp.stack`/`scatter`.
 ## Execution schedule (`Transformed`, owned by `../common/tensorization.py`)
 Per-population, batch-first, static shapes; field names are a binding contract with `common`:
 - `in_src (P, max_nodes, K) int32` — flat index into `reshape(values, (P*max_nodes,))` of the source row of the k-th incoming edge of each node row; in range (0) where the slot is empty.
