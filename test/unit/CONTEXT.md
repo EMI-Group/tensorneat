@@ -6,13 +6,13 @@ Each assertion compares against something independent of the implementation unde
 This directory is the whole content of the default gate; `./parity` (legacy JAX oracle) and `./integration` (whole `Pipeline`) are the two suites that go beyond it.
 
 ## Counts
-`./common` 246, `./genome` 154, `./algorithm` 372 (+1 xfailed), `./problem` 367, `./benchmarks` 82 — 1221 passing cases in the subdirectories, plus `./test_version.py` (2) and `./test_host_payload.py` (12) at this node's root: **1235 passed, 1 xfailed, 0 failed, 0 skipped**.
-`pytest -m "not parity and not slow"` from the repo root: **1241 passed, 1 xfailed, 77 deselected** in ~43 s.
-`./algorithm` carries one strict `xfail` (the HyperNEAT read-out defect below); nothing in this node is skipped.
+`./common` 246, `./genome` 154, `./algorithm` 373, `./problem` 367, `./benchmarks` 82 — 1222 passing cases in the subdirectories, plus `./test_version.py` (2) and `./test_host_payload.py` (12) at this node's root: **1236 passed, 0 failed, 0 skipped**.
+`pytest -m "not parity and not slow"` from the repo root: **1266 passed, 104 deselected** in ~43 s after `uv sync --all-extras`, and **1263 passed, 5 skipped, 68 deselected** in ~34 s in a bare `uv sync` (the five skips are the four `jax` parity modules and `../backends`; `--ignore` is no longer needed, see `../backends/conftest.py`).
+`./algorithm` carries no `xfail` (the HyperNEAT read-out test passes); nothing in this node is skipped.
 `./genome` and `./algorithm` dominate the wall clock (one traced executable per graph), then `./problem`, `./common` and `./benchmarks`.
 
 ## How to run
-`uv run pytest test/unit -o addopts="" -q` from the repo root (plain `pytest` also collects it, but the doubled `-q` from `addopts` hides the summary line) — numpy backend, no optional dependency, **1235 passed, 1 xfailed in ~35 s** after `uv sync --all-extras`.
+`uv run pytest test/unit -o addopts="" -q` from the repo root (plain `pytest` also collects it, but the doubled `-q` from `addopts` hides the summary line) — numpy backend, no optional dependency, **1236 passed in ~32 s** after `uv sync --all-extras`.
 `pytest test/unit/<sub> -k <expr>` narrows the same gate while keeping the leak guard active.
 Per node: `./common` 5 s, `./genome` 11 s, `./algorithm` 11 s, `./problem` 6 s, `./benchmarks` 0.4 s; no module here needs a network, a GPU or parallelism.
 
@@ -46,8 +46,8 @@ Each leak is reported once and forgotten, so one bad import does not turn every 
 Not covered: a dynamic `importlib.import_module` of an already-loaded framework, and anything a subprocess does — that is `../release_gate_no_jax.py`'s job, which checks the package itself in a clean interpreter.
 
 ## Known items
-One strict `xfail` in this node: `./algorithm/test_hyperneat.py::test_forward_reads_the_substrate_output_neurons` pins a real source defect — `HyperNEAT._validate` (`hyperneat.py:491`) requires and `_assemble_substrate` (`:798`) broadcasts the node-key order inputs, outputs, hidden, while the executor genome reads its outputs from the **last** `num_outputs` rows (`genome/base.py:236` `output_idx`, `genome/step.py:439` `_output_values`), so with a hidden block the read-out row is a hidden neuron.
-The defect is inherited from `benchmarks/legacy_jax`, not a rewrite regression, and the xfail is strict: fixing `src/` turns it into an XPASS failure, at which point the marker is deleted, never weakened.
+No `xfail` left in this node: `./algorithm/test_hyperneat.py::test_forward_reads_the_substrate_output_neurons` now passes, because the read-out follows `Transformed.output_slot` (the substrate's output keys `I .. I+O-1`) instead of the last `num_outputs` node rows; the test pins both the slot and the hand-computed value.
+The source fix that made it pass is `src/`'s, not this suite's: the test was never weakened, only un-marked once the behaviour arrived.
 The whole-node run emits 2 `RuntimeWarning: overflow encountered in exp` from the HyperNEAT end-to-end runs' `output_transform=ACT.sigmoid` on saturating weights; the suite deliberately does not silence them.
 Declared size exceptions (each one cohesive concern whose module-local helpers would be duplicated by a split): `./genome/test_forward.py` 1136, `./genome/test_grad.py` 1063, `./genome/test_mutation.py` 1050 — split trigger 1200 lines; `./algorithm/test_substrate.py`, `test_genes.py`, `test_hyperneat.py` and `test_hyperneat_feedforward.py` sit at 983–1000 and split if they grow.
 Remaining gaps, per node: `RecurrentMutation` and the `OriginNode`/`BiasNode` host hooks (`./genome`), `pipeline.py` (still only `./integration`), the substrate `_attr_columns` rejections that evoxc's static allowlist makes unreachable, and the untested `--list`/`--dry-run` CLI paths (`./benchmarks`); the child `CONTEXT.md` files carry the detail.
@@ -62,7 +62,7 @@ An assertion must be able to fail and names the independent oracle it disagrees 
 
 ## Constraints
 No network, no GPU, no wall-clock or ordering dependence; `tmp_path` appears only in `./common/test_state.py` (the `State` save/load round-trip), `./benchmarks` (a temporary git repository and a `tmp_path` copy of a results record) and the e2e HyperNEAT/pipeline runs.
-A test may not edit `../../src`, `../../benchmarks` or `pyproject.toml`; a discovered defect is a strict xfail here and reported upward.
+A test may not edit `../../src`, `../../benchmarks` or `pyproject.toml`; a discovered defect is reported upward (pinned here only as a strict `xfail` while it stands).
 `../conftest.py` puts `src/`, `benchmarks/legacy_jax` and `test/` on `sys.path`; `./benchmarks/conftest.py` additionally appends `benchmarks/` so the harness's bare `harness` sibling import resolves; `conftest.py` here has one process-wide side effect, the import recorder, and it uses nothing outside the standard library and pytest.
 
 ## Routing Table

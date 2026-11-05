@@ -52,10 +52,12 @@ MARKER = "requires_iree"
 #: The optional top-level package the ``evoxc[iree]`` extra provides.
 OPTIONAL_MODULE = "iree"
 
-#: One install step, two spellings: the project extra and the pip extra it expands to.
+#: One install step: the project extra, which pins ``evoxc`` from git rather than PyPI.
+#: ``uv pip install "evoxc[iree]"`` is deliberately *not* offered: it resolves the PyPI
+#: release 0.1.0, which ``pyproject.toml`` forbids (the frontend work landed in 0.1.1).
 INSTALL_COMMAND = (
-    'uv sync --extra iree   (equivalently: uv pip install "evoxc[iree]" -- '
-    "iree-base-compiler + iree-base-runtime)"
+    "uv sync --extra iree   (equivalently: pip install "
+    '"evoxc[iree] @ git+https://github.com/EMI-Group/evoxc@v0.1.1")'
 )
 
 
@@ -99,13 +101,24 @@ def explicit_marker_expressions(config: pytest.Config) -> list[str]:
 
 
 def implies_requires_iree(expression: str) -> bool:
-    """Whether ``expression`` selects a test that carries only the ``requires_iree`` marker.
+    """Whether ``expression`` selects a test *because* it carries the ``requires_iree`` marker.
 
-    The compiled ``-m`` expression is evaluated with a matcher that accepts
-    exactly the bare ``requires_iree`` marker, which answers "does this selector
-    imply the compiled-backend leg": ``-m requires_iree`` and
-    ``-m "requires_iree or parity"`` do, ``-m "not requires_iree"`` and
-    ``-m "requires_iree and slow"`` do not.
+    The compiled ``-m`` expression is evaluated twice against the same synthetic
+    test, one that carries the ``requires_iree`` marker and nothing else:
+
+    * with a matcher that accepts that marker, i.e. the real selector;
+    * with a matcher that accepts nothing, i.e. the same test as if it lacked
+      the marker.
+
+    The expression implies the marker only when the first selects the test and
+    the second does not, so a selector that happens to include every marker-free
+    test (``not parity and not slow``) is *not* misread as a capability request:
+    it selects the bare-``requires_iree`` test twice, once with and once without
+    the marker.
+
+    Consequences: ``requires_iree`` and ``requires_iree or parity`` do imply the
+    compiled-backend leg, while ``not requires_iree``, ``requires_iree and slow``,
+    ``parity`` and ``not parity and not slow`` do not.
 
     A malformed expression returns ``False`` and is left to pytest's own ``-m``
     validation, which reports it with pytest's message; raising a second error
@@ -115,7 +128,9 @@ def implies_requires_iree(expression: str) -> bool:
         compiled = Expression.compile(expression)
     except SyntaxError:
         return False
-    return compiled.evaluate(lambda name, **kwargs: name == MARKER and not kwargs)
+    selected_with = compiled.evaluate(lambda name, **kwargs: name == MARKER)
+    selected_without = compiled.evaluate(lambda name, **kwargs: False)
+    return selected_with and not selected_without
 
 
 def names_the_backends_directory(config: pytest.Config) -> bool:

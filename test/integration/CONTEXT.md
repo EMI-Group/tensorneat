@@ -10,7 +10,7 @@ Every module carries `pytestmark = [pytest.mark.slow]`; `pytest -m slow` selects
 `src/tensorneat/pipeline.py` is the evoxc compile site, so `conftest.py::missing_evoxc_pipeline_features(tn)` returns an empty list and the suite runs.
 The probe is structural, never hardcoded: it inspects `inspect.signature(tn.Pipeline.__init__)` for the four documented compile kwargs (`PIPELINE_COMPILE_KWARGS = ("backend", "device", "compile_options", "is_detailed")`), checks whether the loaded `tensorneat.pipeline` module binds `jax`/`jnp`, and scans that module's source file for a top-level `import jax` (it never imports jax to find out).
 `require_evoxc_pipeline` now **raises `AssertionError`** naming every missing feature, and the autouse `_evoxc_pipeline_required` fixture applies it to every test: losing a compile keyword or re-binding `jax` turns the directory red with a clear message instead of green with silent skips.
-The only remaining skip channel is `support.lazy.require`: an import that raises `NotImplementedError` (the package itself unavailable) is a named skip, not a source regression, and no test body uses `skip`/`skipif`/`xfail`.
+The suite has no skip channel of its own: `support.lazy.require` propagates every error by default — a `NotImplementedError` from this tree is a defect, not a skip — and only the opt-in `allow_pending=True` (which `./conftest.py` never passes) turns a `NotImplementedError` raised inside `src/tensorneat` into a named skip; no test body uses `skip`/`skipif`/`xfail`.
 `test_shape_rebuild.py`'s compile-observability probe follows the same rule: if the first step makes no observable `evoxc.build/build_cached/lower/compile` call it now `pytest.fail`s, naming the compile-site contract.
 No module imports `tensorneat` or a `support` module at module scope: `tn`, `payloads` and `runner` are `support.lazy.require` fixtures, and only `numpy`/`json`/`pytest` plus `from integration.conftest import …` appear at module scope.
 
@@ -91,7 +91,7 @@ Nothing in this directory can observe the pipeline's per-shape cache object itse
 The HyperNEAT coverage uses a deliberately tiny CPPN (`max_nodes=12`, `max_conns=24`) and six func-fit samples, so it pins the wiring (decode, substrate signature, checkpoint, `network_dict`) rather than search quality.
 
 ## Conventions
-Every test has a real body; the only skip channel is `support.lazy.require` for an import that raises `NotImplementedError` (the package is unavailable), and no test body calls `skip`/`skipif`/`xfail`.
+Every test has a real body; the directory has no skip channel — `support.lazy.require` propagates by default and skips only an opt-in `allow_pending=True` `NotImplementedError` raised inside `src/tensorneat`, which no fixture here passes — and no test body calls `skip`/`skipif`/`xfail`.
 The structural probes (`require_evoxc_pipeline`, the shape-rebuild compile probe) fail loudly instead of skipping, because on this tree the evoxc compile site is the code under test.
 Assertions are never weakened to get green: a genuine `src/` defect is reported (or pinned with `xfail(strict=True)` and a one-line reason), never hidden behind a tolerance or a skip.
 Shapes stay small (`pop_size` 8/16 for XOR, 4 for HyperNEAT, `max_nodes ≤ 16`), checkpoint tests always pass `save_dir=tmp_path`, and `log.txt`'s `Cost Time` column is parsed but never asserted on.
