@@ -248,7 +248,7 @@ It passes the gate: no deferred op, no unsigned element type (`f32`/`f64`/`i1`/`
 | `./default.py` | `DefaultMutation`: the four plans, `_fetch_two`, and the add-node allocation/in-degree validation. |
 | `./recurrent.py` | `RecurrentMutation.plan_add_conn`: attempt tableau, `p_recur` requirement, statically gated cycle predicate. |
 | `./cycle.py` | `closes_cycle`: one dense `key -> row` table (one flat rank-1 `scatter` + one flat `gather` pass) feeding a monotone frontier `while_loop` acyclicity predicate; `key_span` is a positional argument. |
-| `./cycle_accelerator.py` | `closes_cycle_accelerator`: the same key resolution feeding a scatter-free `(P, N)` reached-set `while_loop` (broadcast `reduce_max` over the edge axis instead of a `scatter` write), plus the `kernel_mode` reading (`KERNEL_MODE_KEY`/`KERNEL_MODES`/`kernel_mode`/`selected`). |
+| `./cycle_accelerator.py` | `closes_cycle_accelerator`: an **equality-template** `key -> row` resolution (`_key_resolver`, no `scatter` at all, visibility masked through `cycle._in_span`) feeding a scatter-free `(P, N)` reached-set `while_loop` (broadcast `reduce_max` over the edge axis instead of a `scatter` write), plus the `kernel_mode` reading (`KERNEL_MODE_KEY`/`KERNEL_MODES`/`kernel_mode`/`selected`). |
 | `./plan.py` | Plan `NamedTuple`s, `EditContext`, the single-operation `Edit` and the `apply` writer with its static `write_nodes`/`clear_conn` specializations. |
 | `./arrays.py` | Flat-index toolkit: row fetches, block gathers, static index blocks, `uniform_bounds`, `i32` (read-only; writes live in `plan.apply`). |
 | `./degree.py` | Public in-degree audit of a post-write payload: exported, documented, never called in the library and never tested (never in the hot path either). |
