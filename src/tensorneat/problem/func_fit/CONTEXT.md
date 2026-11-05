@@ -78,7 +78,7 @@ So the dataset is never the constant problem here.
 - The budget cannot guard the allocation it exists to bound: `CustomFuncFit.__init__` validates the box and then calls `generate_dataset()` before `super().__init__()`, so a huge `num_samples` (or a fine grid) is fully materialised, targets included, before `validate_dataset` raises.
 - `Pyramid`REMOVE
 
-- The scratch harness named above is a throwaway driver kept outside the repository and run from the worktree root, so it is not shipped and no path to it should be relied on; re-create it if you need to re-measure, calling `problem.evaluate` alone with a genome-free `act_fn`.
+- The scratch harness is a throwaway driver kept outside the repository and run from the worktree root, so it is not shipped and no path to it should be relied on; re-create it if you need to re-measure, calling `problem.evaluate` alone with a genome-free `act_fn`.
   Its `--problem-only` mode is the metric for this node, while its `--share` mode only bounds the segment, because the zeros arm feeds degenerate fitness into `tell` and the two arms speciate differently.
 
 ## Routing Table
