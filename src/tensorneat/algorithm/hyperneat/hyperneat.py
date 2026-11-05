@@ -128,7 +128,10 @@ class HyperNEAT(BaseAlgorithm):
         hyper_genome (RecurrentGenome): Dense fixed-topology executor; ``max_nodes ==
             substrate.nodes_cnt`` and ``max_conns == substrate.conns_cnt``, so no NaN padding exists.
         weight_threshold (float): Dead-zone half-width of the CPPN-to-weight map.
-        max_weight (float): Saturating magnitude of the mapped weight.
+        max_weight (float): Weight scale of the CPPN-to-weight map: the mapped magnitude is
+            ``max_weight / (1 - weight_threshold)`` per unit of CPPN output beyond the dead zone, so
+            ``|weight| == max_weight`` at ``|query| == 1`` and grows proportionally beyond it (the
+            map is not clipped).
         aggregation (Callable): Fixed aggregation used by :class:`HyperNEATNode`.
         activation (Callable): Fixed activation used by :class:`HyperNEATNode`.
         activate_time (int): Recurrent activation steps of the substrate executor.
@@ -169,7 +172,10 @@ class HyperNEAT(BaseAlgorithm):
                 become exactly ``0`` (pruned connections) and the remaining ones are shifted for
                 continuity.  Must satisfy ``0 <= weight_threshold < 1`` because the map divides by
                 ``1 - weight_threshold``.
-            max_weight: Saturating weight magnitude after the map; must be ``> 0``.
+            max_weight: Weight scale of the CPPN-to-weight map; must be ``> 0``.  The map is
+                ``sign(w) * max(|w| - weight_threshold, 0) * max_weight / (1 - weight_threshold)``,
+                unclipped: it yields ``max_weight`` at ``|w| == 1`` and grows proportionally for a
+                larger CPPN output, so ``max_weight`` is a scale, not a saturation bound.
             aggregation: Fixed aggregation callable ``(z, valid_mask) -> z`` used by every substrate
                 node; not evolved.
             activation: Fixed activation callable used by every non-output substrate node; not evolved.
@@ -251,13 +257,19 @@ class HyperNEAT(BaseAlgorithm):
         2. ``query_res (P, Q) = self._query_substrate(state, pop)`` -- the CPPN is evaluated at every
            substrate connection's endpoint coordinates, flattened into the population axis.
         3. ``weights (P, Q) = self._weights_from_query(query_res)`` -- dead-zone, continuity shift and
-           scaling into ``[-max_weight, max_weight]``.
+           scaling by ``max_weight / (1 - weight_threshold)`` (unclipped, so ``|weight|`` is only
+           bounded by ``max_weight`` for ``|query| <= 1``).
         4. ``payload = self._assemble_substrate(weights)`` -- the fixed topology painted with the new
            weights, as the substrate genome's four-array gene payload
            (:class:`~tensorneat.genome.utils.GenomeTensors`).
-        5. ``schedule = self.hyper_genome.transform(state, payload.node_keys, payload.conn_keys)`` --
-           the substrate genome derives its own schedule; its layout is genome-owned and opaque to
-           this module.
+        5. ``schedule = self.hyper_genome.transform(state, payload.node_keys, payload.conn_keys,
+           input_keys=0..I-1, output_keys=I..I+O-1)`` -- the substrate genome derives its schedule
+           from those key arrays, i.e. from the substrate's *actual* input and output keys, never
+           from its default layout (whose output keys are the last ``O`` payload rows).  That is what
+           makes ``schedule.output_slot`` name the substrate output neurons ``I .. I+O-1`` instead of
+           a hidden row; the input keys ``0 .. I-1`` are the first payload rows, which is exactly the
+           row range ``genome.forward`` seeds with the network inputs, so input injection is
+           unaffected.  The rest of the schedule's layout is genome-owned and opaque to this module.
         6. ``return SubstrateSchedule(schedule, *payload)`` -- the two travel together because the
            protocol forwards a single ``transformed`` object into :meth:`forward`.
 
@@ -280,7 +292,22 @@ class HyperNEAT(BaseAlgorithm):
         query_res = self._query_substrate(state, pop)
         weights = self._weights_from_query(query_res)
         payload = self._assemble_substrate(weights)
-        schedule = self.hyper_genome.transform(state, payload.node_keys, payload.conn_keys)
+        # The substrate's node keys are the block order ``inputs, outputs, hidden``, so its output
+        # neurons are the keys ``I .. I+O-1`` and *not* the genome's default last ``O`` payload rows
+        # (those are hidden rows whenever the substrate has hidden neurons).  Deriving the schedule
+        # from the substrate's real key vectors is what makes ``output_slot`` -- the read-out
+        # authority of the substrate phenotype -- name the output neurons.  The input keys
+        # ``0 .. I-1`` are the first payload rows, exactly the rows ``genome.forward`` seeds with the
+        # network inputs, so input injection keeps its invariant.
+        num_inputs = int(self.substrate.num_inputs)
+        num_outputs = int(self.substrate.num_outputs)
+        schedule = self.hyper_genome.transform(
+            state,
+            payload.node_keys,
+            payload.conn_keys,
+            input_keys=tuple(range(num_inputs)),
+            output_keys=tuple(range(num_inputs, num_inputs + num_outputs)),
+        )
         return SubstrateSchedule(
             schedule=schedule,
             node_keys=payload.node_keys,
@@ -428,6 +455,17 @@ class HyperNEAT(BaseAlgorithm):
             TensorNEATError: On any inconsistent arity, threshold, weight bound, activation horizon,
                 substrate table shape, node-key block order, required ``connection_type``, or a
                 non-real ``weight_threshold`` / ``max_weight`` / ``activate_time``.
+
+        Note:
+            The enforced node-key block order -- inputs ``0 .. I-1``, then outputs ``I .. I+O-1``,
+            then hidden -- is the read-out invariant of the decoded phenotype: it makes
+            ``I .. I+O-1`` the substrate's OUTPUT keys, which is exactly the pair
+            :meth:`transform` hands to the executor genome's schedule derivation
+            (``input_keys=0..I-1``, ``output_keys=I..I+O-1``), so ``schedule.output_slot`` names the
+            output neurons that :meth:`forward` reads out.  The input rows stay ``0 .. I-1`` by the
+            same validation, which keeps the genome's input-row seeding invariant intact.
+            :class:`~tensorneat.algorithm.hyperneat.hyperneat_feedforward.HyperNEATFeedForward`
+            inherits all of it through :meth:`transform` plus its ``_genome_cls``.
         """
         substrate = self.substrate
         neat = self.neat
@@ -724,14 +762,18 @@ class HyperNEAT(BaseAlgorithm):
             query_res: ``(P, Q)`` float32 raw CPPN outputs.
 
         Returns:
-            ``(P, Q)`` float32 weights in ``[-max_weight, max_weight]``.
+            ``(P, Q)`` float32 weights scaled by ``max_weight / (1 - weight_threshold)``.  The map is
+            unclipped, so ``|weight| == max_weight`` exactly at ``|query| == 1`` and a larger CPPN
+            output grows proportionally beyond ``max_weight``; only ``|query| <= 1`` keeps the weights
+            inside ``[-max_weight, max_weight]``.
 
         Note:
             The map is ``sign(w) * max(|w| - weight_threshold, 0) * max_weight / (1 -
             weight_threshold)``, built from
             ``abs``/``greater``/``select``/``subtract``/``sign``/``multiply``.  The dead zone is
             strict -- ``|w| <= weight_threshold`` lands on ``0``, a pruned edge -- the legacy
-            ``-t < w < t`` test including its ``|w| == t`` boundary.
+            ``-t < w < t`` test including its ``|w| == t`` boundary.  There is no clamp: ``max_weight``
+            scales the surviving magnitude, it does not bound it.
 
             NaN is *not* masked: ``sign(NaN)`` is NaN, so the final multiply carries it through even
             though the dead-zone ``select`` picks ``0`` for a NaN input.  A broken CPPN therefore

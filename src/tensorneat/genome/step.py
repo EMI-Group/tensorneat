@@ -58,7 +58,7 @@ class _StepStatics:
             rows cleaned, at the evaluated row count.
         flat_index: ``(rows, N, K) int32`` flat gather index of the node-value window.
         present: ``(rows, N, K) bool`` liveness of each window slot.
-        output_rows: ``(rows, N) bool``, True on the rows read out as network outputs.
+        output_rows: ``(rows, N) bool``, True on the rows ``output_slot`` names as outputs.
         samples: Static tiling factor ``S`` of the evaluated batch (``1`` for a direct call).
         mask: The ``(P, N) bool`` output-row mask the prepared ``node`` was built against.
         node_attrs: The attribute tensor the prepared ``node`` was built from, so a second
@@ -91,7 +91,7 @@ class _StepStatics:
             conn: ``ConnOperands`` of the gathered connection attributes, ``P`` rows.
             flat_index: Flat gather index of the node-value window, already tiled.
             present: Liveness mask of the same slots, already tiled.
-            output_rows: ``(P, N) bool`` output-row mask.
+            output_rows: ``(P, N) bool`` mask of the rows ``transformed.output_slot`` names.
             samples: Static tiling factor of the evaluated batch.
         """
         pop_size = int(output_rows.shape[0])
@@ -285,7 +285,8 @@ class NodeStepMixin:
             :class:`_StepStatics` of this population: the gathered edge attributes (a dead
             slot keeps the attribute row its index was clamped to, which no consumer reads),
             the flat window index of the node values, its present-slot mask and the
-            output-row mask.
+            output-row mask derived from ``transformed.output_slot``
+            (:meth:`_output_row_mask`).
 
         Notes:
             The flat index of slot ``(p, n, k, w)`` is ``p * (E * CA) + row * CA + w``, i.e.
@@ -307,7 +308,7 @@ class NodeStepMixin:
         return _StepStatics(
             self.conn_gene.prepare(hit),
             *_slot_index(transformed.in_src, transformed.in_valid, max_nodes, samples),
-            self._output_row_mask(pop_size, max_nodes),
+            self._output_row_mask(transformed),
             samples,
         )
 
@@ -419,38 +420,90 @@ class NodeStepMixin:
         update = evoxc.logical_and(update_mask, any_slot(live))
         return evoxc.select(update, z, values)
 
-    def _output_row_mask(
-        self, pop_size: int, max_nodes: int
-    ) -> evoxc.SymbolicTensor:
-        """Build the ``(P, N)`` output-row mask from static facts alone.
+    def _output_row_mask(self, transformed: Transformed) -> evoxc.SymbolicTensor:
+        """Mark the node rows the schedule reads its network outputs from.
+
+        The mask comes from ``transformed.output_slot`` — the node slot the schedule resolved
+        each output key to — never from a row position: only ``DefaultGenome``'s/
+        ``RecurrentGenome``'s layout template puts the output rows at the tail of the payload,
+        while a substrate executor's payload is ordered inputs, outputs, hidden, so "the last
+        ``num_outputs`` rows" would mark a hidden row. A slot holding ``I_INF`` (an output key
+        no node of the payload carries) matches no in-range row and so marks nothing.
+
+        The derivation is one static ``(1, N)`` ``arange`` constant broadcast-compared with
+        each output column and folded with ``logical_or``: portable (no ``scatter``), and paid
+        once per forward pass inside :meth:`_hit_conn_attrs`, never per level.
 
         Args:
-            pop_size: Static population size ``P``.
-            max_nodes: Static node capacity ``N``.
+            transformed: Execution schedule whose ``output_slot`` is the ``(P, O) int32`` node
+                slot of each output key and whose ``in_conn`` carries the static ``(P, N, K)``.
 
         Returns:
-            ``(P, N) bool``, True on the last ``num_outputs`` rows.
+            ``(P, N) bool``, True on the rows holding an output node.
+
+        Raises:
+            TensorNEATError: If the schedule names no output column (``O == 0``): there is then
+                no output row and a silent all-``False`` mask would poison every read-out.
         """
-        flag = np.zeros(max_nodes, dtype=bool)
-        flag[max_nodes - self.num_outputs :] = True
-        row = evoxc.constant(evoxc.from_numpy(np.ascontiguousarray(flag)))
-        return enp.broadcast_to(evoxc.reshape(row, (1, max_nodes)), (pop_size, max_nodes))
+        pop_size, max_nodes = (int(size) for size in transformed.in_conn.shape[:2])
+        slots = transformed.output_slot
+        width = int(slots.shape[1])
+        if width <= 0:
+            raise TensorNEATError(
+                "_output_row_mask needs at least one output column in output_slot, got "
+                f"shape {tuple(int(size) for size in slots.shape)}"
+            )
+        rows = evoxc.constant(
+            evoxc.from_numpy(
+                np.ascontiguousarray(np.arange(max_nodes, dtype=np.int32).reshape(1, max_nodes))
+            )
+        )
+        mask = enp.equal(evoxc.slice(slots, (0, 0), (pop_size, 1)), rows)
+        for column in range(1, width):
+            mask = evoxc.logical_or(
+                mask, enp.equal(evoxc.slice(slots, (0, column), (pop_size, 1)), rows)
+            )
+        return mask
 
     def _output_values(
-        self, values: evoxc.SymbolicTensor, output_transform: Callable | None
+        self,
+        transformed: Transformed,
+        values: evoxc.SymbolicTensor,
+        output_transform: Callable | None = None,
     ) -> evoxc.SymbolicTensor:
-        """Read the output rows out of the node values and apply the output transform.
+        """Read the network outputs out of the node values and apply the output transform.
+
+        The read-out follows ``transformed.output_slot`` — the node slot of each output key —
+        so one path serves both a tail-of-payload layout (where the slot is exactly the last
+        ``num_outputs`` rows, hence bit-identical to that row slice) and a substrate executor
+        whose payload is ordered inputs, outputs, hidden. A slot holding ``I_INF`` (an output
+        key no node carries) reads ``NaN``, the value of an unconnected node, instead of
+        raising: the derivation is in-graph and a traced value may not drive a host error.
 
         Args:
-            values: ``(P, N) float32`` node values after the unrolled pass.
+            transformed: Execution schedule of the population.
+            values: ``(rows, max_nodes) float32`` node values after the unrolled pass, one row
+                per evaluated sample (``rows = P * samples`` for a problem-tiled batch).
             output_transform: Optional elementwise map over the last axis; ``None`` is identity.
 
         Returns:
-            ``(P, num_outputs) float32`` — rows ``max_nodes-num_outputs..max_nodes-1``, then
-            ``output_transform`` when it is not ``None``.
+            ``(rows, O) float32`` — the gathered output slots, then ``output_transform`` when it
+            is not ``None``.
+
+        Raises:
+            TensorNEATError: If the value rows are not a positive multiple of the schedule's
+                population size, so they do not repeat whole individuals.
         """
         max_nodes = int(values.shape[1])
-        outputs = values[(slice(None), slice(max_nodes - self.num_outputs, max_nodes))]
+        slot = transformed.output_slot
+        pop_size = int(slot.shape[0])
+        samples = self._sample_count(values, pop_size)
+        present = enp.not_equal(slot, _iinf(slot.dtype))
+        flat_index, present = _slot_index(slot, present, max_nodes, samples)
+        gathered = _gather_prepared(values, flat_index)
+        outputs = evoxc.select(
+            present, gathered, fill((), float("nan"), dtype=evoxc.float32)
+        )
         return outputs if output_transform is None else output_transform(outputs)
 
     # ------------------------------------------------------------- payload rows

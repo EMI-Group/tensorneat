@@ -193,8 +193,9 @@ class RecurrentGenome(BaseGenome):
            every non-input row.  ``input_transform`` is deliberately **not** applied — legacy
            parity: the pre-rewrite class fed raw inputs on every tick, which is also what
            HyperNEAT relies on when it uses this genome as a CPPN.
-        3. ``return self._output_values(values, self.output_transform)`` — rows
-           ``max_nodes-num_outputs..max_nodes-1`` of the last tick, then ``output_transform``.
+        3. ``return self._output_values(transformed, values, self.output_transform)`` — the
+           rows ``transformed.output_slot`` names (here ``max_nodes-num_outputs..
+           max_nodes-1``) of the last tick, then ``output_transform``.
 
         ``node_level`` is ignored on purpose: the schedule reports ``I_INF`` for every node on
         or downstream of a cycle, so a level-driven mask would produce an all-``NaN`` read-out.
@@ -356,7 +357,7 @@ class RecurrentGenome(BaseGenome):
                 values,
                 prepared.update_mask,
             )
-        return self._output_values(values, self.output_transform)
+        return self._output_values(transformed, values, self.output_transform)
 
     def sympy_func(
         self,
