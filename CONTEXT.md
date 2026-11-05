@@ -33,6 +33,13 @@ Its quality rows predate the search-quality fixes below; `benchmarks/results/xor
 The rewrite's wins are real and recorded: no JAX/torch runtime dependency, one explicit persistent graph per shape, ~5× lower build latency, lower memory on the compiled leg, and numpy/iree/xla/tvm behind one `backend=` argument.
 `benchmarks/PERF_NUMPY.md` records the numpy op-count pass that cut a generation by 39 % (pop 500) and 45 % (pop 1000) with bit-identical results; its committed before/after pair is the reference for further work.
 Remaining lever, measured and out of scope so far: the padded gene geometry (`max_nodes`/`max_conns` multiply every per-pair op) and `evoxc`'s interpreter per-op overhead (~63 % of a generation).
+## Search Quality
+`benchmarks/results/xor3d_quality_2026-11-04.md` is the post-fix quality measurement (numpy, both implementations, seeds 42/43/44, 150 generations each, one repeat per seed) and is the current search-quality evidence.
+It holds the `-0.05` XOR3d tolerance on `xor3d_p500` (median −2.9e−12 against the JAX side's −0.1789, 3/3 seeds to target) and on `xor3d_p1000` (−1.7e−11 against −1.4e−09), and the `-0.01` Pagie tolerance on `custom_pagie_p500` (−0.0066 against −0.0064, 3/3 seeds).
+`xor3d_p100` still misses the three-seed median (−0.2500 against −0.0894): at pop 100, leaving the constant-0.5 basin is a per-seed lottery in *both* implementations — the new side escapes on 13 of 20 seeds against the frozen oracle's 4 of 20 and seed 42 escapes at generation 55 against the oracle's 81, while seeds 43/44 do not escape inside the budget.
+Two search contracts, both matching the frozen implementation: parent pairing pins elite slot *k* to its species' *k*-th ranked member (never the champion cloned into every elite slot), and the four structural gates are independent per individual and compose sequentially add-node → delete-node → add-conn → delete-conn.
+`DefaultGenome` ships `conn_add=0.4`/`conn_delete=0.05` because the add gate is the one refused roughly half the time (duplicate/self/cycle refusals), which made equal declared probabilities thin the population; an explicitly constructed `DefaultMutation()` keeps NEAT-python's `0.2`/`0.2`.
+Every allocated node and connection key stays inside `key_span`: a key outside the schedule's window is dropped from the phenotype without an error.
 ## Constraints
 - `import tensorneat` must never import `jax`, `torch`, `brax`, `gymnax` or `mujoco` (a release-gate test enforces this); compiled backends are pulled in only by `evoxc.build(backend=...)`.
 - All computation lives inside `@evoxc.defn` graphs or helpers called during an active trace; there is no eager mode — host code only orchestrates build/run/log.
