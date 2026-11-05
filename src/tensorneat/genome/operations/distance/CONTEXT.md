@@ -168,9 +168,9 @@ Measured on this tree (numpy reference interpreter, seed-42 XOR payload, `Defaul
 
 | cell | merge | index_free |
 | --- | --- | --- |
-| traced ops, one `measure` call at a `P`-row centre (measure-only graph, digest at the boundary) | **94** | **85** |
-| traced ops, one `measure` call at a batch-1 centre (live CPU shape; merge takes the dense route) | **109** | **85** |
-| of which `argsort` / `gather` / `constant` | 4 / 6 / 0 | 0 / 2 / 0 |
+| traced ops, one `measure` call at a `P`-row centre (measure-only graph, digest at the boundary) | **93** | **84** |
+| traced ops, one `measure` call at a batch-1 centre (live CPU shape; merge takes the dense route) | **109** | **84** |
+| of which `argsort` / `gather` / `constant` | 4 / 6 / 0 | 0 / 2 / 4 |
 | `prepare` ops / `constant` ops (unchanged by the switch) | 163 / 48 | 163 / 48 |
 | standalone prepare+aligner, node family / conn family | 183 / 184 | 176 / 178 |
 | ms per call, pop 500, tiled centre (8 rounds × 15 reps, interleaved A/B, build excluded) | **0.531** | 1.352 |
