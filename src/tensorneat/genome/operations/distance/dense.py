@@ -22,10 +22,18 @@ the same out-of-range key in the other genome.  The two routes therefore agree o
 whose keys respect the bound, and the algorithm's structural-key allocator is what keeps them
 there.  The divergence is not silent: :func:`.digest.prepare_family` counts the present genes
 the table cannot address and :class:`.digest.DistanceDigest` carries the two per-individual
-counts as ``node_oor``/``conn_oor``.  Nothing here raises or branches on them; a caller that
-relies on this route asserts they are zero on the host (the same host-side pattern as
-``pipeline.py``'s ``max_overflow`` check) or keeps
-``DefaultDistance(dense_single_centre=False)``.  Two key rows with the same key tuple inside one
+counts as ``node_oor``/``conn_oor``.  Nothing *in this module* raises or branches on them — a
+traced value cannot — but :meth:`.base.BaseDistance.measure` validates them on the host at the
+point this route is selected, together with the centre's own present keys: whenever the digest
+and/or the centre is host-resident (a traced :class:`evoxc.SymbolicTensor` is skipped silently),
+a non-zero count raises :class:`~tensorneat.common.errors.TensorNEATError` naming the family,
+the offending individuals or centre rows, ``genome.key_span`` and the two remedies — keep every
+allocated structural key inside ``[0, key_span)`` (or raise ``key_span`` in the shape
+signature), or construct ``DefaultDistance(dense_single_centre=False)`` for a payload that
+legitimately holds keys outside the window.  Inside a trace that check cannot run, and the
+pipeline never reaches this route anyway: ``algorithm/neat/_kernels.py::single_payload`` tiles
+a batch-1 centre to ``pop_size`` rows before measuring, so ``step`` always takes the merge.
+Two key rows with the same key tuple inside one
 genome are outside the payload contract as well (``alignment`` documents the same); the dump
 redirect makes them a last-writer-wins scatter rather than a crash.
 Static gate, never a runtime branch: a family takes this route only while its tables fit
@@ -136,6 +144,9 @@ def measure_centre(
         performs: the accumulator starts at ``0`` and ``0 + x`` is ``x`` for every distance
         (they are non-negative, and ``+0.0 + -0.0`` is ``+0.0`` anyway), so the two families
         are combined in the same order with the same values.
+        The route's ``[0, genome.key_span)`` key precondition is **not** enforced here (this
+        module never branches on a value); :meth:`.base.BaseDistance.measure` validates it on
+        the host for a host-resident digest and centre, and its docstring states the scope.
     """
     node_keys, node_attrs, conn_keys, conn_attrs = payload
     if not (enabled(genome.node_gene, genome) and enabled(genome.conn_gene, genome)):

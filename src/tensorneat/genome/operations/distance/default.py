@@ -28,7 +28,7 @@ from ...utils import valid_count
 from ..alignment import find_homologous, key_rows
 from .base import BaseDistance
 from .consts import ConstantPool
-from .dense import measure_centre
+from .dense import enabled, measure_centre
 from .layout import build_attr_statics
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -101,7 +101,13 @@ class DefaultDistance(BaseDistance):
             dense_single_centre (bool): Allow the dense key-table route for a batch-1 centre
                 (:mod:`.dense`).  ``False`` forces the row-wise merge everywhere — the shape
                 to choose while a caller's payload can hold gene keys outside
-                ``[0, genome.key_span)``, which the dense table cannot address.
+                ``[0, genome.key_span)``, which the dense table cannot address.  With ``True``
+                :meth:`~.base.BaseDistance.measure` validates that precondition on the host
+                (the digest's ``node_oor``/``conn_oor`` and the centre's own present keys) and
+                raises ``TensorNEATError`` when host data breaks it; inside a trace the check
+                cannot run, and the pipeline never selects this route (its centres are
+                population-shaped), so only a direct host ``measure_distance`` call with a
+                batch-1 centre sees it.
 
         Raises:
             ConfigError: If either weight is negative or not finite (a ``ConfigError`` is a
@@ -462,6 +468,27 @@ class DefaultDistance(BaseDistance):
             — on the reference interpreter every constant is one traced op.
         """
         return (self.compatibility_disjoint, self.compatibility_weight, 1.0)
+
+    def _single_centre_enabled(self, genome: "BaseGenome") -> bool:
+        """True when the dense key-table route covers this genome's gene geometry.
+
+        Args:
+            genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene``/``key_span``.
+
+        Returns:
+            bool: ``self.dense_single_centre`` **and** both families inside
+            :func:`~.dense.enabled`'s static table-size gate — exactly the predicate
+            :meth:`_measure_single_centre` checks before it emits an op.
+
+        Notes:
+            Host arithmetic only (table widths and byte estimates), so the key validation
+            :meth:`~.base.BaseDistance.measure` runs under it costs no traced op.
+        """
+        return (
+            bool(self.dense_single_centre)
+            and enabled(genome.node_gene, genome)
+            and enabled(genome.conn_gene, genome)
+        )
 
     def _measure_single_centre(
         self,

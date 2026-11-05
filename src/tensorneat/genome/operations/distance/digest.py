@@ -779,7 +779,8 @@ def match_rows(
         The merge itself is :func:`measure_alignment`; this entry point only re-spells its
         ``I_INF``-free row table as the documented ``I_INF``-padded one, for callers that
         hold nothing but rows.  The distance path skips that re-spelling and the mask/count
-        re-derivation by consuming :class:`AlignedGenes` directly.
+        re-derivation by consuming :class:`AlignedGenes` directly, so this is a public
+        convenience entry point with **no in-library caller today**.
     """
     pool = consts if consts is not None else ConstantPool()
     aligned = measure_alignment(
