@@ -55,6 +55,7 @@ Every scalar field is float32 so NaN encodes a dead slot and `generation` writes
 4. `_new_gene_keys(state, crossed.node_keys)` → `new_node_keys (P,)` (each a wrapped-spread key in `[max_nodes, key_span)`, or the individual's lowest free key when the spread collides) and `new_conn_markers (P, 3)`.
 5. Crossover: one `gather` per payload field for winner and loser, then batch-first `genome.execute_crossover(state, key, winners, losers)` (winner first — part of the contract).
 6. Mutation: batch-first `genome.execute_mutation(state, key, crossed, new_node_keys, new_conn_markers)`, scan-chunked by `pop_batch_size`.
+   The operator is genome-owned: `DefaultGenome`/`RecurrentGenome` build `DefaultMutation(conn_add=DEFAULT_GENOME_CONN_ADD, conn_delete=DEFAULT_GENOME_CONN_DELETE)` = `(0.1, 0.1, 0.4, 0.05)` when no operator is passed (`../../genome/operations/mutation/default.py`), while an explicit `DefaultMutation()` keeps NEAT-python's `0.2`/`0.2` and the node gates and value stage stay at their defaults in both.
 7. Elitism: `select(elite_mask[:, None, …], crossover_children, mutated_children)` per payload field, with one reshaped mask per distinct field rank.
 8. Speciation against the new population: `digest = genome.prepare_distance(state, population)` (once per generation), then `SpeciesController.speciate(state, self._distance_rows(digest, population), population)`.
 9. Commit `pop`, `randkey`, `generation`, `species`.
@@ -86,30 +87,21 @@ Body sizes: scan-1 body 55 traced ops, scan-2 body 221 traced ops with a 7-value
 
 ## Search Quality (XOR3d / XOR, measured)
 Config: `DefaultGenome(num_inputs=3 (XOR3d) / 2 (XOR), num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, `XOR3d()` / `XOR()`, `backend="numpy"`, `fitness_target=-1e-9`, 150 generations, `Pipeline.setup` + a manual `step` loop.
-Parent pairing must hand each elite slot a **different** top member, not `genome_elitism` copies of the champion: with the champ cloned into both elite slots the population never split into compatibility basins at small pops (1 live species every generation) and the search sat at the `-0.25` constant-0.5 plateau of a sigmoid read-out for a non-linearly-separable task.
-Measured with the elementwise pin (this tree) against the clone-the-champion pin (same tree, kernel patched in a host harness), 3 seeds, 150 generations:
-
-| case | live species (before → after) | final best (before → after) | first gen ≥ target (after) |
-| --- | --- | --- | --- |
-| XOR3d P=100 seed 42 | 1 → 2 at gen 4, peak 5 | −0.250000 → −0.250000 at 150 gens (escapes at gen 350) | never |
-| XOR3d P=100 seed 43 | 1 → 2 at gen 12, peak 12 | −0.250000 → −0.250000 at 150 gens (escapes at gen 254) | never |
-| XOR3d P=100 seed 44 | 1 → 1 | −0.250000 → −0.250000 | never |
-| XOR3d P=500 seed 42 | 1 → 2 at gen 150, peak 19 | −0.250000 → **−8.76e-06** | gen 73 |
-| XOR P=100 seed 42 | 1 → 2 at gen 5, peak 4 | plateau → **−0.000027** | gen 89 (−0.077552) |
-| XOR P=500 seed 42 | 1 → 12 at gen 150, peak 20 | plateau → **−0.000016** | gen 35 (−0.112053) |
-
-
-XOR3d is seed-dependent, never population-independent, at 150 generations: P=500 also ends at −0.250000 on seed 43 and −4.135456e-07 on seed 44 (target at generation 65), and P=1000 ends at −9.067872e-14 on seed 42 (target at generation 50), −0.250000 on seed 43 and −6.149132e-09 on seed 44 (target at generation 52), with 3 of seeds 42-47 leaving the −0.25 attractor at P=500.
-
-`benchmarks/legacy_jax` on the same config splits into 2 species at gen 3, 4 at gens 12–25 and 7 by gen 17, so the post-fix species counts sit in the legacy range and the pre-fix single basin did not.
-The `-0.25` value is the exact optimum of "predict 0.5 everywhere" (mse 0.25) and the plateau is not distance-gated: the population's max pairwise compatibility distance already reaches 2.4–2.5 with median 0.44–0.9, overlapping the legacy distribution (legacy gen-15 100×100 matrix: median 1.57, max 2.79), so no threshold change can open a basin the population is already outside of.
-P=100 XOR3d seed 42 remains at exactly −0.250000 for 500 generations while 99/100 genomes carry 1–3 hidden nodes (mean 1.77 at gen 15) and mean real connections fall to ~2 — the escape is a rare structural event, not a species-count problem.
-Measured seed sweep at P=100 (150 gens, this tree): seeds 42-47 all end at −0.250000, with 2 of 6 escaping within 400 generations (seed 42 at gen 350, seed 43 at gen 254); `benchmarks/legacy_jax` on the same config is not uniform either — seeds 42 −0.039734 (target at gen 149), 43 −0.135010, 44 −0.092224, 45 −0.250000 — so the P=100 plateau is a property of this config's search variance, not a rewrite-only defect.
-The frozen tree's connection-gene law (`weight_mutate_rate=0.2`, `weight_replace_rate=0.015`, bounds ±5) does not rescue P=100 — 0 of 6 probed seeds escape the plateau within 150 generations, at either law — and it flattens cells that converge at the shipped `DefaultConn()` defaults, so the shipped defaults stay; `../genome/operations/mutation/CONTEXT.md` is the single source of truth for the full sweep.
-The bounds knob is inert (bit-identical histories); `weight_mutate_rate=0.2` alone and `weight_replace_rate=0.015` alone each reproduce the P=100 plateau on the seeds tested.
-Structural multiplicity (measured on 20 000 individual-mutations): this tree's kernel changes 39.8 % of individuals per generation and never twice (0 % multi-change), the legacy chain changes 39.6 % but gives 16.7 % of individuals ≥2 visible structural changes (analytic attempt rates 0.6 vs 0.4816 per genome per generation).
-Raising `survival_threshold` to 0.1 at P=100 moves the coin flip rather than removing it (seeds 42/45 solve at gens 144/114, seeds 43/44/46 stay at −0.250000), and 0.5 plateaus on every seed tried, so the single-survivor prefix is not the sole cause either.
-Raising the survivor floor to `min(2, member_count)` on top of the elementwise pin was measured and rejected: it does not move P=100 XOR3d (seeds 42/43/44 all still exactly −0.250000) and it departs from the legacy `max(1, floor(thr · members))` formula, so the floor stays as it is.
+"Escape" is some generation's best above -0.24, i.e. off the -0.25 constant-0.5 optimum of a sigmoid read-out for a non-linearly-separable task; "target" is some generation's best at or above -0.05.
+XOR3d pop 100, seeds 0-19, shipped genome defaults: **13/20 escape, 11/20 target**, median escape generation 75, per-seed finals (seeds 0..19) `-1.33e-05 / -0.246 / -0.25 / -5.75e-10 / -0.0180 / -0.0122 / -0.191 / -7.29e-04 / -0.25 / -0.222 / -0.25 / -0.0433 / -0.242 / -0.25 / -0.25 / -5.23e-04 / -2.77e-03 / -2.14e-03 / -2.28e-04 / -0.0437`.
+The frozen oracle on the same seeds escapes 4/20 and targets 2/20 (Fisher exact two-sided p = 0.0095).
+XOR3d pop 500 seeds 42-47 escapes 6/6 and targets 6/6 with finals `-3.89e-15 / -1.22e-04 / -1.08e-11 / -2.48e-18 / -3.63e-37 / -4.14e-04` (3-seed median `-1.08e-11`).
+XOR3d pop 1000 seeds 42/43/44 targets 3/3 with finals `-1.03e-10 / -4.44e-11 / -1.83e-24` (median `-4.44e-11`).
+XOR pop 100 seed 42 reaches its -0.1 target at generation 41 (final -1.64e-05) and XOR pop 500 seed 42 at generation 33 (final 0.0).
+Nothing in this node gates the pop-100 cell: species kill, spawn starvation, elite displacement, `max_in_degree = 4` (refusing only 0.00-0.04 of fired add-conn gates), `max_depth = 16` against an observed maximum node level of 6-9, and an unsaturated output row are measured non-binding.
+The lever is genome-side and it is shipped: `DefaultGenome`/`RecurrentGenome` build `DefaultMutation(conn_add=0.4, conn_delete=0.05)` (`../../genome/operations/mutation/default.py::DEFAULT_GENOME_CONN_ADD`/`DEFAULT_GENOME_CONN_DELETE`), an explicit `DefaultMutation()` keeps 0.2/0.2, and `../../genome/operations/mutation/CONTEXT.md` `## Shipped connection gates` is the ledger.
+Mechanism: at equal connection gates an add-conn is accepted about half as often as a delete-conn (duplicate, self-connection, cycle and `max_in_degree` refusals), so an equal-gate operator's structural steady state is -0.14…-0.22 connections per individual per generation and such populations stay under-wired (5.93 connections / 4.34 hidden nodes / mean output in-degree ~1 at generation 150 against the oracle's 10.09 / 7.31 / higher).
+The shipped pair moves that steady state to +0.15 and lifts generation-150 density to 10.38 connections, output in-degree 2.59 and the multi-input-ancestor fraction to 0.82 (control 0.417) at an unchanged node count (8.19 vs 8.36).
+Parent pairing must hand each elite slot a **different** top member, not `genome_elitism` copies of the champion: cloning the champion into both elite slots keeps a small population in a single compatibility basin (1 live species every generation), while the elementwise pin below splits it into several basins without handing any elite a non-member row.
+`benchmarks/legacy_jax` on the same config splits into 2 species at gen 3, 4 at gens 12–25 and 7 by gen 17.
+The cell is not distance-gated: the population's max pairwise compatibility distance already reaches 2.4–2.5 with median 0.44–0.9, overlapping the legacy distribution (legacy gen-15 100×100 matrix: median 1.57, max 2.79), so no threshold change can open a basin the population is already outside of.
+Raising `survival_threshold` to 0.1 or 0.5 and raising the survivor floor to `min(2, member_count)` were measured and rejected: they move which seeds escape instead of removing the cell, and the floor departs from the legacy `max(1, floor(thr · members))` count.
+Weight-mutation frequency and the connection-gene law are genome-owned; their sweep and the rejections live in `../../genome/operations/mutation/CONTEXT.md`.
 
 ## Distance Rows (one digest per generation; one population-shaped call per centre)
 Both phases need one `(P,)` compatibility row per species slot, and the same population is measured `2 · species_size` times, so `NEAT.tell` digests it once: `genome.prepare_distance(state, pop)` sorts each gene family of the population into a `DistanceDigest` (batch `P` on every population-indexed leaf) and `DistanceRows` turns centres into rows against it without re-sorting the population.
