@@ -12,7 +12,7 @@ Nothing here imports `jax`, `torch`, `brax`, `gymnax` or `mujoco`.
 ## API Surface (how to run)
 From the repository root, with the package importable (`uv pip install -e .` or `PYTHONPATH=src`), run `uv run python examples/<subdir>/<script>.py`.
 - `examples/func_fit/` — supervised function fitting: `xor.py`, `xor3d.py`, `custom_func_fit.py`, `xor_recurrent.py`, `xor_origin.py`, `xor_hyperneat.py`, `xor_hyperneat_feedforward.py`.
-- `examples/rl/cartpole.py` — evoxc-native `CartPole` rollout with a two-logit policy.
+- `examples/rl/` — evoxc-native rollouts: `cartpole.py` (two-logit policy), `pendulum.py` (one torque logit), `mountaincar.py` (one force logit, `fitness_target=float("inf")`).
 - `examples/interpret_visualize/` — host-only genome introspection: `genome_sympy.py`, `visualize_genome.py`.
 `backend="numpy"` is the reference interpreter and works everywhere; `"iree"` / `"xla"` are opt-in extras, compiled once per shape, and an unsupported backend raises rather than falling back.
 Fitness is maximised everywhere, so a `fitness_target` on a function-fitting run is a negative error bound (`-1e-3` ≈ MSE below 1e-3).
