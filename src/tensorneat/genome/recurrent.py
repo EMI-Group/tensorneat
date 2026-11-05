@@ -25,6 +25,10 @@ from .operations import (
     DefaultDistance,
     DefaultMutation,
 )
+from .operations.mutation.default import (
+    DEFAULT_GENOME_CONN_ADD,
+    DEFAULT_GENOME_CONN_DELETE,
+)
 from .window import any_slot, fill
 
 
@@ -62,8 +66,11 @@ class RecurrentGenome(BaseGenome):
         Gene/operator arguments default to ``None`` and are then built **per instance**
         (``DefaultNode()``, ``DefaultConn()``, ``DefaultMutation()``, ``DefaultCrossover()``,
         ``DefaultDistance()``), never shared through a mutable default argument, so two genomes
-        never alias one gene object.  The initial network, the row/key invariant and the
-        ``max_in_degree`` window width come from :class:`.base.BaseGenome`.
+        never alias one gene object.  A ``None`` ``mutation`` builds a fresh ``DefaultMutation``
+        with the genome's shipped connection-gate defaults (``conn_add=0.4``,
+        ``conn_delete=0.05``); an explicitly constructed operator overrides them.  The initial
+        network, the row/key invariant and the ``max_in_degree`` window width come from
+        :class:`.base.BaseGenome`.
 
         Args:
             num_inputs: Input node count, also the network input width.
@@ -72,7 +79,9 @@ class RecurrentGenome(BaseGenome):
             max_conns: Static connection capacity ``E``.
             node_gene: Node gene; ``None`` builds a fresh ``DefaultNode()``.
             conn_gene: Connection gene; ``None`` builds a fresh ``DefaultConn()``.
-            mutation: Mutation operator; ``None`` builds a fresh ``DefaultMutation()``.
+            mutation: Mutation operator; ``None`` builds a fresh ``DefaultMutation`` with the
+                genome's shipped connection-gate defaults (``conn_add=0.4``,
+                ``conn_delete=0.05``); an explicit operator overrides them.
             crossover: Crossover operator; ``None`` builds a fresh ``DefaultCrossover()``.
             distance: Distance operator; ``None`` builds a fresh ``DefaultDistance()``.
             output_transform: Optional elementwise map of the ``(P, num_outputs)`` read-out.
@@ -113,7 +122,14 @@ class RecurrentGenome(BaseGenome):
             max_conns=max_conns,
             node_gene=DefaultNode() if node_gene is None else node_gene,
             conn_gene=DefaultConn() if conn_gene is None else conn_gene,
-            mutation=DefaultMutation() if mutation is None else mutation,
+            mutation=(
+                DefaultMutation(
+                    conn_add=DEFAULT_GENOME_CONN_ADD,
+                    conn_delete=DEFAULT_GENOME_CONN_DELETE,
+                )
+                if mutation is None
+                else mutation
+            ),
             crossover=DefaultCrossover() if crossover is None else crossover,
             distance=DefaultDistance() if distance is None else distance,
             output_transform=output_transform,

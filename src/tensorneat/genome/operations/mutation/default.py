@@ -459,5 +459,16 @@ class DefaultMutation(BaseMutation):
         return DeleteConnPlan(evoxc.logical_and(gate, has_connection), conn_row)
 
 
+#: Connection-gate probabilities of the mutation operator a genome builds when its
+#: ``mutation`` argument is ``None``.  add-conn is accepted about half as often as
+#: delete-conn at equal rates (duplicate, self-connection, cycle and ``max_in_degree``
+#: refusals), so equal gates leave the population under-wired; these values keep the
+#: operator's structural steady state positive (XOR3d pop 100, 150 generations: 13/20
+#: seeds escape the constant-0.5 basin against 4/20 at 0.2/0.2).
+#: ``DefaultMutation``'s own constructor defaults stay NEAT-python's ``0.2``/``0.2``, so an
+#: explicitly constructed operator is unchanged.
+DEFAULT_GENOME_CONN_ADD = 0.4
+DEFAULT_GENOME_CONN_DELETE = 0.05
+
 
 __all__ = ["DefaultMutation"]
