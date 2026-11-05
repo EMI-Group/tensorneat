@@ -3,7 +3,7 @@
 Hold the ROCm evidence for this node: the pre-3.13 abort-era report (`ROCM_FINDINGS.md`, IREE 3.11: nothing ran end to end) and the per-generation cost model below, measured on the tree that does run (IREE 3.13).
 `ROCM_FINDINGS.md` + `repro_minimal.py` + `rocm_a_pipeline.py` / `rocm_abort_ladder.py` / `rocm_b_stages.py` / `rocm_c_kernels.py` / `rocm_run_all.sh` / `rocm_support.py` are the 2026-11-05 pre-fix era record: their per-stage numbers are directional only, because IREE 3.13 lifts the `while`/`scan` aborts they worked around.
 The cost model below supersedes `ROCM_FINDINGS.md` for anything about a whole generation on ROCm; nothing here is a pass/fail benchmark row (`../CONTEXT.md` and `../../GPU.md` own that).
-## Measured cost model (tree `3c0eb95`, 2026-11-05 15:21–15:45 UTC, IREE 3.13.0, ROCm 7.1, MI300X VF, rocprofv3 1.0.0)
+## Measured cost model (tree `3c0eb95`, 2026-11-05 15:21–15:36 UTC, IREE 3.13.0, ROCm 7.1, MI300X VF, rocprofv3 1.0.0)
 Protocol: one `(case, target)` per process, `benchmarks/cases.py` geometry, seed 42, 3 warmup + 5–10 timed generations, `time.perf_counter` around one `evoxc.run` + host materialisation; device time from `rocprofv3 --kernel-trace` on a *single* warm generation (1 warmup + 1 timed, only the second segmented out).
 | case | dispatches / generation | device ms / gen | wall ms / gen (`run` + copies) | non-device ms | non-device µs / dispatch |
 |---|---|---|---|---|---|
