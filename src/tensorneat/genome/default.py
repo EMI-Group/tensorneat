@@ -50,6 +50,12 @@ class _PreparedPass(NamedTuple):
     :meth:`DefaultGenome.prepare_pass` derives it once per payload; each
     :meth:`DefaultGenome.forward_prepared` call then runs only the per-query half, so a rollout
     loop pays the pass prelude once instead of once per timestep.
+
+    ``readout`` is the :class:`.step._ReadOut` of the schedule (the output-slot gather index,
+    its liveness mask and the ``NaN`` fill), ``one`` the rank-0 ``int32`` the level loop counts
+    with, and ``nan_pad`` the ``(rows, max_nodes - num_inputs)`` ``NaN`` block of the value seed
+    (``None`` when the network has no non-input row). All three depend only on the schedule and
+    the static shapes, so no query pays their derivation or their constants.
     """
 
     node_attrs: evoxc.SymbolicTensor
@@ -59,6 +65,9 @@ class _PreparedPass(NamedTuple):
     samples: int
     pop_size: int
     max_nodes: int
+    readout: Any
+    one: evoxc.SymbolicTensor
+    nan_pad: evoxc.SymbolicTensor | None
 
 
 class DefaultGenome(BaseGenome):
@@ -188,7 +197,9 @@ class DefaultGenome(BaseGenome):
            input rows (``0..num_inputs-1``) — only those rows hold a number. The seed is
            assembled as ``concatenate([seed, NaN (rows, N - num_inputs)], axis=1)``: one op
            that leaves every other row at the ``NaN`` padding value, instead of a
-           ``(rows, N)`` mask.
+           ``(rows, N)`` mask. The ``NaN`` block itself is a loop-invariant operand, so
+           :meth:`prepare_pass` derives it once and a query pays only the ``concatenate``
+           (and nothing at all when ``N == num_inputs``).
         2. ``hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs, samples)``
            **once**: edge attributes are constant during a forward pass, so the per-slot gather
            is hoisted out of the loop, derived at the schedule's ``P`` rows and expanded to the
@@ -208,9 +219,12 @@ class DefaultGenome(BaseGenome):
            "at least one *live* slot" term is ANDed in inside ``_node_step``, so a node whose
            sources are all NaN keeps NaN and its descendants lose their only live source: the
            legacy NaN poisoning, reproduced exactly.
-        4. ``return self._output_values(transformed, values, self.output_transform)`` — the
-           rows ``transformed.output_slot`` names (here ``max_nodes-num_outputs..
-           max_nodes-1``), then ``output_transform``.
+        4. ``return self._output_values(transformed, values, self.output_transform,
+           prepared.readout)`` — the rows ``transformed.output_slot`` names (here
+           ``max_nodes-num_outputs..max_nodes-1``), then ``output_transform``. The read-out's
+           flat gather index, its liveness mask and its ``NaN`` fill come from the prepared
+           pass (:meth:`_output_readout`), so a query pays three ops — ``reshape``, ``gather``,
+           ``select`` — instead of re-deriving the eleven-op read-out per timestep.
 
         Cost is ``O(depth x N x K)`` elementwise work: proportional to the *real* depth and the
         real in-degree, never ``max_nodes**2`` per node and never ``max_depth`` levels of typed
@@ -261,8 +275,9 @@ class DefaultGenome(BaseGenome):
 
         Everything :meth:`forward` computes once — the padding-safe node attributes, the
         ``_StepStatics`` of the value window (with its node operand bundle forced here, so the
-        level loop never traces it), the depth bound and the expanded ``node_level`` — so
-        :meth:`forward_prepared` can run once per query on the same payload.
+        level loop never traces it), the depth bound, the expanded ``node_level``, the read-out
+        of the schedule, the level loop's rank-0 counter and the ``NaN`` block of the value seed
+        — so :meth:`forward_prepared` can run once per query on the same payload.
 
         Args:
             state: Host configuration container.
@@ -300,6 +315,10 @@ class DefaultGenome(BaseGenome):
         # Force the node operand bundle here so it is traced in this block instead of inside
         # the loop body, where the region would re-evaluate it on every iteration.
         statics.node_operands(self, prepared_attrs)
+        # The value seed's ``NaN`` block: one broadcast of a rank-0 constant, derived here so a
+        # query pays only the ``concatenate`` that splices it behind the input rows (and no op
+        # at all when the network has no non-input row).
+        pad = max_nodes - self.num_inputs
         return _PreparedPass(
             node_attrs=prepared_attrs,
             statics=statics,
@@ -311,6 +330,16 @@ class DefaultGenome(BaseGenome):
             samples=samples,
             pop_size=pop_size,
             max_nodes=max_nodes,
+            # The read-out is loop-invariant for the whole generation, so its gather index, its
+            # liveness mask and its ``NaN`` fill are derived once per pass: a query then costs
+            # ``reshape`` + ``gather`` + ``select``.
+            readout=self._output_readout(transformed, samples),
+            one=enp.full((), 1, dtype=evoxc.int32),
+            nan_pad=(
+                fill((pop_size * samples, pad), float("nan"), dtype=evoxc.float32)
+                if pad
+                else None
+            ),
         )
 
     def forward_prepared(
@@ -323,8 +352,9 @@ class DefaultGenome(BaseGenome):
         """Run one forward pass from ``prepared``, the per-query half of :meth:`forward`.
 
         Emits only the input seed, the level ``while_loop`` and the read-out; every
-        loop-invariant operand comes from ``prepared``, so repeated queries on one payload pay
-        the prelude once.
+        loop-invariant operand comes from ``prepared`` — including the seed's ``NaN`` block, the
+        loop's rank-0 counter and the read-out's gather index/mask/fill — so repeated queries on
+        one payload pay the prelude once.
 
         Args:
             state: Host configuration container.
@@ -349,19 +379,15 @@ class DefaultGenome(BaseGenome):
                 f"{expected} row(s); prepare the pass with the samples of this batch"
             )
         seed = inputs if self.input_transform is None else self.input_transform(inputs)
-        pad = prepared.max_nodes - self.num_inputs
-        # One NaN constant element broadcast to the node block (see ``..window.fill``): a
-        # materialised ``(rows, max_nodes - num_inputs)`` NaN block is the largest graph
-        # constant of this kernel at every population.
+        # The ``NaN`` block of the seed is a prepared operand (see :meth:`prepare_pass`): the
+        # query pays the ``concatenate`` only, and none at all when the network has no
+        # non-input row.
         values = (
-            evoxc.concatenate(
-                [seed, fill((rows, pad), float("nan"), dtype=evoxc.float32)],
-                axis=1,
-            )
-            if pad
+            evoxc.concatenate([seed, prepared.nan_pad], axis=1)
+            if prepared.nan_pad is not None
             else seed
         )
-        one = enp.full((), 1, dtype=evoxc.int32)
+        one = prepared.one
 
         def cond(carry) -> evoxc.SymbolicTensor:
             """Keep iterating while the next unvisited level is still within the depth."""
@@ -387,7 +413,9 @@ class DefaultGenome(BaseGenome):
             return evoxc.add(level, one), updated
 
         _level, values = evoxc.while_loop(cond, body, (one, values))
-        return self._output_values(transformed, values, self.output_transform)
+        return self._output_values(
+            transformed, values, self.output_transform, prepared.readout
+        )
 
     def _depth_limit(self, transformed: Transformed) -> evoxc.SymbolicTensor:
         """Deepest level this batch can reach, as a rank-0 loop bound in ``[1, max_depth]``.

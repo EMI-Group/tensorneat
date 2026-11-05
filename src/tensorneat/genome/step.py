@@ -11,7 +11,9 @@ The cost law that shapes the code: op count, not element count, is the budget on
 reference backend, and an innermost-axis reduction over ``(P, N, K)`` is an order of magnitude
 more expensive than a static slice fold, so the loop-invariant operands are derived once per
 pass here and a level pays only for the values.
-``_hit_conn_attrs`` is the single derivation point; ``_node_step`` is the single reduce point.
+``_hit_conn_attrs`` is the single derivation point of the window step, ``_output_readout``
+the single derivation point of the read-out (so a repeated query on one payload pays neither
+its index arithmetic nor its constants), and ``_node_step`` is the single reduce point.
 """
 
 from collections.abc import Callable
@@ -144,6 +146,55 @@ class _StepStatics:
         return self.node
 
 
+
+
+class _ReadOut:
+    """The read-out operands of one forward pass, derived once by ``_output_readout``.
+
+    ``_output_values`` gathers the node values at ``transformed.output_slot`` and writes
+    ``NaN`` where a slot names no node. Every operand of that read-out — the flat gather
+    index of the output slots, their liveness mask, the rank-0 ``NaN`` fill — depends only on
+    the schedule and on the static shapes, never on the query, so a rollout loop that asks one
+    prepared payload ``max_step`` times pays its derivation once per pass instead of once per
+    timestep and each query keeps only ``reshape`` + ``gather`` + ``select``.
+
+    This is a plain trace-local Python object, never a graph input or output: it holds
+    ``evoxc`` tensors of the trace that created it and is not part of any pytree.
+
+    Attributes:
+        flat_index: ``(rows, O) int32`` flat gather index of the output slots into the
+            flattened ``(rows * max_nodes,)`` node-value table.
+        present: ``(rows, O) bool``, True where the slot names a real node (a slot holding
+            ``I_INF`` reads ``NaN`` instead).
+        nan: Rank-0 ``float32`` ``NaN``, the ``select`` fill of an absent slot.
+        rows: The evaluated row count ``P * samples`` the index was derived for.
+        max_nodes: The node-value table's second-axis width ``N``.
+    """
+
+    __slots__ = ("flat_index", "present", "nan", "rows", "max_nodes")
+
+    def __init__(
+        self,
+        flat_index: evoxc.SymbolicTensor,
+        present: evoxc.SymbolicTensor,
+        nan: evoxc.SymbolicTensor,
+        rows: int,
+        max_nodes: int,
+    ):
+        """Store the tensors derived once by :meth:`NodeStepMixin._output_readout`.
+
+        Args:
+            flat_index: Block-shaped flat gather index of the output slots.
+            present: Liveness mask of the same slots.
+            nan: Rank-0 ``float32`` ``NaN`` fill.
+            rows: Evaluated row count the index was derived for.
+            max_nodes: Node-value table width the index indexes into.
+        """
+        self.flat_index = flat_index
+        self.present = present
+        self.nan = nan
+        self.rows = int(rows)
+        self.max_nodes = int(max_nodes)
 
 
 class NodeStepMixin:
@@ -465,11 +516,49 @@ class NodeStepMixin:
             )
         return mask
 
+    def _output_readout(
+        self, transformed: Transformed, samples: int = 1
+    ) -> _ReadOut:
+        """Derive the loop-invariant operands of the read-out (once per forward pass).
+
+        :meth:`_output_values` reads the network outputs from the node values through
+        ``transformed.output_slot``, and everything that read-out needs — the flat gather
+        index of the output slots (:func:`..window._slot_index`), their liveness mask and a
+        rank-0 ``NaN`` fill — depends only on the schedule and the static shapes. Deriving it
+        here, beside the other per-pass operands, is what lets a rollout loop that queries one
+        prepared payload ``max_step`` times pay it once: a query then costs exactly ``reshape``
+        + ``gather`` + ``select`` instead of re-deriving the index arithmetic and its two
+        constants per timestep.
+
+        Args:
+            transformed: Execution schedule whose ``output_slot`` is the ``(P, O) int32`` node
+                slot of each output key and whose ``in_conn`` carries the static
+                ``(P, max_nodes, K)`` shape.
+            samples: Static tiling factor ``S`` of the evaluated batch (``1`` for a direct
+                call).
+
+        Returns:
+            :class:`_ReadOut` of this schedule at the ``P * samples`` evaluated rows.
+        """
+        slot = transformed.output_slot
+        pop_size = int(slot.shape[0])
+        max_nodes = int(transformed.in_conn.shape[1])
+        present = enp.not_equal(slot, _iinf(slot.dtype))
+        flat_index, present = _slot_index(slot, present, max_nodes, samples)
+        return _ReadOut(
+            flat_index,
+            present,
+            fill((), float("nan"), dtype=evoxc.float32),
+            pop_size * samples,
+            max_nodes,
+        )
+
     def _output_values(
         self,
         transformed: Transformed,
         values: evoxc.SymbolicTensor,
         output_transform: Callable | None = None,
+        prepared: _ReadOut | None = None,
     ) -> evoxc.SymbolicTensor:
         """Read the network outputs out of the node values and apply the output transform.
 
@@ -485,6 +574,9 @@ class NodeStepMixin:
             values: ``(rows, max_nodes) float32`` node values after the unrolled pass, one row
                 per evaluated sample (``rows = P * samples`` for a problem-tiled batch).
             output_transform: Optional elementwise map over the last axis; ``None`` is identity.
+            prepared: The :class:`_ReadOut` of :meth:`_output_readout` for this schedule and
+                this batch; ``None`` derives one here (the direct-call spelling). A prepared
+                record is what keeps a repeated query on one payload to three ops.
 
         Returns:
             ``(rows, O) float32`` — the gathered output slots, then ``output_transform`` when it
@@ -492,18 +584,28 @@ class NodeStepMixin:
 
         Raises:
             TensorNEATError: If the value rows are not a positive multiple of the schedule's
-                population size, so they do not repeat whole individuals.
+                population size, so they do not repeat whole individuals; or if ``prepared``
+                was derived for a different row count or node width than ``values`` carries,
+                which would silently read another payload's slots.
         """
-        max_nodes = int(values.shape[1])
-        slot = transformed.output_slot
-        pop_size = int(slot.shape[0])
-        samples = self._sample_count(values, pop_size)
-        present = enp.not_equal(slot, _iinf(slot.dtype))
-        flat_index, present = _slot_index(slot, present, max_nodes, samples)
-        gathered = _gather_prepared(values, flat_index)
-        outputs = evoxc.select(
-            present, gathered, fill((), float("nan"), dtype=evoxc.float32)
-        )
+        if prepared is None:
+            samples = self._sample_count(values, int(transformed.output_slot.shape[0]))
+            prepared = self._output_readout(transformed, samples)
+        elif not isinstance(prepared, _ReadOut):
+            raise TensorNEATError(
+                "_output_values expects the _ReadOut returned by _output_readout (or None), "
+                f"not {type(prepared).__name__}"
+            )
+        rows, max_nodes = (int(size) for size in values.shape)
+        if rows != prepared.rows or max_nodes != prepared.max_nodes:
+            raise TensorNEATError(
+                f"_output_values was handed a ({rows}, {max_nodes}) node-value table but the "
+                f"prepared read-out was derived for ({prepared.rows}, {prepared.max_nodes}); "
+                "prepare the pass for the batch it will be queried with (prepare_pass) "
+                "instead of reusing it for another payload"
+            )
+        gathered = _gather_prepared(values, prepared.flat_index)
+        outputs = evoxc.select(prepared.present, gathered, prepared.nan)
         return outputs if output_transform is None else output_transform(outputs)
 
     # ------------------------------------------------------------- payload rows
