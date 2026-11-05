@@ -14,6 +14,20 @@ row whose key is absent or outside ``[0, S)``; the **padding** cell (``width``) 
 and is what a population gene with an unusable key reads.  Both start at the gene count — an
 impossible row index — so ``owner_at < count`` is the whole homology test, and no out-of-range
 index ever reaches the backend.
+**One table, one scatter.**  A family's centre table is a *single* float32 block whose column
+``0`` holds the owner row index and whose remaining columns hold the attributes, so a call
+scatters both with one update block at one index expression.  That is a portability
+requirement, not a cost dodge: ``evoxc``'s StableHLO writer emits an ``i32 -> i64`` convert of
+each ``scatter``'s index operand, upstream IREE common-subexpressions two identical converts,
+and its StableHLO -> Linalg conversion then wants an ``i32`` index for each scatter and inserts
+two conflicting materialisations, so ``iree-compile`` dies on
+``failed to legalize unresolved source materialization from ('tensor<50x1xi64>') to
+('tensor<50x1xi32>')``.  Measured on the scratch harness: one scatter compiles, three scatters
+with three *distinct* index tensors compile, three scatters sharing one index tensor do not, and
+a "distinct" index that canonicalises back (``add(idx, 0)``, ``select(true, idx, idx)``) does
+not either.  A gene with trailing marker columns is therefore resolved by *gathering* the
+centre's own key rows at the owner index, never by a marker table of its own, so each family
+emits exactly two scatters: the merged table and the reorder buffer, at different indices.
 Precondition (the payload contract of :mod:`.digest`, restated because this route depends on it):
 gene keys are non-negative ``int32`` values **below** ``genome.key_span``.  A key outside
 ``[0, S)`` is *unmatched* here — exactly like the execution schedule drops it
@@ -31,13 +45,13 @@ the offending individuals or centre rows, ``genome.key_span`` and the two remedi
 allocated structural key inside ``[0, key_span)`` (or raise ``key_span`` in the shape
 signature), or construct ``DefaultDistance(dense_single_centre=False)`` for a payload that
 legitimately holds keys outside the window.  Inside a trace that check cannot run, and the
-pipeline never reaches this route anyway: ``algorithm/neat/_kernels.py::single_payload`` tiles
-a batch-1 centre to ``pop_size`` rows before measuring, so ``step`` always takes the merge.
+pipeline reaches this route whenever ``algorithm/`` hands over a batch-1 centre; a
+population-shaped centre still takes the row-wise merge (see :meth:`.base.BaseDistance.measure`).
 Two key rows with the same key tuple inside one
 genome are outside the payload contract as well (``alignment`` documents the same); the dump
 redirect makes them a last-writer-wins scatter rather than a crash.
-Static gate, never a runtime branch: a family takes this route only while its tables fit
-:data:`_DENSE_MAX_BYTES` (float32 bytes of the centre tables), and a pipeline whose *two*
+Static gate, never a runtime branch: a family takes this route only while its table fits
+:data:`_DENSE_MAX_BYTES` (float32 bytes of the merged centre table), and a pipeline whose *two*
 families both qualify is the only one that uses it at all — a partially dense ``measure`` would
 have to broadcast the centre payload for the other family, and the row-wise merge is then the
 honest route.  ``S = 150`` (``max_nodes = 50``, ``max_conns = 100``) gives ``22 501`` connection
@@ -50,9 +64,9 @@ positions, so a dense ``measure`` is *bit-identical* to ``execute_distance`` on 
 and population — the property the equivalence gate asserts, not merely closeness.
 Cost shape (measured, numpy reference interpreter, pop 1000): the reference interpreter charges
 per *traced op* rather than per element, so what a call spends is its op count.  Everything that
-depends only on the population geometry — the two table bases, the centre row index, the flat
-reorder offsets and buffer, and the rank-0 scalars of the tail — is therefore built once per
-generation in :func:`.digest.prepare_family` and travels here inside
+depends only on the population geometry — the merged table base, the centre row index, the
+marker pad row, the flat reorder offsets and buffer, and the rank-0 scalars of the tail — is
+therefore built once per generation in :func:`.digest.prepare_family` and travels here inside
 :class:`~.layout.DenseLayout`; a ``measure`` call left with nothing but value-dependent work is
 what the op counts below are made of.
 Never emit ``evoxc.gather(..., axis=1)`` on a rank-3 block: it measured 163 ms for one
@@ -62,15 +76,14 @@ gather.
 """
 from typing import TYPE_CHECKING, NamedTuple
 import evoxc
-import evoxc.numpy as enp
 from .consts import ConstantPool
 from .layout import _FOLDED_KEYS, _column, dense_rows, dense_width, reorder
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...base import BaseGenome
     from .base import BaseDistance
-#: Upper bound on the float32 bytes of one family's centre tables (owner + attributes +
-#: trailing markers).  Above it the row-wise merge is the route: the merge's cost grows with
-#: the gene axis ``M`` while a dense table grows with ``key_span``, so a large key span
+#: Upper bound on the float32 bytes of one family's merged centre table (the owner column plus
+#: one column per attribute).  Above it the row-wise merge is the route: the merge's cost grows
+#: with the gene axis ``M`` while a dense table grows with ``key_span``, so a large key span
 #: (``S * S`` connection cells) is exactly where the sort stops being the expensive side.
 _DENSE_MAX_BYTES = 8 * 1024 * 1024
 def enabled(gene, genome: "BaseGenome") -> bool:
@@ -79,18 +92,19 @@ def enabled(gene, genome: "BaseGenome") -> bool:
         gene: Node or connection gene declaring ``key_width`` and ``attr_width``.
         genome ("BaseGenome"): Genome owning ``key_span``.
     Returns:
-        bool: ``True`` when the family's centre tables fit :data:`_DENSE_MAX_BYTES` and the
+        bool: ``True`` when the family's centre table fits :data:`_DENSE_MAX_BYTES` and the
         table width stays inside the ``int32`` index range.
     Notes:
-        The tables are one cell wider than :func:`~.layout.dense_width` (the never-owned
-        padding cell), which the byte estimate includes.
+        The table is one cell wider than :func:`~.layout.dense_width` (the never-owned
+        padding cell), which the byte estimate includes.  A trailing marker column costs no
+        table cell: markers are resolved by a gather over the centre's own key rows, never by
+        a table of their own (see :func:`_family_terms`).
     """
     width = dense_width(gene, int(genome.key_span)) + 1
     if width > (1 << 31) - 1:  # the dense index is an int32 gather/scatter index
         return False
-    marker_columns = max(0, int(gene.key_width) - _FOLDED_KEYS)
-    # owner (int32) + one float32 column per attribute + one int32 column per trailing marker
-    bytes_per_cell = 4 * (1 + int(gene.attr_width) + marker_columns)
+    # one float32 owner column + one float32 column per attribute
+    bytes_per_cell = 4 * (1 + int(gene.attr_width))
     return width * bytes_per_cell <= _DENSE_MAX_BYTES
 class FamilyTerms(NamedTuple):
     """The three value-dependent scalars one gene family contributes to the scalar tail.
@@ -251,20 +265,35 @@ def _family_terms(
 
     Notes:
         Per-call ops, once the layout is hoisted, are the value-dependent ones only: the centre
-        slot (one read per key column), one scatter, one gather, one range compare, the
-        attribute table pair plus ``gene.distance``, the reorder scatter, two reductions.
-        The owner table is scattered with the bare centre row index: no table cell outside a
-        centre gene's own slot is ever *read* (a population gene with an unusable key reads the
-        never-owned padding cell, not the dump cell), so redirecting the absent rows would be an
-        op that changes nothing.
+        slot (one read per key column), the attribute ``reshape`` and the update ``concatenate``,
+        one scatter, one gather, the owner column read and its cast, one range compare,
+        ``gene.distance``, the reorder scatter, two reductions.
+        The table is scattered with the bare centre row index in its owner column: no table cell
+        outside a centre gene's own slot is ever *read* (a population gene with an unusable key
+        reads the never-owned padding cell, not the dump cell), so redirecting the absent rows
+        would be an op that changes nothing.
     """
     count = int(keys.shape[1])
     pop_size = int(pop_count.shape[0])
     slot, _, present = dense_rows(gene, int(genome.key_span), keys, pool, flat=True)
-    # One owner row index per table cell: a centre gene writes its own row index at its slot.
-    # Absent and out-of-range rows land in the dump cell, which nothing reads.
-    owner = evoxc.scatter(layout.owner, slot, layout.row_index, axis=0)
-    owner_at = evoxc.gather(owner, pop_dense, axis=0)
+    attr_width = int(attrs.shape[-1])
+    # One scatter writes *one* merged table: column 0 is the centre row index (the owner), the
+    # remaining columns are the centre's attributes.  Two scatters at the same index expression
+    # are exactly what upstream IREE fails to legalise — it common-subexpressions the writer's
+    # per-scatter ``i32 -> i64`` index convert, then wants an ``i32`` index for each scatter and
+    # inserts two conflicting materialisations — so the owner and the attributes must travel in
+    # one update block.  Absent and out-of-range rows land in the dump cell, which nothing reads.
+    update = layout.row_index
+    if attr_width:
+        update = evoxc.concatenate(
+            (update, evoxc.reshape(attrs, (count, attr_width))), axis=1
+        )
+    table = evoxc.scatter(layout.table, slot, update, axis=0)
+    table_at = evoxc.gather(table, pop_dense, axis=0)
+    # Column 0 is the centre row index of every population gene's slot, ``count`` where the slot
+    # is unowned: exact in float32 and cast back here, so ``owner_at < count`` is the homology
+    # test with no separate liveness table.
+    owner_at = evoxc.cast(_column(table_at, 0), evoxc.int32)
     matched = evoxc.less(owner_at, layout.count_i32)
     # Column the attribute values are written back at: the centre row of the homologue, or the
     # dump column when there is none.  A slot-only match is enough while the key width fits the
@@ -278,16 +307,19 @@ def _family_terms(
     column = owner_at
     marker_columns = int(gene.key_width) - _FOLDED_KEYS
     if marker_columns > 0:
-        markers = evoxc.scatter(
-            enp.zeros(
-                (dense_width(gene, int(genome.key_span)) + 1, marker_columns),
-                dtype=evoxc.int32,
+        # The marker is resolved by *gathering* the centre's own trailing key columns at the row
+        # each population gene's slot resolved to, through a ``(M + 1, marker_columns)`` table
+        # whose last row is the layout's zero pad (``owner_at == count`` there, i.e. already
+        # unmatched, so that row's contents never matter).  A marker *table* scatter would have
+        # shared the slot index with the table above — the IREE failure this form avoids.
+        marker_at = evoxc.gather(
+            evoxc.concatenate(
+                (_trailing_columns(keys, count, marker_columns), layout.marker_pad),
+                axis=0,
             ),
-            slot,
-            _trailing_columns(keys, count, marker_columns),
+            owner_at,
             axis=0,
         )
-        marker_at = evoxc.gather(markers, pop_dense, axis=0)
         for index in range(marker_columns):
             matched = evoxc.logical_and(
                 matched,
@@ -298,15 +330,10 @@ def _family_terms(
             )
         column = evoxc.select(matched, owner_at, layout.count_i32)
     attribute_distance = layout.zeros
-    attr_width = int(attrs.shape[-1])
     if attr_width:
-        table = evoxc.scatter(
-            layout.table,
-            slot,
-            evoxc.reshape(attrs, (count, attr_width)),
-            axis=0,
+        centre_attrs = evoxc.slice(
+            table_at, (0, 0, 1), (pop_size, count, attr_width)
         )
-        centre_attrs = evoxc.gather(table, pop_dense, axis=0)
         pair = gene.distance(state, centre_attrs, pop_attrs)
         # ``pair`` holds the distance of each *population* gene against the centre row it
         # homologues to.  The scalar tail sums over the centre's rows, so the values are written
