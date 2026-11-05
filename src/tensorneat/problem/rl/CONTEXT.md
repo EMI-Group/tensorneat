@@ -18,7 +18,7 @@ Each one doubles as the reference recipe for any environment a user wants to add
 - `Pendulum`: `input_shape = (2,)` (`theta, theta_dot`), `output_shape = (1,)` (one torque logit, squashed inside the problem).
 - `MountainCarContinuous`: `input_shape = (2,)` (`position, velocity`), `output_shape = (1,)` (one action logit, `a = tanh(logit)`).
 - Both continuous problems own the action squashing, so a genome used with them must leave `output_transform` unset (identity); a bounded transform would rescale the logit before `tanh` ever sees it.
-- `fitness_target` is validation-only in all three: `None` skips the check, a value above the return ceiling raises.
+- `fitness_target` is validation-only in all three: `None` skips the check, a non-finite value raises, and a value above the environment's attained ceiling (`max_step` for `CartPole`, `0` for `Pendulum`, `ATTAINABLE_CEILING = 93.0` for `MountainCarContinuous`) raises.
 - `evaluate(state, keys, act_fn, transformed) -> (P,)`: fitness is maximized, the mean over `repeat_times` of the episode return, `finalize_fitness`-ed last.
 - `show(state, key, act_fn, transformed)`: host-side, one individual, builds its own graph over the single rank-0 key (`evoxc.build` + `evoxc.run`) and prints one line per repeat plus the mean return; returns `None`.
 - `CartPole` trace-side helpers: `_rollout`, `_loop_cond`, `_loop_body`, `_constants`, `_advance`, `_death_mask`, `_terminated`, `_force_from_logits`, `_nan_rows`; validation and the host conversion are the shared `_common` names (`require_positive_int`/`require_positive`/`require_non_negative` with owner `"CartPole"`, `to_numpy`, `returns_of`).
