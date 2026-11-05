@@ -50,7 +50,7 @@ A state-dependent policy needs the oracle to see the state it acted on, so the r
 Both environment oracles are written for batch 1 (`(1, 2)` observations, `(1, 1)` logits); `P > 1` cases assert relations (layout, determinism, divergence, bounds) rather than absolute values.
 
 ## Behaviour this suite pins (gotchas worth knowing before editing it)
-`mape` divides by the target: a non-zero prediction on a zero target is `+inf` loss, while a *zero* prediction on a zero target is `0/0 = NaN`; both reach `-inf` fitness through different arithmetic, and each is asserted separately.
+`mape` divides by the target: a non-zero prediction on a zero target is `+inf` loss, while a *zero* prediction on a zero target is `0/0 = NaN`; only the first is asserted (`test_mape_with_a_zero_target_is_infinite...`), the `0/0` corner is not.
 CartPole demotes NaN logits to `-inf` fitness through the explicit `evoxc.isnan` guard (`_nan_rows` → `_any_repeat` → select NaN before `finalize_fitness`), while the decision site still reads NaN as "push left"; one poisoned repeat demotes the whole individual.
 CartPole's fitness is a mean of 0/1 rewards, so it is always finite outside the NaN case and lies in `[0, max_step]`; `max_step` is a hard ceiling and `fitness_target > max_step` is rejected at construction.
 Pendulum's per-step cost is `angle_normalize(theta)**2 + 0.1*theta_dot**2 + 0.001*u**2` on the **pre-transition** state with `u = max_torque*tanh(logit)`, so the return of *any* policy lies in `[-max_step*(pi**2 + 0.1*max_speed**2 + 0.001*max_torque**2), 0]` — `-16.2736*max_step` at the defaults — and the environment never terminates.
