@@ -18,16 +18,12 @@ The exact gradient path — a dense-weight twin of the window forward, needed be
 :meth:`BaseGenome.grad` is its public entry point and delegates there.
 
 ## Cross-module contracts
-Every name below is provided by the ``common`` node and is never re-derived here.
-``../common.tensorization.derive_schedule`` is the only schedule derivation.
-``../common.functions.apply_activation``/``apply_aggregation`` are the only activation and
-window-reduce kernels, reached through the node gene.
-``../common.tools.I_INF`` is the ``int32`` "no index" sentinel padding every key array, and
-``./window._gather_prepared`` is the flat-index gather the window step uses (prepared once per
-forward pass by ``window._slot_index``; ``../common.tools.masked_flat_gather`` is not on this
-path).
-``../common.State``/``StatefulBaseClass`` are the immutable host containers and
-``../common.errors.TensorNEATError`` (``ConfigError``) covers every configuration violation.
+``../common.tensorization.derive_schedule`` is the only schedule derivation,
+``../common.functions.apply_activation``/``apply_aggregation`` the only activation and
+window-reduce kernels (reached through the node gene), ``../common.tools.I_INF`` the
+``int32`` "no index" sentinel padding every key array, ``./window._gather_prepared`` the
+flat-index gather the window step uses, and ``../common.errors.TensorNEATError``
+(``ConfigError``) every configuration violation.
 
 ## Cost budget (measured, numpy backend)
 A forward pass costs about one unrolled level per network depth: measured 1.8 ms per level at `P=1000`, `max_nodes=50`, `K=2` with ~20 ops per level.
@@ -56,7 +52,7 @@ from .operations import BaseCrossover, BaseDistance, BaseMutation
 from .operations.distance import DistanceDigest
 from .step import NodeStepMixin
 from .window import fill
-from .utils import GenomeTensors
+from .utils import GenomeTensors, constant_int32, schedule_key_column
 
 
 # --------------------------------------------------------------------------- #
@@ -85,20 +81,6 @@ def _positive_int(value: Any, name: str) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be a positive int, got {value!r}")
     return value
-
-
-def _constant_int32(values: Sequence[int]) -> evoxc.SymbolicTensor:
-    """Embed a host integer sequence as an in-graph ``int32`` constant.
-
-    Args:
-        values: Static integers (node keys, column indices, ...).
-
-    Returns:
-        ``(len(values),)`` ``int32`` tensor. Genuinely static data (the initial key layout,
-        the input/output key vector), never per-generation payload.
-    """
-    array = np.ascontiguousarray(np.asarray(values, dtype=np.int32))
-    return evoxc.constant(evoxc.from_numpy(array))
 
 
 class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
@@ -297,12 +279,11 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
             name: Argument name used in error messages.
 
         Returns:
-            ``None``; the probe only traces, it never compiles or runs.
+            ``None``; it only traces, never compiles or runs.
 
         Raises:
-            TensorNEATError: If the transform raises while being traced or returns a shape
-                other than ``(1, width)`` — a broken transform must fail at construction, not
-                inside the generation graph.
+            TensorNEATError: If it raises while traced or returns a shape other than
+                ``(1, width)`` — a broken transform fails at construction.
         """
         if transform is None:
             return
@@ -333,8 +314,7 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
     ) -> int:
         """Resolve the static population size of a kernel call.
 
-        ``pop_size`` is a static, so it is either passed explicitly or read from the
-        ``pop_size`` entry the algorithm registers on ``state``.
+        ``pop_size`` is a static: passed explicitly, or read from ``state.pop_size``.
 
         Args:
             state: Host configuration container.
@@ -363,11 +343,9 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
     def _split_payload(self, *arrays: Any) -> tuple[GenomeTensors, tuple]:
         """Split a call's positional payload arguments into genes and trailing arguments.
 
-        Both spellings are accepted, because the algorithm's doc spells the operators with the
-        four arrays while ``genome/CONTEXT.md`` spells them with a ``GenomeTensors`` payload:
-
-        * ``(payload, *trailing)`` — one ``GenomeTensors`` (or a 4-tuple of the four arrays);
-        * ``(node_keys, node_attrs, conn_keys, conn_attrs, *trailing)``.
+        Both spellings are accepted: ``(payload, *trailing)`` with one ``GenomeTensors`` (or a
+        4-tuple of the four arrays), and ``(node_keys, node_attrs, conn_keys, conn_attrs,
+        *trailing)``.
 
         Args:
             *arrays: The positional arguments after the ``state``/``key`` ones.
@@ -433,10 +411,9 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
             pop_size: Static population size ``P``; ``None`` reads ``state.pop_size``.
 
         Returns:
-            ``GenomeTensors``: ``node_keys (P, N) int32`` (``I_INF`` padded, input/output rows
-            at their invariant positions), ``node_attrs (P, N, NA) float32`` (NaN padded),
-            ``conn_keys (P, E, CK) int32`` (``I_INF`` padded), ``conn_attrs (P, E, CA)
-            float32`` (NaN padded).
+            ``GenomeTensors``: ``node_keys (P, N) int32`` and ``conn_keys (P, E, CK) int32``
+            (``I_INF`` padded, input/output rows at their invariant positions), ``node_attrs
+            (P, N, NA) float32`` and ``conn_attrs (P, E, CA) float32`` (NaN padded).
         """
         pop_size = self._resolve_pop_size(state, pop_size, "initialize")
         node_count = len(self._init_node_keys)
@@ -451,7 +428,7 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
             self.output_idx, dtype=np.int32
         )
         node_keys = enp.broadcast_to(
-            evoxc.reshape(_constant_int32(node_rows), (1, self.max_nodes)),
+            evoxc.reshape(constant_int32(node_rows), (1, self.max_nodes)),
             (pop_size, self.max_nodes),
         )
 
@@ -492,7 +469,7 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
             # The initial marker of a connection is its row index (legacy convention).
             conn_rows[:conn_count, 2] = np.arange(conn_count, dtype=np.int32)
         conn_keys = enp.broadcast_to(
-            evoxc.reshape(_constant_int32(conn_rows.reshape(-1)), (1, *conn_rows.shape)),
+            evoxc.reshape(constant_int32(conn_rows.reshape(-1)), (1, *conn_rows.shape)),
             (pop_size, *conn_rows.shape),
         )
 
@@ -516,7 +493,13 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
 
         return GenomeTensors(node_keys, node_attrs, conn_keys, conn_attrs)
 
-    def transform(self, state: State, *arrays: Any) -> Transformed:
+    def transform(
+        self,
+        state: State,
+        *arrays: Any,
+        input_keys: Any = None,
+        output_keys: Any = None,
+    ) -> Transformed:
         """Derive the execution schedule of every individual (in-graph, no host round-trip).
 
         The only place the schedule is derived: it delegates to
@@ -531,28 +514,56 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
         must stay outside any differentiated graph (``argsort`` has no AD rule), which is why
         :meth:`grad` takes an already-derived ``Transformed``.
 
+        ``input_keys``/``output_keys`` override the two key columns the schedule pins, which is
+        what makes the schedule usable for a payload whose block order is not this genome's
+        layout template (a substrate executor's ``inputs, outputs, hidden``): the schedule
+        resolves *these* keys to node slots, so ``output_slot`` names the output neurons and the
+        read-out follows it.
+        An output key no node of the payload holds yields ``output_slot == I_INF``, which the
+        read-out surfaces as ``NaN`` (the value of an unconnected node), never a raise: the
+        derivation is in-graph.
+        ``forward`` still seeds ``input_transform(inputs)`` into rows ``0..num_inputs-1``, so the
+        input keys must stay this genome's own order and a host sequence that differs from
+        :attr:`input_idx` is refused; an ``evoxc`` tensor ``input_keys`` can only be checked for
+        rank/dtype/length, never for its values (a traced value may not drive a host test).
+
         Args:
             state: Host configuration container.
             *arrays: The key arrays, in either accepted spelling: a ``GenomeTensors``
                 payload; ``(node_keys, conn_keys)``; or the full four-array payload
                 ``(node_keys, node_attrs, conn_keys, conn_attrs)`` — the attribute arrays are
                 ignored, the schedule only needs the keys.
+            input_keys: ``None`` (this genome's :attr:`input_idx`), a ``num_inputs``-long
+                integer sequence equal to it, or a rank-1 ``int32`` ``evoxc`` tensor.
+            output_keys: ``None`` (this genome's :attr:`output_idx`), a ``num_outputs``-long
+                integer sequence, or a rank-1 ``int32`` ``evoxc`` tensor.
 
         Returns:
             ``Transformed`` with ``in_src``/``in_conn``/``in_valid (P, N, K)``,
-            ``node_level``/``node_exists (P, N)``, ``overflow (P,)``; cost is
-            edge-proportional, never ``max_nodes**2`` per node.
+            ``node_level``/``node_exists (P, N)``, ``input_slot``/``output_slot (P, I|O)``,
+            ``overflow (P,)``; cost is edge-proportional, never ``max_nodes**2`` per node.
 
         Raises:
-            TensorNEATError: If the arguments match none of the accepted spellings, or if a
-                selected array is not batch-first — ``node_keys`` must be ``(P, max_nodes)``,
-                ``conn_keys`` ``(P, max_conns, key_width)``, all leading dimensions equal, and
-                (four-array spelling) the attribute arrays led by the same population size.
-                A bare per-individual row is the common defect: it has no population axis, so
-                the error says so instead of letting the shape unpack raise ``ValueError``.
+            TensorNEATError: If the arguments match none of the accepted spellings, if a
+                selected array is not batch-first (a bare per-individual row is the common
+                defect: the error names the missing population axis), if a key column is not
+                rank-1 ``int32`` of length ``num_inputs``/``num_outputs``, or if a host
+                ``input_keys`` differs from :attr:`input_idx`.
         """
         node_keys, conn_keys = self._schedule_inputs(arrays)
         self._check_schedule_shapes(arrays, node_keys, conn_keys)
+        input_keys, input_values = schedule_key_column(
+            input_keys, self.input_idx, "num_inputs", "input_keys"
+        )
+        if input_values is not None and input_values != self.input_idx:
+            raise TensorNEATError(
+                f"input_keys {input_values} differ from this genome's own input key order "
+                f"{self.input_idx}: forward writes the inputs into rows 0..num_inputs-1, so a "
+                "different pinning would read them from the wrong nodes"
+            )
+        output_keys, _ = schedule_key_column(
+            output_keys, self.output_idx, "num_outputs", "output_keys"
+        )
         pop_size, max_nodes = (int(size) for size in node_keys.shape)
         conn_in = self.conn_gene.key_column(conn_keys, "input_index")
         conn_out = self.conn_gene.key_column(conn_keys, "output_index")
@@ -560,8 +571,8 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
             node_keys,
             conn_in,
             conn_out,
-            _constant_int32(self.input_idx),
-            _constant_int32(self.output_idx),
+            input_keys,
+            output_keys,
             pop_size,
             max_nodes,
             self.max_conns,
@@ -598,17 +609,14 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
     def _check_schedule_shapes(arrays: tuple, node_keys: Any, conn_keys: Any) -> None:
         """Validate the rank and population alignment of a schedule call's arrays.
 
-        ``transform`` is the batch-first entry point of the genome, and a caller that slices
-        one individual out of a payload hands it a bare row (``node_keys (N,)``,
-        ``conn_keys (E, key_width)``).  Without this check the population unpack inside
-        ``transform`` raises a raw ``ValueError`` from the shape tuple instead of the
-        documented configuration error.  Only ``.shape`` is read — a tuple of ints both on a
-        traced ``evoxc.SymbolicTensor`` and on a host array — so the check costs no traced op
-        and no host conversion, and it runs identically inside a trace (where the exception
-        propagates out of ``build``) and on host data.
-
-        The static sizes are deliberately **not** compared with ``self.max_nodes``/
-        ``self.max_conns``; only the *internal* agreement of one call is a contract.
+        A caller that slices one individual out of a payload hands ``transform`` a bare row
+        (``node_keys (N,)``, ``conn_keys (E, key_width)``); without this check the population
+        unpack raises a raw ``ValueError`` instead of the documented configuration error.
+        Only ``.shape`` is read — identical on a traced tensor and a host array — so the check
+        costs no traced op and behaves the same inside a trace (where the exception propagates
+        out of ``build``).  The static sizes are deliberately **not** compared with
+        ``self.max_nodes``/``self.max_conns``; only the *internal* agreement of one call is a
+        contract.
 
         Args:
             arrays: The positional arguments of ``transform``, used to locate the attribute
@@ -710,8 +718,7 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
     ) -> Any:
         """Derive the loop-invariant operands of one forward pass (abstract).
 
-        ``conn_keys`` is accepted for symmetry with :meth:`forward`; ``samples`` is the static
-        tiling factor of the ``P * samples`` evaluated rows.
+        ``conn_keys`` mirrors :meth:`forward`; ``samples`` is the tiling factor of the rows.
         """
         raise NotImplementedError(
             "concrete genomes derive one forward pass's loop-invariant operands"
@@ -755,11 +762,6 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
         masked to its existing rows and NaN-cleaned (``select(isnan(a) | ~exists, 0, a)``),
         which makes the reverse sweep emit exactly ``0`` on padding (a zeroed cotangent times
         a NaN local derivative would otherwise be NaN) and leaves live rows untouched.
-
-        The differentiated pass is ``.grad.dense_forward``, not the window step of
-        :meth:`_node_step`: evoxc 0.1.0 transposes ``gather`` with *put* semantics, so the
-        exact path aggregates with a per-individual dense weight ``dot`` instead
-        (:func:`.grad.build_grad`).
 
         Args:
             state: Host configuration container.
