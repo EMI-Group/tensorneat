@@ -16,6 +16,10 @@ aligned-attribute row base and the ``(P * M, A)`` attribute row view) is rebuilt
 :func:`~.layout.build_grouped_statics`, which reuses every rank-0 scalar of the base digest.
 The module also owns :func:`validate_family`, the per-family geometry check both digest types
 run, so the plain and the grouped route refuse a mismatched centre with one wording.
+Nothing in the package calls :func:`group_digest`: ``algorithm/neat`` measures one
+population-shaped centre per ``measure_distance`` call, so the grouped route is a verified,
+unwired option — bit-identical to the ``k`` plain calls it replaces, but its wider
+intermediates cost numpy wall time and peak memory (``CONTEXT.md``, ``## Grouped route``).
 """
 
 from typing import NamedTuple
@@ -88,7 +92,7 @@ class GroupedDigest(NamedTuple):
 
 
 def group_digest(digest: DistanceDigest, group: int) -> GroupedDigest:
-    """Tile one population digest for a ``k``-centre ``measure`` call (once per generation).
+    """Tile one population digest for a ``k``-centre ``measure`` call (once per reused digest).
 
     Args:
         digest (DistanceDigest): The generation's population digest from
@@ -114,8 +118,8 @@ def group_digest(digest: DistanceDigest, group: int) -> GroupedDigest:
         op — ``evoxc.concatenate`` accepts the same operand several times and the reference
         backend copies the block ``group`` times), and none at all for ``group == 1``, where the
         base digest's block is already the answer.
-        Nothing here runs per ``measure`` call: the tile and the statics are the
-        once-per-generation cost, so a grouped call spends its ops on value-dependent work only.
+        Nothing here runs per ``measure`` call: the tile and the statics are paid once per
+        reused digest, so a grouped call spends its ops on value-dependent work only.
         ``group`` is a static Python int and no traced value drives the static gate.
     """
     if not isinstance(digest, DistanceDigest):
