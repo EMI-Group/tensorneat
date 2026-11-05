@@ -57,7 +57,7 @@ The neutral fallbacks are fixed and shared by the traced and host paths: aggrega
 - No `jax`/`torch`, no `numpy.random`, no eager NumPy on the compute path; option branches are `evoxc.select` cascades over NaN-free branches (each aggregation option neutral-fills dead slots before its reduce).
 - Keys are never floats, and padding sentinels never mix: `I_INF` in key arrays, NaN in attr arrays.
 - Errors: configuration violations raise `common.errors.TensorNEATError` subclasses (`ConfigError`); evoxc shape/backend errors propagate unchanged.
-- Files ≤ ~1000 lines; a new gene family adds declarations plus hooks, never a copy of the mutate/crossover/distance code.
+- Files ≤ ~1000 lines; a new gene family adds declarations plus hooks, never a copy of the mutate/crossover/distance code (`BiasNode.__init__` is the existing exception: it re-spells the whole response-free constructor and identity-row walk rather than parameterising `DefaultNode`'s).
 
 ## Hooks other nodes rely on
 `genome/base.py`: `initialize` uses `new_random_attrs`, `new_identity_attrs` (add-node), `new_zero_attrs`; the forward step calls `conn_gene.forward` then `node_gene.forward`; `grad` differentiates only the float attr arrays, which works because `attr_column` is differentiable.
