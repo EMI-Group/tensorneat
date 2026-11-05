@@ -8,18 +8,32 @@ standard library and the error hierarchy (:class:`GraphError`,
 Role: this module is the **host-side counterpart** of the in-graph execution
 schedule (:func:`tensorneat.common.tensorization.derive_schedule`). It never
 runs inside a trace, it is never called from a kernel, and it produces no
-tensors — it exists so that the three host-only consumers
-(``genome.network_dict``, ``genome.sympy_func``, ``genome.visualize``) share
-one implementation of "walk this topology" instead of each re-deriving
-adjacency from the gene payload.
+tensors.
 
-Input representation: every function here deliberately operates on plain
-Python ``set``/``dict``/``list`` structures decoded from a gene payload by the
-caller (see :func:`decode_graph`) — node keys are ``int``, connections are
-``(in_key, out_key)`` pairs of ``int``. :func:`decode_graph` performs the one
-padding-sentinel test (``NaN`` or ``I_INF`` in a row's key column); apart from
-that, no array or sentinel and no batch axis leaks into this module: a caller
-that holds ``(P, max_nodes, node_len)`` payloads selects one population member
+Who actually calls what:
+
+* :func:`topological_sort` and :func:`find_useful_nodes` are on the production
+  path — ``genome/default.py::network_dict`` calls both on one individual's
+  renumbered key sets;
+* :func:`node_depth` is on the production path too —
+  ``algorithm/hyperneat/hyperneat.py`` uses it to size a substrate depth;
+* :func:`decode_graph` and :func:`check_cycles` have **no production caller**.
+  The host-side genome helpers (``genome/host.py::network_dict``/``repr``,
+  ``sympy_func``, ``visualize``) decode the split payload into dicts
+  themselves and never route it through this module; :func:`decode_graph`
+  takes the legacy mixed-dtype ``nodes``/``conns`` row arrays that the split
+  ``node_keys``/``node_attrs``/``conn_keys``/``conn_attrs`` payload no longer
+  produces, so it cannot be reused there. Both remain exported public helpers,
+  exercised by ``test/unit/common/test_host_graph.py`` only.
+
+Input representation: every function here operates on plain Python
+``set``/``dict``/``list`` structures — node keys are ``int``, connections are
+``(in_key, out_key)`` pairs of ``int``. :func:`decode_graph` is the optional
+adapter that produces those structures from one genome's legacy
+mixed-dtype row arrays (there, and only there, the padding-sentinel test —
+``NaN`` or ``I_INF`` in a row's key column — is applied). Apart from that, no
+array or sentinel and no batch axis leaks into this module: a caller that
+holds ``(P, max_nodes, node_len)`` payloads selects one population member
 first.
 
 Why the split from the schedule: the in-graph schedule answers *how to execute
@@ -100,10 +114,17 @@ def _unique_edges(conns):
 
 
 def decode_graph(nodes, conns, node_attrs=1, conn_attrs=2):
-    """Decode one genome's gene payload into plain Python structures.
+    """Decode one genome's legacy row arrays into plain Python structures.
 
-    This is the only place where the padded array payload crosses into
-    host graph land: everything downstream of it works on ``int`` keys.
+    This is the one place in this module where a padded array crosses into
+    host graph land; everything downstream of it works on ``int`` keys.
+
+    It has **no production caller**: the host-side genome helpers decode the
+    split ``node_keys``/``node_attrs``/``conn_keys``/``conn_attrs`` payload
+    themselves (``genome/host.py``), and the row layout this function expects
+    is the legacy mixed-dtype ``nodes``/``conns`` pair that the split payload
+    no longer produces. It is exported as a public helper for tests and legacy
+    parity.
 
     Parameters
     ----------
@@ -421,8 +442,11 @@ def check_cycles(nodes, conns, from_idx, to_idx):
     A genome that is already cyclic returns ``True`` for almost any pair; this
     function answers "does this edge close a cycle", not "is the graph
     acyclic" — use :func:`topological_sort` for the latter. Cost is
-    ``O(nodes * conns)`` worst case (iterative closure), which is fine for the
-    host-only mutation paths that call it.
+    ``O(nodes * conns)`` worst case (iterative closure), fine for a host-side
+    inspection tool. It has **no production caller**: in-graph mutation uses
+    ``genome/operations/mutation/cycle.py::closes_cycle`` and the schedule
+    reports a cycle as ``Transformed.node_level == I_INF``; this helper is
+    exported for tests and legacy parity.
     """
     node_set = set(nodes)
     for key, role in ((from_idx, "from_idx"), (to_idx, "to_idx")):

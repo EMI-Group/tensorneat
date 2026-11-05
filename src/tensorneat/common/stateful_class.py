@@ -21,9 +21,11 @@ class StatefulBaseClass:
 
     Used as ``genome``/``algorithm``/``problem`` base class: the leaf
     configurations (gene types, mutation operators, problems) are
-    ``StatefulBaseClass`` instances nested inside a larger one, and
-    :meth:`show_config` walks that nesting to produce the run header the
-    ``Pipeline`` logs.
+    ``StatefulBaseClass`` instances nested inside a larger one.
+    :meth:`show_config` walks that nesting, but it is **not** what the
+    ``Pipeline`` logs: ``Pipeline.show_config`` renders the run header through
+    ``host_payload._object_config`` and never calls this method,
+    so ``show_config`` is public surface with no production caller.
     """
 
     def setup(self, state: State | None = None) -> State:
@@ -50,7 +52,12 @@ class StatefulBaseClass:
         return state
 
     def show_config(self, registered_objects: list | None = None) -> dict:
-        """Collect the (possibly nested) configuration for run logging.
+        """Collect the (possibly nested) configuration as a host-side dict.
+
+        Public surface with no production caller: ``Pipeline.show_config``
+        renders the run header through ``host_payload._object_config`` and
+        never calls this method, and no test exercises it either. It is kept
+        because it documents the generic ``__dict__``-walk rendering rule.
 
         Args:
             registered_objects (list | None): Accumulator of
@@ -84,7 +91,10 @@ class StatefulBaseClass:
 
     @staticmethod
     def _render_value(value) -> str:
-        """Render one non-configuration attribute for the run header.
+        """Render one non-configuration attribute for a config dict.
+
+        Only :meth:`show_config` calls this, so it inherits that method's
+        status: no production caller.
 
         Args:
             value: Any attribute value of a ``StatefulBaseClass``.
