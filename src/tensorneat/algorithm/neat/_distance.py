@@ -15,6 +15,10 @@ digest of the whole population's batch width.
 The genome measures that single centre against the digest's ``pop_size`` rows,
 on its dense single-centre route when the static gate on the genome holds and by
 broadcasting the centre internally otherwise; both spellings return the same row.
+That dense route is the one ``iree-compile`` cannot legalize yet (its computed
+``(K, 1)`` scatter index blocks), so a compiled backend needs
+``DefaultDistance(dense_single_centre=False)`` until the genome respells them --
+see the node ``CONTEXT.md`` `## Known Issues`.
 The ``group * pop_size`` batch the genome also accepts belongs to a
 ``group_digest``-tiled digest, which this module never builds.
 
@@ -62,8 +66,9 @@ takes the genome's row-wise merge) against this one, medians of 8 rounds at
 The dispatch count moves the other way: 7 678.7 -> 7 958.7 executed ops per
 generation at ``P = 500`` (7 682.0 -> 7 962.0 at ``P = 1000``, 5 335.7 -> 5 497.7
 on the gated cell), i.e. +7 per compatibility call, because the dense
-single-centre route is 102 ops against the merge's 94 while being about twice as
-cheap per op spent (genome-side record: 1.35 vs 2.39 ms per call at ``P = 500``).
+single-centre route emits more ops than the merge (the genome records 102
+against 94) while spending far less per op on a ``P``-row-wide payload
+(genome-side record: 1.35 vs 2.39 ms per call at ``P = 500``).
 At these populations the interpreter's per-op cost is not the binding term; the
 row width of the merge's ``(rows, 2 * max_conns)`` intermediates is.
 The table costs exactly one ``measure_distance`` call per centre row -- 40 calls per
