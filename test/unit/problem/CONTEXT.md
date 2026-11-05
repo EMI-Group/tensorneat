@@ -97,7 +97,7 @@ A `mape` case that divides by zero target emits `RuntimeWarning: divide by zero`
 ## Constraints
 A test may not edit `../../../src`, `../../../benchmarks` or `pyproject.toml`; a defect or a doc conflict found here goes into the report to the parent.
 A src defect is never hidden: keep the real assertion and mark the test `@pytest.mark.xfail(strict=True, reason="src defect: …")`. No such xfail exists today.
-Files stay under ~1000 lines: `test_cartpole.py` 883, `test_func_fit.py` 822, `test_mountaincar.py` 777, `test_pendulum.py` 769, `test_problem_api.py` 649, `test_custom.py` 472, `conftest.py` 335, `test_rl_common.py` 329, `test_prepared_rollout.py` 203.
+Files stay under ~1000 lines: `test_cartpole.py` 883, `test_func_fit.py` 803, `test_mountaincar.py` 777, `test_pendulum.py` 769, `test_problem_api.py` 649, `test_custom.py` 472, `conftest.py` 335, `test_rl_common.py` 329, `test_prepared_rollout.py` 203.
 `test_rl_common.py`'s 196 cases are cheap parametrizations of host-side validators (no graph is built), so its case count is large without affecting the directory's wall clock.
 Suite output must be deterministic — CartPole randomness is driven by explicit integer `key_seed`s and `CustomFuncFit` by explicit `seed`s, never by the global numpy state; Pendulum and MountainCar likewise only ever pass an integer `key_seed` (never a literal drawn state) so a re-run reproduces every number.
 `pytest.mark.slow` and `pytest.mark.parity` are not used here: every case is a batched `while_loop` over at most a few hundred float32 steps on populations of at most eight individuals (~6 s for the whole directory).
