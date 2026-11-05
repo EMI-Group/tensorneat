@@ -125,6 +125,11 @@ __all__ = ["Pipeline"]
 #: rebuilt from the graph's tensor arguments and never baked in as statics.
 _RUNTIME_KEYS: tuple[str, ...] = ("pop", "generation", "species", "randkey")
 
+#: ``compile_options`` keys that select *where* a compiled artifact runs. The
+#: setup-time graphs run on CPU, so they must not see them; every other option
+#: key is forwarded unchanged.
+_DEVICE_TARGETING_OPTIONS: tuple[str, ...] = ("device", "target_backends")
+
 
 # The host payload helpers (``_NetworkActFn``, ``_one_individual``, ...) live in
 # :mod:`tensorneat.host_payload` and are imported above.
@@ -401,11 +406,14 @@ class Pipeline(StatefulBaseClass):
         Device placement: the setup-time graphs are built and run **on CPU**
         (``device=None`` is registered for them), because their only run input
         is the host ``randkey`` and ``evoxc.run`` never transfers across
-        devices. Only after ``problem.setup`` is the real ``device`` registered
-        and the runtime tensors placed on it (:meth:`_place_state`), so
-        generation 0 and every later :meth:`step` are fully device-resident.
-        With ``device=None`` nothing is registered differently and the state is
-        returned exactly as before.
+        devices. A CPU run cannot execute an artifact compiled for the
+        accelerator either, so the device-targeting ``compile_options`` entries
+        are stripped for that phase (:meth:`_host_build_options`). Only after
+        ``problem.setup`` are the real ``device`` and ``compile_options``
+        registered and the runtime tensors placed on the device
+        (:meth:`_place_state`), so generation 0 and every later :meth:`step` are
+        fully device-resident. With ``device=None`` nothing is placed and the
+        state is returned with its configuration unchanged.
 
         Args:
             state (State, optional): Base state to extend; ``None`` -- spelled
@@ -427,17 +435,19 @@ class Pipeline(StatefulBaseClass):
         state = state.register(
             backend=self.backend,
             # Setup graphs stay on CPU: ``algorithm.setup`` runs its
-            # initialisation graph on ``randkey``, which is host memory.
+            # initialisation graph on ``randkey``, which is host memory, and a
+            # CPU run cannot execute an artifact compiled for the accelerator.
             device=None,
-            compile_options=self.compile_options,
+            compile_options=self._host_build_options(),
         )
         state = self.algorithm.setup(state)
         state = self.problem.setup(state)
 
-        # The real device is registered only now, then the runtime tensors are
-        # placed once: every later generation runs and stays on that device.
+        # The real device and compile options are registered only now, then the
+        # runtime tensors are placed once: every later generation runs and stays
+        # on that device.
+        state = state.update(device=self.device, compile_options=self.compile_options)
         if self.device is not None:
-            state = state.update(device=self.device)
             state = self._place_state(state)
 
         self.fitness_history = []
@@ -514,6 +524,26 @@ class Pipeline(StatefulBaseClass):
         )
         return payload_signature + _substrate_signature(self.algorithm)
 
+    def _host_build_options(self) -> Optional[dict]:
+        """The compile options the CPU-only setup graphs may see.
+
+        ``algorithm.setup`` / ``problem.setup`` build and run one-off graphs on
+        the host ``randkey`` (the state registers ``device=None`` for that
+        phase), so the options that select *where* a compiled artifact runs --
+        ``"device"`` and ``"target_backends"`` -- must not be forwarded: an
+        artifact compiled for the accelerator cannot execute on the CPU device
+        it is run on. Every unrelated key (``iree_compile_args``,
+        ``iree_runtime_args``, flags, ...) is preserved, and ``None`` stays
+        ``None``.
+        """
+        if not self.compile_options:
+            return self.compile_options
+        return {
+            key: value
+            for key, value in self.compile_options.items()
+            if key not in _DEVICE_TARGETING_OPTIONS
+        }
+
     def _build_options(self, state: Optional[State] = None) -> dict:
         """The ``evoxc.build`` keyword arguments this pipeline forwards.
 
@@ -559,9 +589,21 @@ class Pipeline(StatefulBaseClass):
         Only the :data:`_RUNTIME_KEYS` entries are mapped -- the ``State`` also
         holds configuration objects and the ``compile_options``/``device``
         host values, which must never be walked -- and every non-tensor leaf is
-        left alone. ``Tensor.to`` returns ``self`` on the tensor's own device,
-        so the call is idempotent, a CPU placement copies nothing, and the
-        default ``device=None`` path returns the state untouched.
+        left alone.
+
+        A cross-kind move goes through host memory: the runtime tensors
+        ``algorithm.setup`` returns are payload-backed (one graph run), and
+        ``evoxc`` refuses a payload-to-device transfer ("cross-device copies are
+        not implemented in v1"). The supported upload path is an
+        *ndarray-backed* tensor, so such a leaf is read back with the explicit
+        D2H accessor (:func:`~tensorneat.common.tools.to_numpy`) and
+        re-uploaded as contiguous memory. Contiguity is fixed **rank-preservingly**
+        -- ``np.ascontiguousarray`` promotes a rank-0 array to shape ``(1,)``,
+        which would break the scalar ``randkey`` (``evoxc.random.split`` rejects
+        it) -- so only a genuinely non-contiguous array is copied. A same-kind
+        move stays ``Tensor.to``, which returns ``self`` on the tensor's own
+        device, so the call is idempotent, a CPU placement copies nothing, and
+        the default ``device=None`` path returns the state untouched.
         """
         device = self._placement_device()
         if device is None:
@@ -569,7 +611,15 @@ class Pipeline(StatefulBaseClass):
 
         def place(leaf: Any) -> Any:
             """Move one tensor leaf to ``device``; leave host values alone."""
-            return leaf.to(device) if isinstance(leaf, evoxc.Tensor) else leaf
+            if not isinstance(leaf, evoxc.Tensor):
+                return leaf
+            source = getattr(leaf, "device", None)
+            if source is not None and source.kind != device.kind:
+                host = np.asarray(to_numpy(leaf))
+                if not host.flags["C_CONTIGUOUS"]:
+                    host = np.ascontiguousarray(host)
+                return evoxc.from_numpy(host).to(device)
+            return leaf.to(device)
 
         placed = {
             name: evoxc.tree_map(place, getattr(state, name))
@@ -586,8 +636,11 @@ class Pipeline(StatefulBaseClass):
         / ``evoxc.constant`` are CPU-only), so they keep building and running on
         the CPU side-channel: this view registers ``device=None`` (its build
         options carry no device) and moves the runtime tensors to
-        ``Device("cpu", 0)``. The result is never fed back into evolution.
-        The default ``device=None`` path returns ``state`` itself.
+        ``Device("cpu", 0)``. That move is evoxc's explicit D2H transfer
+        (``Tensor.to(cpu)`` materialises a fresh host copy of a device payload),
+        so a device-resident state is never rejected and the result is never fed
+        back into evolution. The default ``device=None`` path returns ``state``
+        itself.
         """
         if self.device is None:
             return state
