@@ -975,14 +975,16 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
 
     @staticmethod
     def _check_key_shapes(*checks: tuple) -> None:
-        """Validate the static shapes of caller-allocated structural key tensors.
+        """Validate the static shapes and dtypes of caller-allocated structural keys.
+
+        Keys are ``int32`` throughout the payload: a float or widened integer is
+        refused, never cast -- a cast would be a traced op for a host-side violation.
 
         Args:
             *checks: ``(tensor, name, expected_shape)`` triples.
 
         Raises:
-            TensorNEATError: If a tensor's shape differs from its expected shape, or its dtype
-                is not an integer dtype (keys are never floats).
+            TensorNEATError: If a shape or dtype is wrong (keys are ``int32``).
         """
         for tensor, name, expected in checks:
             shape = tuple(int(size) for size in tensor.shape)
@@ -990,7 +992,7 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
                 raise TensorNEATError(
                     f"{name} must have shape {tuple(expected)}, got {shape}"
                 )
-            if tensor.dtype not in (evoxc.int8, evoxc.int16, evoxc.int32, evoxc.int64):
+            if tensor.dtype != evoxc.int32:
                 raise TensorNEATError(
-                    f"{name} must be an integer key tensor, got dtype {tensor.dtype}"
+                    f"{name} must be an int32 key tensor, got dtype {tensor.dtype}"
                 )
