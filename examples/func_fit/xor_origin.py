@@ -5,9 +5,9 @@ historical marker, so every mutation stays traceable
 (https://github.com/EMI-Group/tensorneat/issues/11).
 
 The demo budget below is enough to solve XOR3d at seed 42: the population sits
-on the constant-0.5 predictor (fitness -0.25) until about generation 60, then
-climbs steadily and stops on the -1e-6 error target at generation 123, which
-takes around 10 s on a CPU. A real run uses pop_size in the thousands and a few
+on the constant-0.5 predictor (fitness -0.25) until about generation 13, then
+climbs steadily and stops on the -1e-6 error target at generation 89, which
+takes about 6 s on a CPU. A real run uses pop_size in the thousands and a few
 hundred generations.
 
 Run: python examples/func_fit/xor_origin.py
@@ -18,7 +18,7 @@ from tensorneat.common import ACT
 
 if __name__ == "__main__":
     # Demo budget: pop 300 for at most 250 generations; seed 42 solves XOR3d on
-    # generation 123 (about 10 s). A real run uses pop_size in the thousands and
+    # generation 89 (about 6 s). A real run uses pop_size in the thousands and
     # a few hundred generations; a larger pop is no faster here.
     pipeline = Pipeline(
         algorithm=algorithm.NEAT(

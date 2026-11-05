@@ -28,8 +28,9 @@ idle individual (the pipeline's stop test is ``max fitness >= fitness_target``).
 Backend note: the rollout is a fixed-horizon loop, so evaluation cost grows
 linearly with ``max_step`` -- 999 steps at ``pop_size=100`` costs 1.1–1.7 s per
 generation on this CPU (measured). That is why the budget below is 10
-generations: about 15.5 s of generations plus ~4 s of startup, 19.1–19.6 s wall
-in total, on the numpy reference interpreter, which needs no optional extra. A compiled
+generations: about 15.0 s of generations, a 0.28 s build and ~3.2 s of
+interpreter startup, 18.4 s wall in total (measured three times), on the numpy
+reference interpreter, which needs no optional extra. A compiled
 backend pays a one-off compile per static shape and, on CPU, is measured no
 faster end to end for this workload.
 """

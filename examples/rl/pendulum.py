@@ -12,20 +12,21 @@ positive (``fitness_target`` may only be ``<= 0``).
 
 Backend note: the rollout is a fixed-horizon loop, so evaluation cost grows
 with ``max_step``; at ``pop_size=100`` / ``max_step=200`` a generation costs
-0.34–0.51 s on this CPU (measured) and the 0.27 s build is one-off, so the
-whole script takes 5–7 s wall including interpreter startup (6.86 s cold,
-5.12 s warm, measured). That is
-measured on the numpy reference interpreter, which needs no optional extra, so
-this script keeps ``backend="numpy"``. A compiled backend pays a one-off
+0.34–0.53 s on this CPU (measured) and the 0.29 s build is one-off, so the
+run below (5 generations) takes 3.8 s wall including interpreter startup
+(measured). All these figures come from the numpy reference interpreter, which
+needs no optional extra, so this script keeps ``backend="numpy"``. A compiled
+backend pays a one-off
 compile per static shape and, on CPU, is measured faster for the raw rollout
 but slower end to end for this workload; reach for it for portability and
 memory, not for speed here.
 
 With ``seed=42`` the run below reaches ``fitness_target=-300`` (mean return at
-or above -300, i.e. a cost below 300) at generation 8 of the 20 allowed: the
-per-generation log tops out at -238.84 and ``show``'s single-episode report on
-that genome reads -48.08. The 6-node hidden layer matters: the same budget
-without ``init_hidden_layers`` plateaus around -527.
+or above -300, i.e. a cost below 300) at generation 5 of the 20 allowed: the
+per-generation log tops out at -271.30. ``show`` builds its own one-episode
+executable on ``state.randkey`` and reports -595.12 for that genome, a
+different measurement rather than a contradiction. The 6-node hidden layer
+matters: the same budget without ``init_hidden_layers`` plateaus around -527.
 """
 
 from tensorneat import Pipeline, algorithm, genome, problem

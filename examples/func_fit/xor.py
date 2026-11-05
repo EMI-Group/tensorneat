@@ -7,8 +7,9 @@ from tensorneat import Pipeline, algorithm, genome, problem
 from tensorneat.common import ACT
 
 if __name__ == "__main__":
-    # Demo budget: pop 200 for at most 150 generations (it converges around
-    # generation 75); a real run uses pop_size in the thousands and more generations.
+    # Demo budget: pop 200 for at most 150 generations (seed 42 stops on the
+    # target at generation 67); a real run uses pop_size in the thousands and
+    # more generations.
     pipeline = Pipeline(
         algorithm=algorithm.NEAT(
             pop_size=200,
