@@ -22,7 +22,20 @@ stay outside the differentiated graph.
 derives the schedule on the host with a one-off executable around ``transform``, builds the
 gradient graph, compiles it and runs it, returning ``(node_attr_grads, conn_attr_grads)``::
 
-    node_grads, conn_grads = genome.grad_from_payload(state, payload, inputs, loss_fn)
+    import numpy as np, evoxc
+    from tensorneat import genome
+    from tensorneat.genome.utils import GenomeTensors
+
+    g = genome.DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=8, max_conns=12)
+    state, key = g.setup(), evoxc.random.key(0)
+    exe = evoxc.build(lambda k: g.initialize(state, k, 1), evoxc.TensorSpec((), key.dtype))
+    payload = GenomeTensors(*[t.numpy() for t in evoxc.run(exe, key)])  # host arrays
+    loss_fn = lambda out: (out - 0.5) * (out - 0.5)  # squared with a multiply
+    inputs = np.array([[0.0, 1.0]], dtype=np.float32)
+    node_grads, conn_grads = g.grad_from_payload(state, payload, inputs, loss_fn)
+
+See :meth:`BaseGenomeHost.grad_from_payload` for the two operand constraints (``loss_fn`` is
+traced; ``payload`` is batch-first) that a first call usually trips over.
 
 A caller that already holds a schedule (a cached one-off executable, a repeated call on the
 same payload) derives it once and calls ``genome.grad(state, transformed, *arrays, inputs,
@@ -502,14 +515,14 @@ class BaseGenomeHost:
             payload: The **batch-first** payload of the population — a ``GenomeTensors`` or
                 its four arrays, ``node_keys (P, max_nodes)``, ``node_attrs (P, max_nodes,
                 attr_width)``, ``conn_keys (P, max_conns, key_width)``, ``conn_attrs (P,
-                max_conns, attr_width)``.  Bare per-individual rows are refused: a gradient
-                is a population-shaped quantity.
+                max_conns, attr_width)``.  A ``P == 1`` batch is a legitimate
+                single-individual gradient; bare per-individual rows are refused (see
+                Notes).
             inputs: ``(P, num_inputs)`` float32 network inputs.
             loss_fn: Callable ``(P, num_outputs) float32 -> (*)`` returning the
                 per-individual loss; it is scalarized as ``sum(loss_fn(outputs))``, and the
                 population axis is independent of the sum, so per-individual gradients are
-                unaffected.  Must be written with a ``multiply`` for a square (evoxc's
-                ``power`` pullback emits a ``log`` unconditionally).
+                unaffected.  It is **traced**: see Notes for what its operands may be.
             backend: ``evoxc`` backend name for both builds; ``"numpy"`` by default (the
                 reference interpreter, no optional dependency).
             device: Backend device forwarded to ``build``/``load``; ``None`` (the backend
@@ -535,6 +548,19 @@ class BaseGenomeHost:
                 ``max_in_degree``.
 
         Notes:
+            ``loss_fn`` is **traced**, so its operands must be ``evoxc`` tensors/ops or
+            Python ``bool``/``int``/``float`` scalars: a numpy target array raises
+            ``TypeError: unsupported operand type ndarray: op operands must be
+            SymbolicTensor or Python scalars``.  Build a constant vector inside the function
+            with ``evoxc.numpy`` (``enp.full`` + ``enp.broadcast_to``), and square with a
+            multiply — ``(a - b) * (a - b)``, never ``** 2``, whose ``power`` pullback emits
+            an unconditional ``log`` of a possibly negative base and warns ``invalid value
+            encountered in log``.
+            ``payload`` must be **batch-first** (a population on axis 0): the bare
+            per-individual rows a checkpoint stores are refused (``TensorNEATError``,
+            "payload field node_keys must be batch-first (population on axis 0)"), while a
+            ``P == 1`` batch is a legitimate single-individual gradient, bit-identical to
+            that individual's rows of a larger batch.
             A **fresh** graph is traced and compiled per call (like :meth:`BaseGenome.grad`
             itself), so a caller that repeats the call on the same shapes should cache the
             executable itself; only the schedule derivation cost is paid once here.
