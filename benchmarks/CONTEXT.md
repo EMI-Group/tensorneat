@@ -8,7 +8,7 @@ Nothing here ships: the harness never imports both implementations in one proces
 `RESULTS.md` is generated evidence, never hand-edited.
 ## Provenance: which artifact measures which tree
 No committed CPU artifact measures the merged tree; every number in this node belongs to the artifact, tree and session named below, and nothing here may be quoted as a statement about HEAD.
-The accelerator record is the one artifact whose fingerprint names the tree this documentation sits on (`2d86a89`), and it speaks only for its own 9 rows.
+The two compiled-backend artifacts are the ones whose fingerprints name the current `src/`: the accelerator record at `a5973c8` and the `iree` record at `6869a13` (same `src/`, later commit), and each speaks only for its own rows and session.
 
 | Artifact | Measured on | What it can speak for |
 |---|---|---|
