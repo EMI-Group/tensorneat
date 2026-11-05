@@ -9,81 +9,91 @@ genome into one ``(P,)`` distance row without re-sorting the population.
 
 Shape contract
 --------------
-Every call this module makes to ``genome.measure_distance`` carries a centre
-payload whose batch matches the digest it is measured against: ``pop_size`` rows
-for the plain digest (row ``p`` the centre paired with population member ``p``)
-and ``k * pop_size`` rows for a digest tiled ``k`` times.  ``measure_distance``
-rejects every other width, so the two batch forms are the only ones any call site
-here may build.
+Every call this module makes to ``genome.measure_distance`` carries a
+**population-shaped** centre payload: exactly ``pop_size`` rows, row ``p`` being
+the centre measured against population member ``p``, next to the digest of the
+same batch width.  ``measure_distance`` accepts no other width besides a
+broadcastable ``1``, so the population-shaped form is the one shape that works
+for both a single centre and a whole species table without a second digest
+tiling.
 
 :meth:`DistanceRows.__call__` is single-valued: it accepts a centre payload of
 batch ``pop_size`` (measured as it stands) or batch ``1`` (tiled to
 ``pop_size`` rows and measured in one call) and rejects every other batch width.
-It is the route ``_kernels.speciate`` uses for a row it cannot know up front:
-both scan bodies behind a ``cond`` on the gated path, and only a species-creating
-slot's carry-dependent ``pop[seed]`` centre on the dense path (a small
-``Pipeline`` run traced 4 ``__call__`` invocations on the gated path and 2 on the
-dense one -- ``evoxc.scan`` peels step 0 at the enclosing level and traces the
-body again, so each scan body is traced twice).
+It **is** the production route: ``_kernels.speciate`` calls ``distance_fn(...)``
+from its per-iteration ``compute_row`` bodies for the gated ``reserve`` and
+``assign_members`` scans, and unconditionally for every ``assign_members``
+iteration on the dense path (a small ``Pipeline`` run traced 4 ``__call__``
+invocations on the gated path and 2 on the dense one, plus one :meth:`matrix`:
+``evoxc.scan`` peels step 0 at the enclosing level and traces the body again, so
+each scan body is traced twice).
 What no in-repo call site reaches through it is only the batch-``1`` tiling
-branch and the batch-width rejection, because every call site wraps its slot's
-centre with ``single_payload`` (``pop_size`` rows), and
+branch and the batch-width rejection, because ``compute_row`` always wraps its
+slot's centre with ``single_payload`` (``pop_size`` rows), and
 :meth:`_check_population`'s payload rejection, because every call site passes the
 four arrays the digest was prepared from.
 :meth:`DistanceRows.row` is the same measurement spelled explicitly for one
-centre, and :meth:`DistanceRows.matrix` is the explicit whole-table form:
-``S // k`` fixed-length ``evoxc.scan`` iterations, each measuring ``k`` centre
-rows in one ``genome.measure_distance`` call against a digest tiled ``k``
-times (:data:`GROUP_CHOICES` picks ``k`` statically from ``S``), so a whole
-``(S, P)`` table is ``S // k`` calls of ``k * pop_size`` rows rather than ``S``
-calls of ``pop_size`` rows.
-The rows are identical either way, because the compatibility kernel is strictly
-row-independent (elementwise per-pair work plus per-row reductions), and the
-grouped digest documents the pairing: result row ``j * pop_size + p`` is centre
-row ``j * pop_size + p`` against individual ``p``.
-:meth:`DistanceRows.matrix_after_reservation` is the same grouped helper for the
-**second** speciation phase's centre rows; it carries its own name because the
-two tables belong to different points of the generation.
-``matrix`` is never selected by ``__call__``: a caller that wants a whole table
-asks for it by name, which is what the dense path's two scans do.
+centre, and :meth:`DistanceRows.matrix` is the explicit whole-table form: one
+such call per centre row, run as a single fixed-length ``evoxc.scan`` over the
+``S`` centre rows, so an ``(S, P)`` table is ``S`` calls of ``pop_size`` rows
+rather than one ``S * P`` batch.  The rows are identical either way, because the
+compatibility kernel is row-independent, and one centre per call keeps the
+kernel's transient footprint at one population instead of ``S`` of them, which
+the scan body then releases again before the next iteration.  ``matrix`` is
+never selected by ``__call__``: a caller that wants a whole table asks for it by
+name, which is what the dense path's scan 1 does.
 
 Nothing here re-implements distance arithmetic: every number comes from the
 genome's own kernel, so the rows are bit-identical to
 :meth:`~tensorneat.genome.base.BaseGenome.execute_distance` on the same centre and
-population, and a grouped table is bit-identical to the per-centre table it
-replaces (verified on 10-generation ``xor`` and ``pagie`` runs, 50 arrays each).
+population.
 
 Measured cost
 -------------
-Numpy reference backend, ``species_size = 20``, one configuration per fresh
-process, 3 warmup + 20 timed ``Pipeline.step``, seed 42: ``xor_p500`` 7 651
-dispatched ops and 160.9 ms / 234.0 MiB / 0.337 s build before this route,
-6 661 ops and 244.2 ms / 273.6 MiB / 0.371 s after it (``k = 2``); the distance
-share alone (total minus a run whose ``BaseDistance.measure`` returns zeros) is
-3 675 -> 2 845 ops, i.e. 38 -> 19 compatibility kernels per generation.
-``custom_pagie_p500`` is 11 536 -> 9 595 ops and 950.0 -> 979.8 ms / 1 261.1 ->
-1 298.4 MiB, ``xor_p100`` (gated path, scan 2 unchanged) 3 758 -> 3 699 ops.
-So the dispatch win is real and the numpy wall time **regresses**: a
-``k * pop_size``-row kernel costs ~2.75x more per pair than a ``pop_size``-row
-one on the interpreter (40.4 ms for twenty plain calls of 500 rows against
-110.8 ms for five grouped calls of 2 000 rows), because the wider transient
-dominates the ~13 us per-dispatch saving.
-The lever this route buys is per-dispatch cost on a compiled backend, not numpy
-milliseconds; the peak-RSS budget it is allowed to spend is ~25 %, which is why
-``k = 2`` ships (``k = 1`` 164.4 ms / 226.9 MiB, ``k = 2`` 281.3 / 273.6,
-``k = 4`` 209.2 / 357.3 against the 160.9 / 234.0 baseline: four is inside the
-wall-time budget but past the memory one).
+Numpy reference backend, ``species_size=20``, one configuration per fresh
+process, ``benchmarks/backend_measure.py --backend numpy --generations 20
+--warmup 3`` (its numbers are ``Pipeline.step``): one population-shaped call per
+centre is 160.9-162.2 ms per generation and 233.6 MiB peak RSS at ``P = 500``
+with a 0.40 s build, and 314.7 ms / 391.7 MiB / 0.40 s at ``P = 1000``.  The
+table costs exactly one ``measure_distance`` call per centre row; what the scan
+buys is the *region* around those calls, not fewer of them.
+
+Measuring the same rows at the top level of the generation graph instead reads
+199.8 ms / 454.4 MiB / 0.56 s at ``P = 500`` and 339.5 ms / 809.4 MiB / 0.65 s
+at ``P = 1000``: slower and roughly twice the footprint, for the reason in
+`Peak memory` below.
+
+Pre-measuring *both* speciation scans needs a ``cond`` for scan 2's
+data-dependent ``pop[seed]`` centre and costs ~50 % more peak RSS for no timed
+gain.
+
+Grouping several centres into one ``measure_distance`` call is rejected: at
+``P = 500`` / ``species_size = 20``, one centre per call is 160.9-162.2 ms per
+generation and 233.6 MiB, ``k = 2`` is 219.7-280.5 ms and 273.8 MiB, ``k = 4``
+is 208.8-219.5 ms and 353.1 MiB, and ``k = 10`` / ``k = 20`` are ~260 ms at
+593 / 753 MiB.  The ``(rows, 2 * max_conns)`` kernel intermediates grow with
+``k`` and the compatibility kernel is memory-bound at that width, so the wider
+call's per-element cost exceeds the interpreter dispatch it saves: dispatches
+fall 8061 -> 4885 at ``k = 4`` against a 28 % wall-time increase, with
+``argsort`` 25.5 -> 37.0 ms, ``gather`` 21.5 -> 36.1 ms, ``cast`` 8.0 -> 17.7 ms
+and ``reshape`` 4.3 -> 8.9 ms.  ``_kernels.speciate`` therefore keeps one
+population-shaped call per centre, and
+``tensorneat.genome.operations.distance.group_digest`` -- the tested grouped
+route -- stays unwired here: it is an option for a dispatch-bound backend, not
+for the numpy default.
 
 Peak memory
 -----------
 ``evoxc``'s numpy interpreter keeps every SSA result of a block in that block's
 environment until the block returns, and pops a nested region's environment per
 iteration.  A kernel inside a ``scan`` body therefore pays one region's
-transients at a time, while a kernel at the top level keeps its ``(k * pop_size,
+transients at a time, while a kernel at the top level keeps its ``(pop_size,
 2 * max_conns, ...)`` intermediates alive for the rest of the generation.  The
-scan is thus what keeps the grouped block affordable at all: at ``P = 500`` the
-whole-table route adds ~40 MiB over the no-distance-kernel floor (228.2 ->
-273.6 MiB) instead of the ~226 MiB a top-level loop costs.
+whole-table scan adds ~12 MiB over the floor of a generation with no distance
+kernel at all at ``P = 500`` (228.2 -> 240.5 MiB) and ~24 MiB at ``P = 1000``
+(368.2 -> 391.7 MiB), where the top-level form adds 226 / 441 MiB.  Build
+follows the same split, because a loop body is traced once and a static loop
+over ``S`` centres traces ``S`` copies of the kernel.
 Any future hoist out of the region has to report peak RSS and build next to its
 wall time.
 """
@@ -96,44 +106,6 @@ import evoxc
 import evoxc.numpy as enp
 
 from tensorneat.common.errors import TensorNEATError
-
-#: Candidate group sizes for one whole-table measurement, largest first.
-#:
-#: A ``k``-centre block asks the genome for ``k * pop_size`` distances in one
-#: ``measure_distance`` call against a digest tiled ``k`` times (see
-#: ``tensorneat.genome.operations.distance.group_digest``), which is where the
-#: dispatch win of the dense path comes from: two centres per call halves the
-#: number of compatibility kernels a generation runs.  The group must divide the
-#: centre-table row count exactly, so species sizes that are not a multiple of
-#: two fall back to one centre per call.  Static, so the choice is made at trace
-#: time and costs no op.
-#:
-#: Two rather than four: a ``k * pop_size``-row kernel is slower per row than a
-#: ``pop_size``-row one on the numpy interpreter, and the wider block also grows
-#: the peak live set.  Measured on ``xor_p500`` (one process per cell, 3 warmup
-#: + 20 timed ``Pipeline.step``): ``k = 1`` 164.4 ms / 226.9 MiB, ``k = 2``
-#: 281.3 ms / 273.6 MiB, ``k = 4`` 209.2 ms / 357.3 MiB against a 160.9 ms /
-#: 234.0 MiB baseline, i.e. four centres per call is past the ~25 % peak-RSS
-#: budget this route is allowed to spend for its dispatch win.
-GROUP_CHOICES = (2, 1)
-
-
-def _group_size(count: int) -> int:
-    """Largest :data:`GROUP_CHOICES` entry that divides ``count`` exactly."""
-    for size in GROUP_CHOICES:
-        if count % size == 0:
-            return size
-    return 1
-
-
-def int_const(value: int) -> Any:
-    """0-d ``int32`` graph constant (local to this module's group indexing)."""
-    return enp.full((), value, dtype=evoxc.int32)
-
-
-def iota_i32(length: int) -> Any:
-    """``(length,)`` ``int32`` index vector ``[0, 1, ...]``."""
-    return enp.arange(length, dtype=evoxc.int32)
 
 
 class DistanceRows:
@@ -205,12 +177,11 @@ class DistanceRows:
         Note:
             This is the callable ``_kernels.speciate`` invokes as
             ``distance_fn(state, centre, pop)``: the gated path reaches it from
-            both scan bodies, the dense path only from a species-creating
-            ``assign_members`` slot (whose centre is that scan's own
-            ``pop[seed]``).  Those call sites always hand over a
-            population-shaped centre and the digested population, so the
-            batch-``1`` tiling branch and both rejections in the body are
-            unexercised from inside the package.
+            both scan bodies, the dense path from every ``assign_members``
+            iteration.  Those call sites always hand over a population-shaped
+            centre and the digested population, so the batch-``1`` tiling branch
+            and both rejections in the body are unexercised from inside the
+            package.
             A whole ``(S, P)`` species table is not a ``__call__`` shape either:
             ask for it by name with :meth:`matrix`, so a table can never be
             mistaken for a population-shaped centre.
@@ -329,122 +300,14 @@ class DistanceRows:
             centre when ``S == P``.  The one in-package caller is
             ``_kernels.speciate``'s dense path, which measures scan 1's whole
             centre table this way before the reservation scan.
-            See :meth:`_table` for the measurement itself.
+            One population-shaped ``measure_distance`` call per centre row, run
+            as one fixed-length ``evoxc.scan`` over the ``K`` centre rows: the
+            kernel never sees a ``K * P`` batch, and because a scan body's region
+            environment is popped per iteration, only one centre's transients are
+            alive at a time.  Measuring the same rows at the top level of the
+            generation graph would keep all ``K`` of them resident -- see
+            `Peak memory` in the module docstring.
         """
-        return self._table(state, centres)
-
-    def matrix_after_reservation(self, state: Any, centres: Any) -> Any:
-        """``(S, P)`` table of the centre rows a **second** phase measures.
-
-        Args:
-            state (Any): Shared state.
-            centres (Any): Centre payload of ``K`` rows holding the centres that
-                survive the reservation scan (``_kernels.speciate``'s
-                ``centre_after1`` table).
-
-        Returns:
-            Any: ``(K, P)`` float32 distances, row ``s`` against the whole
-            population.
-
-        Note:
-            A separate name rather than a second :meth:`matrix` call, because
-            the two tables are measured at different points of the generation
-            and a caller-counting test pins that split.  Every non-creating
-            slot's second-phase row is exactly its post-reservation centre
-            measured against the population, so pre-measuring the table lets
-            that scan read its row instead of running the kernel per iteration;
-            only a slot that *creates* a species measures a carry-dependent
-            centre (``pop[seed]``) and keeps its in-loop call.
-            Same measurement as :meth:`matrix`, from the same helper.
-        """
-        return self._table(state, centres)
-
-    def _table(self, state: Any, centres: Any) -> Any:
-        """Measure a whole centre table as ``(K, P)``, ``k`` centres per call.
-
-        Args:
-            state (Any): Shared state.
-            centres (Any): Centre payload of ``K`` rows.
-
-        Returns:
-            Any: ``(K, P)`` float32 distances.
-
-        Note:
-            ``K // k`` iterations of one fixed-length ``evoxc.scan``, ``k``
-            being :func:`_group_size` of ``K``.  Each iteration gathers the
-            block's ``k`` centre rows, expands them to ``k * pop_size`` rows in
-            **group-major** order (block row ``j`` repeated ``pop_size`` times,
-            which is the pairing a grouped digest documents: result row
-            ``j * pop_size + p`` is centre row ``j * pop_size + p`` against
-            individual ``p``), makes one ``genome.measure_distance`` call
-            against the digest tiled ``k`` times, and returns its ``(k, P)``
-            view; the scan stacks those to ``(K // k, k, P)``, which reshapes
-            to ``(K, P)`` in table order.
-            For ``k == 1`` the plain digest and today's one-centre-per-iteration
-            spelling are kept: tiling a digest once would be a no-op, and the
-            scan's per-iteration region is what bounds the kernel's live set
-            (see `Peak memory` in the module docstring).
-            The grouped digest is built here, from the generation's plain
-            digest, and belongs to this trace; nothing is cached on ``self``
-            across calls.
-        """
-        count = int(centres[0].shape[0])
-        group = _group_size(count)
-        if group == 1:
-            return self._single_table(state, centres)
-        batch = int_const(group)
-        spanning = iota_i32(group)
-        # Function-local: importing ``tensorneat.genome`` at module scope would
-        # make ``algorithm`` depend on the sibling node at package import time.
-        from tensorneat.genome.operations.distance import group_digest
-
-        grouped = group_digest(self.digest, group)
-
-        def body(carry: Any, block_index: Any) -> Any:
-            """One ``k``-centre block of the table, measured inside the scan."""
-            index = evoxc.add(evoxc.multiply(block_index, batch), spanning)
-            block = type(centres)(
-                *(evoxc.gather(field, index, axis=0) for field in centres)
-            )
-            expanded = type(centres)(
-                *(self._group_shaped(field, group) for field in block)
-            )
-            rows = self.genome.measure_distance(state, expanded, grouped)
-            return carry, evoxc.reshape(rows, (group, self.pop_size))
-
-        _, stacked = evoxc.scan(
-            body,
-            enp.zeros((1,), dtype=evoxc.float32),
-            iota_i32(count // group),
-        )
-        return evoxc.reshape(stacked, (count, self.pop_size))
-
-    def _group_shaped(self, block: Any, group: int) -> Any:
-        """Expand a ``(k, ...)`` centre block to ``k * pop_size`` group-major rows.
-
-        Args:
-            block (Any): One split gene array of ``k`` centre rows, rank above 1.
-            group (int): Static ``k`` of the block.
-
-        Returns:
-            Any: ``(group * pop_size, ...)`` array whose row ``j * pop_size + p``
-            is block row ``j``.
-
-        Note:
-            One ``reshape`` + one rank-raising ``evoxc.broadcast`` + one
-            ``reshape`` per field: broadcasting an axis of length ``1`` up to
-            ``pop_size`` repeats the row, and the trailing flattening puts the
-            copies in the order a grouped digest pairs.
-        """
-        rest = tuple(block.shape)[1:]
-        widened = evoxc.reshape(block, (group, 1) + rest)
-        return evoxc.reshape(
-            evoxc.broadcast(widened, (group, self.pop_size) + rest),
-            (group * self.pop_size,) + rest,
-        )
-
-    def _single_table(self, state: Any, centres: Any) -> Any:
-        """``(K, P)`` table measured one centre per scan iteration (``k == 1``)."""
         count = int(centres[0].shape[0])
 
         def body(carry: Any, slot: Any) -> Any:
@@ -462,6 +325,6 @@ class DistanceRows:
         _, stacked = evoxc.scan(
             body,
             enp.zeros((1,), dtype=evoxc.float32),
-            iota_i32(count),
+            enp.arange(0, count, dtype=evoxc.int32),
         )
         return stacked
