@@ -99,6 +99,9 @@ class BaseCrossover(StatefulBaseClass):
             table is two-dimensional (one key column); a ``(P, N, 1)`` view that spells the
             key axis out is accepted as well and returned verbatim, which is what the shared
             :func:`~tensorneat.genome.operations.alignment.key_rows` normaliser allows.
+            The trace-time ``state`` is forwarded into both :meth:`align_gene_rows` calls —
+            its ``kernel_mode`` entry selects the alignment formulation — the symmetric
+            spelling of :meth:`crossover_gene_attrs`, which already takes ``state``.
         """
         payload1 = (node_keys1, node_attrs1, conn_keys1, conn_attrs1)
         payload2 = (node_keys2, node_attrs2, conn_keys2, conn_attrs2)
@@ -116,7 +119,7 @@ class BaseCrossover(StatefulBaseClass):
             genome.node_gene,
             node_key,
             node_attrs1,
-            self.align_gene_rows(key_rows(node_keys1), key_rows(node_keys2)),
+            self.align_gene_rows(key_rows(node_keys1), key_rows(node_keys2), state=state),
             node_attrs2,
         )
         conn_attrs = self.crossover_gene_attrs(
@@ -124,7 +127,7 @@ class BaseCrossover(StatefulBaseClass):
             genome.conn_gene,
             conn_key,
             conn_attrs1,
-            self.align_gene_rows(key_rows(conn_keys1), key_rows(conn_keys2)),
+            self.align_gene_rows(key_rows(conn_keys1), key_rows(conn_keys2), state=state),
             conn_attrs2,
         )
         return GenomeTensors(node_keys1, node_attrs, conn_keys1, conn_attrs)

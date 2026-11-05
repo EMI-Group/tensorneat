@@ -97,6 +97,8 @@ class DefaultCrossover(BaseCrossover):
         self,
         keys1: evoxc.SymbolicTensor,
         keys2: evoxc.SymbolicTensor,
+        *,
+        state: State | None = None,
     ) -> evoxc.SymbolicTensor:
         """Locate, for every gene of parent 1, its homologous row in parent 2.
 
@@ -115,6 +117,10 @@ class DefaultCrossover(BaseCrossover):
                 ``I_INF`` padded.
             keys2 (evoxc.SymbolicTensor): ``(P, M, K) int32`` key columns of parent 2,
                 ``I_INF`` padded.
+            state (State | None): The trace-time configuration ``State``, or ``None`` for a
+                direct call.  Its ``kernel_mode`` entry selects the alignment formulation
+                (``"host"`` when absent, exactly like
+                :func:`tensorneat.genome.operations.alignment.find_homologous`).
 
         Returns:
             evoxc.SymbolicTensor: ``(P, M) int32`` row indices into parent 2, with ``I_INF``
@@ -126,12 +132,14 @@ class DefaultCrossover(BaseCrossover):
             implementation the compatibility distance consumes too; nothing
             family-specific is left to do here.
         """
-        return find_homologous(keys1, keys2)
+        return find_homologous(keys1, keys2, state=state)
 
     def align_gene_rows(
         self,
         keys1: evoxc.SymbolicTensor,
         keys2: evoxc.SymbolicTensor,
+        *,
+        state: State | None = None,
     ) -> tuple:
         """Return the homologue row **and** the match mask in one merge.
 
@@ -140,6 +148,8 @@ class DefaultCrossover(BaseCrossover):
                 ``I_INF`` padded.
             keys2 (evoxc.SymbolicTensor): ``(P, M, K) int32`` key columns of parent 2,
                 ``I_INF`` padded.
+            state (State | None): The trace-time configuration ``State``, or ``None``; its
+                ``kernel_mode`` entry selects the alignment formulation.
 
         Returns:
             tuple: ``(rows (P, M) int32, present (P, M) bool)`` — parent 2's row per gene of
@@ -152,7 +162,7 @@ class DefaultCrossover(BaseCrossover):
             flag, so asking for them separately would pay an ``I_INF`` marking pass here
             plus a ``not_equal`` and a redirect ``select`` at the call site.
         """
-        return homologous_pair(keys1, keys2)
+        return homologous_pair(keys1, keys2, state=state)
 
     def crossover_gene_attrs(
         self,
