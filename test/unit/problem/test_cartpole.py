@@ -711,6 +711,54 @@ def test_nan_logits_poison_the_fitness_to_negative_infinity(
 
 
 # --------------------------------------------------------------------------- #
+# the host-side report is finite-safe
+# --------------------------------------------------------------------------- #
+
+
+def test_show_reports_a_nan_poisoned_policy_instead_of_raising(
+    state, problem, enp, fake_schedule, evoxc_key, capsys
+):
+    """Invariant: a NaN-poisoned rollout prints an honest report and never raises.
+
+    Oracle: the documented rule ("a NaN-poisoned policy is reported, not crashed
+    on: ... a non-finite return has no integer survival length, so the step count
+    is printed as ``n/a`` with the honest return value"). The poisoning test above
+    already proves ``evaluate`` carries NaN into the return; this test drives the
+    same poisoned ``act_fn`` through ``show`` -- whose one-off graph is built
+    outside any trace -- and asserts the report reaches stdout for every repeat
+    plus the mean line.
+
+    Notes:
+        The failure this guards is concrete: ``int(round(nan))`` raises
+        ``ValueError``, so a report that formatted the survival count
+        unconditionally would crash on exactly the individual a user most wants
+        to inspect. The finite control run in the same test pins the other
+        branch, so ``n/a`` cannot be printed for a healthy policy either.
+    """
+    cartpole = problem.CartPole(max_step=10, repeat_times=2, reset_scale=0.0)
+    schedule = fake_schedule(pop_size=1)
+
+    returned = cartpole.show(
+        state, evoxc_key, _constant_logits(enp, float("nan"), float("nan")), schedule
+    )
+    report = capsys.readouterr().out
+
+    assert returned is None
+    assert report.count("CartPole repeat") == 2
+    assert report.count("survived n/a (NaN return)") == 2
+    assert "return nan" in report
+    assert "CartPole mean return: nan" in report
+    assert "survived 9/10 steps" not in report
+
+    healthy = cartpole.show(state, evoxc_key, _constant_logits(enp, 0.0, 1.0), schedule)
+    finite = capsys.readouterr().out
+
+    assert healthy is None
+    assert finite.count(f"survived {CONSTANT_POLICY_SURVIVAL}/10 steps") == 2
+    assert "n/a" not in finite
+
+
+# --------------------------------------------------------------------------- #
 # configuration errors
 # --------------------------------------------------------------------------- #
 

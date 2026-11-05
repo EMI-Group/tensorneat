@@ -19,31 +19,38 @@ Each test below fixes one clause of that list with a genome-free ``act_fn``
 (a plain Python closure over ``enp`` ops, inlined into the graph by the shared
 runner), so nothing here depends on the genome subtree at all.
 
+``CustomFuncFit``'s own dataset generation and box validation live in
+``test_custom.py`` (one module per source module).
+
 Oracles used here (never the kernel under test)
 -----------------------------------------------
 * closed forms -- a constant ``0.5`` predictor on XOR has ``mse = 0.25``,
   ``rmse = mae = 0.5``; a zero predictor on a strictly positive dataset has
-  ``mape = 1``;
+  ``mape = 1``; the two-output nonzero case has ``mse = 91/8``,
+  ``mae = 22/8`` and ``mape = (467/60)/8``;
 * :func:`support.oracle.func_fit_loss` -- the independent numpy reduction over
   both axes, written from the docstring, used wherever a closed form would be
   tedious (the row-index tiling test, the four-method parametrization);
 * the dataset literals themselves (``XOR`` is four rows, ``XOR3d`` is eight),
-  which are data in the API, not an implementation detail.
+  which are data in the API, not an implementation detail;
+* the byte arithmetic of the baked constants (``(S, I)`` plus ``(S, O)``
+  float32), which is what ``MAX_DATASET_NBYTES`` is compared against.
 
 Gotchas this module encodes
 ---------------------------
 * ``mape`` divides by the target, so a **zero target** with a non-zero
-  prediction yields ``+inf`` (legacy behaviour, kept). A zero *prediction* on a
-  zero target yields ``0/0 = NaN`` instead -- both reach ``-inf`` fitness, but
-  through different arithmetic, so the test states which one it asserts.
+  prediction yields ``+inf`` (legacy behaviour, kept) and a zero *prediction* on
+  a zero target yields ``0/0 = NaN``. Both reach ``-inf`` fitness, through
+  different arithmetic, and **both** are asserted: the guard-free NaN is what a
+  "fix" that replaced ``0/0`` with ``0`` would silently change.
 * The reduction denominators matter: with ``O = 1`` every plausible reduction
   (over both axes, over samples only, mean-of-means) coincides, which is why the
-  axis test uses ``O = 2``, where a factor-``O`` mistake is visible.
-* ``CustomFuncFit`` samples from ``np.random.default_rng(seed)`` on the host, so
-  a dataset is reproducible from the seed alone and the global ``np.random``
-  state is never touched (the legacy global-seed coupling is gone).
-* The dataset is a compile-time constant, so ``S`` stays small: every case here
-  uses ``S <= 8`` and populations of at most four individuals.
+  axis tests use ``O = 2``, where a factor-``O`` mistake is visible.
+* The dataset is a compile-time constant bounded by
+  ``FuncFit.MAX_DATASET_NBYTES`` (1 MiB), checked at construction, in ``setup``
+  and again at bake time -- a direct ``evaluate`` is guarded too.
+* ``S`` stays small: every case here uses ``S <= 8`` and populations of at most
+  four individuals.
 
 Backend is ``"numpy"`` throughout, through the shared runner only; no
 ``jax``/``torch``, no network, no GPU.
@@ -187,11 +194,12 @@ def _positive_grid_problem(problem, error_method="mse"):
     )
 
 
-def _two_output_grid_problem(problem):
+def _two_output_grid_problem(problem, error_method="mse"):
     """A ``CustomFuncFit`` on ``[0, 2]^2`` whose ``func`` returns ``(O,) = (2,)``.
 
     Args:
         problem: The ``tensorneat.problem`` package.
+        error_method: The reduction under test; forwarded to the constructor.
 
     Returns:
         A problem with ``S = 4`` grid rows ``{0, 1}^2`` and targets
@@ -205,6 +213,7 @@ def _two_output_grid_problem(problem):
         upper_bounds=[2.0, 2.0],
         method="grid",
         step_size=[1.0, 1.0],
+        error_method=error_method,
     )
 
 
@@ -296,12 +305,22 @@ def test_error_method_matches_its_hand_computed_scalar(
     assert observed.shape == (4,)
     np.testing.assert_allclose(observed, np.full(4, fitness), rtol=1e-6)
 
-    # The three parametrized values are pairwise distinct, so matching one is
-    # not a coincidence of a shared float32 rounding.
-    others = {"mse": -0.3125, "rmse": -(0.3125**0.5), "mae": -0.5}
-    for other_method, other_fitness in others.items():
-        if other_method != error_method:
-            assert not np.isclose(fitness, other_fitness), (error_method, other_method)
+    # The three parametrized values are pairwise distinct, and the kernel really
+    # returns distinguishable fitness for them: the *same predictor* on the
+    # *same dataset* through another reduction is asserted to differ, so
+    # matching one value cannot be a coincidence of a shared float32 rounding,
+    # and a reduction aliased onto another one fails here.
+    for other_method in {"mse", "rmse", "mae"} - {error_method}:
+        other = run_evaluate(
+            problem.XOR(error_method=other_method),
+            state,
+            _constant_predictor(enp, 0.25),
+            fake_schedule(4),
+        )
+        assert not np.allclose(observed, other, rtol=1e-6), (
+            error_method,
+            other_method,
+        )
 
 
 @pytest.mark.parametrize("error_method", ["mse", "rmse", "mae", "mape"])
@@ -341,12 +360,21 @@ def test_every_error_method_matches_the_numpy_oracle(
         observed, np.full(pop_size, -_POSITIVE_GRID_LOSSES[error_method]), rtol=1e-6
     )
 
-    # The four closed forms differ, so this dataset really does distinguish them.
-    for other_method, other_loss in _POSITIVE_GRID_LOSSES.items():
-        if other_method != error_method:
-            assert not np.isclose(
-                _POSITIVE_GRID_LOSSES[error_method], other_loss, rtol=1e-3
-            ), (error_method, other_method)
+    # The four closed forms differ, and the kernel really distinguishes them:
+    # every *other* reduction on the same dataset is asserted to move the
+    # observed fitness, so an implementation that aliased two methods (e.g.
+    # ``rmse`` onto ``mse``) cannot pass by matching a literal table.
+    for other_method in set(problem.FuncFit.ERROR_METHODS) - {error_method}:
+        other = run_evaluate(
+            _positive_grid_problem(problem, error_method=other_method),
+            state,
+            _constant_predictor(enp, 0.0),
+            fake_schedule(pop_size),
+        )
+        assert not np.allclose(observed, other, rtol=1e-6), (
+            error_method,
+            other_method,
+        )
 
 
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
@@ -393,52 +421,113 @@ def test_mape_with_a_zero_target_is_infinite_and_so_is_the_negated_fitness(
     np.testing.assert_allclose(finite, np.full(pop_size, -0.25), rtol=1e-6)
 
 
-def test_the_loss_reduces_over_the_sample_and_the_output_axes(
-    state, problem, oracle, enp, run_evaluate, fake_schedule
+@pytest.mark.parametrize(
+    "error_method, expected_loss",
+    [
+        # err = pred - targets on [[1, 2], [1, 4], [2, 3], [2, 5]] with the
+        # constant prediction (0.5, -1) is
+        # [[-0.5, -3], [-0.5, -5], [-1.5, -4], [-1.5, -6]], so over all S*O = 8
+        # entries:  sum(err**2) = 0.25+9+0.25+25+2.25+16+2.25+36 = 91,
+        #           sum(|err|)  = 0.5+3+0.5+5+1.5+4+1.5+6 = 22, and
+        #           sum(|err/t|) = 1/2+3/2+1/2+5/4+3/4+4/3+3/4+6/5 = 467/60.
+        ("mse", 91.0 / 8.0),
+        ("rmse", (91.0 / 8.0) ** 0.5),
+        ("mae", 22.0 / 8.0),
+        ("mape", (467.0 / 60.0) / 8.0),
+    ],
+)
+def test_every_reduction_reduces_over_the_sample_and_the_output_axes(
+    state, problem, enp, run_evaluate, fake_schedule, error_method, expected_loss
 ):
-    """Invariant: the per-individual loss is the mean over ``S`` *and* ``O`` elements.
+    """Invariant: all four reductions average over ``S`` *and* ``O``.
 
-    Oracle: closed form on a two-output ``CustomFuncFit`` (``O = 2``) with the
-    zero predictor: ``mse = mean(targets ** 2)`` over all ``S * O`` entries,
-    compared with ``np.mean`` of the whole target array and cross-checked against
-    ``support.oracle.func_fit_loss``.
+    Oracle: the closed forms above, derived from the documented reductions on a
+    two-output ``CustomFuncFit`` and a *non-zero* predictor. ``O = 2`` is what
+    makes the axis question observable -- with one output a mean over the
+    samples and a mean over both axes coincide -- and a non-zero predictor keeps
+    ``mape`` away from its ``|0 / t| = 1`` fixed point, where every dataset would
+    agree.
 
     Notes:
-        ``O = 2`` is the whole point: with one output, "mean over both axes",
-        "mean over the samples" and "mean of the per-sample means" are the same
-        number, so only a two-output problem exposes a reduction that misses an
-        axis (a factor ``O``) or sums instead of averaging (a factor ``S * O``).
-        The result is also asserted to be ``(P,)``: a reduction over the sample
-        axis alone would leave a ``(P, O)`` block, which is not a fitness.
+        The zero predictor is avoided on purpose: at a zero prediction every
+        ``mape`` dataset sits at its ``|0 / t| = 1`` fixed point, where the axis
+        question is invisible. The factor checks (``O`` and ``S*O`` too large)
+        reject the two classic denominator mistakes explicitly, and the ``(P,)``
+        shape rejects a reduction that averaged over the sample axis only (that
+        would leave a ``(P, O)`` block, which is not a fitness).
     """
-    custom = _two_output_grid_problem(problem)
+    custom = _two_output_grid_problem(problem, error_method=error_method)
     pop_size = 4
     observed = run_evaluate(
-        custom, state, _two_output_constant(enp, 0.0, 0.0), fake_schedule(pop_size)
+        custom, state, _two_output_constant(enp, 0.5, -1.0), fake_schedule(pop_size)
     )
 
     targets = np.asarray(custom.targets, dtype=np.float64)
-    num_samples, num_outputs = targets.shape
-    assert (num_samples, num_outputs) == (4, 2)
-    assert custom.output_shape == (2,)
-
-    # mean over the S * O = 8 squared entries of [[1, 2], [1, 4], [2, 3], [2, 5]].
-    expected = float(np.mean(targets**2))
-    assert np.isclose(expected, 8.0)
-    np.testing.assert_allclose(
-        oracle.func_fit_loss(
-            np.zeros((pop_size, num_samples, num_outputs)), targets, "mse"
-        ),
-        np.full(pop_size, expected),
-        rtol=1e-12,
-    )
+    prediction = np.tile(np.array([[0.5, -1.0]], dtype=np.float64), (4, 1))
+    errors = prediction - targets
+    # The same closed forms, re-derived with plain numpy arithmetic.
+    independent = {
+        "mse": np.mean(errors**2),
+        "rmse": np.sqrt(np.mean(errors**2)),
+        "mae": np.mean(np.abs(errors)),
+        "mape": np.mean(np.abs(errors / targets)),
+    }
+    assert np.isclose(independent[error_method], expected_loss, rtol=1e-12)
 
     assert observed.shape == (pop_size,)
-    np.testing.assert_allclose(observed, np.full(pop_size, -expected), rtol=1e-6)
+    np.testing.assert_allclose(observed, np.full(pop_size, -expected_loss), rtol=1e-6)
     # A mean over the sample axis only (a factor ``O`` too large) ...
-    assert not np.isclose(observed[0], -expected * num_outputs)
+    assert not np.isclose(observed[0], -expected_loss * 2, rtol=1e-6)
     # ... and a sum instead of a mean (a factor ``S * O`` too large) both differ.
-    assert not np.isclose(observed[0], -expected * num_samples * num_outputs)
+    assert not np.isclose(observed[0], -expected_loss * 8, rtol=1e-6)
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+def test_mape_with_a_zero_prediction_on_a_zero_target_is_nan_and_negative_infinite(
+    state, problem, enp, run_evaluate, fake_schedule
+):
+    """Invariant: the ``0/0`` corner of ``mape`` poisons the loss to ``-inf``.
+
+    Oracle: closed form on XOR (targets ``[0, 1, 1, 0]``) with a **zero**
+    predictor: the two zero-target rows give ``|0 / 0| = NaN`` while the two
+    one-target rows give ``0``, so the mean over both axes is ``NaN`` and
+    ``finalize_fitness`` maps it to ``-inf``. That is the second corner of the
+    documented ``mape`` behaviour -- the first, a *non-zero* prediction on a zero
+    target (``+inf``), is
+    :func:`test_mape_with_a_zero_target_is_infinite_and_so_is_the_negated_fitness`.
+
+    Notes:
+        The poison really is the division: the same zero predictor on the same
+        dataset under ``mse`` is finite (``-0.5``). An implementation that
+        guarded the division (mapping ``0/0`` to ``0``) would return ``0.0`` here
+        instead of ``-inf``, so the assertion distinguishes a silent guard from
+        the documented NaN propagation.
+    """
+    pop_size = 4
+    targets = np.asarray(problem.XOR().targets, dtype=np.float64)
+    zero_prediction = np.zeros_like(targets)
+    with np.errstate(invalid="ignore"):
+        ratio = np.abs(zero_prediction / targets)
+    # The documented corner, stated on the host: half the rows are ``0/0``.
+    assert np.isnan(ratio).any()
+
+    observed = run_evaluate(
+        problem.XOR(error_method="mape"),
+        state,
+        _constant_predictor(enp, 0.0),
+        fake_schedule(pop_size),
+    )
+    assert observed.shape == (pop_size,)
+    assert np.all(np.isneginf(observed))
+    assert not np.any(np.isnan(observed))
+
+    finite = run_evaluate(
+        problem.XOR(error_method="mse"),
+        state,
+        _constant_predictor(enp, 0.0),
+        fake_schedule(pop_size),
+    )
+    np.testing.assert_allclose(finite, np.full(pop_size, -0.5), rtol=1e-6)
 
 
 def test_a_nan_prediction_scores_negative_infinity(
@@ -544,161 +633,131 @@ def test_xor3d_dataset_is_the_eight_row_parity_literal(problem):
     assert xor3d.output_shape == (1,)
 
 
-def test_custom_func_fit_grid_builds_the_cartesian_product_in_order(problem):
-    """Invariant: ``method="grid"`` is the row-major cartesian product of the per-axis grids.
-
-    Oracle: ``np.arange(low[i], high[i], step[i])`` per axis, combined
-    row-major (first axis slowest) -- the order ``cartesian_product`` documents.
-    With ``low = [0, 0]``, ``high = [2, 3]`` and ``step = [1, 1]`` the six rows
-    are ``[[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2]]``, and the targets
-    are ``np.apply_along_axis(func, -1, inputs)``.
-
-    Notes:
-        The order matters twice: the tiling test assumes sample order, and a
-        user reading a printed report expects the first axis to move slowest.
-        ``S`` is the product of the per-axis grid lengths, never ``num_samples``
-        (left at its default ``100`` here).
-    """
-
-    def func(point):
-        return point[0] * 10.0 + point[1]
-
-    custom = problem.CustomFuncFit(
-        func,
-        low_bounds=[0.0, 0.0],
-        upper_bounds=[2.0, 3.0],
-        method="grid",
-        step_size=[1.0, 1.0],
-    )
-    inputs = np.asarray(custom.inputs)
-    targets = np.asarray(custom.targets)
-
-    expected_inputs = np.array(
-        [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2]], dtype=np.float32
-    )
-    assert inputs.shape == (6, 2)
-    np.testing.assert_array_equal(inputs, expected_inputs)
-
-    # "first axis slowest" as a computed property: the grid is the ``indexing="ij"``
-    # meshgrid of the two per-axis ``arange`` grids, flattened row-major.
-    axis_grids = [np.arange(0, 2, 1), np.arange(0, 3, 1)]
-    mesh = np.stack(np.meshgrid(*axis_grids, indexing="ij"), axis=-1).reshape(-1, 2)
-    np.testing.assert_array_equal(inputs.astype(np.int64), mesh)
-
-    assert targets.shape == (6, 1)
-    np.testing.assert_array_equal(
-        targets,
-        np.apply_along_axis(func, -1, expected_inputs).astype(np.float32)[:, None],
-    )
-    np.testing.assert_array_equal(targets[:, 0], np.array([0, 1, 2, 10, 11, 12], dtype=np.float32))
-
-    assert custom.num_samples == 100
-    assert custom.inputs.shape[0] != custom.num_samples
-    assert custom.input_shape == (2,)
-    assert custom.output_shape == (1,)
+# --------------------------------------------------------------------------- #
+# the baked-dataset budget: MAX_DATASET_NBYTES, validate_dataset, setup, bake
+# --------------------------------------------------------------------------- #
 
 
-def test_cartesian_product_pairs_every_row_of_both_inputs_major_first_slowest(problem):
-    """Invariant: ``custom.cartesian_product`` repeats ``arr1`` rows for each ``arr2`` row.
+def test_the_dataset_budget_is_the_two_float32_constants(problem):
+    """Invariant: ``dataset_nbytes`` is exactly ``inputs.nbytes + targets.nbytes``.
 
-    Oracle: closed form. ``arr1 = [[0], [1]]`` and ``arr2 = [[10], [11], [12]]``
-    must produce ``[[0, 10], [0, 11], [0, 12], [1, 10], [1, 11], [1, 12]]`` --
-    shape ``(n1 * n2, k1 + k2)``, first input slowest -- and an ``AssertionError``
-    for inputs of different rank or above rank 2.
-    """
-    # ``cartesian_product`` is exported by ``problem.func_fit.custom`` only; the
-    # package re-exports the problems, not the grid helper.
-    cartesian_product = problem.func_fit.custom.cartesian_product
-
-    first = np.array([[0], [1]], dtype=np.int32)
-    second = np.array([[10], [11], [12]], dtype=np.int32)
-    product = cartesian_product(first, second)
-
-    expected = np.array(
-        [[0, 10], [0, 11], [0, 12], [1, 10], [1, 11], [1, 12]], dtype=np.int32
-    )
-    assert product.shape == (first.shape[0] * second.shape[0], 2)
-    np.testing.assert_array_equal(product, expected)
-
-    # "first input slowest": column 0 repeats each ``first`` row ``n2`` times and
-    # column 1 repeats the whole of ``second`` row by row.
-    np.testing.assert_array_equal(product[:, 0], np.repeat(first[:, 0], second.shape[0]))
-    np.testing.assert_array_equal(product[:, 1], np.tile(second[:, 0], first.shape[0]))
-
-    # Rank-1 inputs are single columns, so the result is the same ``(6, 2)`` block.
-    np.testing.assert_array_equal(
-        cartesian_product(np.array([0, 1]), np.array([10, 11, 12])), expected
-    )
-
-    with pytest.raises(AssertionError):
-        cartesian_product(np.array([[0], [1]]), np.array([1, 2, 3]))
-    with pytest.raises(AssertionError):
-        cartesian_product(np.zeros((1, 1, 1)), np.zeros((2, 1, 1)))
-
-
-def test_custom_func_fit_sample_method_is_reproducible_from_its_seed(problem):
-    """Invariant: ``method="sample"`` datasets are reproducible from ``seed`` alone.
-
-    Oracle: two ``CustomFuncFit`` instances built with the same seed must have
-    bit-identical ``inputs``/``targets``; a different seed must give different
-    inputs (asserted on the arrays, not on a hash). Every row must lie inside
-    ``[low_bounds, upper_bounds]``, ``S == num_samples`` as documented, and the
-    targets must equal ``np.apply_along_axis(func, -1, inputs)`` re-derived in
-    the test -- so a dataset that ignored ``func`` cannot pass.
+    Oracle: the documented arithmetic -- "measured on the float32 host arrays
+    that ``_dataset_constants`` bakes", never on the population, because the
+    dataset is baked untiled. XOR is ``(4, 2)`` float32 inputs plus ``(4, 1)``
+    float32 targets, i.e. ``32 + 16 = 48`` bytes, and the class budget is the
+    documented 1 MiB (``EVOXC_LARGE_CONSTANT_BYTES``).
 
     Notes:
-        ``np.random.default_rng(seed)`` is host-side only; the test also asserts
-        that constructing a problem leaves the *global* ``np.random`` state
-        untouched (``np.random.get_state()`` before/after), which is the legacy
-        coupling this rewrite removes.
+        Recomputing the footprint from the two arrays in the test is what pins
+        "float32, untiled": a ``float64`` coercion (96 bytes) or a pre-tiled
+        constant (scaled by ``P``) would both disagree here.
     """
-    num_samples = 8
+    xor = problem.XOR()
+    inputs = np.asarray(xor.inputs, dtype=np.float32)
+    targets = np.asarray(xor.targets, dtype=np.float32)
 
-    def func(point):
-        return point[0] - point[1]
+    assert (inputs.shape, targets.shape) == ((4, 2), (4, 1))
+    assert problem.FuncFit.MAX_DATASET_NBYTES == 1 << 20
+    assert xor.dataset_nbytes == inputs.nbytes + targets.nbytes == 48
+    assert xor.validate_dataset() == 48
 
-    def build(seed):
-        return problem.CustomFuncFit(
-            func,
-            low_bounds=[0.0, 0.0],
-            upper_bounds=[1.0, 1.0],
-            method="sample",
-            num_samples=num_samples,
-            seed=seed,
-        )
 
-    global_before = np.random.get_state()
-    first = build(7)
-    second = build(7)
-    other = build(8)
-    global_after = np.random.get_state()
+def test_validate_dataset_and_setup_reject_a_dataset_over_budget(
+    problem, common, state
+):
+    """Invariant: a footprint above ``MAX_DATASET_NBYTES`` raises from both host entry points.
 
-    inputs = np.asarray(first.inputs)
-    targets = np.asarray(first.targets)
-    assert inputs.shape == (num_samples, 2) == (first.num_samples, 2)
-    assert targets.shape == (num_samples, 1)
-    assert inputs.dtype == np.float32
-    assert targets.dtype == np.float32
-    assert first.input_shape == (2,)
-    assert first.output_shape == (1,)
+    Oracle: the documented ``Raises:`` clauses of :meth:`validate_dataset` and
+    :meth:`setup`, driven by lowering the **instance** attribute to one byte
+    below XOR's 48-byte footprint (:meth:`setup` calls ``validate_dataset``
+    first, so a budget check that lived only in one of them would show up as one
+    failing half). The exact boundary is probed from both sides: ``48`` is
+    accepted and anything smaller is not, which pins ``>`` against ``>=``.
 
-    # Reproducible bit for bit from the seed ...
-    assert inputs.tobytes() == np.asarray(second.inputs).tobytes()
-    assert targets.tobytes() == np.asarray(second.targets).tobytes()
-    # ... and a different seed really moves the draw.
-    assert not np.array_equal(inputs, np.asarray(other.inputs))
+    Notes:
+        The budget is a *configuration* error, so it is ``TensorNEATError`` and
+        the message names the attribute a user can raise. ``setup`` registers no
+        keys, so the accepted call is asserted to hand the very same ``State``
+        back, and a broken dataset must not leave a partially-built state behind.
+    """
+    xor = problem.XOR()
+    assert xor.dataset_nbytes == 48
 
-    assert np.all(inputs >= np.asarray(first.low_bounds))
-    assert np.all(inputs <= np.asarray(first.upper_bounds))
+    xor.MAX_DATASET_NBYTES = 48  # the boundary itself is allowed
+    assert xor.validate_dataset() == 48
+    assert xor.setup(state) is state
 
-    np.testing.assert_allclose(
-        targets[:, 0], np.apply_along_axis(func, -1, inputs), rtol=0, atol=1e-6
-    )
+    xor.MAX_DATASET_NBYTES = 47
+    with pytest.raises(common.TensorNEATError) as excinfo:
+        xor.validate_dataset()
+    assert "MAX_DATASET_NBYTES" in str(excinfo.value)
+    assert "48" in str(excinfo.value)
 
-    # The global legacy state is untouched.
-    assert global_before[0] == global_after[0]
-    np.testing.assert_array_equal(global_before[1], global_after[1])
-    assert global_before[2:] == global_after[2:]
+    with pytest.raises(common.TensorNEATError, match="MAX_DATASET_NBYTES"):
+        xor.setup(None)
+
+
+def test_the_bake_time_check_rejects_an_oversized_dataset(
+    state, problem, common, enp, run_evaluate, fake_schedule
+):
+    """Invariant: a direct ``evaluate`` is guarded too -- the error escapes ``evoxc.build``.
+
+    Oracle: the documented re-check in ``_dataset_constants`` ("the budget is
+    enforced here as well as on the host, so an ``evaluate`` called directly ...
+    is guarded too; the ``TensorNEATError`` propagates unchanged through
+    ``evoxc.build``"). The instance budget is lowered *after* construction, so
+    the constructor's own ``validate_dataset`` has already passed and the only
+    remaining guard is the bake-time one.
+
+    Notes:
+        This is the path the parity harness takes (a direct ``evaluate``), so the
+        failure has to be the library's ``TensorNEATError`` and not a bare
+        trace-time error surfacing from inside evoxc.
+    """
+    xor = problem.XOR()
+    xor.MAX_DATASET_NBYTES = 1
+
+    with pytest.raises(common.TensorNEATError, match="MAX_DATASET_NBYTES"):
+        run_evaluate(xor, state, _constant_predictor(enp, 0.0), fake_schedule(2))
+
+
+# --------------------------------------------------------------------------- #
+# the host-side report
+# --------------------------------------------------------------------------- #
+
+
+def test_show_prints_one_block_per_individual(problem, state, enp, evoxc_key, fake_schedule, capsys):
+    """Invariant: ``show`` accepts any static ``P`` and labels each individual's block.
+
+    Oracle: the documented report -- "one row per sample plus the loss ... the
+    report prints one block per individual, so any static ``P`` is accepted".
+    With ``P = 2`` the output must carry two ``individual: <i>`` headers, ``S``
+    ``input:`` rows and one ``loss:`` line under each, and the closed-form loss of
+    the constant ``0.5`` predictor (``0.25``) in both blocks -- so a report that
+    silently evaluated only the first individual, or reused one loss, fails.
+
+    Notes:
+        ``P = 1`` omits the header (asserted by the previous test's absence of
+        ``individual:``), so this is the branch a multi-individual schedule
+        reaches and the one a user calling ``show`` on ``state.pop`` depends on.
+    """
+    xor = problem.XOR()
+    returned = xor.show(state, evoxc_key, _constant_predictor(enp, 0.5), fake_schedule(2))
+    report = capsys.readouterr().out
+
+    assert returned is None
+    lines = report.splitlines()
+    assert [line for line in lines if line.startswith("individual:")] == [
+        "individual: 0",
+        "individual: 1",
+    ]
+    num_samples = int(np.asarray(xor.inputs).shape[0])
+    assert len([line for line in lines if line.startswith("input:")]) == 2 * num_samples
+    losses = [float(line.split(":", 1)[1]) for line in lines if line.startswith("loss:")]
+    assert losses == pytest.approx([0.25, 0.25], rel=1e-6)
+    # The rows of individual 1 follow the ``individual: 1`` header, not before it.
+    second_block = lines[lines.index("individual: 1"):]
+    assert sum(line.startswith("input:") for line in second_block) == num_samples
 
 
 # --------------------------------------------------------------------------- #
@@ -740,72 +799,3 @@ def test_an_unknown_error_method_is_a_configuration_error(problem, common, oracl
         assert "bogus" in str(excinfo.value), name
         assert isinstance(excinfo.value, common.TensorNEATError), name
 
-
-def test_custom_func_fit_validates_its_box_and_sampling_configuration(problem, common):
-    """Invariant: every documented misuse of ``CustomFuncFit`` raises ``TensorNEATError``.
-
-    Oracle: the ``Raises:`` clause of the constructor docstring --
-    ``method`` outside ``{"sample", "grid"}``, ``num_samples <= 0``, a missing
-    ``step_size`` for ``method="grid"``, a ``step_size`` that does not match the
-    bounds' shape or is not strictly positive,
-    ``low_bounds.shape != upper_bounds.shape``, and ``func(low_bounds)`` raising.
-    Each case is asserted separately, so a partially-validating constructor is
-    caught.
-    """
-
-    def func(point):
-        return point[0] + point[1]
-
-    valid = dict(
-        func=func,
-        low_bounds=[0.0, 0.0],
-        upper_bounds=[2.0, 2.0],
-        method="grid",
-        step_size=[1.0, 1.0],
-        num_samples=4,
-    )
-    problem.CustomFuncFit(**valid)  # the baseline really is accepted
-
-    cases = [
-        ("method outside {'sample', 'grid'}", dict(method="quadrature")),
-        ("num_samples == 0", dict(num_samples=0)),
-        ("num_samples < 0", dict(num_samples=-5)),
-        ("method='grid' without step_size", dict(step_size=None)),
-        ("step_size of the wrong shape", dict(step_size=[1.0, 1.0, 1.0])),
-        ("step_size with a zero entry", dict(step_size=[1.0, 0.0])),
-        ("step_size with a negative entry", dict(step_size=[-1.0, 1.0])),
-        ("method='sample' with num_samples == 0", dict(method="sample", num_samples=0)),
-        (
-            "low_bounds.shape != upper_bounds.shape",
-            dict(low_bounds=[0.0, 0.0], upper_bounds=[2.0, 2.0, 2.0]),
-        ),
-    ]
-    for label, overrides in cases:
-        kwargs = dict(valid)
-        kwargs.update(overrides)
-        with pytest.raises(common.TensorNEATError):
-            problem.CustomFuncFit(**kwargs)
-
-    # ``step_size`` is a grid-only requirement: ``method="sample"`` ignores it.
-    problem.CustomFuncFit(
-        func,
-        low_bounds=[0.0, 0.0],
-        upper_bounds=[2.0, 2.0],
-        method="sample",
-        num_samples=4,
-        step_size=None,
-        seed=0,
-    )
-
-    def broken(point):
-        raise ValueError("boom")
-
-    with pytest.raises(common.TensorNEATError) as excinfo:
-        problem.CustomFuncFit(
-            broken,
-            low_bounds=[0.0, 0.0],
-            upper_bounds=[2.0, 2.0],
-            method="grid",
-            step_size=[1.0, 1.0],
-        )
-    assert "boom" in str(excinfo.value)

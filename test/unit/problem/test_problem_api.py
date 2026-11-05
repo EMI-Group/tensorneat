@@ -101,6 +101,19 @@ def _two_logits(enp):
     return act_fn
 
 
+def _single_logit(enp):
+    """An ``act_fn`` emitting one constant logit (the two continuous RL policies).
+
+    Returns:
+        ``act_fn(batch) -> (B, 1) float32``, always a zero torque / zero force.
+    """
+
+    def act_fn(batch):
+        return enp.full((batch.shape[0], 1), 0.0)
+
+    return act_fn
+
+
 def _positive_grid_problem(problem):
     """A ``CustomFuncFit`` on ``[0, 1]^2`` with a deterministic four-row dataset.
 
@@ -211,28 +224,43 @@ def test_the_input_and_output_arity_match_the_algorithm(problem, algorithm, payl
         pytest.param(lambda problem: problem.CartPole(max_step=20), id="cartpole"),
     ],
 )
-def test_setup_returns_a_state_and_registers_no_keys(common, problem, state, factory):
-    """Invariant: ``setup(state)`` returns a ``State`` holding the same keys.
+def test_setup_returns_a_state_and_registers_no_keys(common, problem, factory):
+    """Invariant: ``setup(state)`` returns the *same* ``State`` and adds no keys.
 
     Oracle: ``State`` is immutable and no shipped problem registers anything, so
-    the returned container must be a ``common.State`` whose
-    ``registered_keys()`` equal the input's -- not a superset. ``setup`` exists
-    for protocol uniformity (and for user problems that add normalization
-    statistics), which is why the assertion is "no new keys" rather than
-    "a new object". ``setup(None)`` -- the documented default -- must likewise
-    start from an empty ``State``, so it is checked against the same key list.
+    the returned container must be a ``common.State`` that is the very object
+    handed in, with its keys -- and their values -- unchanged: not a superset,
+    not a rebuilt copy that dropped an entry. ``setup`` exists for protocol
+    uniformity (and for user problems that add normalization statistics), which
+    is why the assertion is "no new keys" rather than "a new object".
+
+    Notes:
+        The incoming state deliberately registers three unrelated keys
+        (``backend``, ``pop``, ``seed``) with non-default values, so the
+        comparison is against a **non-empty** key set: an empty-state check
+        (``[] == []``) cannot notice a ``setup`` that dropped or replaced keys,
+        which is exactly the regression this test has to be able to fail on.
+        ``setup(None)`` -- the documented default -- must start from a genuinely
+        empty ``State``, so its key list is empty rather than "the same as the
+        input's".
     """
-    before = list(state.registered_keys())
+    incoming = common.State(backend="numpy", pop=3, seed=11)
+    original_keys = set(incoming.registered_keys())
+    assert original_keys == {"backend", "pop", "seed"}
     subject = factory(problem)
 
-    returned = subject.setup(state)
+    returned = subject.setup(incoming)
+
     assert isinstance(returned, common.State)
-    assert list(returned.registered_keys()) == before
-    assert list(state.registered_keys()) == before  # the argument is untouched
+    assert returned is incoming
+    assert set(returned.registered_keys()) == original_keys
+    assert (returned.backend, returned.pop, returned.seed) == ("numpy", 3, 11)
+    # The argument is an immutable container: reading it back is unchanged.
+    assert (incoming.backend, incoming.pop, incoming.seed) == ("numpy", 3, 11)
 
     fresh = subject.setup(None)  # documented default: start from an empty State
     assert isinstance(fresh, common.State)
-    assert list(fresh.registered_keys()) == before
+    assert list(fresh.registered_keys()) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -443,6 +471,145 @@ def test_show_details_is_a_no_op_hook(state, problem, fake_schedule, evoxc_key, 
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+
+
+# --------------------------------------------------------------------------- #
+# the reporting backend: build_options and show's "no silent fallback"
+# --------------------------------------------------------------------------- #
+
+
+def test_build_options_reads_the_registered_selection(problem, common):
+    """Invariant: ``build_options`` forwards ``backend``/``device``/``compile_options`` off ``state``.
+
+    Oracle: the helper's own documented mapping -- ``backend`` from the state or
+    ``"numpy"`` when none is registered, ``device`` only when registered and not
+    ``None``, and ``compile_options`` expanded into ``**options`` (not nested
+    under its own key, because ``evoxc.build`` reads them as keyword arguments).
+
+    Notes:
+        Every branch is asserted on a hand-built ``State``, so the fallback
+        (``{"backend": "numpy"}``) is distinguished from a forwarded selection:
+        the two differ only in the value, and a helper that always answered
+        ``"numpy"`` would pass only the first case.
+    """
+    build_options = problem.base.build_options
+
+    assert build_options(common.State()) == {"backend": "numpy"}
+    assert build_options(common.State(backend="irep")) == {"backend": "irep"}
+    # A registered ``device=None`` is dropped rather than forwarded.
+    assert build_options(common.State(backend="numpy", device=None)) == {
+        "backend": "numpy"
+    }
+    assert build_options(common.State(device="cpu")) == {
+        "backend": "numpy",
+        "device": "cpu",
+    }
+    # ``compile_options`` is expanded, never nested.
+    assert build_options(common.State(compile_options={"foo": 1})) == {
+        "backend": "numpy",
+        "foo": 1,
+    }
+    assert build_options(
+        common.State(backend="irep", device="cpu", compile_options={"bar": 2})
+    ) == {"backend": "irep", "device": "cpu", "bar": 2}
+
+
+@pytest.mark.parametrize(
+    "factory, policy",
+    [
+        pytest.param(
+            lambda problem: problem.XOR(),
+            "constant",
+            id="xor",
+        ),
+        pytest.param(
+            lambda problem: problem.CartPole(max_step=10),
+            "two_logits",
+            id="cartpole",
+        ),
+        pytest.param(
+            lambda problem: problem.Pendulum(max_step=10),
+            "single_logit",
+            id="pendulum",
+        ),
+        pytest.param(
+            lambda problem: problem.MountainCarContinuous(max_step=10),
+            "single_logit",
+            id="mountaincar",
+        ),
+    ],
+)
+def test_show_honours_the_registered_backend_instead_of_falling_back_to_numpy(
+    problem, common, enp, evoxc, evoxc_key, fake_schedule, capsys, factory, policy
+):
+    """Invariant: a bogus *registered* backend makes ``show`` raise, not silently use numpy.
+
+    Oracle: the documented rule on every ``show`` -- "the report runs on the
+    backend the run was configured with ... never a silent numpy fallback behind
+    a compiled run", and ``evoxc``'s registry, which raises ``BackendError``
+    ("unknown backend '<name>'; registered backends: ...") for a name it does not
+    know. The name is asserted verbatim in the message, so the failure is
+    attributed to the registered selection and not to some later stage.
+
+    Notes:
+        An *unregistered* name is the strongest available probe on a box without
+        every compiled backend: it exercises the same ``backend`` keyword that
+        ``build_options`` forwards, and a ``show`` that ignored the state (the
+        numpy fallback) would print a report and pass instead of raising. Nothing
+        is printed before the build, so stdout must be empty afterwards.
+    """
+    subject = factory(problem)
+    state = common.State(backend="definitely-not-a-registered-backend")
+    assert problem.base.build_options(state) == {
+        "backend": "definitely-not-a-registered-backend"
+    }
+
+    if policy == "constant":
+        act_fn = _constant_predictor(enp, 0.5)
+    elif policy == "two_logits":
+        act_fn = _two_logits(enp)
+    else:
+        act_fn = _single_logit(enp)
+
+    with pytest.raises(evoxc.BackendError, match="definitely-not-a-registered-backend"):
+        subject.show(state, evoxc_key, act_fn, fake_schedule(pop_size=1))
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_the_base_problem_skeleton_raises_not_implemented(
+    problem, evoxc_key, fake_schedule
+):
+    """Invariant: the abstract protocol raises ``NotImplementedError``; ``show_details`` does not.
+
+    Oracle: the ``Raises:`` clauses of the skeleton -- ``evaluate``, ``input_shape``,
+    ``output_shape`` and ``show`` all raise ``NotImplementedError`` "always, in the
+    skeleton", while ``show_details`` is the documented no-op hook ("the default
+    is a no-op") that ``Pipeline.auto_run`` may call on any problem.
+
+    Notes:
+        A missing override must be loud: ``BaseProblem`` is what a user problem
+        subclasses, and a silent default (a zero fitness or an empty shape) would
+        be inherited by mistake. The no-op half is asserted in the same test so a
+        skeleton that started raising from ``show_details`` is caught too.
+    """
+    base = problem.BaseProblem()
+    schedule = fake_schedule(pop_size=1)
+
+    with pytest.raises(NotImplementedError):
+        base.evaluate(None, evoxc_key, None, schedule)
+    with pytest.raises(NotImplementedError):
+        base.input_shape
+    with pytest.raises(NotImplementedError):
+        base.output_shape
+    with pytest.raises(NotImplementedError):
+        base.show(None, evoxc_key, None, schedule)
+
+    # ``None`` for the state/key/act_fn is legal for the no-op hook: it must not
+    # touch any of them.
+    assert base.show_details(None, evoxc_key, None, schedule) is None
 
 
 # --------------------------------------------------------------------------- #
