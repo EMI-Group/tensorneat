@@ -38,6 +38,23 @@ scatter dominates.  The switch is a **static host branch**: both spellings are p
 helpers (never ``@evoxc.defn``), so a graph is exactly one of them and no backend ever sees
 both.
 
+**The loop's growth flag must be consumed outside the loop** (``iree-compile`` release gate).
+This hop carries ``(reach, growing)`` and only ``reach`` is read after the loop, so the
+``growing`` result is dead.  ``iree-compile`` 3.13 runs an ``scf.while`` canonicalization that
+drops such an unused result together with the corresponding body block argument but *keeps*
+the yield operand and the operand, which makes the op illegal
+(``region branch point has 2 operands, but region successor needs 4 inputs``) — the failure
+surfaces much later, in ``iree-stream-conversion``, and only for the **assembled** generation
+graph (the same kernel compiles and runs standalone, and the ``"host"`` spelling escapes it
+only because its destination-passing scatter aliases the carried value, so its body reduces to
+``scf.yield %arg`` and the rewrite stays consistent).  The answer therefore ends with
+``logical_not(growing)``: a value-identity term (the loop only exits once its condition — the
+carried flag itself — is ``False``, so the final flag is always ``False``) that keeps the
+result live.  It also *reads* as what it is, a convergence guard: an unconverged reached set
+would answer ``False``, i.e. refuse the mutation instead of admitting a cycle.
+Do not delete it as dead code, and do not "simplify" the pair into one carried tensor without
+re-running ``iree-compile`` on a traced generation graph in this mode.
+
 Correctness is the host formulation's contract, unchanged: the same dense ``key -> row``
 resolution (:func:`~.cycle._key_table` / :func:`~.cycle._rows_of`), so the out-of-span-key
 precondition, the duplicate-key invariance and the "a degenerate candidate answers ``False``"
@@ -144,6 +161,10 @@ def closes_cycle_accelerator(
         The ``scatter`` that the host formulation pays per hop is the whole point of this
         route: it is replaced by one broadcast ``logical_and`` plus one reduction over the
         edge axis, both of which a compiled backend spreads over its workgroups.
+        Both loop results are consumed (the second through a ``logical_not`` that is the
+        identity on every backend), because an unused ``while`` result makes
+        ``iree-compile`` produce an illegal ``scf.while`` for the assembled generation graph —
+        the module note holds the compiler evidence and the exact rewrite at fault.
     """
     pop_size, node_count = node_keys.shape
     edge_count = conn_keys.shape[1]
@@ -189,43 +210,64 @@ def closes_cycle_accelerator(
     # Seed the reached set at the destination.  ``dst_row`` lies in ``[0, N)`` and the
     # ``dst_hit`` term clears an absent destination, so the seed needs no dump column and
     # - like the host formulation - is never a ``scatter``.
-    reach = enp.reshape(
-        evoxc.logical_and(evoxc.equal(columns, dst_row), dst_hit),
-        (pop_size, node_count),
+    # The carried tensor is ``(P, N + 1)``: columns ``0 .. N-1`` are the reached set and column
+    # ``N`` is the loop's growth flag, broadcast over the population rows.  The flag lives
+    # *inside* the single carried value on purpose - see the module note.
+    seed_flags = enp.broadcast_to(
+        enp.full((1, 1), True, dtype=evoxc.bool_), (pop_size, 1)
     )
+    reach = enp.concatenate(
+        [
+            enp.reshape(
+                evoxc.logical_and(evoxc.equal(columns, dst_row), dst_hit),
+                (pop_size, node_count),
+            ),
+            seed_flags,
+        ],
+        axis=1,
+    )
+    flag_length = (pop_size, 1)
 
     def cond(carried):
-        """Continue while the reached set gained a node."""
-        _reach, growing = carried
-        return growing
+        """Continue while the reached set gained a node (the carried flag's column)."""
+        return evoxc.reduce_max(evoxc.slice(carried, (0, node_count), flag_length))
 
     def body(carried):
         """One hop: every live edge whose source is reached marks its destination."""
-        reach, _growing = carried
+        current = evoxc.slice(carried, (0, 0), (pop_size, node_count))
         reached = evoxc.gather(
-            enp.reshape(reach, (pop_size * node_count,)), src_flat, axis=0
+            enp.reshape(current, (pop_size * node_count,)), src_flat, axis=0
         )
         live = evoxc.logical_and(valid_flat, reached)
         marked = evoxc.reduce_max(
             evoxc.logical_and(enp.reshape(live, (pop_size, edge_count, 1)), dst_onehot),
             axes=1,
         )
-        grown = evoxc.logical_or(reach, marked)
-        return grown, evoxc.reduce_max(evoxc.not_equal(grown, reach))
+        grown = evoxc.logical_or(current, marked)
+        grew = enp.reshape(
+            evoxc.reduce_max(evoxc.not_equal(grown, current), axes=1), (pop_size, 1)
+        )
+        return enp.concatenate([grown, grew], axis=1)
 
-    reach, _ = evoxc.while_loop(
-        cond,
-        body,
-        (reach, enp.full((), True, dtype=evoxc.bool_)),
-    )
+    carried = evoxc.while_loop(cond, body, reach)
+    reach = evoxc.slice(carried, (0, 0), (pop_size, node_count))
     # Read the reached set at the candidate source's row.
     src_slot = enp.reshape(evoxc.add(src_row, offsets), (pop_size,))
     reached = enp.reshape(
         evoxc.gather(enp.reshape(reach, (pop_size * node_count,)), src_slot, axis=0),
         (pop_size, 1),
     )
+    # The carried flag is always ``False`` here - the loop's condition IS that flag, so it only
+    # exits on a hop that grew nothing - which makes this term the identity on every backend.
+    # Read it as a convergence guard: a reached set that had not stabilised answers ``False``,
+    # i.e. refuses the mutation rather than admitting a cycle.
+    settled = evoxc.slice(carried, (0, node_count), flag_length)
     return enp.reshape(
-        evoxc.logical_and(evoxc.logical_and(reached, src_hit), dst_hit), (pop_size,)
+        evoxc.logical_and(
+            evoxc.logical_and(evoxc.logical_and(reached, src_hit), dst_hit),
+            evoxc.logical_not(settled),
+        ),
+        (pop_size,),
     )
 
 

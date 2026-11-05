@@ -409,6 +409,10 @@ def closes_cycle(
         :func:`~.cycle_accelerator.closes_cycle_accelerator`, which carries a ``(P, N)``
         reached set and marks destinations with a broadcast reduction instead of a write
         because a compiled backend serialises ``scatter`` (see that module's note).
+        The accelerator route carries a second loop value, its growth flag, and consumes it
+        after the loop: an unused ``while`` result makes ``iree-compile`` emit an illegal
+        ``scf.while`` for the assembled generation graph, so that term is a release gate and
+        not dead code (same module note).
         The branch is a static host read — the entry is a plain string on the configuration
         ``State`` — so a graph contains exactly one of the two spellings and no traced value
         ever drives it.  The batch axis is written explicitly — no ``vmap`` over the region.
