@@ -243,6 +243,7 @@ A per-call body runs ~`2 * species_size` times per generation, so **anything tha
 Ops inside a region pay per trip, so the rule is doubly binding inside the caller's `scan`.
 The rejected alternative — a private `ConstantPool` and per-call `enp.arange`/`batch_offsets` inside `measure` — costs 536 rank-0 constant ops plus 160 `batch_offsets` and 160 attribute-index ops per generation, ~20 % of this node's bucket.
 What is *not* hoistable is anything derived from the centre payload: `_pack`, the merge, the aligned attribute gather and the scalar tail stay per call.
+On a compiled/dispatch-bound backend the same node pays by a different law, and the two facts below are what the formulation switch is priced on: an `evoxc` `scatter` lowers to **one single-threaded workgroup at ~7–19 ns per destination cell** (why the dense route is a 2× device-time regression on that leg, even though it needs no sort), and a count-mode `argsort` expands into **`8 · E · R · E` element touches** for `E = 2M + 1` (why the merge's per-call body carries 8 such reduction families and the index-free table `3 · R · M²` replaces them).
 
 ## Cost (measured, numpy reference backend, seed-42 XOR population after 5 generations, build excluded, one fresh process per pop)
 | kernel | ops | ms/call, pop 500 | ms/call, pop 1000 |
