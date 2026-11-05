@@ -137,58 +137,6 @@ def key_fold(
     )
 
 
-def _order_dtype(merged_width: int):
-    """Dtype of the encoded position key of :func:`order_positions`.
-
-    Args:
-        merged_width (int): Static width ``2M + 1`` of the merged block.
-
-    Returns:
-        ``evoxc.int32`` while the encoding of a whole merged row fits the ``int32`` range,
-        ``evoxc.int64`` above it.
-
-    Notes:
-        The radix is the smallest power of two not below ``merged_width``, so the largest key
-        a row can hold is ``(merged_width - 1) * radix + merged_width - 1 < merged_width *
-        radix``; that product is the whole guard.  ``int32`` needs ``merged_width < ~2**15``
-        (``max_conns`` above ~16 000), which no shipped geometry approaches — the fallback
-        exists so an absurd geometry cannot wrap silently into a wrong permutation.
-    """
-    radix = 1 << max(1, (merged_width - 1).bit_length())
-    return evoxc.int32 if radix * merged_width < 1 << 31 else evoxc.int64
-
-
-def _order_encoding(
-    pool: ConstantPool, merged_width: int
-) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
-    """Build the three statics of the encoded inverse-permutation sort.
-
-    Args:
-        pool (ConstantPool): Per-trace constant pool.
-        merged_width (int): Static width ``2M + 1`` of the merged block.
-
-    Returns:
-        ``(radix, mask, slots)`` — the rank-0 radix ``R``, the rank-0 ``R - 1`` mask that reads
-        a position back out of a sorted key, and the ``(1, 2M + 1)`` static position column
-        ``arange(0, 2M + 1)``, all in :func:`_order_dtype`'s dtype.
-
-    Notes:
-        ``R`` is a power of two above the merged width, so ``mask`` is exact and a position
-        never spills into the index bits of the encoding (see :func:`order_positions`).
-        ``slots`` is a static index table, not a data buffer, so it keeps its direct
-        ``enp.arange``; the two scalars come from the pool because a ``measure`` call must
-        emit no ``constant`` op.
-    """
-    dtype = _order_dtype(merged_width)
-    radix = 1 << max(1, (merged_width - 1).bit_length())
-    build = pool.i32 if dtype is evoxc.int32 else pool.i64
-    return (
-        build(radix),
-        build(radix - 1),
-        evoxc.reshape(enp.arange(0, merged_width, dtype=dtype), (1, merged_width)),
-    )
-
-
 class MeasureStatics(NamedTuple):
     """Per-generation scaffolding of one gene family's row-wise ``measure`` route.
 
@@ -223,14 +171,6 @@ class MeasureStatics(NamedTuple):
             the row stride of the merged block (``batch_offsets``, hoisted).
         offsets_plus_one (evoxc.SymbolicTensor): ``(P, 1) int32`` ``offsets + 1``, so the
             successor position and its flat base are one ``add`` instead of two.
-        order_radix (evoxc.SymbolicTensor): rank-0 radix ``R`` of the encoded position key of
-            :func:`order_positions` - the smallest power of two not below ``2M + 1``
-            (``int64`` above the ``int32`` range, see :func:`_order_dtype`).
-        order_mask (evoxc.SymbolicTensor): rank-0 ``R - 1`` - the mask that reads a sorted
-            position back out of an encoded key, exact because ``R`` is a power of two.
-        order_slots (evoxc.SymbolicTensor): ``(1, 2M + 1)`` static ``arange(0, 2M + 1)`` - the
-            position column of that key, which is what turns the merge's second ``argsort``
-            into one values-only ``sort`` that :func:`order_positions` applies.
         attr (AttrStatics): the aligned-attribute scaffold the scalar tail consumes — shared
             with the pair-wise route, which passes its own through the same argument.
     """
@@ -245,9 +185,6 @@ class MeasureStatics(NamedTuple):
     pad_column_i64: evoxc.SymbolicTensor
     offsets: evoxc.SymbolicTensor
     offsets_plus_one: evoxc.SymbolicTensor
-    order_radix: evoxc.SymbolicTensor
-    order_mask: evoxc.SymbolicTensor
-    order_slots: evoxc.SymbolicTensor
     attr: "AttrStatics"
 
 
@@ -410,7 +347,6 @@ def build_statics(
         fill((pop_size, 1), pad_centre, evoxc.int64),
         offsets,
         evoxc.add(offsets, pool.i32(1)),
-        *_order_encoding(pool, merged_width),
         build_attr_statics(
             pool,
             pop_size=pop_size,
@@ -482,9 +418,6 @@ def build_grouped_statics(
         evoxc.broadcast(base.pad_centre_i64, (rows, 1)),
         offsets,
         evoxc.add(offsets, enp.full((), 1, dtype=evoxc.int32)),
-        base.order_radix,
-        base.order_mask,
-        base.order_slots,
         AttrStatics(
             (
                 evoxc.reshape(
@@ -502,49 +435,6 @@ def build_grouped_statics(
             base.attr.tail,
         ),
     )
-
-
-def order_positions(
-    order: evoxc.SymbolicTensor, *, count: int, statics: MeasureStatics
-) -> evoxc.SymbolicTensor:
-    """Read the sorted position of every centre gene out of one values-only ``sort``.
-    Args:
-        order (evoxc.SymbolicTensor): ``(P, 2M + 1) int32`` merge permutation — ``order[i]``
-            is the merged index that sorts to position ``i``, i.e. the ``argsort`` of the
-            merged block (:func:`.digest.measure_alignment`).
-        count (int): Static gene count ``M`` of the family.
-        statics (MeasureStatics): The family's scaffold; the three ``order_*`` fields carry
-            the encoding's radix, its mask and its static position column.
-    Returns:
-        ``(P, M) int32`` sorted position of merged columns ``count .. 2 * count - 1``, i.e. of
-        the centre's own gene rows — exactly ``argsort(order)``'s centre half.
-    Notes:
-        ``order`` is a permutation, so *sorting it* is its own inverse; sorting the encoded
-        key ``order[i] * R + i`` instead of the permutation alone hands the position back out
-        of the sorted value: the smallest key is the one whose merged index is ``0``, and at
-        output position ``j`` the value is ``j * R + position[j]``, so ``value & (R - 1)`` is
-        ``position[j]`` (exact because ``R`` is a power of two above every position and
-        ``order`` is injective, so no two keys are equal and stability is irrelevant).
-        This is a *values-only* ``sort``: it replaces the second ``argsort`` of the merge with
-        one sort whose result the mask reads, which is a device-side win of three of the four
-        wide reduces the count-mode ``argsort`` expansion emits (``evoxc`` sorts inside a
-        region through ``writer._count_argsort_active``, and only ``argsort`` needs the
-        inverse-space chain, not ``sort``).  Its numpy cost is two elementwise passes on the
-        merged width instead of a second permutation sort, measured below the noise floor of
-        the call (see ``CONTEXT.md``).
-        ``R`` is the smallest power of two not below the merged width, so a position never
-        reaches the index bits; :func:`_order_dtype` widens the encoding to ``int64`` for a
-        geometry whose keys would not fit ``int32``, and the mask's result is cast back so the
-        index chain stays ``int32`` like the ``argsort`` spelling it replaces.
-    """
-    pop_size, merged_width = int(order.shape[0]), int(order.shape[1])
-    encoded = evoxc.add(evoxc.multiply(order, statics.order_radix), statics.order_slots)
-    inverse = evoxc.slice(
-        evoxc.sort(encoded, axis=-1), (0, count), (pop_size, count)
-    )
-    if _order_dtype(merged_width) is not evoxc.int32:
-        inverse = evoxc.cast(inverse, evoxc.int32)
-    return evoxc.bitwise_and(inverse, statics.order_mask)
 
 
 class DenseLayout(NamedTuple):
