@@ -20,7 +20,7 @@ Two modules pin a guard that a naive implementation would pass by accident: `tes
 `test_transform_validation.py` — `transform` rejects a per-individual node row, a `conn_keys` without a population axis and mismatched population sizes with `TensorNEATError`, and accepts both batched spellings.
 `conftest.py` — the five lazily resolved modules (`genome`, `common`, `payloads`, `oracle`, `runner`), the four graph-glue fixtures (`run_kernel`, `run_transform`, `run_forward`, `run_prepared`) and the module-scoped `evoxc.Executable` cache they share.
 
-## Known coverage gaps
+## Known test gaps
 `RecurrentMutation` (`../../../src/tensorneat/genome/operations/mutation/recurrent.py`) has no reference in `test/`: `p_recur`/`max_conn_tries` validation, the cycle-forcing accept filter and the candidate-tableau path are unverified, and `RecurrentGenome` defaults to `DefaultMutation`, so nothing exercises it implicitly.
 `OriginNode.crossover` and `OriginConn.crossover`/`get_historical_marker` are never executed: `OriginConn` appears only as a three-column key layout, and every crossover assertion runs the per-attribute `DefaultNode`/`DefaultConn` path.
 `BiasNode`'s host hooks (`repr`, `to_dict`, `sympy_func`) and its `new_identity_attrs` are never called; its only use is the CartPole golden run, which asserts fitness/population hashes.
@@ -28,6 +28,12 @@ Two modules pin a guard that a naive implementation would pass by accident: `tes
 `BaseCrossover`'s differently-shaped-parent `ConfigError` is claimed by this suite's own `test_crossover.py` docstring but no test pins it.
 `window.any_slot`'s wide-window fallback (`width > _WINDOW_FOLD_LIMIT`) is untested — every genome here uses `max_in_degree <= 5`.
 `in_degree`/`max_in_degree`/`violation` (`operations/mutation/degree.py`, re-exported from `operations.mutation`) have no caller in `src/` and no test.
+`test_grad.py` never builds a non-default node gene: the `AGG.mean` divide (`grad.py:421`), the activation derivative and the output-row mask (`grad.py:429`) are unexercised, and none of `dense_grad_plan`'s refusals (`grad.py:186-249`) is asserted.
+No grad test configures `input_transform`/`output_transform` or a network deeper than `max_depth`, so a dense pass that dropped a transform or over-ran the depth bound passes.
+`test_recurrent.py::test_raw_inputs_are_reinjected_on_every_tick` cannot fail for its claim: no `in_valid` window covers an input row, so hoisting the re-injection out of the tick loop yields the same read-out.
+`test_payload.py:180` asserts `not np.isnan(node_keys).any()` on an `int32` array, which is always true; `initialize`'s attribute *values* are never asserted, so a swapped `bias`/`response` spec in `new_random_attrs` passes.
+`test_host_helpers.py`'s `hash` test changes a connection attribute but never a node attribute, so a fold that ignores `node_attrs` passes.
+Mutation is pinned at invariant level only: no test asserts a `weight_mutate_power` magnitude, the replace distribution, or which connection a delete drops.
 
 ## Conventions
 Inputs are `scope="module"` fixtures resolved through `support.lazy.require`, so no module-scope `tensorneat`/`support` import; `pytest`, `numpy` and (in `test_payload.py`) `evoxc.random` are the only module-scope imports.
