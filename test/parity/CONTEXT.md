@@ -60,7 +60,7 @@ Verified against the real legacy code: with that layer list the legacy forward o
 
 ## Fixtures (`conftest.py`) — the API the test modules use
 `legacy` (module-scoped) — `pytest.importorskip("jax")` then `pytest.importorskip("tensorneat_legacy")`, both *inside the fixture body*, so a numpy-only environment reports a named skip instead of a collection error.
-`new` — `support.lazy.require("tensorneat")`, which converts a pending-implementation `NotImplementedError` into a skip and lets an `ImportError` surface.
+`new` — `support.lazy.require("tensorneat")`, which propagates a pending-implementation `NotImplementedError` (these fixtures do not opt in with `allow_pending=True`, so an unfinished port fails them instead of greening them) and likewise lets an `ImportError` surface.
 `payloads`, `runner` — the `support.payloads` / `support.runner` modules through the same `require`; `runner` is the only path to `evoxc.build`/`evoxc.run` in this directory.
 `convert` — this directory's `convert.py`.
 `genome_pair` — `build(num_inputs=2, num_outputs=1, max_nodes=8, max_conns=16, *, max_in_degree=None, activation="sigmoid", aggregation="sum", input_transform=None, output_transform=None) -> GenomePair`, resolving ACT/AGG **by name** against each library's registry, as one-element lists, and the sizes from the rules above (`max_in_degree` defaults to `max_nodes`).
