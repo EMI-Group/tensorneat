@@ -7,7 +7,7 @@ Every assertion compares against something *independent* of the implementation i
 The suite runs in the default gate (`pytest -m "not parity and not slow"`) on `backend="numpy"`.
 
 ## How to run
-`uv run pytest -o addopts="" -q test/unit/common` from the repo root after `uv sync --all-extras` — 155 tests, ~4 s.
+`uv run pytest -o addopts="" -q test/unit/common` from the repo root after `uv sync --all-extras` — 155 passed, ~2 s.
 155 = `test_tools.py` 49 + `test_functions.py` 36 + `test_tensorization.py` 22 + `test_host_graph.py` 21 + `test_state.py` 17 + `test_tensorization_validate.py` 10.
 
 ## What each module proves

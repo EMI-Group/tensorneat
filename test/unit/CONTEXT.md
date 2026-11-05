@@ -6,12 +6,12 @@ Each assertion compares against something independent of the implementation unde
 This directory is the whole content of the default gate; `./parity` (legacy JAX oracle) and `./integration` (whole `Pipeline`) are the two suites that go beyond it.
 
 ## Counts
-`./common` 155 passed, `./genome` 108, `./algorithm` 144, `./problem` 133, `./benchmarks` 16 — 556 passed and 0 xfailed in the subdirectories, plus `./test_version.py` (2) and `./test_host_payload.py` (11) at this node's root: 569 collected.
+`./common` 155 passed, `./genome` 117, `./algorithm` 148, `./problem` 141, `./benchmarks` 16 — 577 passed and 0 xfailed in the subdirectories, plus `./test_version.py` (2) and `./test_host_payload.py` (12) at this node's root: 591 collected and 591 passing.
 `./genome` dominates the wall clock (one traced executable per graph), then `./problem`, `./algorithm`, `./benchmarks` and `./common`.
 Everything in this node is green: there is no xfail and no skip (the `./benchmarks` fingerprint tests skip only on a box without a `git` binary).
 
 ## How to run
-`python -m pytest test/unit -m "not parity and not slow"` (or plain `pytest` from the repo root) — numpy backend, no optional dependency, ~19 s (569 passed).
+`python -m pytest test/unit -m "not parity and not slow"` (or plain `pytest` from the repo root) — numpy backend, no optional dependency, `591 passed in ~20 s`.
 `pytest test/unit/<sub> -k <expr>` narrows the same gate while keeping the leak guard active.
 `test/unit/genome` and `test/unit/problem` are also comfortable alone (`~9 s` / `~5 s`, against `~4 s` for `./algorithm`); no module here needs a network, a GPU or parallelism.
 

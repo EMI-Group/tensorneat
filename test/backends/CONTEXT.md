@@ -13,11 +13,11 @@ It asserts on real kernels — nothing here skips unless the optional extra is g
    `==` is never used on floats.
 3. No silent fallback: `compile_options={"not_a_real_compile_option": 1}` raises `evoxc.core.errors.BackendError` on `backend="iree"` (named option, named backend) while the numpy reference interpreter — which documents no option validation — runs the very same dictionary.
    The error surfaces in `setup()`, because `NEAT.setup` builds the genetic-operator graph with the state's build options.
-Both backends are driven once per module through module-scoped fixtures, so the ~8 s iree compile happens once and the module costs ~25 s.
+Both backends are driven once per module through module-scoped fixtures, so the ~8 s iree compile happens once and the three cases cost ~9 s together.
 
 ## How to run
 `uv pip install "evoxc[iree]"` installs `iree-base-compiler` + `iree-base-runtime`; without the extra the module skips at import via `pytest.importorskip("iree")` with an install hint.
-- `pytest -q test/backends` — this suite alone.
+- `pytest -q test/backends` — this suite alone; with the extra installed it is **3 passed in ~9 s**.
 - `pytest -m requires_iree` — the same tests selected by marker (registered in `../conftest.py`, in no gate).
 - `pytest -m "not requires_iree"` — deselect them from a run that installed the extra but does not want the compile cost.
 - `pytest -q test/backends` in an environment without the extra must report one skip, not an error; that is the release-shape check for this directory.

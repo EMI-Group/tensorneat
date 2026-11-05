@@ -8,11 +8,11 @@ Every suite reads `../src/tensorneat` and `../benchmarks/legacy_jax` as read-onl
 
 ## How to run
 Commands an owner runs from the repo root (`[tool.pytest.ini_options]` in `pyproject.toml` sets `testpaths = ["test"]`, `addopts = "-q"`; a doubled `-q` suppresses the summary line, so read the counts with `-o addopts=""`):
-- `pytest -m "not parity and not slow"` — the default gate: all of `./unit` (591 passed), the release gate's three non-slow cases, and the three `./backends` cases that skip without `evoxc[iree]`; measured with every extra installed **597 passed, 0 failed, 0 xfailed, 0 skipped, 77 deselected in 34.8 s**, the deselected being the 53 `./parity` cases, the 23 `./integration` ones and the release gate's end-to-end XOR run.
-- `pytest -m parity` — kernel equality against the frozen legacy JAX implementation; needs the `bench` extra and passes **53 in 15.3 s**. Without a usable `jax`, the four JAX oracle modules skip at import and `test_convert.py` alone runs **18 passed** (measured: 18 passed, 4 skipped). Every parity module calls `pytest.importorskip("jax")` so a bare environment skips rather than errors.
-- `pytest -m slow` — `./integration` (XOR evolution, determinism, rebuild-on-shape-change, checkpoint round-trip) plus the release gate's end-to-end XOR run: **24 passed, 4 skipped, 650 deselected in 19.7 s** when `jax` is absent, **24 passed with 0 skipped** when it is installed.
-- `pytest test/release_gate_no_jax.py` — the import-hygiene gate alone; **4 passed in 1.9 s**.
-- `pytest` (no marker) — the whole tree: **674 passed, 0 skipped in 68.4 s** with every extra installed.
+- `pytest -m "not parity and not slow"` — the default gate: all of `./unit` (591 passed), the release gate's three non-slow cases and the three `./backends` cases (which pass with `evoxc[iree]` and skip as a whole without it); no other optional extra is needed. Measured with every extra installed **597 passed, 0 failed, 0 xfailed, 0 skipped, 77 deselected in 30.4 s**, the deselected being the 53 `./parity` cases, the 23 `./integration` ones and the release gate's end-to-end XOR run.
+- `pytest -m parity` — kernel equality against the frozen legacy JAX implementation; needs the `bench` extra and passes **53 passed in 14.1 s**. Without a usable `jax`, the four JAX oracle modules skip at import and `test_convert.py` alone runs **18 passed** (measured: 18 passed, 4 skipped). Every parity module calls `pytest.importorskip("jax")` so a bare environment skips rather than errors.
+- `pytest -m slow` — `./integration` (XOR evolution, determinism, rebuild-on-shape-change, checkpoint round-trip, chunk-budget neutrality, CartPole goldens) plus the release gate's end-to-end XOR run: **24 passed, 0 skipped, 650 deselected in 17.3 s** with every extra installed, and **24 passed, 4 skipped, 615 deselected in 16.6 s** when `jax` is absent.
+- `pytest test/release_gate_no_jax.py` — the import-hygiene gate alone, no optional dependency; **4 passed in 1.9 s**.
+- `pytest` (no marker) — the whole tree: **674 passed, 0 skipped, 3 warnings in 64.4 s** with every extra installed.
 Markers `parity` and `slow` are declared in `pyproject.toml`; `requires_iree` is declared in `conftest.py` and is in no gate (it needs `evoxc[iree]`).
 
 ## Layout
@@ -87,7 +87,7 @@ Suite output must be deterministic — a flaky test is a bug in the test, not a 
 | Path | Purpose |
 |---|---|
 | `./unit` | numpy-backend kernel/invariant suites, mirroring `../src/tensorneat/`. |
-| `./unit/test_host_payload.py` | `_one_individual`'s two accepted spellings and its `P > 1` / `None` rejections (11 tests). |
+| `./unit/test_host_payload.py` | `_one_individual`'s two accepted spellings and its `P > 1` / `None` rejections (12 tests). |
 | `./unit/algorithm/test_exports.py` | the `tensorneat.algorithm` public surface: four documented names, exactly those in `__all__` (4 tests). |
 | `./parity` | kernel equality vs the frozen legacy JAX library (marker `parity`). |
 | `./integration` | whole-`Pipeline` runs, determinism, rebuild, checkpointing, chunk-budget neutrality and the CartPole goldens (marker `slow`, 23 tests). |
