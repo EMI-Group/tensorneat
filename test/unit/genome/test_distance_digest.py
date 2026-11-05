@@ -101,6 +101,30 @@ MEASURE_OP_CEILING = 120
 #: generation against ``2 * species_size`` ``measure`` calls, so the two ceilings
 #: are not the same budget.
 PREPARE_OP_CEILING = 210
+#: The digest's field order, spelled out literally: the documented payload contract
+#: (node family first) that ``field_names`` reports.  ``field_names`` itself is
+#: ``self._fields``, so this tuple is the assertion that can fail.
+DIGEST_FIELDS = (
+    "node_keys",
+    "node_attrs",
+    "node_count",
+    "node_key_cols",
+    "conn_keys",
+    "conn_attrs",
+    "conn_count",
+    "conn_key_cols",
+    "node_dense",
+    "node_real",
+    "node_oor",
+    "conn_dense",
+    "conn_real",
+    "conn_oor",
+    "node_layout",
+    "conn_layout",
+    "tail_counts",
+    "node_statics",
+    "conn_statics",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -124,6 +148,28 @@ def _distance_genome(genome, *, dense):
         num_outputs=1,
         max_nodes=MAX_NODES,
         max_conns=MAX_CONNS,
+        node_gene=genome.DefaultNode(),
+        conn_gene=genome.DefaultConn(),
+        mutation=genome.DefaultMutation(),
+        crossover=genome.DefaultCrossover(),
+        distance=genome.DefaultDistance(dense_single_centre=dense),
+    )
+
+
+def _oor_genome(genome, *, dense):
+    """A small-span genome whose key window a hand-written payload can overstep.
+
+    ``key_span`` defaults to ``max(max_nodes, num_inputs + num_outputs) + max_conns``,
+    so ``max_nodes=8``/``max_conns=16`` gives ``S = 24``.  That is small enough to
+    write an out-of-range key by hand (``24``, or a negative one) while every table
+    still fits, so the digest's ``node_oor``/``conn_oor`` counts can be checked
+    against a value the test named rather than against another kernel.
+    """
+    return genome.DefaultGenome(
+        num_inputs=2,
+        num_outputs=1,
+        max_nodes=8,
+        max_conns=16,
         node_gene=genome.DefaultNode(),
         conn_gene=genome.DefaultConn(),
         mutation=genome.DefaultMutation(),
@@ -425,11 +471,107 @@ def test_digest_static_contract(routes, evolved):
     np.testing.assert_array_equal(
         digest.tail_counts, np.stack([digest.node_count, digest.conn_count])
     )
+    # The real contract is the *literal* field order: ``field_names`` is implemented
+    # as ``self._fields``, so comparing the two is tautological, while pinning the
+    # tuple catches a renamed, reordered or added field.
+    assert digest.field_names == DIGEST_FIELDS
+    assert digest._fields == DIGEST_FIELDS
+    # On the evolved fixture both counts are 0 — the dense route's documented
+    # precondition, which is what makes the bit-identity assertions above comparable.
+    # The non-zero contract (the exact count of keys outside ``[0, key_span)``) is
+    # pinned differentially by ``test_out_of_range_keys_are_counted_per_family``.
     for name in ("node_oor", "conn_oor"):
         oor = getattr(digest, name)
         assert oor.shape == (pop_size,)
-        np.testing.assert_array_equal(oor, np.zeros(pop_size, oor.dtype))
-    assert digest.field_names == digest._fields
+        assert oor.dtype == np.int64
+        np.testing.assert_array_equal(oor, np.zeros(pop_size, np.int64))
+
+
+def test_out_of_range_keys_are_counted_per_family(genome, common, payloads, run_kernel):
+    """Invariant: ``node_oor``/``conn_oor`` count exactly the *present* genes outside ``key_span``.
+
+    Oracle: hand-written keys.  ``_oor_genome`` has ``key_span == 24``, so
+    individual 0 carries one out-of-range node key (``24``, the first value the dense
+    table cannot address) and one out-of-range connection endpoint, individual 1
+    carries a *negative* out-of-range node key and a negative connection endpoint, and
+    individual 2 is clean.  Padding rows are ``I_INF`` — out of range but *absent* —
+    and must never be counted.
+    Assertion: the exact per-individual counts ``[1, 1, 0]`` for both families, as
+    ``(P,) int64``, next to the payload's present-row counts (``[4, 4, 4]`` nodes,
+    ``[2, 2, 2]`` connections) — so counting present genes instead of out-of-range
+    ones, or counting every slot, fails.  Then the documented consequence: a host
+    ``measure_distance`` on the dense route rejects the digest with ``TensorNEATError``
+    naming the family (``node_oor`` first, ``conn_oor`` on a clean-node payload),
+    while the row-wise merge (``dense_single_centre=False``) still answers, with
+    self-distance exactly ``0.0`` for every individual — proof that the merge matches
+    the out-of-range keys instead of dropping them like the dense table would.
+    """
+    dense = _oor_genome(genome, dense=True)
+    merge = _oor_genome(genome, dense=False)
+    assert dense.key_span == merge.key_span == 24  # the window the payload oversteps
+    payload = payloads.new_payload(3, 8, 16)
+    # Individual 0: in-range nodes plus key 24 (the first out-of-range value); the one
+    # connection ending at that key is out of range too.
+    for row, key in enumerate((0, 1, 7, 24)):
+        payloads.set_node(payload, 0, row, key)
+    payloads.set_conn(payload, 0, 0, 0, 7)
+    payloads.set_conn(payload, 0, 1, 1, 24)
+    # Individual 1: a negative node key and a negative connection endpoint.
+    for row, key in enumerate((0, 1, 7, -1)):
+        payloads.set_node(payload, 1, row, key)
+    payloads.set_conn(payload, 1, 0, 0, 7)
+    payloads.set_conn(payload, 1, 1, -1, 7)
+    # Individual 2: clean, so a hard-coded count cannot pass for every row.
+    for row, key in enumerate((0, 1, 2, 7)):
+        payloads.set_node(payload, 2, row, key)
+    payloads.set_conn(payload, 2, 0, 0, 7)
+    payloads.set_conn(payload, 2, 1, 2, 7)
+
+    state = payloads.genome_state(dense)
+    digest = run_kernel(dense.prepare_distance, state, *payload.args())
+    np.testing.assert_array_equal(digest.node_count, np.array([4, 4, 4], np.int32))
+    np.testing.assert_array_equal(digest.conn_count, np.array([2, 2, 2], np.int32))
+    for name in ("node_oor", "conn_oor"):
+        oor = getattr(digest, name)
+        assert oor.shape == (3,)
+        assert oor.dtype == np.int64
+    np.testing.assert_array_equal(digest.node_oor, np.array([1, 1, 0], np.int64))
+    np.testing.assert_array_equal(digest.conn_oor, np.array([1, 1, 0], np.int64))
+
+    # The dense route's precondition, rejected on the host with the family named.
+    with pytest.raises(common.TensorNEATError) as caught:
+        dense.measure_distance(state, *payload.of(0).args(), digest)
+    message = str(caught.value)
+    assert "node_oor" in message
+    assert "[0, 24)" in message
+
+    # A clean node family isolates the connection count's own rejection message.  The
+    # payload keeps the same shapes, so the prepared executable is reused.
+    conn_only = payloads.new_payload(3, 8, 16)
+    for p in range(3):
+        for row, key in enumerate((0, 1, 2, 7)):
+            payloads.set_node(conn_only, p, row, key)
+        payloads.set_conn(conn_only, p, 0, 0, 7)
+    payloads.set_conn(conn_only, 0, 1, 0, 24)
+    other = run_kernel(dense.prepare_distance, state, *conn_only.args())
+    np.testing.assert_array_equal(other.node_oor, np.zeros(3, np.int64))
+    np.testing.assert_array_equal(other.conn_oor, np.array([1, 0, 0], np.int64))
+    with pytest.raises(common.TensorNEATError) as caught:
+        dense.measure_distance(state, *conn_only.of(0).args(), other)
+    assert "conn_oor" in str(caught.value)
+
+    # The merge route is the documented alternative for such a payload: it matches the
+    # keys exactly, so every individual is at distance 0 from itself.
+    merge_state = payloads.genome_state(merge)
+    merge_digest = run_kernel(merge.prepare_distance, merge_state, *payload.args())
+    np.testing.assert_array_equal(merge_digest.node_oor, np.array([1, 1, 0], np.int64))
+    np.testing.assert_array_equal(merge_digest.conn_oor, np.array([1, 1, 0], np.int64))
+    distances = run_kernel(
+        merge.measure_distance, merge_state, *payload.args(), merge_digest
+    )
+    assert distances.shape == (3,)
+    assert distances.dtype == np.float32
+    np.testing.assert_array_equal(distances, np.zeros(3, np.float32))
 
 
 def test_measure_rejects_a_centre_that_disagrees_with_the_digest(
