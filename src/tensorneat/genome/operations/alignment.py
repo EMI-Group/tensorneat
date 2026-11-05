@@ -605,7 +605,7 @@ def homologous_pair(
         cannot disagree about homology.  ``present`` is computed before the redirect, so
         the mask is exactly "parent 2 holds this key tuple".
     """
-    return _homologous(keys1, keys2)
+    return _homologous(keys1, keys2, state=state)
 
 
 def _homologous(
