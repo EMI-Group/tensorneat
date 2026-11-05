@@ -141,7 +141,7 @@ The reproduce block names the record the report was rendered from: a record that
 ## Constraints
 - Python >= 3.11; harness dependencies are stdlib + `numpy` (plus `jax` on the old side only, via the `bench` extra).
 - Never edit `legacy_jax/` — a moving baseline makes every number meaningless.
-- Never hand-edit a generated report or a committed record; a document that needs a scope line gets it from `--report-title`/`--report-note` at render time.
+- Never hand-edit a generated report or a committed record; a document that needs a scope line gets it from `--report-title`/`--report-note` at render time, and `--persist-note` stores it in the record so later renders keep it.
 - Quote no number without the tree or session it came from: `RESULTS.md`, `THREADS.md`, `iree.md`, `BACKENDS.md` and `PERF_NUMPY.md` each describe a different tree, and only a fresh harness run may be described as HEAD.
 - Nothing outside `benchmarks/` is read except the two implementation trees under test and the host fingerprint (`/proc/cpuinfo`, `/proc/meminfo`, `git rev-parse`/`git status` on this checkout); nothing outside `benchmarks/` is written.
 - Files stay under ~1000 lines with one responsibility each: protocol / adapters / worker / reporter / report format / report sections / CLI / cases.
