@@ -1,16 +1,31 @@
 # numpy reference backend — per-generation cost, before vs after the two measured performance passes
 
 > **Hand-maintained record** of two focused performance passes on the `numpy` reference interpreter.
-> Pass 1 is the op-count pass (`a697531` → its pass-1 tree) and pass 2 is the tiled func-fit evaluate
-> plus the RL rollout hoist (`ce5bb88` → `90d97b4`); each pass keeps its own measured pair, its own
-> commits and its own protocol below.
+> Pass 1 is the op-count pass (`a697531` → the tree the pass was recorded on, `f619f46`) and pass 2 is
+> the tiled func-fit evaluate plus the RL rollout hoist (`ce5bb88` → `90d97b4`); each pass keeps its
+> own measured pair, its own commits and its own protocol below.
 > `RESULTS.md` remains the *generated* old-vs-new harness report (rendered from
 > `results/authoritative.json`); its new-side rows **predate both passes** and are stale until the
 > harness is re-run. This file is not a re-verdict: it holds the measured before/after pair of each
 > pass — pass 1 with both cells taken in one session, alternating trees so drift cancels, pass 2 with
 > an interleaved same-session no-regression control beside a cross-session `before` column that is
 > labelled indicative.
-## Pass 1 — op-count pass (`a697531` → pass-1 tree)
+
+## Which tree each record belongs to
+
+No committed artifact measures the merged tree, and each record in this directory speaks only for the
+tree and session it names — the table in `CONTEXT.md` ("Provenance") is the canonical map.
+The three trees this file depends on: `results/authoritative.json` (and therefore `RESULTS.md`) was
+measured at `ebeaf1f8` on 2026-11-04T19:01Z, before both passes and before the search-quality fixes;
+pass 2's `after` record `results/fix_after.json` was measured at `90d97b4` on 2026-11-04T21:51Z, after
+both passes and before the search-quality fixes; `results/xor3d_quality_2026-11-04.json` was measured
+at `58657f6` on 2026-11-05T00:57Z on a branch that carries the search-quality fixes but not pass 2, so
+it is post-quality and pre-tiling.
+So the only post-pass-2 timing numbers in this node are the case-scoped rows in pass 2 below, and they
+describe `90d97b4`, not the merged tree: the search-quality fixes change the mutation and speciation
+paths that the timings include, and no committed record re-measures that cost.
+
+## Pass 1 — op-count pass (`a697531` → `f619f46`)
 
 ### Headline
 
@@ -38,7 +53,8 @@ Peak RSS *fell* while wall time fell: the winning restructuring moved the specia
 back inside a single `evoxc.scan` (one centre per iteration) after first measuring it as 20 hoisted
 top-level calls.
 
-`before` = commit `a697531`; `after` = the tree carrying this file. Both cells per row were run in the
+`before` = commit `a697531`; `after` = the tree the pass was recorded on (`f619f46`, the commit that
+first wrote this pass up), not the merged HEAD. Both cells per row were run in the
 same session, alternating trees, one fresh process per cell.
 
 ### Where the time was
@@ -87,9 +103,9 @@ the 1 360 older notes claimed.
 `rtol`/`atol` tolerances (53 passed).
 Independently, 3 generations of the full pipeline at pop 500 and pop 1000 hash identically to
 `a697531` over all four payload arrays, the `(P,)` fitness and the returned `State`
-(`fitness_history`, `SpeciesState` leaves, `randkey`, `generation`). Full suite: **659 passed,
-0 failed, 0 skipped** with `uv sync --all-extras` and `uv run pytest -o addopts="" -q` (66.5 s on this
-run; `test/unit` 578, `test/parity` 53, `test/integration` 21, `test/backends` 3, release gate 4).
+(`fitness_history`, `SpeciesState` leaves, `randkey`, `generation`). The suite was green on the tree
+this pass was recorded on (`f619f46`); the count quoted for the merged HEAD is 674 passed (see pass 2
+and `../CONTEXT.md`), and an older count describes that older tree, never HEAD.
 The counts need the optional extras: `test/parity` needs the `bench` extra (`jax`) and `test/backends`
 needs `evoxc[iree]` (without it those three tests skip rather than fail).
 
@@ -149,20 +165,22 @@ seed ⇒ same evolution), so that verdict is unchanged by this pass.
   the two trees, and the median is the load-bearing statistic (the pop-1000 mean is skewed by one slow
   generation and is reported for completeness).
 - The contract verdict is still owned by the generated report; this file states the before/after pair
-  of the pass, not a re-verdict. The committed `RESULTS.md` postdates the pass and its new-side rows
-  agree with the `after` column within the documented box drift.
+  of the pass, not a re-verdict. The committed `RESULTS.md`/`authoritative.json` pair predates the pass
+  (measured at `ebeaf1f8`, 2026-11-04T18:20Z), so its new-side rows are the pre-pass cost and must not
+  be read as this pass's `after` column.
 - Build time is one-off per shape signature and improved on every cell, but a `T=50`-step build now
   traces the distance kernel inside a scan body instead of 20 times, which is why it fell.
 
 ## Pass 2 — tiled func-fit evaluate and the RL rollout hoist (`ce5bb88` → `90d97b4`)
 
 Protocol: same box, `backend="numpy"`, harness seeds 42/43/44 (repeat `r` uses `seed + r`),
-`--generations 150 --warmup 3 --repeats 3`. `after` = the case-scoped run on HEAD `90d97b4`, record
+`--generations 150 --warmup 3 --repeats 3`. `after` = the case-scoped run on `90d97b4` (the perf
+stream's tip, before the search-quality merge, so not the merged HEAD), record
 `benchmarks/results/fix_after.json` (a git-ignored scratch record, rendered to `$TMPDIR/fix_after.md`,
 so the committed `RESULTS.md` was never rewritten). `before` = the committed
 `benchmarks/results/authoritative.json` (measured at `ebeaf1f8`, the commit its own environment
-fingerprint stores; rendered into `RESULTS.md`, which is committed at `ce5bb88`; same protocol, same
-box family). Both sides of the old-vs-new column come from the same pass-2 run.
+fingerprint stores; the report rendered from it, `RESULTS.md`, was committed at `ce5bb88`; same
+protocol, same box family). Both sides of the old-vs-new column come from the same pass-2 run.
 
 ### Headline
 
@@ -190,8 +208,8 @@ record to 539.19 ms/gen in this run — the box, not the code.
 The two XOR control rows move by roughly **±10 % against the committed record** (161.73 → 178.24,
 171.16 → 183.22), which is **box drift, not a regression**: an interleaved same-session A/B at pop 500
 (20 timed generations, 3 rounds, pre-fix tree `ce5bb88` vs `90d97b4`) gives xor medians base
-175.9 / 178.1 / 176.6 ms vs HEAD 179.7 / 172.0 / 170.0 ms, and xor3d base 181.3 / 184.8 / 189.1 ms vs
-HEAD 174.3 / 180.4 / 174.9 ms — neutral to slightly better at `S = 4` and `S = 8`.
+175.9 / 178.1 / 176.6 ms vs `90d97b4` 179.7 / 172.0 / 170.0 ms, and xor3d base 181.3 / 184.8 / 189.1 ms vs
+`90d97b4` 174.3 / 180.4 / 174.9 ms — neutral to slightly better at `S = 4` and `S = 8`.
 The old-side rows of `RESULTS.md` and of this record were measured with the same `jax 0.10.2`, and
 today's box runs about 10 % slower than the committed record (old `xor_p500` 349.98 ms here vs
 295.33 ms there). So the same-run old-vs-new ratio is the load-bearing number, never the
@@ -256,15 +274,19 @@ generation, 11 600 of 42 549 executed dispatches.
 byte-exactly against the pre-fix tree for `custom_pagie_p500`, `xor_p100`, `xor_p500` and `xor_p1000`;
 CartPole over 8 generations; Pendulum and MountainCar at `R = 1` and `R = 2`. Executed dispatch counts
 are unchanged on the untouched paths (pagie 11 490 before and after the hoist, `xor_p500` 8 263).
-Executed ops per generation at HEAD: pagie 11 490 (chunked, unchanged by the hoist), `xor_p500` 8 263,
-cartpole 31 604. Tests at HEAD: `uv run pytest -o addopts="" -q` → 674 passed (659 before the pass);
-`-m parity` → 53 passed; `test/backends` → 3 passed; `test/release_gate_no_jax.py` → 4 passed.
+Executed ops per generation at the pass-2 tree (`90d97b4`): pagie 11 490 (chunked, unchanged by the
+hoist), `xor_p500` 8 263, cartpole 31 604. Tests at the merged HEAD: `uv sync --all-extras` then
+`uv run pytest -o addopts="" -q` → 674 passed, 0 failed, 0 skipped; a suite count belongs to the tree
+it was run on, so any earlier count quoted for a pass describes that pass's tree, never HEAD.
 
 ### IREE
 
-The StableHLO v1 export of the new generation graph still succeeds, and an `iree` llvm-cpu build plus
+The StableHLO v1 export of the pass-2 generation graph still succeeds, and an `iree` llvm-cpu build plus
 one generation of `custom_pagie_p500` agrees with numpy to **2.38e-07** — float32 fusion, not
 bit-equal across compilers, so the durability gate stays `pytest test/backends` (which passes 3/3).
+This is a durability check at `90d97b4`, not a timing one, and it predates the search-quality merge:
+`BACKENDS.md` holds the only compiled-backend per-generation numbers in this node and they belong to
+its own earlier session, so no `iree` speed number here describes the merged tree.
 
 ### How to reproduce
 
