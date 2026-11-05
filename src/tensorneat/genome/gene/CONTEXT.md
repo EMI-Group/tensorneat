@@ -62,7 +62,8 @@ The neutral fallbacks are fixed and shared by the traced and host paths: aggrega
 ## Hooks other nodes rely on
 `genome/base.py`: `initialize` uses `new_random_attrs`, `new_identity_attrs` (add-node), `new_zero_attrs`; the forward step calls `conn_gene.forward` then `node_gene.forward`; `grad` differentiates only the float attr arrays, which works because `attr_column` is differentiable.
 `genome/operations/**`: `mutate`, `crossover`, `distance`, `hash`, `attr_width`/`key_width`, `from_attrs`.
-`algorithm/**`: `from_attrs` (payload assembly), `uses_historical_marker`/`get_historical_marker`, `node_gene.from_attrs(keys)` + `conn_gene.from_attrs(in_keys, out_keys, weights)` for the HyperNEAT substrate.
+`algorithm/**`: `from_attrs` (payload assembly), `uses_historical_marker`, `node_gene.from_attrs(keys)` + `conn_gene.from_attrs(in_keys, out_keys, weights)` for the HyperNEAT substrate.
+`get_historical_marker` has **no caller**: `../step.py` reads `conn_gene.key_column(conn_keys, "historical_marker")` directly, so the abstract raise in `conn/base.py` and `OriginConn`'s override are unread surface (`## Unread and untested surface`).
 `BaseConn.from_attrs` accepts `attrs=None` (zeros), `(*shape,)` per-connection scalars broadcast over the attribute axis, or full `(*shape, attr_width)` rows.
 
 ## Origin families
