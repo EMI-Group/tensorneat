@@ -17,7 +17,7 @@ RTD builds strictly: `sphinx.fail_on_warning: true`, and because the overridden 
 `src/tensorneat/problem/rl/_common.py` is `_`-prefixed and therefore deliberately has no page.
 
 ## Constraints
-The stub set mirrors `src/tensorneat`: one page per public module (`source/tensorneat.<module>.rst`) and one landing page per package/subpackage (`source/tensorneat.<pkg>.rst`); `_`-prefixed modules (`algorithm/neat/_keys.py`, `_kernels.py`, `_distance.py`, `_validation.py`, `problem/rl/_common.py`) are private and get no page.
+The stub set mirrors `src/tensorneat`: one page per public module (`source/tensorneat.<module>.rst`) and one landing page per package/subpackage (`source/tensorneat.<pkg>.rst`); `_`-prefixed modules (`algorithm/neat/_keys.py`, `_kernels.py`, `_distance.py`, `_validation.py`; `problem/rl/_common.py`) are private and get no page.
 When `src/tensorneat` gains or loses a public module, add or delete the matching stub and its toctree entry in the enclosing package page — `find src/tensorneat -name '*.py' | sort` versus `ls docs/source/*.rst` is the sync check.
 Module pages carry exactly one `.. automodule::` with `:members:` and `:show-inheritance:`; that page is the single place an object is documented, because every package `__init__.py` merely re-exports and a second registration makes each unqualified cross-reference ambiguous (and emits duplicate-object warnings).
 Package pages are pure landing pages: one sentence of intent plus a `:maxdepth: 4` toctree over subpackages/submodules, never an `automodule`.
