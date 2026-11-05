@@ -154,7 +154,25 @@ The dense table is ~49 ms of the pop-500 generation and ~90 ms of the pop-1000 o
 The generation's distance work is `2 · species_size · pop_size` = 4 000 / 20 000 / 40 000 pairs.
 Dispatch budget per generation: 1 `prepare_distance` + `2 · species_size` population-shaped `measure_distance` calls (scan 1's `species_size` inside `matrix`'s scan, scan 2's `species_size` in-loop) against `2 · species_size` `execute_distance` calls before the digest existed.
 `genome.execute_mutation` is 1 359 of breed's 2 014 IR ops (67 %), `genome.execute_crossover` 432 (21 %), this subtree's `update_species` 189 (9 %) and `neat.py` 29 (1.4 %), so breed is genome-kernel bound.
-The 51 / 109 / 157 ms per generation figures are the *declared* contract in `benchmarks/RESULTS.md`; `benchmarks/PERF_NUMPY.md` pass 1's same-session harness records 1.29× / 2.04× / 3.06× faster than the frozen JAX side at pop 100 / 500 / 1000.
+`benchmarks/PERF_NUMPY.md` pass 1's same-session harness records 1.29× / 2.04× / 3.06× faster than the frozen JAX side at pop 100 / 500 / 1000.
+
+## Executed-Op Inventory (measured on tree `a5973c8`, numpy backend)
+One `Pipeline.step` of `xor_p500` executes **8 414 IR dispatches** over a 2 348-op static generation graph; the count is set by the static shapes only, so `xor_p500`, `xor_p1000` and `xor3d_p500` all measure 8 414 (`benchmarks/PERF_NUMPY.md` pass 2 records 8 263 on `90d97b4`, the difference is later-tree drift).
+Method: count every `Interpreter._run_block` op dispatch, and stamp each op at trace time with the phase stack of wrapped entry points (`ask`/`transform`/`tell`/`_create_next_generation`/`execute_crossover`/`execute_mutation`/`prepare_distance`/`speciate`/`DistanceRows.matrix`/`measure_distance`/`forward`/problem `evaluate`); region ops execute their body once per iteration, and `evoxc.scan` peels step 0 at the enclosing level, so every scan body executes `species_size` times total.
+| phase | executed ops | share |
+| --- | --- | --- |
+| `transform` (schedule derivation + its `node_levels` `while`) | 308 | 3.7 % |
+| `evaluate` (problem tiling 11 + genome forward 156) | 167 | 2.0 % |
+| `tell` own (fitness sanitize, species fitness/sort/stagnation/spawn, `pair_parents`, `block_layout`) | 221 | 2.6 % |
+| `tell > breed` (prelude 60 + crossover 142 + mutation 583) | 785 | 9.3 % |
+| `tell > prepare_distance` (the digest) | 163 | 1.9 % |
+| `tell > speciate` | **6 767** | **80.4 %** |
+| unlabelled (pipeline `randkey` split, overflow `reduce_max`) | 3 | 0.04 % |
+`speciate` decomposes into three fixed-length scan bodies at `species_size = 20` iterations each (`_kernels.py`): `reserve` 52 ops/iteration (1 040), `matrix` 118/iteration of which 94 is one `measure_distance` call (2 360), `assign_members` 162/iteration of which 94 is `measure_distance` (3 240), plus ≈127 of scan prelude.
+`measure_distance` is therefore **3 760 executed ops = 44.7 % of the generation** over the `2 · species_size = 40` pairs (`genome/operations/distance/CONTEXT.md` holds its 94-op op-by-op census: 53 node family + 39 conn family + the final add).
+The same census on the other cases: `custom_pagie_p500` 11 719 (forward 3 461 because the `EVAL_CHUNK_ROWS` loop unrolls 20 full forward passes, tell side unchanged), `cartpole_p100` 25 992 (evaluate+forward 22 086 inside the 200-step rollout `while`, speciate 2 426 on the lazy gated path at `species_size · pop_size = 2 000`).
+Ranked in-node op-count levers (details, shapes and value-identity arguments in `./neat/CONTEXT.md`): collapse the 4-op centre tiling to one rank-raising `broadcast` per field (−400), take the four centre-row table writes out of the `reserve` scan body into two rank-1 scatters plus a post-scan rebuild (−440), hoist the three per-iteration `enp.full` sentinels and the two `scalar_f32` no-op triples (−66), drop the two promotion-safe casts/`select` in the distance merge (−80), and dedupe `tell`'s constants/`trusted=`/static reversal/double `membership` mask (−55): ≈ −1 040 dispatches (−12.4 %) with no oracle, dtype or static-trip-count implication.
+The one order-of-magnitude lever is the opposite direction: grouping the 40 centre pairs into `k`-centre batched `measure` calls (−2 660…−2 820, ≈ −32 %) needs digest statics at `k · P` rows and a relaxed `_validate_digest`, i.e. a genome-node change plus a peak-RSS measurement, and it is not reachable from this node.
 
 ## Cost of the Bounded Key Allocator (interleaved A/B, same protocol)
 `xor pop 100` / `xor3d pop 500` / `xor3d pop 1000`, three rounds each, the pre-change tree (`de943ca`, unbounded `max_node_key + 1 + slot`) against the bounded-allocator tree (an A/B recorded only in this section), one process per cell and the trees alternating so box drift cancels; a cell shows its per-round medians (and means).
