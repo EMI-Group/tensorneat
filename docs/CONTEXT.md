@@ -33,8 +33,10 @@ Every page must stay reachable from `source/modules.rst`; an unreachable page wa
 Pages stay 5–20 lines; a page that needs more is documenting more than one thing.
 
 ## Known Issues
-None.
-`rm -rf docs/_build && uv run --extra docs sphinx-build -W -b html docs docs/_build` exits 0, reports zero warnings, and `-w <log>` leaves that log empty.
+Two public-looking objects are absent from their module's `__all__`, so `automodule :members:` never registers them and a reader following the docs cannot find them.
+`DEFAULT_GENOME_CONN_ADD = 0.4` and `DEFAULT_GENOME_CONN_DELETE = 0.05` live in `src/tensorneat/genome/operations/mutation/default.py` under a six-line `#:` doc comment, but that module's `__all__ = ["DefaultMutation"]`; they are the connection gates every `DefaultGenome()`/`RecurrentGenome()` ships when no operator is passed, so the documented `DefaultMutation` defaults (`0.2`/`0.2`) are not the ones a plain pipeline uses.
+`FamilyTerms` lives in `src/tensorneat/genome/operations/distance/dense.py` with a class docstring and an `Attributes:` section, but that module's `__all__ = ["enabled", "measure_centre"]`; it is the `NamedTuple` `measure_centre` returns, named only as plain text in that function's `Returns:` block.
+Both are visible today only in the `viewcode` module source, never as a documented object or a resolvable cross-reference; closing the gap is either a source-side `__all__` change or an explicit `autoattribute`/`autoclass` on the module page, and the non-nitpicky build reports neither.
 
 ## Test Strategy
 Verification is the build itself: `rm -rf docs/_build && uv run --extra docs sphinx-build -W -b html docs docs/_build -w /tmp/w.log` must exit 0 with an empty `/tmp/w.log` (0 lines) and print `build succeeded.`.
