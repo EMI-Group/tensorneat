@@ -10,10 +10,12 @@ data, so only the kernels differ.*
 module-scope import would turn ``pytest test/parity`` — and the repo-wide run —
 into a collection error instead of a named skip.  :func:`legacy` calls
 ``pytest.importorskip`` **inside the fixture body** and :func:`new` goes through
-:func:`support.lazy.require`, which imports ``tensorneat`` at fixture time and
-turns only a pending-implementation ``NotImplementedError`` into a skip.  No
-other suite may import ``jax`` at module scope; this directory is the one place
-allowed to (``../CONTEXT.md``).
+:func:`support.lazy.require`, which imports ``tensorneat`` at fixture time; a
+pending-implementation ``NotImplementedError`` propagates (the parity fixtures
+deliberately do not opt in with ``allow_pending=True``, so an unfinished port is
+a failure, not a skip), and ``ImportError`` and every other error propagate too.
+No other suite may import ``jax`` at module scope; this directory is the one
+place allowed to (``../CONTEXT.md``).
 
 The legacy library additionally needs its payload as ``jax`` arrays rather than
 numpy arrays: under JAX 0.12 its forward loops with ``lax.fori_loop`` and indexes
@@ -156,8 +158,10 @@ def new():
 
     Notes:
         Deferred through :func:`support.lazy.require`, which imports the package
-        at fixture time and turns only a ``NotImplementedError`` raised during
-        that import into a skip.  An ``ImportError`` still surfaces.
+        at fixture time.  A pending-implementation ``NotImplementedError``
+        propagates — the parity fixtures do not opt in with
+        ``allow_pending=True``, so an unfinished port fails here instead of
+        skipping — and an ``ImportError`` or any other error surfaces too.
     """
     from support.lazy import require
 

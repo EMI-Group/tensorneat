@@ -3,6 +3,7 @@
 ## Intent
 Hold everything more than one suite needs, so no test module re-invents it: the one correct way to run an evoxc graph from pytest, hand-built gene payloads (so a test controls topology instead of drawing it), and the numpy reference implementations the assertions are written against.
 This is test code: it is imported (`from support.runner import run_defn ...`) and never packaged, and it must stay free of `jax`/`torch` and of any `backend` other than the numpy reference interpreter.
+`test_lazy.py` is the single exception to "imported, never collected": it is the pytest module that pins `lazy.py`'s skip contract.
 `conftest.py` puts this directory's parent on `sys.path`, so `import support.<module>` works from every suite.
 
 ## API Surface
@@ -12,9 +13,20 @@ This is test code: it is imported (`from support.runner import run_defn ...`) an
 `run_graph(graph, *arrays, backend="numpy")` → `lower`→`compile`→`load`→`run` for an already traced `evoxc.Graph` (what `genome.grad` returns).
 `compile_graph(graph, backend="numpy")`, `to_numpy(tree)`, `spec_like(array)`, `tensor(array)`, `DEFAULT_BACKEND = "numpy"`.
 Arguments may be nested pytrees of arrays (a `Transformed` namedtuple, a dict of payloads): `_split_arg` recurses, so the spec tree always mirrors the runtime tree; the spec shape is read off the *wrapped* tensor because `evoxc.from_numpy` reports a 0-d array as shape `(1,)`.
-`lazy.py::require(module)` imports a module at call time and converts a `NotImplementedError` raised during that import into a named `pytest.skip`; every other error surfaces. Every suite's `conftest.py` resolves the package through it inside a module-scoped fixture.
 Rules the runner exists to encode: statics must be passed **again** at `run` (they are baked per call here), an `Executable` is not callable, and `evoxc.Tensor` has no `__array__`.
 A test that needs a *method* inside a graph closes over the host objects and passes only tensors/statics: `run_defn(lambda nk, ck: genome.transform(state, nk, ck), node_keys, conn_keys)` — never nest two `@evoxc.defn` functions.
+### `lazy.py` (implemented)
+`require(module: str, *, allow_pending: bool = False) -> ModuleType` imports a module at call time inside a fixture, so a failing import is attributed to the test that needed it.
+Every error propagates by default, `NotImplementedError` included: a pending implementation in the library under test is a defect, not a skip.
+`allow_pending=True` converts only a `NotImplementedError` whose innermost traceback frame is a file inside `LIBRARY_DIR` into `pytest.skip`, with a message naming the dotted module, the absolute source file, the raising line and the raising function name.
+`LIBRARY_DIR` is derived from this file's location (`Path(__file__).resolve().parents[2] / "src" / "tensorneat"`), never hardcoded, and is a plain module attribute, so a test monkeypatches it to drive the in-library case without touching `src/`.
+A `NotImplementedError` raised anywhere else — a `support` module, `evoxc`, site-packages — propagates even with `allow_pending=True`, and `ImportError` and every other error always propagate.
+The exported surface is `__all__ == ["require"]`; `LIBRARY_DIR` is a documented module attribute, not an export.
+Every suite's `conftest.py` resolves its package through `require(<package>)` without the flag inside a module-scoped fixture.
+### `test_lazy.py` (implemented)
+The one pytest module of this node: it pins the skip channel above so it cannot hide a real pending implementation (9 tests, measured `9 passed in 0.4 s`).
+Every test that needs a subject module writes it on disk under `tmp_path`, inserts that directory at the front of `sys.path` through the `tmp_sys_path` fixture, and purges the temporary packages from `sys.modules` afterwards, so no test depends on the current state of `src/tensorneat`.
+It pins `LIBRARY_DIR`'s derivation from this file's location and `__all__`; default-mode propagation of `NotImplementedError`; the in-library opt-in skip, including the module, file, line 1 and `in <module>()` in the message; propagation of a `NotImplementedError` raised outside `LIBRARY_DIR` with `allow_pending=True` (the anti-hole case); `ImportError` propagation in both modes and from an in-library module (only `NotImplementedError` converts); and identity of a healthy import with `importlib.import_module`.
 ### `payloads.py` (implemented)
 `I_INF` — the `int32` sentinel re-exported from `tensorneat.common.tools`, so a payload and the kernels agree on one value.
 `new_payload(pop_size=1, max_nodes=8, max_conns=16, *, node_attr_width=4, conn_key_width=2, conn_attr_width=1) -> Payload` — `I_INF`-padded `node_keys`/`conn_keys` (`int32`) and NaN-padded `node_attrs`/`conn_attrs` (`float32`).
@@ -47,9 +59,9 @@ No distance or mutation oracle here: parity compares the real operators against 
 No `jax`, no `torch`, no network, no GPU; `runner.py` is the only module allowed to call `evoxc.build`/`evoxc.run`/`evoxc.lower`/`evoxc.compile`/`evoxc.load`.
 Oracles are written from the *documented algorithm* (docstrings in `../../src/tensorneat/`), never by calling the implementation they check — otherwise the test is a tautology.
 Files ≤ ~1000 lines, one concern per file; helpers take plain numpy in and return plain numpy out so a test can print them on failure.
-Nothing here is collected by pytest (no `test_*` names) and nothing here asserts.
+`./test_lazy.py` is the only file here pytest collects and the only one that asserts; every other module is imported, never collected, and never asserts.
 
 ## Routing Table
 No subdirectories — this node is a leaf.
-Consumers: `../unit/`, `../parity/`, `../integration/` and `../release_gate_no_jax.py`.
+Consumers: `../unit/`, `../parity/`, `../integration/` and `../release_gate_no_jax.py`; inside this node, `./test_lazy.py` pins `lazy.py`.
 Read-only contracts it encodes: `../../src/tensorneat/common/tensorization.py` (`Transformed`), `../../src/tensorneat/genome/utils.py` (`GenomeTensors`), `../../src/tensorneat/problem/` (loss + dynamics).

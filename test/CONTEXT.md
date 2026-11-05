@@ -1,18 +1,20 @@
 # ./test — the pytest suite of the evoxc rewrite
 
 ## Intent
-Prove three separate things about the rewrite: the evoxc kernels are *correct* (unit, against numpy oracles), they are *equivalent* to the frozen legacy library where the legacy semantics are well defined (parity, against `benchmarks/legacy_jax`), and the installed package is *JAX-free and runnable end to end* (release gate + integration).
+Prove three separate things about the rewrite: the evoxc kernels are *correct* (unit, against numpy oracles), they are *equivalent* to the frozen legacy library where the legacy semantics are well defined (parity, against `benchmarks/legacy_jax`), and the installed package is *JAX-free, importable end to end and runnable* (the two release gates + integration).
 This is a verifier, not a specification: every test body executes a real kernel and asserts on its output.
 Every suite reads `../src/tensorneat` and `../benchmarks/legacy_jax` as read-only inputs; nothing in `src/` imports anything from here.
 `./support` holds the host-side helpers the suites share (one graph runner, hand-built gene payloads, numpy reference oracles); it is test code and is not packaged.
 
 ## How to run
 Commands an owner runs from the repo root (`[tool.pytest.ini_options]` in `pyproject.toml` sets `testpaths = ["test"]`, `addopts = "-q"`; a doubled `-q` suppresses the summary line, so read the counts with `-o addopts=""`):
-- `pytest -m "not parity and not slow"` — the default gate: all of `./unit` (591 passed), the release gate's three non-slow cases and the three `./backends` cases (which pass with `evoxc[iree]` and skip as a whole without it); no other optional extra is needed. Measured with every extra installed **597 passed, 0 failed, 0 xfailed, 0 skipped, 77 deselected in 30.4 s**, the deselected being the 53 `./parity` cases, the 23 `./integration` ones and the release gate's end-to-end XOR run.
-- `pytest -m parity` — kernel equality against the frozen legacy JAX implementation; needs the `bench` extra and passes **53 passed in 14.1 s**. Without a usable `jax`, the four JAX oracle modules skip at import and `test_convert.py` alone runs **18 passed** (measured: 18 passed, 4 skipped). Every parity module calls `pytest.importorskip("jax")` so a bare environment skips rather than errors.
-- `pytest -m slow` — `./integration` (XOR evolution, determinism, rebuild-on-shape-change, checkpoint round-trip, chunk-budget neutrality, CartPole goldens) plus the release gate's end-to-end XOR run: **24 passed, 0 skipped, 650 deselected in 17.3 s** with every extra installed, and **24 passed, 4 skipped, 615 deselected in 16.6 s** when `jax` is absent.
-- `pytest test/release_gate_no_jax.py` — the import-hygiene gate alone, no optional dependency; **4 passed in 1.9 s**.
-- `pytest` (no marker) — the whole tree: **674 passed, 0 skipped, 3 warnings in 64.4 s** with every extra installed.
+- `pytest -m "not parity and not slow"` — the default gate: all of `./unit` (591 cases), the import-hygiene gate's three non-slow cases, the surface gate's five cases and the three `./backends` cases (which pass with `evoxc[iree]` and skip as a whole without it; naming the marker explicitly, `-m requires_iree`, fails loudly instead of skipping when the extra is absent); no other optional extra is needed. Measured with every extra installed **607 passed, 4 failed, 0 xfailed, 0 skipped, 84 deselected in 31.4 s**; the four failures are `./unit` cases at this tree's `src/` (enumerated under Coverage and integrity), not gate cases. The deselected are the 60 `./parity` cases, the 23 `./integration` ones and the import-hygiene gate's end-to-end XOR run.
+- `pytest -m parity` — kernel equality against the frozen legacy JAX implementation; needs the `bench` extra and passes **60 passed in 16.4 s**. Without a usable `jax` the four oracle modules skip at import but the run is **22 passed, 6 skipped, 0 failed** (18 library-free `test_convert` cases + the 4 always-run oracle-independence cases in `test_oracle_integrity.py`; the four oracle modules and that module's two jax-dependent guards each skip with a reason naming the missing modules), and its collection ratchet fails the run if the directory is collected with fewer items than its documented constant while jax is importable — a bare environment is *explicit*, never a silent 18-test green.
+- `pytest -m slow` — `./integration` (XOR evolution, determinism, rebuild-on-shape-change, checkpoint round-trip, chunk-budget neutrality, CartPole goldens) plus the import-hygiene gate's end-to-end XOR run: **24 passed, 0 skipped, 671 deselected in 17.0 s** with every extra installed, and **24 passed, 5 skipped, 632 deselected in 16.2 s** when `jax` is absent.
+- `pytest test/release_gate_no_jax.py test/test_release_gate_surface.py` — both release gates together, no optional dependency and no fixture; **9 passed in 2.8 s** (4 import-hygiene cases, 5 surface cases).
+- `pytest test/release_gate_no_jax.py` — the import-hygiene gate alone; **4 passed** (1 marked `slow`).
+- `pytest test/test_release_gate_surface.py` — the surface gate alone; **5 passed in 0.6 s**.
+- `pytest` (no marker) — the whole tree: **695 collected, 691 passed, 4 failed, 3 warnings in 67.3 s** with every extra installed, and **661 collected: 650 passed, 4 failed, 7 skipped** in a bare `uv sync`.
 Markers `parity` and `slow` are declared in `pyproject.toml`; `requires_iree` is declared in `conftest.py` and is in no gate (it needs `evoxc[iree]`).
 
 ## Layout
@@ -20,6 +22,7 @@ Markers `parity` and `slow` are declared in `pyproject.toml`; `requires_iree` is
 test/
   conftest.py            sys.path guards (src/, benchmarks/legacy_jax, test/), marker registration, seed/rng/evoxc_key fixtures
   release_gate_no_jax.py the import-hygiene gate (collected by a conftest hook, see Constraints)
+  test_release_gate_surface.py the surface gate: every module imports, every `__all__` resolves, no forbidden import in the source tree
   support/               shared host-side test infrastructure (runner, payloads, numpy oracles, lazy imports)
   unit/                  numpy-backend kernel and invariant tests, mirrors src/tensorneat/
     conftest.py          session-wide optional-framework leak guard
@@ -29,9 +32,10 @@ test/
   parity/                same kernels vs the frozen legacy JAX library, marker `parity`
   integration/           whole-Pipeline runs, marker `slow`
   backends/              compiled-backend runs (marker `requires_iree`), skips without `evoxc[iree]`
+    conftest.py          the request guard: `-m requires_iree` fails instead of skipping when the extra is absent
 ```
 Every directory that holds test modules carries an `__init__.py`: pytest's default prepend import mode names a module by its basename, so un-namespaced directories collide (`test/unit/genome/test_forward.py` vs `test/parity/test_forward.py`) and abort the session with an import-mismatch error.
-Current counts: `unit/common` 155, `unit/genome` 117, `unit/algorithm` 148, `unit/problem` 141, `unit/benchmarks` 16, `unit/test_version.py` 2, `unit/test_host_payload.py` 12, `parity` 53 (18 without jax), `integration` 23, `backends` 3, release gate 4 — 674 collected and 674 passing with every extra installed.
+Current counts: `unit/common` 155, `unit/genome` 117, `unit/algorithm` 148, `unit/problem` 141, `unit/benchmarks` 16, `unit/test_version.py` 2, `unit/test_host_payload.py` 12, `parity` 60 (24 collected / 22 passing without jax), `integration` 23, `backends` 3, `support/test_lazy.py` 9, import-hygiene gate 4, surface gate 5 — 695 collected with every extra installed, 691 passing at this merged tree (the four red cases are `./unit`'s).
 
 ## What each suite proves
 - `./unit/common` — the schedule derived from a hand-built genome has the right level order, incoming-edge windows and sentinels, `validate_schedule` accepts what `derive_schedule` produces and rejects every tampered invariant, flat gather/scatter/mutation helpers agree with a plain-numpy oracle, the ACT/AGG dispatchers agree with a per-option Python loop for all 12 ACT / 6 AGG ids (including `-1` and out-of-range ⇒ identity), `State` is an immutable pytree container, and the host graph walks (`decode_graph`, `topological_sort`, `find_useful_nodes`, `node_depth`, `check_cycles`) agree with the in-graph `node_level`.
@@ -43,15 +47,18 @@ Current counts: `unit/common` 155, `unit/genome` 117, `unit/algorithm` 148, `uni
 - `./unit/test_version.py` — `tensorneat.__version__` against the installed distribution metadata, plus the `PackageNotFoundError` fallback to `"0.0.0"` proved by patching the metadata lookup and reloading the module.
 - `./parity` — on *identical* genomes: `forward` values and NaN pattern (rtol 1e-5) on chain / skip / isolated / random-DAG genomes, `execute_distance` closed forms, `XOR`/`XOR3d` fitness for every `error_method`, and gradients w.r.t. `conn_attrs`/`node_attrs` (rtol 1e-4), plus the lossless-schedule guard in `convert.py`.
 - `./integration` — `Pipeline.auto_run` reaches the XOR fitness target inside a small generation budget, the same seed reproduces the same run, a shape-signature change rebuilds (and does not corrupt) the cached executable, `is_save` writes a loadable checkpoint, the documented reporting tail `show(state, best)` prints the XOR report for the batched best and for its bare rows, a `CustomFuncFit` run chunked at a small `EVAL_CHUNK_ROWS` is exactly the default run (fitness and all four `state.pop` arrays), and a three-generation `pop_size=100` CartPole run reproduces its recorded best/mean/population-hash goldens.
-- `./backends` — the `iree` compiled backend runs a real XOR generation end to end (`setup` + 2 `step`s, finite `(P,)` fitness, one cached build), agrees with numpy on the same seed (int/key payloads exactly, floats within a documented reduction-reassociation tolerance), and rejects an unknown compile option instead of falling back.
-- `release_gate_no_jax.py` — in a clean subprocess, `import tensorneat` leaves `jax`, `torch`, `brax`, `gymnax`, `mujoco` out of `sys.modules`, and a full XOR generation still runs.
+- `./backends` — the `iree` compiled backend runs a real XOR generation end to end (`setup` + 2 `step`s, finite `(P,)` fitness, one cached build), agrees with numpy on the same seed (int/key payloads exactly, floats within a documented reduction-reassociation tolerance), and rejects an unknown compile option instead of falling back; `./backends/conftest.py` makes a missing extra loud when the leg is explicitly requested (`-m requires_iree` exits 1) and only a warning when the directory is merely named.
+- `release_gate_no_jax.py` — in a clean subprocess, `import tensorneat` leaves `jax`, `jaxlib`, `optax`, `flax`, `torch`, `brax`, `gymnax` and `mujoco` out of `sys.modules` and survives a `sys.meta_path` finder that refuses each of them, the documented public surface resolves from this checkout, and a full XOR generation still runs.
+- `test_release_gate_surface.py` — the package *surface* behind that root import: a subprocess walks and imports every module under `src/tensorneat` (87 of them, floor 80) and fails on any `NotImplementedError` (an unfinished port must not be laundered into a `support.lazy` skip) or on any `__all__` name that does not `getattr`; an in-process `ast` pass over every `.py` file (88, floor 80) rejects the forbidden eight in `import`/`from` forms and in `__import__("…")`/`….import_module("…")` literals, with a synthetic positive control; and a probe proves the shared import hook — not an absent installation — refuses each forbidden name.
 
 ## Shared infrastructure (`./support`)
 `support/runner.py` is the ONLY place that touches `evoxc.build`/`evoxc.run`/`evoxc.lower`/`evoxc.compile`/`evoxc.load`: `build_defn(fn, *args, backend="numpy")` maps a `@evoxc.defn` (or any plain callable closure) plus its arguments to an executable, `run_defn(fn, *args)` builds and runs in one call, `run_graph(graph, *arrays)` compiles and runs a `Graph` (what `genome.grad` returns), and `to_numpy(tree)` unwraps `evoxc.Tensor` leaves of nested tuples/lists/dicts/namedtuples (a plain `tuple` is rebuilt rather than called).
 `support/payloads.py` builds `int32`/`float32` gene payloads by hand (`node_keys`, `node_attrs`, `conn_keys`, `conn_attrs` as plain numpy arrays, with `I_INF`/`NaN` padding) plus the canonical small genomes (dense chain, skipped node, isolated node, recurrent ring).
 `support/oracle.py` holds the numpy reference implementations the assertions compare against: the schedule derivation (field-for-field against `Transformed`), a NaN-aware forward pass, the four func-fit losses, and the CartPole Euler rollout; the Pendulum and MountainCar rollouts live in their own `./unit/problem` modules because they transcribe different dynamics.
 `support/functions_ref.py` keeps the 12 ACT / 6 AGG reference kernels.
-`support/lazy.py::require(module)` is the deferred-import helper the fixtures use: it imports a module at call time and turns a `NotImplementedError` raised during that import into a named skip, while every other error surfaces.
+`support/lazy.py::require(module, *, allow_pending=False)` is the deferred-import helper the fixtures use: it imports a module at call time and, by default, lets every error through — `NotImplementedError` included, because a pending implementation in the library under test is a defect, not a skip.
+`allow_pending=True` converts only a `NotImplementedError` whose innermost traceback frame lies inside `LIBRARY_DIR` (`src/tensorneat`, derived from the file) into a named `pytest.skip`, and names the module, file, line and function; a raise from anywhere else propagates, and no fixture in the suite opts in.
+`support/test_lazy.py` pins that contract (9 tests), including the anti-hole case where `allow_pending=True` still propagates an out-of-library raise.
 
 ## Known items
 `evoxc`'s power pullback computes `d(x²)/dx` as `y*b/a`, yielding `NaN` at `x == 0` where jax yields `0`; `./parity` differentiates at a differentiable point and records the corner rather than depending on it.
@@ -71,8 +78,9 @@ The legacy RL problems are gone, so CartPole, Pendulum and MountainCar have no p
 A NaN *source slot* is dropped when the destination also has a live source, so an isolated node poisons only a read-out that has no other live input; both halves of that rule are pinned in `./parity` and `./unit/genome`.
 
 ## Coverage and integrity (measured audit)
-`pytest -o addopts="" -q` under `uv sync --all-extras` is **674 passed, 0 skipped, 0 xfailed, 3 warnings** — the suite contains no `skip`/`skipif`/`xfail` in any test body; the only skip channel is optional-dependency machinery.
-Measured skip sets: `--extra bench` without iree → 671 passed, **1** skipped (`test/backends` module-level `importorskip`, hiding its 3 tests); bare `uv sync` → 636 passed, **5** skipped (the four `jax` parity modules + `test/backends`), i.e. the parity gate degenerates to `test_convert.py`'s 18 library-free tests.
+`pytest -o addopts="" -q` under `uv sync --all-extras` is **695 collected: 691 passed, 4 failed, 0 skipped, 0 xfailed, 3 warnings** — the suite contains no `skip`/`skipif`/`xfail` in any test body; the only skip channels are optional-dependency machinery (`./parity`'s four `importorskip` modules, `./backends`' `iree` gate, and the two jax-dependent guards in `./parity/test_oracle_integrity.py`, which fail rather than skip whenever jax *is* installed).
+The four red cases at this merged tree are `unit/common/test_state.py::test_missing_entry_raises_key_error_and_escapes_hasattr`, `unit/genome/test_host_helpers.py::test_hash_is_deterministic_and_distinguishes_different_topologies`, `unit/problem/test_func_fit.py::test_cartesian_product_pairs_every_row_of_both_inputs_major_first_slowest` and `unit/problem/test_mountaincar.py::test_in_domain_configuration_is_accepted`; both release gates are green.
+Measured skip sets: `--extra bench` without iree → 690 passed, 4 failed, **1** skipped (`test/backends` module-level `importorskip`, hiding its 3 tests); bare `uv sync` → 661 collected, 650 passed, 4 failed, **7** skipped (the four `jax` parity modules, the two parity guards and `test/backends`), i.e. the parity gate still runs `test_convert.py`'s 18 library-free tests *plus* the 4 oracle-independence tests, and its ratchet/independence guard names what is missing rather than letting the differential evidence vanish.
 Line coverage of `src/tensorneat` from the whole suite: 84 % (6389 statements); the hole concentrates in `algorithm/hyperneat/**` (21–28 % — `HyperNEAT`, `HyperNEATFeedForward` and every substrate have no behavioural test anywhere) and `genome/operations/mutation/recurrent.py` (23 %, zero references to `RecurrentMutation`).
 No test exceeds `algorithm/neat/_kernels.GATED_ROWS = 6000`, so the dense species-distance path (`_kernels.py:949`, `_distance.DistanceRows.matrix`) is dead in CI and live only at pop ≳ 300.
 No test evaluates a genome with an edge from a higher node row to a lower one (every payload builder and both random-DAG generators emit `source < target`), so the level-synchronous sweep is exercised only where level order and row order agree.
@@ -84,6 +92,7 @@ Per-subtree detail lives in the child `CONTEXT.md` files' `Known gaps`/`Coverage
 ## Conventions
 No test body is a placeholder: every test either asserts on a real kernel or is skipped because an optional dependency is absent (`./parity` without `jax`).
 `jax` is imported only inside `./parity` modules, and only after `pytest.importorskip("jax")`; no other test may import it at module scope, and `test/unit/conftest.py` enforces that with a session-baseline `sys.modules` diff plus an import recorder that attributes the offending file.
+The two release gates name the forbidden frameworks only inside subprocess script strings — `release_gate_no_jax.py` under the refusing import hook, `test_release_gate_surface.py`'s probe on purpose — so no such import ever runs in the pytest process.
 A behaviour the implementation documents but does not deliver is pinned with `xfail(strict=True)` and a reason starting `src defect:` — never removed, never softened.
 Shapes and keys in the suite are small (pop ≤ 16, `max_nodes` ≤ 16) except where a test exists specifically to exceed a static bound.
 No network, no GPU, `backend="numpy"` everywhere except tests marked `requires_iree`.
@@ -91,6 +100,8 @@ Files stay under ~1000 lines; one test module per source module, named `test_<mo
 
 ## Constraints
 `release_gate_no_jax.py` does not match pytest's default `python_files` patterns, so `conftest.py::pytest_collect_file` explicitly collects that one filename; do not rename it without editing the hook.
+`test_release_gate_surface.py` matches the default `test_*.py` pattern, so it needs no hook; it imports `release_gate_no_jax` for `FORBIDDEN`, the subprocess environment and the import hook, which works because `conftest.py` puts `test/` on `sys.path`.
+`FORBIDDEN` lives only in `release_gate_no_jax.py`; adding a framework there strengthens every gate at once, and the surface gate's `MIN_MODULES`/`MIN_FILES` floors are what stop an empty walk or scan from passing.
 A test may not edit `../src`, `../benchmarks` or `pyproject.toml`: cross-node needs go into the report to the parent.
 Suite output must be deterministic — a flaky test is a bug in the test, not a `pytest.retries` candidate (the plugin is not installed).
 
@@ -102,9 +113,10 @@ Suite output must be deterministic — a flaky test is a bug in the test, not a 
 | `./unit/algorithm/test_exports.py` | the `tensorneat.algorithm` public surface: four documented names, exactly those in `__all__` (4 tests). |
 | `./parity` | kernel equality vs the frozen legacy JAX library (marker `parity`). |
 | `./integration` | whole-`Pipeline` runs, determinism, rebuild, checkpointing, chunk-budget neutrality and the CartPole goldens (marker `slow`, 23 tests). |
-| `./backends` | compiled-backend (`iree`) end-to-end XOR run plus numpy/iree agreement; marker `requires_iree`, in no gate (`./backends/CONTEXT.md`). |
-| `./support` | shared runner, hand-built payloads and numpy oracles for the suites above. |
-| `./release_gate_no_jax.py` | import-hygiene gate on `tensorneat` (module file, collected by the conftest hook). |
+| `./backends` | compiled-backend (`iree`) end-to-end XOR run plus numpy/iree agreement; marker `requires_iree`, in no gate; `./backends/conftest.py` fails an explicit `-m requires_iree` run when the extra is absent (`./backends/CONTEXT.md`). |
+| `./support` | shared runner, hand-built payloads, numpy oracles and the deferred-import helper; `./support/test_lazy.py` pins `require`'s opt-in, library-scoped skip (9 tests). |
+| `./release_gate_no_jax.py` | import-hygiene gate on `tensorneat` (module file, collected by the conftest hook, 4 tests). |
+| `./test_release_gate_surface.py` | surface gate: every module imports, every `__all__` resolves, the source tree imports no forbidden framework, the import hook refuses all eight names (5 tests). |
 | `../src/tensorneat` | code under test — read-only, escalate changes to the parent. |
 | `../benchmarks/legacy_jax` | frozen legacy implementation used as parity oracle — read-only. |
 | `../pyproject.toml` | pytest configuration (`testpaths`, `addopts`, `parity`/`slow` markers) — read-only. |

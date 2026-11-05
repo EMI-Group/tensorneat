@@ -1,13 +1,26 @@
-# ./benchmarks — regression tests for the benchmark harness fingerprint
+# ./benchmarks — regression tests for the benchmark harness
+
 ## Intent
-Pin the one host-side piece of `../../benchmarks/harness` that can silently lie: `protocol.git_report()`, whose `git_dirty` flag is what the report banner calls "re-probed on this tree".
-The bug these tests exist for: the probe parsed `git status --porcelain` after stripping the output, so the leading space of `" M path"` was lost, the two-character XY status field was read one character short and the path was sliced from the wrong offset — a modified-but-unstaged file reported `git_dirty: False`.
+Pin the host-side pieces of `../../benchmarks` that can silently lie about evidence: the git fingerprint, the generations-to-target bookkeeping and the cell that renders it, the old/new speed-up bounds, the case matrix's declared-target flag, and the `--persist-note` write into a committed record.
+`../../benchmarks` — harness code and the committed records under `../../benchmarks/results` — is a read-only input; a test that needs a record or a report works on a `tmp_path` copy and writes nothing outside it.
+No benchmark run, no network, no wall clock: every test calls a pure function or a `main()` path that spawns no worker.
+
 ## What Is Tested
-- `git_report()` against a real temporary git repository (`tmp_path`): clean tree → clean, unstaged modification → dirty and names `src/mod.py`, untracked file → dirty, staged rename → dirty and names the new path (never the rename source).
-- `_porcelain_path()` on the documented `XY PATH` records (`" M path"`, `"M  path"`, `"?? path"`, `"A  path"`, `"R  old -> new"`, a path with a space) and on truncated records, which yield `""` rather than a shifted fragment.
-- `_porcelain_paths()` on `git status --porcelain -z` output: NUL-separated, unquoted, rename destination first with its source in a separate field.
-- `_git(..., strip=False)` keeps the first character of the status field; `git_report()` keeps its three public keys and their types.
+- `test_protocol.py` (16) — `git_report()` against a real temporary git repository (`tmp_path`): clean tree clean, unstaged modification dirty naming `src/mod.py`, untracked file dirty, staged rename dirty naming the new path; the porcelain `XY PATH` parser on the documented records and on truncated ones (which yield `""`, never a shifted fragment); the `-z` NUL-record reader that consumes a rename's source field. This is the regression suite for the `git_dirty` false-negative (a stripped status line read the path one character short).
+- `test_aggregate.py` (7) — `protocol.aggregate()`'s generations-to-target keys: `target` comes from the first *ok* repeat in seed order (an error repeat's stored target is never used), `gens_to_target_all` is one entry per repeat in seed order, `gens_to_target_reached` counts the entries that arrived, `gens_to_target_repeats` counts the attempts, and the unchanged `generations_to_target` stays the median over the ok repeats only.
+- `test_speedup_bounds.py` (24) — `speedup_bounds` reads the per-repeat extremes and never the medians: `best = old_min/new_max` (the old side's best case, the pessimistic bound for the new side) and `worst = old_max/new_min`; each key is `None` when the extreme it reads is missing, a single repeat collapses both to the same ratio, and `speedup` is `None` unless both values are finite with `new > 0` (a zero new side is not an infinite win).
+- `test_report_format.py` (24) — `report_format.reach` renders exactly `78`, `78 (2/3)`, `>152 (0/3)`, `n/a (no informative target)` and the legacy form, plus the rebuilt median from the repeats that did arrive, the half-up rounding of a fractional median (`77.5` → `78`) and single-repeat / absent-list cells; `gens_to_target` bounds at `>N` with the recorded generation count and degrades to `n/a` without one.
+- `test_cases.py` (7) — `cases.get_cases(["cartpole_p100"])[0].gens_to_target is False`, that flag present in `as_dict()` (the snapshot that lands in a run record's `case_config`), every other case still `True`, and the suppression keeping the case's documented `fitness_target`/`max_step` and its new-only `impls`.
+- `test_cli.py` (4) — `--persist-note` on a `tmp_path` copy of `results/authoritative.json`: the record's bytes become exactly its old content with `meta.report_note` replaced (every other top-level key, every other `meta` key and `runs` unchanged), a later bare `--render-from-json` carries the note and leaves the record byte-identical, and the two unsupported modes exit `2` writing nothing — without `--render-from-json` (the measurement path) and without `--report-note`.
+
+## Pinned harness behaviour worth knowing
+`target` and the medians are gated on `status == "ok"`, but `gens_to_target_all` is not: a repeat that errored after recording a generation count still occupies its slot and is counted by `gens_to_target_reached`, so only a successful worker's `runs` list makes the `(reached/total)` annotation a statement about quality.
+`report_format.TARGET_UNKNOWN` is deliberately distinct from `None`: an absent `target` key keeps the legacy `>N` rendering, while a recorded `"target": null` means "measured with no target" and renders `n/a (no informative target)` even when the row still holds a numeric median.
+`--persist-note` has exactly two supported modes (`--render-from-json` plus `--report-note`); the CLI re-reads the written record and refuses to render if any top-level key other than `meta` moved, which is why the test compares the whole serialised document, not just the note.
+
 ## Rules
-- `../../benchmarks` is a read-only input: the harness is imported as `benchmarks.harness.protocol` (the checkout root is appended to `sys.path` by `../../conftest.py`), and no test writes outside its `tmp_path` repository.
-- The repository fixture uses a local git identity and commits once, so every case starts from a genuinely clean tree; a missing `git` binary skips the module instead of asserting something weaker.
-- Never soften the assertion: the dirty flag is a claim about whether a measurement is reproducible, so the tests check the parsed path itself, not just the boolean.
+- Read-only inputs: the harness is imported as `benchmarks.harness.*` (the checkout root is appended to `sys.path` by `../../conftest.py`) and the committed records as `Path(run_benchmark.__file__).parent / "results"`; nothing is written outside `tmp_path`.
+- `conftest.py` here appends `../../benchmarks` to `sys.path` because `report_format`/`report_sections`/`reporter` import their sibling as the bare package `harness` (the CLI inserts that directory itself); keep it appended so it cannot shadow `src/`, `test/` or the checkout root.
+- The fingerprint repository fixture uses a local git identity and commits once, so every case starts from a genuinely clean tree; a missing `git` binary skips `test_protocol.py` instead of asserting something weaker.
+- Never soften an assertion: the dirty flag, the `(reached/total)` tally and the persisted note are claims about whether a committed record is evidence, so each test checks the parsed value or the written bytes, not only a boolean.
+- A discovered harness defect is pinned here and reported upward — `../../benchmarks` is never edited from this node.

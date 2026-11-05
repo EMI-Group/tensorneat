@@ -146,6 +146,12 @@ def test_initialize_uses_the_documented_shapes_and_dtypes(
     so a kernel can take them positionally. ``DefaultNode`` declares four
     attribute columns and ``DefaultConn`` one, and ``BaseConn.fixed_attrs`` names
     two key columns.
+
+    The same test pins the two documented sentinels, which the dtype assertions
+    alone do not: an *absent* row is ``I_INF`` in every key column **and** ``NaN``
+    in every attribute column, a *present* row carries keys inside
+    ``[0, key_span)`` with finite attributes, and the initial network is the dense
+    ``num_inputs -> num_outputs`` wiring (``num_inputs * num_outputs`` edges).
     """
     pop_size, max_nodes, max_conns = 3, 8, 16
     g = payloads.default_genome(
@@ -176,11 +182,59 @@ def test_initialize_uses_the_documented_shapes_and_dtypes(
     assert node_attrs.dtype == np.float32
     assert conn_attrs.dtype == np.float32
 
-    # No NaN ever reaches an integer key array, and no I_INF an attr array.
-    assert not np.isnan(node_keys).any()
-    assert not np.isnan(conn_keys).any()
-    assert np.isnan(node_attrs).any()  # the padding rows are NaN, never a leftover
-    assert np.isnan(conn_attrs).any()
+    # The two sentinels never mix.  "Row absent" is exactly ``I_INF`` in every key
+    # column *and* ``NaN`` in every attribute column of that row; a present row
+    # carries keys inside ``[0, key_span)`` and finite attributes.  (An ``int32``
+    # array cannot hold ``NaN``, so a ``np.isnan`` probe on a key array proves
+    # nothing; the assertions below are the actual contract.)
+    num_inputs, num_outputs = g.num_inputs, g.num_outputs
+    node_absent = node_keys == common.I_INF
+    assert node_absent.any() and not node_absent.all()
+    # The initial network is ``num_inputs -> num_outputs`` dense: three node rows
+    # are present (2 inputs + 1 output) and the rest are padding.
+    assert node_absent.sum(axis=1).tolist() == [
+        max_nodes - (num_inputs + num_outputs)
+    ] * pop_size
+    present_node_keys = node_keys[~node_absent]
+    assert np.all(present_node_keys >= 0)
+    assert np.all(present_node_keys < g.key_span)
+    for p in range(pop_size):
+        keys = node_keys[p][~node_absent[p]]
+        # No duplicate key inside an individual, and the present keys ascend
+        # because ``initialize`` writes the input/hidden keys first and the
+        # output keys (the highest ones) last.
+        assert np.array_equal(keys, np.sort(keys)), f"individual {p} keys {keys}"
+        assert len(set(keys.tolist())) == len(keys), f"individual {p} repeats a key"
+    # The float attribute rows are NaN in *every* column exactly where the key row
+    # is absent (no half-cleared row), and finite in every column where it is not.
+    assert np.array_equal(np.isnan(node_attrs).all(axis=-1), node_absent)
+    assert np.all(np.isfinite(node_attrs[~node_absent]))
+
+    # The same two-sentinel contract for connections, plus the initial wiring:
+    # ``num_inputs * num_outputs`` edges from every input row to the output row.
+    conn_absent = conn_keys[:, :, 0] == common.I_INF
+    assert conn_absent.any() and not conn_absent.all()
+    assert conn_absent.sum(axis=1).tolist() == [
+        max_conns - num_inputs * num_outputs
+    ] * pop_size
+    assert np.array_equal(
+        conn_keys == common.I_INF,
+        np.broadcast_to(conn_absent[:, :, None], conn_keys.shape),
+    ), "every key column of a connection row shares the sentinel"
+    present_conn_keys = conn_keys[~conn_absent]
+    assert np.all(present_conn_keys >= 0)
+    assert np.all(present_conn_keys < g.key_span)
+    assert np.array_equal(np.isnan(conn_attrs).all(axis=-1), conn_absent)
+    assert np.all(np.isfinite(conn_attrs[~conn_absent]))
+    expected_edges = {
+        (source, max_nodes - 1) for source in range(num_inputs)
+    }
+    for p in range(pop_size):
+        edges = {
+            (int(row[0]), int(row[1]))
+            for row in conn_keys[p, ~conn_absent[p], :2]
+        }
+        assert edges == expected_edges, f"individual {p} writes {sorted(edges)}"
 
 
 def test_initialize_places_input_keys_on_the_first_rows(

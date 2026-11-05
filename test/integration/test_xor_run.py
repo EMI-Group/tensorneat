@@ -24,7 +24,7 @@ No test reads a clock (``test/CONTEXT.md``: a flaky timing test is a bug in the 
 Why this file has no skip of its own
 ------------------------------------
 ``./conftest.py``'s autouse probe (:func:`~.conftest.require_evoxc_pipeline`)
-requires every documented evoxc-pipeline feature and skips with the exact list
+requires every documented evoxc-pipeline feature and fails with the exact list
 of anything missing.
 Nothing in this module hardcodes a skip, so the tests run unmodified against the
 evoxc compile site.
