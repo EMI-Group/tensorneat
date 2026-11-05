@@ -36,7 +36,7 @@ Randomness comes only from the repo-level `rng`/`evoxc_key` fixtures (seeded fro
 ## Constraints
 A test may not edit `../../../src`, `../../../benchmarks` or `pyproject.toml`; a defect or a doc conflict found here goes into the report to the parent.
 Whole node: 108 passed in ≈10 s on the numpy backend (`--durations=10`), at ≈225 `evoxc.build` calls per run, which is the floor: each forward/recurrent test legitimately builds a fresh genome+state and `grad` graphs are never cached.
-`test_mutation.py` is ≈1020 lines for 15 invariant tests; it is at the concern threshold and should be split by operation family if it grows.
+`test_mutation.py` is ≈1000 lines for 15 invariant tests; it is at the concern threshold and should be split by operation family if it grows.
 `test_host_helpers.py`'s `visualize` test asserts `matplotlib`/`networkx` are absent from `sys.modules` before the call, so it is order-sensitive within one process; pytest runs each module once, so this never bites in a normal run.
 The guard in `test/unit/conftest.py` is the test-side counterpart of `test/release_gate_no_jax.py`: it freezes a session baseline at session start and records every import statement of `jax`/`jaxlib`/`torch`/`brax`/`gymnax`/`mujoco`, attributed to the file that executed it.
 It therefore catches any import of an optional framework executed from `test/unit/**`, whether at module scope or inside a test body.
