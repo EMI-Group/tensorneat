@@ -16,13 +16,21 @@ on a compiled backend those expand into ``(P, M, M)`` count-mode blocks anyway (
 This formulation asks the question directly and without an index permutation: it compares
 every centre composite against every population composite of the same individual with one
 broadcast equality, so the answer is the ``(P, M, M)`` boolean table
-``table[p, i, j] = (centre[p, i] == digest[p, j])``.  Two reductions read it:
+``table[p, i, j] = (centre[p, i] == digest[p, j])``.  One reduction reads it:
 
-* ``homologous = reduce_max(table, axes=2)`` — "some population gene carries this key" (a
-  boolean *any*, so the order of the reduction is irrelevant);
-* ``col = argmax(table, axis=2)`` — the **first** matching population column, which is the
-  very row the merge's successor test finds: the digest half is sorted ascending and stably,
-  so equal composites appear in original row order.
+* ``col = reduce_min(select(table, columns, count), axes=2)`` — "the **first** matching
+  population column", which is the very row the merge's successor test finds: the digest
+  half is sorted ascending and stably, so equal composites appear in original row order.  A
+  non-matching column carries ``count`` (one past the last index), so it never wins the
+  minimum;
+* ``homologous = col < count`` — "some population gene carries this key".  It reads the same
+  reduction's result, so no second table-wide pass is paid and the boolean *any* never has to
+  be materialised.
+
+``argmax``-based spellings are deliberately avoided: it materialises a full ``(P, M, M)``
+``int64`` iota, whose dispatch has no operands and is therefore left outside every
+``stream.async.execute`` region by IREE's scheduling, which fails ``iree-compile`` on the
+assembled generation graph (see ``## Test Strategy`` in this node's ``CONTEXT.md``).
 
 The nested table is what the formulation buys and what it costs: no ``argsort``, no
 permutation, no merge-wide ``int64`` block, and every op below the table is row-local — at the
@@ -65,6 +73,7 @@ merge is the shipped contract and ``measure_alignment`` is deliberately left alo
 from typing import TYPE_CHECKING
 
 import evoxc
+import evoxc.numpy as enp
 
 from ....common import ConfigError, TensorNEATError
 from . import digest as _digest
@@ -230,10 +239,10 @@ def resolve(
         a payload that respects the unique-key contract — the fold is injective, so tag-plus-
         equality is full key equality, and :func:`~.digest._key_row_matches` confirms the
         columns the ``int64`` composite cannot hold, on the same candidate row.
-        ``argmax`` returns ``0`` for an all-``False`` row and every column it can name is in
-        range, so no clamp and no ``I_INF`` redirect are needed; ``rows`` is redirected to
-        ``statics.zero_i32`` by the ``select`` regardless, which is the value the tail masks
-        away anyway.
+        The minimum lands on ``count`` for an all-``False`` row and every column the table
+        can name is in range, so no clamp and no ``I_INF`` redirect are needed; ``rows`` is
+        redirected to ``statics.zero_i32`` by the ``select`` regardless, which is the value
+        the tail masks away anyway.
         Everything below the table is row-local, so a :class:`~.grouped.GroupedDigest`
         (whose statics sit at ``group * P`` rows) and a centre broadcast to the digest's
         batch are measured unchanged — neither is special-cased here.
@@ -253,11 +262,23 @@ def resolve(
         evoxc.reshape(tagged, (pop_size, count, 1)),
         evoxc.reshape(digest_keys, (pop_size, 1, count)),
     )
-    # A boolean *any* over the population axis: the reduction order is irrelevant, so no
-    # float summation-order question arises.  ``argmax`` of the same table is the first
-    # matching column — the row the merge's successor test finds (see the module docstring).
-    homologous = evoxc.reduce_max(table, axes=2)
-    col = evoxc.cast(evoxc.argmax(table, axis=2), evoxc.int32)
+    # "First matching population column", folded in one reduction: every matching column
+    # keeps its own index, every other column carries ``count`` -- one past the last index,
+    # so it can never win a minimum -- and the row's minimum is therefore the leftmost match,
+    # the row the merge's successor test finds (see the module docstring).  An all-False row
+    # lands on ``count``, which ``col < count`` reads back as "no homologue", so the same
+    # reduction answers both questions and no second ``(P, M, M)`` pass is paid.
+    # Spelled this way instead of ``reduce_max`` + ``argmax`` on purpose: ``argmax``
+    # materialises a full ``(P, M, M)`` ``int64`` iota (``stablehlo.iota dim = 2``), and the
+    # dispatch IREE forms for it has no operands, so it is left outside every
+    # ``stream.async.execute`` region and ``iree-compile`` fails the whole generation graph
+    # with ``'stream.async.dispatch' op : streamable op expected to be in an execution
+    # region`` on both ``llvm-cpu`` and ``rocm`` (measured, see ``## Test Strategy`` in this
+    # node's ``CONTEXT.md``).  The index table below is ``M`` elements, not ``P * M * M``.
+    columns = enp.arange(0, count, dtype=evoxc.int32)
+    no_match = pool.i32(count)
+    col = evoxc.reduce_min(evoxc.select(table, columns, no_match), axes=2)
+    homologous = evoxc.less(col, no_match)
     if width > _FOLDED_KEYS:
         # A key width the ``int64`` composite cannot hold (``OriginConn``'s
         # ``historical_marker``) is confirmed row-for-row against the candidate digest row,
