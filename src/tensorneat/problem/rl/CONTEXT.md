@@ -47,6 +47,12 @@ A traced tensor has no `__getitem__`: broadcast with `enp.expand_dims`, split co
 Because episodes are frozen, an individual's return is its survival time: `max_step` is the fitness ceiling, so `fitness_target` must be `<= max_step`.
 NaN logits act as push-left inside the rollout (`enp.greater` is false against NaN) but a NaN census (`evoxc.isnan(reduce_sum(logits, axis=1))`) is accumulated into `total`, so that individual's fitness is NaN → `-inf`.
 
+#### IREE dispatch budget of the step block (measured statically, CPU only; deliberately unchanged)
+`CartPole` costs **27 dispatches per timestep**: `^bb5` 3 + 4·L + `^bb8` 12 at `L = 3` (the same static-count method as the MountainCar subsection, `max_step=200`, pop 100, seed 42).
+`^bb8`'s 12 are the force select, **4 `slow_memcpy`** (the four columns of `enp.split(obs, 4, axis=1)`), the fused Euler row op, the death `reduce_max`, the NaN `reduce_sum`, the reward/accumulator elementwise, the alive update and the freeze select.
+The 4 copies are the largest environment-side block, and the column-carry rewrite that removes them is **measured and rejected**: carrying `x, x_dot, theta, theta_dot` as four `(B,1)` leaves (Pendulum's shape, with the policy row rebuilt from a baked `(1,4)` mask select) reaches `^bb5` 4 + 4·L + `^bb8` **9** = **25** dispatches per timestep, but it executes **33 230** IR ops per generation against the shipped **31 020** (+7.1 %, and +8 % wall: 254.6 vs 234.8–238.0 ms median in the same session), because a column-shaped step pays four `enp.where` freezes, four `state + dt * deriv` updates and a six-op death slack where the row form pays one of each.
+No variant tested beat that trade on both axes, so `CartPole` keeps the row carry and its 12-dispatch step block: on this leg the numpy dispatch-count rule outranks the IREE dispatch count.
+
 ### Pendulum (`pendulum.py`)
 Gym `Pendulum-v1`: `theta=0` is **upright**, so the cost is small exactly at the unstable equilibrium.
 Per timestep, all on the pre-transition state:
