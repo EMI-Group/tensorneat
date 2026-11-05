@@ -37,6 +37,15 @@ The dispatchers take `act_fns`/`agg_fns` as trace-time static arguments, so a cu
 `test_tensorization_validate.py` is the `validate_schedule` half of a two-module pair covering one source module; it relative-imports the schedule fixtures from `test_tensorization.py`, and pytest resolves a fixture's own dependencies in the *using* module's namespace, so the payload fixtures travel with that import.
 A parametrized case may legitimately carry several variants (mutation rates, neutral elements, tampered invariants) — the counts are the design, not an accident.
 
+## Known gaps
+`derive_schedule(..., acyclic=True)` is never exercised: `_schedule` in `./test_tensorization.py` stops at `key_span`, so the level-only fast path (`tensorization.py` `node_levels` `acyclic` branch) has no test anywhere in `test/`.
+`derive_schedule`'s documented `ConfigError` block (non-positive statics, `_check_shape` mismatches, `num_inputs > max_nodes`, mixed key dtypes) is untested — every schedule fixture is well formed.
+`tools.prepare_flat_index` / `flat_gather_prepared` / `flat_scatter_prepared` are only reached through the one-shot wrappers, and **`trusted=True` is passed nowhere in `test/`**, so the op-count shortcut that drops the out-of-range redirect is unverified.
+`apply_aggregation` has no custom-`agg_fns` test (the ACT side has one), so the `window_body` / `zero_on_empty` protocol, the guard emitted for an unannotated kernel, and the empty-list `enp.zeros` return are unpinned.
+`common/sympy_tools.py::to_latex_code` (with `analysis_nodes_exprs`, `round_expr`, `replace_variable_names`) has zero coverage in the whole repo; only `to_python_code` is tested.
+`tools.to_numpy` and `tools.hash_rows`'s row-padding/empty-column branches are untested here; `StatefulBaseClass.show_config` is untested anywhere (Pipeline overrides it).
+Timing-sensitive bands: `test_fetch_random_is_uniform_over_the_row` (4.5σ) and the `mutate_float` law test (3σ on a 4000-element draw) ride a crc32-of-node-id seed, so a rename re-rolls them.
+
 ## Constraints
 Backend is always `"numpy"`; no `requires_iree` case lives here (every kernel under test is numpy-backend only, so an iree variant would prove nothing new).
 No test module imports `jax`/`torch` at module scope or in a body; `sympy` is imported inside the tests that need it.

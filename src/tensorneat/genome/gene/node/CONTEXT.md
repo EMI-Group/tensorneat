@@ -20,9 +20,12 @@ Column order *is* the `*_attrs` column order, so `bias=0`, `response=1`, `aggreg
 `aggregation_default` / `activation_default` are int indices resolved with `options.index(default)`; `None` means option 0.
 
 ## Hooks: implemented here vs inherited
-`BaseNode` implements `setup`, `forward`, `aggregate`, `repr`, `to_dict` and the host-only `_aggregation_name` / `_activation_name` / `_option_name`.
-`forward` is `z = combine(attrs, aggregate(...))`, then `activated = apply_activation(z, activation_column, activation_options)`, then `evoxc.select(is_output_node, z, activated)`.
-`aggregate` is implemented **once** on `BaseNode` as `apply_aggregation(messages, valid_mask, aggregation_column, self.aggregation_options)`; no family overrides it.
+`BaseNode` implements `setup`, `forward`, `prepare` (the `NodeOperands` bundle), `aggregate`, `needs_has_valid`, `column_of`, `repr`, `to_dict` and the host-only `_aggregation_name` / `_activation_name` / `_option_name`.
+`forward` is `z = combine(attrs, aggregate(...))` then `select_cascade(activation_masks, [fn(z) for fn in activation_options], z)`; there is no `select(is_output_node, z, activated)` step, because `prepare` writes `ACT_IDENTITY` into the activation id of every output row, where it matches no option and the cascade returns `z` unchanged.
+`prepare` reads every attribute column once, casts the option columns to `int32`, forces `ACT_IDENTITY` on the output rows and builds the per-option `ids == index` masks, so no level re-reads an attribute or re-emits an `equal`; a family with no attribute column gets one broadcast constant id (aggregation option `0`, activation `ACT_IDENTITY`) instead of a population-scaled `enp.full`.
+`aggregate` is implemented **once** on `BaseNode` as `select_cascade(aggregation_masks, [fn(messages, valid_mask) for fn in aggregation_options], zero)` followed by the `has_valid` guard `select(any_slot(valid_mask), aggregated, 0)`; `needs_has_valid` drops that guard when every configured option is in `self_neutral_aggregations` (`AGG.sum`, `AGG.mean`); no family overrides `aggregate`.
+`common.functions.apply_activation` / `apply_aggregation` are not called by this node any more — `option_masks`/`select_cascade` are the same cascade with the per-level `equal`/cast hoisted — and `NodeOperands.aggregation_ids`/`activation_ids` are stored but never read.
+`prepare` assumes the caller already 0-padded the attributes of absent rows (`genome/step.py::_padding_safe_attrs`, `default.py`/`recurrent.py` forward paths); a NaN option id would otherwise be cast to `int32` and only later discarded.
 `combine` and `sympy_func` stay abstract on `BaseNode` (accurate `NotImplementedError`) because a base class without an attribute table cannot know its columns or option names.
 `DefaultNode` overrides `__init__`, `new_identity_attrs`, `combine` (`bias + response * aggregated`), `repr`, `to_dict`, `sympy_func`.
 `BiasNode` overrides `__init__`, `new_identity_attrs`, `combine` (`bias + aggregated`), `repr`, `to_dict`, `sympy_func`, and shares `_option_list` / `_default_index` / `_option_spec` with `DefaultNode` instead of copying them; it deliberately does not chain the response-carrying constructor.
@@ -30,9 +33,9 @@ Column order *is* the `*_attrs` column order, so `bias=0`, `response=1`, `aggreg
 `mutate`, the default per-column `crossover`, `distance`, `hash`, `from_attrs` and every width helper are inherited from `gene/base.BaseGene` unchanged.
 
 ## Op count
-`apply_aggregation` evaluates every configured option on the whole `(P, N, K)` window (one masked reduce each) plus one `select` per option, then one `has_valid` select; a single-option gene is 1 reduce + 1 select + a mask count + 1 select.
-`apply_activation` starts from `z` (the identity branch) and emits one `select` per configured option, so the default single-option configuration is exactly a 1-select cascade over `(P, N)`.
-Both dispatchers cast the gene column to `int32` first, and option ids are gene data rather than a static shape, so no static shortcut can reduce the cascade to the options a population happens to use.
+`aggregate` evaluates every configured option on the whole `(P, N, K)` window (one masked reduce each) plus one `select` per option, then the `has_valid` guard when a configured option is not self-neutral; a single-option gene is 1 reduce + 1 select.
+The activation cascade starts from `z` (the identity branch) and emits one `select` per configured option over `(P, N)`, so the default single-option configuration is a 1-select cascade.
+The per-**pass** cost is the attribute column reads, the two `int32` casts and one `equal` per option (all in `prepare`); per **level** only the reduce/select dispatch and `combine` remain, and option ids are gene data rather than a static shape, so no static shortcut can reduce the cascade to the options a population happens to use.
 A per-level node step therefore stays `O(max_nodes x K)` gathers plus a constant dispatch cost, never `max_nodes^2`.
 
 ## Host-only API (siblings may rely on it)
@@ -40,7 +43,8 @@ A per-level node step therefore stays `O(max_nodes x K)` gathers plus a constant
 `repr` reuses `to_dict` and prints `TypeName(idx=..., bias=..., [response=...,] aggregation=<name>, activation=<name>)`; `BaseNode.repr` / `BaseNode.to_dict` are the generic label-driven rendering for a family without named options.
 `sympy_func(node_dict, inputs, is_output_node=False)` takes the incoming edge contributions (an iterable of sympy expressions, or one expression treated as a one-term list) and returns `(expression, {symbol: value})` with the `n_<idx>_b` / `n_<idx>_r` symbol names.
 A custom option callable that is not in the global `ACT` / `AGG` registry is named by its own `__name__`; an option id outside `[0, len(options))` raises `ConfigError` instead of wrapping.
-`genome/base.py` calls `node_gene.forward(state, node_attrs, msg, is_output_row, live)` once per level/tick; `genome/operations/mutation/` uses `new_identity_attrs` for add-node splits.
+`genome/step.py::_node_step` calls `node_gene.forward(state, node_operands, messages, output_rows, live)` once per level/tick (the operands come from `prepare` at pass start, `live` is the `present & (xv == xv)` slot mask); `genome/operations/mutation/` uses `new_identity_attrs` for add-node splits.
+`BaseNode.repr`/`to_dict` are generic super()-pass-throughs in practice: every shipped family overrides both, so the generic rendering has no caller (`../CONTEXT.md` `## Unread and untested surface`).
 
 ## Constraints
 Output nodes are never activated here; the final activation belongs to the genome-level `output_transform`.

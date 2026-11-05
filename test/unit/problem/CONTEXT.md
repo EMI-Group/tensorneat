@@ -18,8 +18,9 @@ Assertions are closed forms, the independent numpy references of `../support/ora
 
 ## Oracles used (never the kernel under test)
 `support.oracle.func_fit_loss` (the reduction over the sample *and* output axes) and `support.oracle.cartpole_rollout` + `cartpole_params` (the only CartPole oracle, since the legacy RL problems are gone).
-`test_pendulum.py` and `test_mountaincar.py` carry their own host-numpy rollouts (`_pendulum_rollout`, `_mountaincar_rollout`, plus `_physics`/`_constants`-mirroring kwargs) instead of extending `../support/oracle.py`, which sits at its own size budget as a sibling node; the two transcribe different dynamics, so this is not duplication.
-Each of those oracles exists twice in the same file: a float32 transcription that mirrors the kernel op for op (and is therefore bit-identical at batch 1) and a float64 Gym-semantics transcription checked at `rtol 1e-5`, which is what proves the float32 graph is the documented environment and not merely self-consistent.
+`test_pendulum.py` and `test_mountaincar.py` carry their own host-numpy rollouts (`_pendulum_rollout`, `_mountaincar_rollout`, plus `_physics`) instead of extending `../support/oracle.py`, which sits at its own size budget as a sibling node.
+Each is a single function parameterized by `dtype`: the float32 and float64 runs use the *same* recurrence, constants and ordering, so the `rtol=1e-5` comparison only checks float32 rounding, not Gym semantics.
+The recurrence itself is cross-checked independently only by the hand-computed one-step expectations (`test_pendulum.py`'s `_advance` case and `test_mountaincar.py`'s `_advance` rows) and MountainCar's reset-interval/idle closed forms; Pendulum's `_physics` copies the source's `3*gravity/(2*length)` and `3/(mass*length**2)` formulas verbatim, so a design error in those coefficients is invisible to every oracle here.
 Closed forms where one is cheap: `mse = 0.25`, `rmse = mae = 0.5` for a constant `0.5` predictor on XOR; `-2.5` for the row-index predictor's first individual; `mape = 1` for a zero predictor on a strictly positive dataset; the `k = 9` survival count of a constant policy from rest; `finalize_fitness`'s `[nan, -1.5, 0, 3, +inf] -> [-inf, -1.5, 0, 3, +inf]`; MountainCar's exactly `0.0` for the idle policy and `100 - 0.1*tanh(logit)**2` for one body step that reaches the goal; Pendulum's `6.245` and `1000` one-step costs and its `16.2736` per-step ceiling.
 Identities where no absolute value exists: `inputs.shape == (S,) + input_shape`, and the `B = P * repeat_times` identity in `test_repeat_times_averages_individual_major_rows`.
 
@@ -49,7 +50,7 @@ A state-dependent policy needs the oracle to see the state it acted on, so the r
 Both environment oracles are written for batch 1 (`(1, 2)` observations, `(1, 1)` logits); `P > 1` cases assert relations (layout, determinism, divergence, bounds) rather than absolute values.
 
 ## Behaviour this suite pins (gotchas worth knowing before editing it)
-`mape` divides by the target: a non-zero prediction on a zero target is `+inf` loss, while a *zero* prediction on a zero target is `0/0 = NaN`; both reach `-inf` fitness through different arithmetic, and each is asserted separately.
+`mape` divides by the target: a non-zero prediction on a zero target is `+inf` loss, while a *zero* prediction on a zero target is `0/0 = NaN`; only the first is asserted (`test_mape_with_a_zero_target_is_infinite...`), the `0/0` corner is not.
 CartPole demotes NaN logits to `-inf` fitness through the explicit `evoxc.isnan` guard (`_nan_rows` → `_any_repeat` → select NaN before `finalize_fitness`), while the decision site still reads NaN as "push left"; one poisoned repeat demotes the whole individual.
 CartPole's fitness is a mean of 0/1 rewards, so it is always finite outside the NaN case and lies in `[0, max_step]`; `max_step` is a hard ceiling and `fitness_target > max_step` is rejected at construction.
 Pendulum's per-step cost is `angle_normalize(theta)**2 + 0.1*theta_dot**2 + 0.001*u**2` on the **pre-transition** state with `u = max_torque*tanh(logit)`, so the return of *any* policy lies in `[-max_step*(pi**2 + 0.1*max_speed**2 + 0.001*max_torque**2), 0]` — `-16.2736*max_step` at the defaults — and the environment never terminates.
@@ -66,6 +67,17 @@ Pendulum and MountainCar have neither a reset knob nor a NaN census: NaN logits 
 `cartesian_product` is not re-exported by `tensorneat.problem` or `tensorneat.problem.func_fit`; it is reached as `problem.func_fit.custom.cartesian_product`.
 `algorithm.NEAT` rejects `pop_size < species_size * min_species_size` (default `10 * 1`), so the arity cross-check builds it at `pop_size = 10`; a smaller population raises `TensorNEATError` before the arity can be read.
 `setup(state)` returns the same `State` and registers no keys; `setup(None)` starts from the same empty key set.
+
+## Known gaps (audit)
+`FuncFit.MAX_DATASET_NBYTES` / `validate_dataset` / `dataset_nbytes` and the `setup`/bake-time budget checks have no test anywhere under `test/`.
+`CustomFuncFit` grid generation is only tested on a 2-D box; 1-D/3-D grids and the oversized-grid rejection are not covered.
+The O=2 reduction is pinned for `mse` only; `rmse`/`mae`/`mape` over both axes are not.
+CartPole's default reset distribution is never bounded (only determinism/divergence), Pendulum's `_reset` is checked for shape/dtype only, and only MountainCar's reset interval is asserted independently.
+`Pendulum.show` and `MountainCar.show` are never called, and `FuncFit.show`'s `P > 1` `individual:` branch is untested.
+MountainCar's `_advance` force clip (`clip(action, -1, 1)`) is never reached with `|action| > 1`: the policies only emit `tanh` values and the hand-built rows pass actions in `[-1, 1]`.
+`test_prepared_rollout.py` pins the prepared pass at the CartPole call site only; the Pendulum/MountainCar `prepared_query` call sites are untested.
+The `BaseProblem` skeleton (`evaluate`/`input_shape`/`output_shape`/`show` raising `NotImplementedError`) and `_common.to_numpy`'s non-`evoxc.Tensor` branch are untested.
+`setup` is tested only on an empty `State` (the `state` fixture has no keys), so dropping or replacing registered keys cannot be detected.
 
 ## Conventions
 Nothing imports `tensorneat`, `support` or `evoxc` at module scope: `../conftest.py` prepends `src/`, `benchmarks/legacy_jax` and `test/` to `sys.path` at collection time, so every input is a `scope="module"` fixture that imports inside its body.

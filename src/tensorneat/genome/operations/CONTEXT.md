@@ -99,6 +99,13 @@ The full suite measured on this tree with `uv sync --extra bench --extra iree`: 
   The concrete case is a boolean `scatter` as a `while_loop` initial value: it SIGSEGVs `iree-compile` in the generation graph although the same `closes_cycle` kernel compiles and runs standalone, which is why that frontier seed is a one-hot `equal`/`logical_and` (evidence and cost in `./mutation/CONTEXT.md`, cycle-predicate section).
 - The v1-portable formulations cost, measured on this node by running the compared formulations side by side on the same box: `closes_cycle`'s log2-doubling suffix scan in place of `cumsum` costs 24 traced ops and 8.60 ms per call at pop 1000, 4.30 at 500, 1.88 at 100; `_order_ready` costs 4 traced ops per `find_homologous` call and `execute_distance` 3.26 ms at pop 100; `prepare_distance` measures 1.340 ms per call. All three keep the numpy backend bit-identical.
 
+## Call-site census (no in-repo caller — verified with `rg` over `src`, `test`, `examples`, `benchmarks`)
+`mutation/degree.py` (`in_degree`/`max_in_degree`/`violation`) is exported by `mutation/__init__.py` and has an autodoc stub, but nothing in the repo imports or calls it; it is a shipped diagnostic only.
+`distance/layout.py::dense_slot` and `distance/digest.py::match_rows` are `__all__` members with no caller, and `distance/base.py::BaseDistance.gene_measure` has no caller either.
+`crossover/default.py::DefaultCrossover.find_homologous` is called only by two tests in `test/unit/genome/test_crossover.py`; the live crossover path is `align_gene_rows` → `alignment.homologous_pair`.
+`BaseDistance.gene_measure` starts its own `ConstantPool()` (`distance/base.py:384`), so it cannot share a generation's constants; `measure` → `_measure_family` is the live path.
+`DistanceDigest.field_names` is read only by `test/unit/genome/test_distance_digest.py`.
+
 ## Routing Table
 | Path | Responsibility |
 |---|---|
