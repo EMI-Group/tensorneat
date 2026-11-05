@@ -52,7 +52,7 @@ Every number comes from one worker run of one `(case, impl, backend, repeat)` tu
 - repeats — repeat `r` uses `seed + r`, so repeats sample timing noise *and* search variance; per-case values are medians over repeats with min/max kept in JSON.
 - load — measured conditions, never a verdict input: each worker records `os.getloadavg()` at start and end (`loadavg_start`/`loadavg_end`, optional keys) and `protocol.env_report()` records the document-build load average; the report prints them so a shared box is visible instead of implied.
 - repeat spread — the headline prints the speed-up range `old_min/new_max … old_max/new_min` over the per-repeat medians next to the median, and `## Quality curves` prints one row per repeat plus the element-wise-median aggregate row: per-repeat spread is the honest uncertainty measure, a median alone is not.
-- That range prints the pessimistic ratio first (`old_min/new_max` is the worst speed-up for the new side), so the column title `Speed-up range (best–worst)` reads backwards: `xor_p100` shows `0.59x–1.37x`.
+- That range prints the pessimistic ratio first (`old_min/new_max` is the worst speed-up for the new side) and the headline column is titled `Speed-up range (worst–best)` accordingly: `xor_p100` shows `0.59x–1.37x`.
 ## Fairness Rules (binding)
 1. One implementation per process: the old side loads JAX, the new side asserts `jax`/`torch` never entered `sys.modules` after `import tensorneat` (a built-in release-gate check).
 2. Runs are strictly sequential — never two benchmark processes at once, one fresh interpreter per run.
