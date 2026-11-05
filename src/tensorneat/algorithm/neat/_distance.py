@@ -59,22 +59,29 @@ population.
 Measured cost
 -------------
 Numpy reference backend, ``species_size=20``, one configuration per fresh
-process, 3 warmup + 20 timed ``Pipeline.step`` after the build step, interleaved
-rounds alternating a tree that tiles the centre to ``pop_size`` rows (and so
-takes the genome's row-wise merge) against this one, medians of 8 rounds at
-``P = 500`` and of 4 at ``P = 1000`` / ``P = 100``, ``XOR``, seed 42,
-``is_detailed=False``: ``P = 500`` **157.5 -> 111.4 ms** per generation and
-222.3 -> 198.5 MiB peak RSS, ``P = 1000`` **278.4 -> 172.3 ms** and
-352.0 -> 304.1 MiB, and the gated ``P = 100`` cell 42.6 -> 40.7 ms at
-113.4 -> 112.3 MiB.
-The dispatch count moves the other way: 7 678.7 -> 7 958.7 executed ops per
-generation at ``P = 500`` (7 682.0 -> 7 962.0 at ``P = 1000``, 5 335.7 -> 5 497.7
-on the gated cell), i.e. +7 per compatibility call, because the dense
-single-centre route emits more ops than the merge (the genome records 102
-against 94) while spending far less per op on a ``P``-row-wide payload
-(genome-side record: 1.35 vs 2.39 ms per call at ``P = 500``).
-At these populations the interpreter's per-op cost is not the binding term; the
-row width of the merge's ``(rows, 2 * max_conns)`` intermediates is.
+process, 3 warmup + 20 timed ``Pipeline.step`` after the build step, six
+interleaved rounds, medians of the per-round medians, ``XOR``, seed 42,
+``is_detailed=False``; ``reference`` is the pre-change tree's measurement
+(one-individual only, i.e. what ``"single"`` replaces):
+
+* ``xor_p500`` ms per generation: 159.43 tiled, 112.73 single, 115.81 reference.
+* ``xor_p1000`` ms per generation: 272.84 tiled, 176.61 single, 178.58 reference.
+* ``xor_p100`` ms per generation: 42.85 tiled, 41.09 single, 40.92 reference.
+* peak RSS ``P = 500`` / ``P = 1000``: 218.7 / 348.5 MiB tiled, 196.4 / 302.5 single.
+* executed ops per generation at ``P = 500`` / ``P = 1000`` / ``P = 100``:
+  7 466 / 7 471 / 3 817 tiled against 8 066 / 8 071 / 3 877 single (and reference).
+
+``"single"`` is within noise of the reference it replaced (0.986x / 0.999x /
+1.004x), so the switch costs the interpreter nothing.
+``"tiled"`` is the legacy merge shape and dispatches **fewer** ops (-7.4 %) yet
+runs +39 % / +54 % / +4.3 % slower: at these populations the numpy interpreter
+is charged by element volume rather than by dispatch, and the merge's
+``(pop_size, 2 * max_conns)`` row-width intermediates are that volume (the
+genome records 2.39 against 1.35 ms per compatibility call at ``P = 500``).
+So on numpy a pipeline selects ``"single"``, and ``"tiled"`` exists for
+GPU-class devices, where the dense route's per-call scatters are lowered
+single-threaded (40 x 0.97 ms + 40 x 0.52 ms of a generation) and the merge is
+the 2x cheaper device shape.
 The table costs exactly one ``measure_distance`` call per centre row -- 40 calls per
 generation at ``species_size = 20``, 20 here and 20 in scan 2 -- and what the
 scan buys is the *region* around those calls, not fewer of them.
@@ -87,8 +94,8 @@ Grouping several centres into one ``measure_distance`` call is a measured
 rejection and an unwired option, not a shipped path: the genome's
 ``tensorneat.genome.operations.distance.group_digest`` / ``GroupedDigest`` route
 is tested and bit-identical to the separate calls, and it is a row-wise-merge
-option only (the tiled digest carries no dense table), so it competes with the
-merge, not with the shipped one-individual call.
+option only (the tiled digest carries no dense table), so it competes with
+``"tiled"``, not with the one-individual call this module makes in ``"single"``.
 Measured against that merge over the whole generation at ``P = 500`` /
 ``species_size = 20``, scan 1 grouped two centres per call dispatched 6 589 ops
 (-13 %) at 253.2 MiB peak RSS (+8.3 %) against the ungrouped 7 592 at 233.8 MiB,
@@ -112,10 +119,11 @@ iteration.  A kernel inside a ``scan`` body therefore pays one region's
 transients at a time, while a kernel at the top level keeps them alive for the
 rest of the generation -- which is what the whole-table scan is for, and why the
 top-level spelling of the same rows is never used.
-The measured footprint of the shipped arrangement is the A/B's 198.5 MiB at
-``P = 500`` and 304.1 MiB at ``P = 1000``; build follows the same split, because
-a loop body is traced once while a static loop over ``S`` centres traces ``S``
-copies of the kernel.
+The measured footprint is per mode (the table above): 196.4 / 302.5 MiB at
+``P = 500`` / ``P = 1000`` in ``"single"`` and 218.7 / 348.5 MiB in ``"tiled"``,
+the merge's wider rows being the difference; build follows the same split,
+because a loop body is traced once while a static loop over ``S`` centres traces
+``S`` copies of the kernel.
 Any future hoist out of the region has to report peak RSS and build next to its
 wall time.
 """
@@ -256,10 +264,10 @@ class DistanceRows:
         """``(P,)`` distance row of one centre payload (batch ``1`` or ``P``).
 
         Args:
-            state (Any): Shared state.
+            state (Any): Shared state; its ``distance_centre`` entry selects the
+                centre spelling (:func:`._validation.distance_centre_mode`).
             centre (Any): Centre payload of one individual (batch ``1``) or a
-                population-shaped one (batch ``pop_size``); both are measured as
-                they stand.
+                population-shaped one (batch ``pop_size``).
 
         Returns:
             Any: ``(P,)`` float32 distances.
@@ -268,12 +276,11 @@ class DistanceRows:
             TensorNEATError: If the centre batch is neither ``1`` nor ``P``.
 
         Note:
-            The batch-``1`` centre goes to
-            :meth:`~tensorneat.genome.base.BaseGenome.measure_distance`
-            unchanged: the genome pairs that one centre against the digest's
-            ``pop_size`` rows, taking its dense single-centre route when the static
-            gate on the genome holds and broadcasting the centre internally
-            otherwise.
+            A batch-``1`` centre is tiled to ``pop_size`` rows in ``"tiled"``
+            mode (the default) and handed on unchanged in ``"single"`` mode,
+            where the genome pairs it against the digest's ``pop_size`` rows
+            through its dense single-centre route; a ``pop_size``-row centre is
+            measured row-wise as it stands in both modes.
         """
         batch = int(centre[0].shape[0])
         if batch != self.pop_size and batch != 1:
