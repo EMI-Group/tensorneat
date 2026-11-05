@@ -141,7 +141,7 @@ The shipped connection gates live on the genome (`DefaultMutation(conn_add=0.4, 
 - Files ≤ ~1000 lines; shared math lives in `common/`, never duplicated per genome/algorithm.
 - The numpy interpreter keeps every SSA result of a block alive until that block returns, so a kernel's live set is charged once per enclosing block: never hoist a kernel out of a `while`/`scan` without measuring peak RSS (hoisting the 20 speciation rows was 28 % faster and 1.7× the memory; measuring them inside one `evoxc.scan` is 40 % faster and below the starting memory).
 - Never seed a `while`-carried value with a `scatter`: it SIGSEGVs `iree-compile` in the assembled graph while exporting cleanly; seed with a one-hot `equal`/`logical_and`, and treat only `test/backends` as proof of portability.
-- `pipeline.py` (988 lines) is one job — the single compile site plus the design, caching, overflow and measured-cost documentation that belongs next to it; the host-side payload helpers live in `./host_payload.py` (442 lines) so the file stays under the line budget.
+- `pipeline.py` (959 lines) is one job — the single compile site plus the design, caching, overflow and measured-cost documentation that belongs next to it; the host-side payload helpers live in `./host_payload.py` (571 lines) so the file stays under the line budget.
 
 ## Routing Table
 | Path | Responsibility |
