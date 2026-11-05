@@ -39,7 +39,7 @@ That failure was real and is now fixed at its source in `src/` (section "The fiv
 | backend | install | what runs | compile needed |
 |---|---|---|---|
 | `numpy` | always available | everything | 0.26–0.40 s per generation graph (the evoxc interpreter build) |
-| `iree` (llvm-cpu) | `pip install "evoxc[iree]"` | `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum`, `MountainCarContinuous`, `RecurrentGenome`, `HyperNEAT` — one full generation each, verified (see the coverage note above) | 7.0–10.4 s per generation graph, one-off per static shape |
+| `iree` (llvm-cpu) | `uv sync --extra iree` (without uv: `pip install "evoxc[iree] @ git+https://github.com/EMI-Group/evoxc@v0.1.1"`) | `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum`, `MountainCarContinuous`, `RecurrentGenome`, `HyperNEAT` — one full generation each, verified (see the coverage note above) | 7.0–10.4 s per generation graph, one-off per static shape |
 | `xla` | plugin `.so` required | nothing | not reached: `the xla adapter requires a PJRT C API plugin library (.so exporting GetPjRtApi) and none was found` |
 | `tvm` | extra | not attempted | — |
 
@@ -172,7 +172,9 @@ Per-generation cost is dominated by the graph's dense `gather`/`argsort`/`scatte
 
 ## What a user must know to run `backend="iree"`
 
-- `pip install "evoxc[iree]"` (pulls `iree-base-compiler` + `iree-base-runtime`); then `Pipeline(..., backend="iree")` just works for the shipped problems.
+- `uv sync --extra iree` pulls `iree-base-compiler` + `iree-base-runtime`; then `Pipeline(..., backend="iree")` just works for the shipped problems.
+  Without uv, install the same extra from the pinned tag: `pip install "evoxc[iree] @ git+https://github.com/EMI-Group/evoxc@v0.1.1"`, plus `pip install --no-deps .` for tensorneat itself.
+  Plain `pip install "evoxc[iree]"` is not supported: PyPI only ships `evoxc` 0.1.0, while `pyproject.toml` resolves the git tag `v0.1.1` through `[tool.uv.sources]` (and its `evoxc >= 0.1.1` floor cannot be satisfied from PyPI).
 - **Compile is one-off per static shape**: population, `max_nodes`, `max_conns` are baked into the graph, so a shape change re-compiles (~10 s here). `Pipeline` caches the executable per shape.
 - **Kernel rules the exporter and iree impose** (all enforced by construction in `src/` today, and documented in `src/tensorneat/common/CONTEXT.md`, `src/tensorneat/algorithm/neat/CONTEXT.md`, `src/tensorneat/algorithm/hyperneat/CONTEXT.md`, `src/tensorneat/genome/CONTEXT.md` and `src/tensorneat/genome/operations/CONTEXT.md`):
   1. `scatter` must be rank-1 `axis=0` or a rank-2 row/column write — no rank ≥ 3 operand.
