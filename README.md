@@ -205,7 +205,7 @@ Practical notes if you want to run `backend="iree"`: `uv sync --extra iree`, lea
 ## Performance
 
 Honest state: on CPU, with the numpy reference interpreter, **the rewrite is not uniformly faster per generation than the frozen pre-rewrite JAX implementation**. The table is the committed harness record in [`benchmarks/RESULTS.md`](./benchmarks/RESULTS.md), rendered from `benchmarks/results/authoritative.json` at 2026-11-04T19:01Z, git `ebeaf1f`, 3 repeats at seeds 42/43/44, **JAX 0.10.2**, 150 timed generations after 3 warmup, one process per run, on a **shared** 20-core INTEL Xeon Platinum 8568Y+ (other jobs ran concurrently, so the per-repeat spread is the honest uncertainty — `0.59×`–`1.37×` on the pop-100 XOR row; a median alone would hide it).
-That record predates the tiled-evaluate pass, the hoisted RL rollout and the search-quality pass, so every number in it describes the tree at `ebeaf1f`; the post-fix measurements live in [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md) and the post-fix search-quality record in [`benchmarks/results/xor3d_quality_2026-11-04.md`](./benchmarks/results/xor3d_quality_2026-11-04.md).
+That record postdates the op-count pass but predates the tiled-evaluate pass, the hoisted RL rollout and the search-quality pass, so every number in it describes the tree at `ebeaf1f`; the post-fix measurements live in [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md) and the post-fix search-quality record in [`benchmarks/results/xor3d_quality_2026-11-04.md`](./benchmarks/results/xor3d_quality_2026-11-04.md).
 
 | case | pop | legacy JAX ms/gen | this library (`numpy`) ms/gen | speed-up (old / new) |
 |---|---|---|---|---|
