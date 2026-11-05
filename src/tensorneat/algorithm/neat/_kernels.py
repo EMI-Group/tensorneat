@@ -5,8 +5,8 @@ This private module holds the parts of the species algebra that are written
 
 * the graph-time constant/index helpers (``enp`` creation ops need a live trace,
   so nothing here may be precomputed on the host);
-* the shared building blocks ``sort_desc_legacy``, ``prefix_sum_exclusive``,
-  ``membership`` and ``scatter_row``;
+* the shared building blocks ``sort_desc_legacy``, ``prefix_sum_exclusive`` and
+  ``membership``;
 * spawn allocation (:func:`spawn_numbers_by_rank` / ``_by_fitness`` on top of
   :func:`spawn_from_target`), block flattening (:func:`block_layout`), parent
   pairing (:func:`pair_parents`);
@@ -35,8 +35,6 @@ from tensorneat.common.tools import (
     fetch_first,
     flat_gather,
 )
-
-from ._distance import repeat_leading
 
 #: Entry name under which the current population payload is stored.
 POP_KEY = "pop"
@@ -107,25 +105,25 @@ def static_f32(values: Any) -> Any:
     return evoxc.constant(evoxc.from_numpy(array))
 
 
-def reversed_index(length: int) -> Any:
-    """``(length,)`` ``int32`` index vector ``[length - 1, ..., 1, 0]``.
-
-    The exportable replacement for ``evoxc.flip(x, 0)``, which the StableHLO
-    v1 exporter does not map: ``gather(x, reversed_index(n), axis=0)`` is the
-    same reversal, since a single-axis gather with static indices is
-    supported.
-    """
-    return static_i32(np.arange(length - 1, -1, -1))
-
-
 def scalar_f32(value: Any) -> Any:
-    """Normalise a traced value to a rank-0 ``float32``.
+    """Normalise a traced value to a rank-0 ``float32``, adding no op when it is.
 
     A 0-d tensor handed to a graph as an *input* can arrive with shape ``(1,)``,
-    so a scalar that is later broadcast against ``(S,)`` fields is reshaped here
-    instead of at every use site.
+    and a generation counter may travel in another float dtype, so a scalar that
+    is later broadcast against ``(S,)`` fields is normalised here instead of at
+    every use site -- but only as far as it needs to be: the ``cast`` is emitted
+    only when the static dtype differs and the ``reshape`` only when the static
+    rank differs, so a 0-d ``float32`` value (``state.generation``, which
+    :meth:`NEAT.setup` creates that way) costs zero dispatches.
+
+    Both branches hold the same value bit for bit: the static check is a Python
+    ``if`` over the trace-time dtype/shape, never a predicate on tensor contents.
     """
-    return evoxc.reshape(evoxc.cast(evoxc.reshape(value, (1,)), evoxc.float32), ())
+    if value.dtype != evoxc.float32:
+        value = evoxc.cast(value, evoxc.float32)
+    if tuple(value.shape) != ():
+        value = evoxc.reshape(value, ())
+    return value
 
 
 def payload_like(
@@ -178,28 +176,6 @@ def prefix_sum_exclusive(values: Any) -> Any:
     length = values.shape[0]
     triangular = static_f32(np.tril(np.ones((length, length), dtype=np.float32), -1))
     return evoxc.reshape(evoxc.dot(triangular, enp.expand_dims(values, 1)), (length,))
-
-
-def scatter_row(table: Any, slot: Any, update: Any) -> Any:
-    """Replace row ``slot`` of a ``(S, ...)`` table with ``update``.
-
-    ``evoxc.scatter`` writes the cells numpy's ``x[slot] = update`` writes, but
-    the StableHLO v1 exporter only supports ``scatter`` on a rank-1 ``axis=0``
-    operand and on rank-2 row/column writes -- a rank-3 gene table
-    (``(S, N, NA)`` node attrs, ``(S, E, CK)`` conn keys, ...) is rejected
-    outright.  Flattening the trailing axes into one row length ``R`` turns the
-    same write into a rank-2 ``axis=0`` row scatter, which exports; the
-    reshape round-trip is shape-only, so the written cells are identical.
-    """
-    shape = tuple(table.shape)
-    if len(shape) == 2:
-        return evoxc.scatter(table, slot, update)
-    row_len = 1
-    for dim in shape[1:]:
-        row_len *= dim
-    flat = evoxc.reshape(table, (shape[0], row_len))
-    written = evoxc.scatter(flat, slot, evoxc.reshape(update, (row_len,)))
-    return evoxc.reshape(written, shape)
 
 
 def first_centre_table(species_size: int, row: Any, fill: Any, dtype: Any) -> Any:
@@ -358,7 +334,7 @@ def spawn_numbers_by_fitness(
 # --------------------------------------------------------------------------- #
 
 
-def block_layout(spawn_number: Any, pop_size: int, species_size: int) -> Any:
+def block_layout(spawn_number: Any, pop_size: int) -> Any:
     """Map each population slot to its species block: ``(loc, idx_in_block)``.
 
     With the exclusive prefix sum ``E`` of ``spawn_number`` and
@@ -378,30 +354,28 @@ def block_layout(spawn_number: Any, pop_size: int, species_size: int) -> Any:
     residual correction making the total exactly ``pop_size``), and
     :func:`pair_parents` is this kernel's only production caller.
 
-    ``loc`` must be the *last* qualifying block rather than the number of
-    qualifying blocks: zero-spawn species can sit in the middle of the table
-    (after the sort only dead slots are guaranteed to trail), so a count would
-    point at the wrong block -- hence the reversed ``argmax`` (``argmax``
-    returns the first maximum), with the reversal spelled as a static-index
-    ``gather`` (:func:`reversed_index`) because ``evoxc.flip`` is a deferred op
-    on the StableHLO exporter.
+    ``loc`` is the *last* qualifying block rather than the number of qualifying
+    blocks: zero-spawn species can sit in the middle of the table (after the sort
+    only dead slots are guaranteed to trail).  The two forms coincide exactly
+    because ``spawn >= 0`` makes ``E`` its running sum, hence monotone
+    non-decreasing -- so the indices ``i`` with ``E[i] <= p`` are a *prefix* of
+    ``[0, S)``, and "the count of them minus one" IS the last one.  The count is
+    spelled ``sum(E[:, None] <= p, axis=0) - 1``: one comparison over the
+    ``(S, P)`` mask plus one reduction, with no reversal permutation, no
+    ``argmax`` and no ``reverse-index`` constant to bake.  The reduction needs the
+    trailing ``cast`` because an integer ``sum`` accumulates in the platform
+    integer (``int64``) while ``loc`` is an ``int32`` gather index.
     """
-    spawn = evoxc.cast(spawn_number, evoxc.int32)
-    exclusive = prefix_sum_exclusive(evoxc.cast(spawn, evoxc.float32))
+    spawn = evoxc.cast(spawn_number, evoxc.float32)
+    exclusive = prefix_sum_exclusive(spawn)
     slots = iota_f32(pop_size)
     mask = evoxc.less_equal(
         enp.expand_dims(exclusive, 1), enp.expand_dims(slots, 0)
     )
-    reversed_loc = evoxc.cast(
-        evoxc.argmax(
-            evoxc.gather(
-                evoxc.cast(mask, evoxc.int32), reversed_index(species_size), axis=0
-            ),
-            axis=0,
-        ),
+    loc = evoxc.cast(
+        evoxc.subtract(evoxc.sum(evoxc.cast(mask, evoxc.int32), axes=0), int_const(1)),
         evoxc.int32,
     )
-    loc = evoxc.subtract(int_const(species_size - 1), reversed_loc)
     idx_in_block = evoxc.cast(
         evoxc.subtract(slots, evoxc.gather(exclusive, loc, axis=0)), evoxc.int32
     )
@@ -450,12 +424,22 @@ def pair_parents(
     a sanitised ``-inf`` genome.
     """
     members = membership(species_keys, idx2species)
-    masked = evoxc.select(members, enp.expand_dims(fitness, 0), neg_inf())
+    # One graph constant per distinct scalar, built once and closed over: they are
+    # trace-time constants, so a shared binding is one ``constant`` op instead of
+    # one per use site.
+    minus_inf = neg_inf()
+    zero_f32 = const(0.0)
+    one_f32 = const(1.0)
+    pop_bound = const(float(pop_size))
+    pop_i32 = int_const(pop_size)
+    zero_i32 = int_const(0)
+    one_i32 = int_const(1)
+    masked = evoxc.select(members, enp.expand_dims(fitness, 0), minus_inf)
     ranking = evoxc.cast(sort_desc_legacy(masked, axis=1), evoxc.int32)
-    previous = evoxc.select(evoxc.isnan(member_count), const(0.0), member_count)
+    previous = evoxc.select(evoxc.isnan(member_count), zero_f32, member_count)
     floored = evoxc.floor(evoxc.multiply(previous, float(survival_threshold)))
-    ceiling = evoxc.maximum(evoxc.minimum(previous, const(float(pop_size))), const(1.0))
-    survive = evoxc.cast(evoxc.clamp(floored, const(1.0), ceiling), evoxc.int32)
+    ceiling = evoxc.maximum(evoxc.minimum(previous, pop_bound), one_f32)
+    survive = evoxc.cast(evoxc.clamp(floored, one_f32, ceiling), evoxc.int32)
     draws = evoxc.random.randint(
         selection_key,
         (species_size, 2, pop_size),
@@ -465,7 +449,11 @@ def pair_parents(
     )
     # ``evoxc.gather`` replaces its axis instead of indexing per row, so the
     # per-row draw must go through the flattened ``common.tools.flat_gather``.
-    parent = flat_gather(ranking, draws)
+    # ``trusted``: a draw is in ``[0, survive)`` and ``survive`` is clamped to
+    # ``[1, pop_size]`` (its ceiling is ``max(min(member_count, pop_size), 1)`` and
+    # ``floor(threshold * member_count) <= member_count`` for ``threshold <= 1``),
+    # so every index is inside the ranking's row length ``pop_size`` by construction.
+    parent = flat_gather(ranking, draws, trusted=True)
     width = species_size * pop_size
     father = evoxc.reshape(evoxc.gather(parent, 0, axis=1), (width,))
     mother = evoxc.reshape(evoxc.gather(parent, 1, axis=1), (width,))
@@ -475,20 +463,27 @@ def pair_parents(
     winner_species = evoxc.select(father_wins, father, mother)
     loser_species = evoxc.select(father_wins, mother, father)
 
-    loc, idx_in_block = block_layout(spawn_number, pop_size, species_size)
-    flat_slot = evoxc.add(evoxc.multiply(loc, int_const(pop_size)), idx_in_block)
+    loc, idx_in_block = block_layout(spawn_number, pop_size)
+    flat_slot = evoxc.add(evoxc.multiply(loc, pop_i32), idx_in_block)
     winner = evoxc.gather(winner_species, flat_slot, axis=0)
     loser = evoxc.gather(loser_species, flat_slot, axis=0)
     elite_mask = evoxc.less(idx_in_block, genome_elitism)
     # Elite slot ``c`` pins rank ``min(c, live_members - 1)``: the ranking is descending
     # and every finite fitness beats the ``-inf`` a sanitised genome maps to, so the
     # finite members head the row and the clamp stays on a live member.
-    alive = evoxc.cast(evoxc.greater(fitness, neg_inf()), evoxc.float32)
-    live = evoxc.sum(evoxc.select(members, enp.expand_dims(alive, 0), const(0.0)), axes=1)
-    cap = evoxc.maximum(evoxc.subtract(evoxc.cast(live, evoxc.int32), int_const(1)), int_const(0))
-    ranks = enp.reshape(enp.arange(pop_size, dtype=evoxc.int32), (1, pop_size))
+    alive = evoxc.cast(evoxc.greater(fitness, minus_inf), evoxc.float32)
+    live = evoxc.sum(evoxc.select(members, enp.expand_dims(alive, 0), zero_f32), axes=1)
+    cap = evoxc.maximum(evoxc.subtract(evoxc.cast(live, evoxc.int32), one_i32), zero_i32)
+    ranks = enp.reshape(iota_i32(pop_size), (1, pop_size))
     block_rank = evoxc.minimum(ranks, enp.expand_dims(cap, 1))
-    pinned = evoxc.gather(evoxc.reshape(flat_gather(ranking, block_rank), (width,)), flat_slot, axis=0)
+    # ``trusted``: ``block_rank = min(rank, cap)`` with ``rank`` in ``[0, P)`` and
+    # ``cap`` in ``[0, P - 1]`` (it is a member count minus one), so it never
+    # leaves the ranking's row length ``pop_size`` either.
+    pinned = evoxc.gather(
+        evoxc.reshape(flat_gather(ranking, block_rank, trusted=True), (width,)),
+        flat_slot,
+        axis=0,
+    )
     return (
         evoxc.select(elite_mask, pinned, winner),
         evoxc.select(elite_mask, pinned, loser),
@@ -604,15 +599,23 @@ def speciate(
     iteration with nothing to do performs no write, which reproduces the legacy
     early-exit ``while_loop`` on a static trip count.
 
-    **Carried state.**  Scan 1 carries the four centre gene tables (it is the
-    pass that re-elects centres); scan 2 carries two rank-1 per-slot tables
-    instead -- ``seed_table (S,) int32`` and ``created_mask (S,) float32`` -- and
-    the four centre tables are rebuilt once after it.  Scan 2's own centre writes
-    were the identity on every non-creating slot, so only a created row
-    (``pop[seed_table[slot]]``) ever differs from the scan-1 table; recording
-    that pair replaces four row scatters per iteration and drops the four gene
-    tables out of the ``while`` carry without changing a single value.  Both
-    scans carry ``assign``/``dist``/``keys_ext`` and nothing else.
+    **Carried state.**  Both scans carry ``assign``/``dist``/``keys_ext`` plus two
+    rank-1 per-slot tables recording the centre rows they write:
+    ``closest_table (S,) int32`` / ``claim_table (S,) float32`` for scan 1 and
+    ``seed_table (S,) int32`` / ``created_mask (S,) float32`` for scan 2 (one
+    single-element rank-1 ``axis=0`` ``scatter`` each, the exporter's supported
+    shape), and the four centre gene tables are rebuilt once after each scan.  In
+    both scans a slot writes only *its own* centre row, and ``arange(S)`` visits
+    every slot exactly once, so the row another iteration reads is always the
+    pre-scan one: recording ``(source row, did-write)`` per slot and applying it
+    with four ``gather`` + four ``select`` after the scan replaces four row
+    scatters per iteration (and four gene tables in the ``while`` carry) without
+    changing a single value.  Scan 1 records ``closest`` (``pop[closest]`` is the
+    re-elected centre), scan 2 records ``seed`` (``pop[seed]`` is the centre of a
+    slot that creates a species; its own centre write was the identity on every
+    other slot).  A non-writing slot's recorded index is the clamped ``0``, which
+    its mask discards, so the unconditional post-scan ``gather`` is always in
+    range and never read.
 
     **Distance rows.**  ``distance_fn`` is the digest-backed callable built by
     ``NEAT.tell`` from ``genome.prepare_distance`` (see
@@ -645,11 +648,11 @@ def speciate(
       next centre is measured, where a top-level loop would keep all
       ``species_size`` of them alive for the rest of the generation.  Scan 1's
       rows are the ones the gated path would read: slot ``i``'s centre is the
-      carry row ``i``, and no earlier iteration can rewrite it (every
+      pre-scan centre row ``i``, and no earlier iteration can rewrite it (every
       ``scatter`` writes index ``slot`` and each slot is visited once).  Scan 2
       still measures its selected centre per iteration (``pop[seed]`` for a
-      creating slot, the scan-1 centre row otherwise -- a closed-over value,
-      because scan 2 no longer carries the centre tables), because a creating
+      creating slot, the rebuilt scan-1 centre row otherwise -- a closed-over
+      value, because neither scan carries the centre tables), because a creating
       slot's centre is data-dependent.
       This form needs a callable with ``matrix`` (:class:`._distance.DistanceRows`);
       any other callable raises ``TensorNEATError`` instead of falling back to the
@@ -670,19 +673,24 @@ def speciate(
         species_state.center_conn_keys,
         species_state.center_conn_attrs,
     )
+    # Scan 1 carries the running assignment/distance and the key table plus two
+    # rank-1 per-slot tables recording the centre rows it writes
+    # (``closest_table``/``claim_table``); the four centre gene tables are
+    # rebuilt once after the scan -- see the ``speciate`` docstring's "Carried
+    # state" paragraph.
     carry = (
         enp.full((pop_size,), float("nan"), dtype=evoxc.float32),
         enp.full((pop_size,), float("inf"), dtype=evoxc.float32),
         keys_ext,
-        *centre_fields,
+        enp.zeros((species_size,), dtype=evoxc.int32),
+        enp.zeros((species_size,), dtype=evoxc.float32),
     )
     population_fields = tuple(population)
     centre_payload = payload_like(population, *centre_fields)
     # Trace-time constants are built once here and closed over by the scan
     # bodies: a ``while`` body may reference enclosing SSA values, so one
-    # ``constant`` op at the top level replaces the one every body would
-    # otherwise re-emit on each of its ``species_size`` iterations.  The values
-    # and their dtypes are exactly what the bodies used to build in place.
+    # ``constant`` op at the top level instead of one re-emitted on each of the
+    # body's ``species_size`` iterations.
     iinf = int_const(I_INF)
     zero_i32 = int_const(0)
     zero_f32 = const(0.0)
@@ -705,17 +713,14 @@ def speciate(
 
         The genome's distance kernel takes a population-shaped centre -- one row
         per (centre, individual) pair -- so the slot's single centre row is
-        repeated ``pop_size`` times with :func:`._distance.repeat_leading`: every
-        row of the payload is the same centre, which is what makes the returned
-        ``(pop_size,)`` vector the centre's distance row.  A bare row would be
-        read as a rank-1 payload.
+        repeated ``pop_size`` times with one rank-raising ``evoxc.broadcast`` per
+        field: every row of the payload is the same centre, which is what makes
+        the returned ``(pop_size,)`` vector the centre's distance row.  A bare row
+        would be read as a rank-1 payload.
         """
         return payload_like(
             population,
-            *(
-                repeat_leading(evoxc.reshape(row, (1,) + tuple(row.shape)), pop_size)
-                for row in rows
-            ),
+            *(evoxc.broadcast(row, (pop_size,) + tuple(row.shape)) for row in rows),
         )
 
     def centre_rows(fields, slot):
@@ -764,7 +769,7 @@ def speciate(
 
     def reserve(carry, slot):
         """Scan 1: claim the nearest unassigned genome for one live slot."""
-        assign, dist, keys_ext, node_keys, node_attrs, conn_keys, conn_attrs = carry
+        assign, dist, keys_ext, closest_table, claim_table = carry
         key_slot = evoxc.gather(keys_ext, slot, axis=0)
         live = evoxc.logical_not(evoxc.isnan(key_slot))
         pending = evoxc.isnan(assign)
@@ -772,34 +777,23 @@ def speciate(
         claim = evoxc.logical_and(live, any_pending)
 
         def compute_row(
-            centre_node_keys,
-            centre_node_attrs,
-            centre_conn_keys,
-            centre_conn_attrs,
             pop_node_keys,
             pop_node_attrs,
             pop_conn_keys,
             pop_conn_attrs,
             centre_slot,
         ):
-            """Distance row of the carry centre ``centre_slot``, ``(P,)`` floats.
+            """Distance row of the pre-scan centre ``centre_slot``, ``(P,)`` floats.
 
-            The payload is built *in here* from the four carry arrays, so a
+            The payload is built *in here* from the four centre tables, so a
             skipped slot pays neither the gather nor the compatibility kernel.
+            Its centre is row ``centre_slot`` of the *pre-scan* tables, which is
+            the row this slot would still carry: no earlier iteration writes any
+            row but its own.
             """
             return distance_fn(
                 state,
-                single_payload(
-                    centre_rows(
-                        (
-                            centre_node_keys,
-                            centre_node_attrs,
-                            centre_conn_keys,
-                            centre_conn_attrs,
-                        ),
-                        centre_slot,
-                    )
-                ),
+                single_payload(centre_rows(centre_fields, centre_slot)),
                 payload_like(
                     population,
                     pop_node_keys,
@@ -809,9 +803,8 @@ def speciate(
                 ),
             )
 
-        operands = (node_keys, node_attrs, conn_keys, conn_attrs) + population_fields
         if gate:
-            distances = gated_row(claim, compute_row, operands + (slot,))
+            distances = gated_row(claim, compute_row, population_fields + (slot,))
         else:
             distances = evoxc.gather(rows1, slot, axis=0)
         # ``argmin_with_mask`` folds "nothing left to claim" into the ``I_INF``
@@ -826,51 +819,12 @@ def speciate(
         onehot = evoxc.logical_and(evoxc.equal(pop_index, closest), claim)
         assign = evoxc.select(onehot, key_slot, assign)
         dist = evoxc.select(onehot, zero_f32, dist)
-        node_keys = scatter_row(
-            node_keys,
-            slot,
-            evoxc.select(
-                claim,
-                evoxc.gather(population.node_keys, closest, axis=0),
-                evoxc.gather(node_keys, slot, axis=0),
-            ),
-        )
-        node_attrs = scatter_row(
-            node_attrs,
-            slot,
-            evoxc.select(
-                claim,
-                evoxc.gather(population.node_attrs, closest, axis=0),
-                evoxc.gather(node_attrs, slot, axis=0),
-            ),
-        )
-        conn_keys = scatter_row(
-            conn_keys,
-            slot,
-            evoxc.select(
-                claim,
-                evoxc.gather(population.conn_keys, closest, axis=0),
-                evoxc.gather(conn_keys, slot, axis=0),
-            ),
-        )
-        conn_attrs = scatter_row(
-            conn_attrs,
-            slot,
-            evoxc.select(
-                claim,
-                evoxc.gather(population.conn_attrs, closest, axis=0),
-                evoxc.gather(conn_attrs, slot, axis=0),
-            ),
-        )
-        return (
-            assign,
-            dist,
-            keys_ext,
-            node_keys,
-            node_attrs,
-            conn_keys,
-            conn_attrs,
-        ), assign
+        # Record the re-elected centre row instead of scattering it: row ``slot``
+        # becomes ``pop[closest]`` where ``claim`` holds, which the post-scan
+        # rebuild applies with one gather and one select per field.
+        closest_table = evoxc.scatter(closest_table, slot, closest)
+        claim_table = evoxc.scatter(claim_table, slot, evoxc.cast(claim, evoxc.float32))
+        return (assign, dist, keys_ext, closest_table, claim_table), zero_f32
 
     # Scan 2 carries two rank-1 per-slot tables instead of the four centre gene
     # tables: its centre writes were the identity on every non-creating slot, so
@@ -952,13 +906,13 @@ def speciate(
         dist = evoxc.select(take, distances, dist)
         return (assign, dist, keys_ext, seed_table, created_mask), create
 
-    # Scan 1's centre for slot ``i`` is the carry row ``i``, and no earlier
-    # iteration can rewrite it (every ``scatter`` in ``reserve`` writes index
-    # ``slot``, and each slot is visited exactly once), so the pre-scan centre
-    # table already holds exactly the centre every iteration reads.  The dense
-    # path measures that whole table before the scan and each iteration reads
-    # its own row with a ``gather``, which keeps the compatibility kernel out of
-    # the reservation ``while`` body.
+    # Scan 1's centre for slot ``i`` is the pre-scan centre row ``i``, and no
+    # earlier iteration can rewrite it (every ``scatter`` in ``reserve`` writes
+    # index ``slot``, and each slot is visited exactly once), so the pre-scan
+    # centre table already holds exactly the centre every iteration reads.  The
+    # dense path measures that whole table before the scan and each iteration
+    # reads its own row with a ``gather``, which keeps the compatibility kernel
+    # out of the reservation ``while`` body.
     #
     # ``distance_fn.matrix`` does the measuring inside its own fixed-length
     # ``scan``, one centre per iteration: that region is the memory scope, so
@@ -969,8 +923,22 @@ def speciate(
     rows1 = None if gate else distance_fn.matrix(state, centre_payload)
 
     carry, _ = evoxc.scan(reserve, carry, iota_i32(species_size))
-    assign, dist, keys_ext, *centre_after1 = carry
-    centre_after1 = tuple(centre_after1)
+    assign, dist, keys_ext, closest_table, claim_table = carry
+    # Scan 1's centre writes, applied once: row ``slot`` becomes ``pop[closest]``
+    # on the slots that claimed, the pre-scan row everywhere else (dead slots keep
+    # the stale integers they already held).  A non-claiming slot's recorded
+    # ``closest`` is the clamped ``0``, which ``claimed`` discards -- the same
+    # argument as scan 2's clamped ``seed`` below.  Value-identical to the
+    # per-iteration scatter it replaces, because a slot writes only its own row.
+    claimed = evoxc.greater(claim_table, zero_f32)
+    centre_after1 = tuple(
+        evoxc.select(
+            enp.expand_dims(claimed, tuple(range(1, len(before.shape)))),
+            evoxc.gather(field, closest_table, axis=0),
+            before,
+        )
+        for field, before in zip(population_fields, centre_fields)
+    )
     carry, created = evoxc.scan(
         assign_members,
         (
