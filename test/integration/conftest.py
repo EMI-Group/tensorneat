@@ -3,8 +3,9 @@ Every test in this directory drives a whole ``tensorneat.Pipeline`` on the numpy
 ``tn``, ``payloads`` and ``runner`` are resolved through :func:`support.lazy.require`, which imports them at fixture time and reports a pending implementation as a named skip instead of turning the module into a collection error.
 :data:`TINY_CONFIG` is the single small XOR configuration every pipeline in this suite is built from; :func:`tiny_pipeline` spells it out and refuses unknown knobs instead of ignoring them.
 :func:`run_pipeline` is ``setup()`` plus ``auto_run()``; the per-generation trajectory comes from :func:`step_loop`, which drives the documented ``pipeline.step`` one generation at a time and never reads an internal history attribute.
-:func:`evaluate_population` re-scores any gene payload on the host through the documented kernel triple ``algorithm.transform`` → replicated ``algorithm.forward`` → ``problem.evaluate``.
-:func:`missing_evoxc_pipeline_features` and :func:`require_evoxc_pipeline` are a structural probe of the loaded ``tensorneat.pipeline``: while that module is still the legacy JAX file the whole suite skips, and the skip disappears by itself once the evoxc compile site lands.
+:func:`evaluate_population` re-scores any gene payload on the host through the documented kernel triple ``algorithm.transform`` → ``algorithm.prepare_forward``/``algorithm.forward_prepared`` → ``problem.evaluate``, so it serves both ``NEAT`` and ``HyperNEAT`` (whose ``SubstrateSchedule`` carries a nested schedule).
+:func:`hyperneat_pipeline` builds the one small ``HyperNEAT`` + ``CustomFuncFit`` pipeline the wrapper tests share.
+:func:`missing_evoxc_pipeline_features` and :func:`require_evoxc_pipeline` are a structural probe of the loaded ``tensorneat.pipeline``: a missing compile keyword or a re-appearing ``jax`` binding fails the whole directory instead of skipping it, because on this tree the evoxc compile site is the code under test.
 :func:`record_compiles` counts the calls into the evoxc compile entry points, which is how a test proves that a second generation of the same shape does not recompile.
 No ``jax``, no ``torch``, no network, no GPU, no wall-clock assertion: the backend is ``"numpy"`` everywhere and a run is judged by generations, fitness and payload shapes.
 """
@@ -156,15 +157,17 @@ def missing_evoxc_pipeline_features(tn: Any) -> list[str]:
 
 
 def require_evoxc_pipeline(tn: Any) -> None:
-    """Skip the calling test while the pipeline is still the legacy JAX implementation.
+    """Fail the calling test when the loaded pipeline lost an evoxc feature.
 
     Args:
         tn: The imported ``tensorneat`` package (the ``tn`` fixture).
 
     Raises:
-        pytest.skip.Exception: When :func:`missing_evoxc_pipeline_features` reports
-            anything; the reason names every missing feature so a reader knows
-            exactly which part of ``pipeline.py`` has not landed yet.
+        AssertionError: When :func:`missing_evoxc_pipeline_features` reports
+            anything; the message names every missing feature, so a regression
+            (a dropped compile keyword, a re-bound ``jax`` name, a top-level
+            ``import jax``) fails the directory instead of hiding it behind a
+            green skip. This is a source regression, not an absent environment.
 
     Notes:
         The whole directory is guarded by the autouse ``_evoxc_pipeline_required``
@@ -174,20 +177,20 @@ def require_evoxc_pipeline(tn: Any) -> None:
     """
     missing = missing_evoxc_pipeline_features(tn)
     if missing:
-        pytest.skip(
-            "pipeline.py is still the legacy JAX implementation: "
+        raise AssertionError(
+            "the evoxc Pipeline contract regressed (a source defect, not a skip): "
             + "; ".join(missing)
-            + "; the evoxc compile site has not landed"
         )
 
 
 @pytest.fixture(autouse=True)
 def _evoxc_pipeline_required(tn):
-    """Skip every test of this directory until the evoxc ``Pipeline`` exists.
+    """Fail every test of this directory if the evoxc ``Pipeline`` regresses.
 
-    This is the self-flipping half of the probe: nothing here is hardcoded, so the
-    moment ``missing_evoxc_pipeline_features`` returns an empty list the guard
-    becomes a no-op and the suite starts running for real.
+    The probe is structural and self-flipping, and it raises rather than skips:
+    losing a documented compile keyword or re-binding ``jax`` in
+    ``tensorneat.pipeline`` must turn this directory red, never green with 23
+    silent skips.
     """
     require_evoxc_pipeline(tn)
 
@@ -282,9 +285,9 @@ def tiny_pipeline(tn):
         unchanged. That is what keeps the XOR read-out inside ``(0, 1)``, exactly
         like the shipped ``examples/func_fit/xor.py`` — without it the ``mse <=
         0.01`` target is not reachable for a population this small.
-        The pipeline is built with the documented evoxc arguments; while the
-        legacy class is still loaded the constructor rejects them, which is fine
-        because :func:`require_evoxc_pipeline` skips every test before it gets here.
+        The pipeline is built with the documented evoxc arguments; a missing one is
+        reported by :func:`require_evoxc_pipeline` as a failure before a test gets
+        here, never silently ignored.
     """
 
     def make(**overrides):
@@ -329,6 +332,128 @@ def tiny_pipeline(tn):
             save_dir=config["save_dir"],
             is_detailed=config["is_detailed"],
             show_problem_details=config["show_problem_details"],
+        )
+
+    return make
+
+
+#: The small CPPN/substrate geometry shared by :func:`hyperneat_algorithm` and
+#: :func:`hyperneat_pipeline`: four 2-D substrate input coordinates (three real
+#: inputs plus the trailing bias), three hidden neurons and one output, so the
+#: decoded substrate has three problem inputs.
+HYPERNEAT_INPUT_COORS = ((-1.0, -1.0), (-0.33, -1.0), (0.33, -1.0), (1.0, -1.0))
+HYPERNEAT_HIDDEN_COORS = ((-1.0, 0.0), (0.0, 0.0), (1.0, 0.0))
+HYPERNEAT_OUTPUT_COORS = ((0.0, 1.0),)
+
+
+@pytest.fixture(scope="module")
+def hyperneat_algorithm(tn):
+    """Factory for a small ``HyperNEAT`` around a supplied substrate.
+
+    Returns:
+        ``make(substrate, *, pop_size=4, activate_time=2) -> HyperNEAT``: a CPPN
+        ``NEAT`` (four coords in — ``2 * CD`` for the 2-D layout — one weight
+        output, a small padded genome) wrapped around the given substrate. The
+        CPPN config is fixed so two algorithms built with different substrates
+        share one payload signature and differ only in the substrate half of the
+        pipeline's shape signature.
+
+    Notes:
+        The problem-input arity follows the substrate: ``HyperNEAT.num_inputs`` is
+        ``substrate.num_inputs - 1`` (the trailing substrate input is the bias).
+        ``species_size=2`` with the default ``min_species_size=1`` fits the tiny
+        populations used here.
+    """
+
+    def make(substrate, *, pop_size=4, activate_time=2):
+        from tensorneat.algorithm.hyperneat import HyperNEAT
+
+        neat = tn.algorithm.NEAT(
+            genome=tn.genome.DefaultGenome(
+                num_inputs=4,
+                num_outputs=1,
+                max_nodes=12,
+                max_conns=24,
+                max_in_degree=4,
+                max_depth=4,
+                output_transform=tn.common.ACT.tanh,
+            ),
+            pop_size=pop_size,
+            species_size=2,
+            survival_threshold=0.1,
+        )
+        return HyperNEAT(
+            substrate=substrate,
+            neat=neat,
+            activation=tn.common.ACT.tanh,
+            activate_time=activate_time,
+            output_transform=tn.common.ACT.sigmoid,
+        )
+
+    return make
+
+
+@pytest.fixture(scope="module")
+def hyperneat_pipeline(tn, hyperneat_algorithm):
+    """Factory for the small ``HyperNEAT`` + ``CustomFuncFit`` pipeline of this suite.
+
+    Returns:
+        ``make(*, hidden_coors=..., pop_size=4, generation_limit=2,
+        fitness_target=1.0, num_samples=6, activate_time=2, seed=42,
+        is_save=False, save_dir=None, is_detailed=False) -> Pipeline``: a fully
+        decodable HyperNEAT run over a three-input ``CustomFuncFit`` dataset
+        (``f(p) = p[0] + p[1] + p[2]``, sampled from ``[-1, 1]^3``). Nothing is
+        run: the caller calls ``setup()`` or :func:`run_pipeline`.
+
+    Notes:
+        ``fitness_target=1.0`` is unreachable for a non-positive loss, so a fixed
+        ``generation_limit`` is always consumed unless a test lowers the target.
+        The default substrate is the :data:`HYPERNEAT_*_COORS` layout; pass
+        ``hidden_coors`` to obtain a different substrate geometry.
+    """
+
+    def make(
+        *,
+        hidden_coors=HYPERNEAT_HIDDEN_COORS,
+        pop_size=4,
+        generation_limit=2,
+        fitness_target=1.0,
+        num_samples=6,
+        activate_time=2,
+        seed=42,
+        is_save=False,
+        save_dir=None,
+        is_detailed=False,
+    ):
+        from tensorneat.algorithm.hyperneat import FullSubstrate
+
+        substrate = FullSubstrate(
+            input_coors=HYPERNEAT_INPUT_COORS,
+            hidden_coors=hidden_coors,
+            output_coors=HYPERNEAT_OUTPUT_COORS,
+        )
+        algorithm = hyperneat_algorithm(
+            substrate, pop_size=pop_size, activate_time=activate_time
+        )
+        problem = tn.problem.CustomFuncFit(
+            lambda point: float(point[0] + point[1] + point[2]),
+            low_bounds=[-1.0, -1.0, -1.0],
+            upper_bounds=[1.0, 1.0, 1.0],
+            method="sample",
+            num_samples=num_samples,
+            seed=7,
+            error_method="mse",
+        )
+        return tn.Pipeline(
+            algorithm=algorithm,
+            problem=problem,
+            seed=seed,
+            fitness_target=fitness_target,
+            generation_limit=generation_limit,
+            backend="numpy",
+            is_save=is_save,
+            save_dir=save_dir,
+            is_detailed=is_detailed,
         )
 
     return make
@@ -582,89 +707,28 @@ def _payload_arrays(pop: Any) -> tuple[np.ndarray, ...]:
     )
 
 
-def _population_size(payload: Any) -> int:
-    """Read the static population size off a payload's leading axis.
-
-    Args:
-        payload: The rebuilt ``GenomeTensors`` inside the active trace (every leaf
-            carries the population on axis 0).
-
-    Returns:
-        ``P`` as a Python int; static shapes make this host-visible even mid-trace.
-    """
-    return int(tuple(payload)[0].shape[0])
-
-
-def _repeat_along_pop(field: Any, reps: int, pop_size: int) -> Any:
-    """Repeat a batch-first ``(P, ...)`` tensor to ``(P * reps, ...)``, individual-major.
-
-    Args:
-        field: A traced tensor whose axis 0 is the individual.
-        reps: How many copies of every individual are needed (``S``, the number of
-            problem samples, when the schedule is tiled for a func-fit problem).
-        pop_size: The static ``P`` of ``field``.
-
-    Returns:
-        ``(P * reps, ...)`` with rows ``p * reps + s`` holding individual ``p``.
-
-    Notes:
-        This is the exact order ``problem.FuncFit`` tiles its dataset in, so row
-        ``p * S + s`` of the returned tensor is sample ``s`` of individual ``p``.
-        The recipe is ``reshape`` to ``(P, 1, ...)`` → ``evoxc.broadcast`` to
-        ``(P, reps, ...)`` → ``reshape`` to ``(P * reps, ...)``. ``evoxc`` has no
-        ``broadcast_to`` name (``evoxc.broadcast`` is the numpy ``broadcast_to``
-        semantics), and writing ``reps`` into the middle axis of the target shape is
-        what makes the repetition individual-major.
-    """
-    import evoxc  # deferred: only needed while a graph is being traced
-
-    if reps == 1:
-        return field
-    tail = tuple(int(size) for size in field.shape[1:])
-    expanded = evoxc.reshape(field, (pop_size, 1) + tail)
-    widened = evoxc.broadcast(expanded, (pop_size, reps) + tail)
-    return evoxc.reshape(widened, (pop_size * reps,) + tail)
-
-
-def _replicate(container: Any, reps: int, pop_size: int) -> Any:
-    """Replicate every leaf of a batch-first pytree along the population axis.
-
-    Args:
-        container: A ``Transformed`` schedule or a ``GenomeTensors`` payload (any
-            namedtuple/tuple whose leaves are ``(P, ...)`` tensors).
-        reps: Copies per individual.
-        pop_size: The static ``P`` of every leaf.
-
-    Returns:
-        The same container type holding ``(P * reps, ...)`` leaves.
-    """
-    if reps == 1:
-        return container
-    return type(container)(
-        *(_repeat_along_pop(field, reps, pop_size) for field in container)
-    )
-
-
 @pytest.fixture(scope="module")
 def evaluate_population(runner):
     """Score a population payload on the host, through the documented kernel contract.
 
     Returns:
         ``evaluate(pipeline, state, pop) -> (P,) numpy fitness``: derives the
-        execution schedule with ``pipeline.algorithm.transform(state, pop)``, hands
-        ``pipeline.problem.evaluate`` an ``act_fn`` that replicates both the
-        schedule and the payload to the problem's tiled batch, and runs the whole
-        thing as one graph through :mod:`support.runner`. It accepts a payload with
+        execution schedule with ``pipeline.algorithm.transform(state, pop)``, then
+        runs ``pipeline.problem.evaluate`` in one graph through
+        :mod:`support.runner`. Its ``act_fn`` derives the pass's loop-invariant
+        operands once with ``algorithm.prepare_forward(..., samples)`` and queries
+        ``algorithm.forward_prepared`` — the documented prepared-pass pair, so the
+        helper serves ``NEAT`` and a wrapper such as ``HyperNEAT`` (whose
+        ``SubstrateSchedule`` nests a schedule) alike. It accepts a payload with
         ``P = 1`` (the "re-score the reported best genome" case) and one with
         ``P = pipeline.pop_size``.
 
     Notes:
         ``problem.evaluate`` (func-fit) tiles the dataset to ``(P * S, I)`` and calls
         ``act_fn`` **once** with that batch, row ``p * S + s`` being sample ``s`` of
-        individual ``p``; ``algorithm.forward`` still expects one schedule leaf per
-        row, so ``act_fn`` repeats the schedule and the payload ``S = rows // P``
-        times with :func:`_replicate`. Without that repetition the genome kernel
-        raises a ``ShapeError`` on mismatched concatenation.
+        individual ``p``; the genome kernel expands its population-axis statics by
+        ``samples = rows // P`` itself, so the schedule and payload stay at ``P``
+        rows and ``prepare_forward`` receives that same factor.
         ``pop`` may be a ``GenomeTensors``, a 4-array tuple/list or a
         ``support.payloads.Payload``; it is rebuilt as ``type(state.pop)`` inside the
         trace so the algorithm receives its own payload container. ``state.randkey``
@@ -692,10 +756,13 @@ def evaluate_population(runner):
                         f"the {pop_size}-individual schedule; check that the payload "
                         "and the schedule describe the same population"
                     )
-                reps = rows // pop_size
-                schedule = _replicate(transformed, reps, pop_size)
-                replicated = _replicate(payload, reps, pop_size)
-                return algorithm.forward(state, schedule, batch, pop=replicated)
+                samples = rows // pop_size
+                prepared = algorithm.prepare_forward(
+                    state, transformed, payload, samples
+                )
+                return algorithm.forward_prepared(
+                    state, transformed, prepared, batch
+                )
 
             return problem.evaluate(state, state.randkey, act_fn, transformed)
 
