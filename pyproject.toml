@@ -44,9 +44,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-iree = ["evoxc[iree]"]
+# IREE 3.13 is the first release whose ROCm/HIP runtime executes while/scan
+# loops (3.10/3.11 abort in the HIP HAL on any loop-carried int32 `while` and
+# SIGSEGV `iree-compile` on while-nested `cond`), so the extra names the IREE
+# wheels directly instead of `evoxc[iree]`, whose pin is >=3.11,<3.12.
+# Compiler and runtime must be the same release.
+iree = ["iree-base-compiler>=3.13,<3.14", "iree-base-runtime>=3.13,<3.14"]
 tvm = ["evoxc[tvm]"]
-compilers = ["evoxc[compilers]"]
+compilers = [
+    "iree-base-compiler>=3.13,<3.14",
+    "iree-base-runtime>=3.13,<3.14",
+    "evoxc[tvm]",
+]
 # `bench` installs the frozen legacy JAX implementation, used as the timing
 # baseline and numerical oracle by benchmarks/ and test/parity/.
 bench = ["jax >= 0.4.28", "pytest >= 8.0"]

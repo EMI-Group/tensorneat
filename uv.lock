@@ -453,16 +453,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-compilers = [
-    { name = "apache-tvm" },
-    { name = "iree-base-compiler" },
-    { name = "iree-base-runtime" },
-    { name = "jaxlib" },
-]
-iree = [
-    { name = "iree-base-compiler" },
-    { name = "iree-base-runtime" },
-]
 tvm = [
     { name = "apache-tvm" },
     { name = "jaxlib" },
@@ -569,7 +559,7 @@ wheels = [
 
 [[package]]
 name = "iree-base-compiler"
-version = "3.11.0"
+version = "3.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -577,21 +567,20 @@ dependencies = [
     { name = "sympy" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f7/49/1fbdc3d6fc3d3a248539fb18c97e0e539223d578942157748891314a116c/iree_base_compiler-3.11.0-cp311-cp311-macosx_13_0_universal2.whl", hash = "sha256:5a89f4f0f930d4553362b9ac6d01686ae6326192df238a462131b38493b01b1a", size = 71943817, upload-time = "2026-03-19T23:19:51.782Z" },
-    { url = "https://files.pythonhosted.org/packages/f1/35/0970c821782ee69c6991d683273f3d9399eb376336432f16ecea03b3beb2/iree_base_compiler-3.11.0-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c9cf39661b92bc0050f4ea9fef7d52a631294443bf2ae5d1978f0b9085be40b8", size = 82730885, upload-time = "2026-03-19T23:20:00.383Z" },
-    { url = "https://files.pythonhosted.org/packages/6e/fb/fe1f0aa0135400a8f6112bb16f8ac79d762acf1b160a282dc7a94a42edb1/iree_base_compiler-3.11.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ac3505591b6b134784eae7bcdf806fc66a2d120a82134b98bd4fbe488fdf84c5", size = 83114482, upload-time = "2026-03-19T23:20:05.79Z" },
-    { url = "https://files.pythonhosted.org/packages/2b/4b/464471037eb89407e06650c087cf6d6c3d26de5d4b996feb336dd9d7cb6f/iree_base_compiler-3.11.0-cp311-cp311-win_amd64.whl", hash = "sha256:9f4289c9115d23da429e36ed613cb3ca408cbd7d26912ee32cdb5e71807231ad", size = 57904687, upload-time = "2026-03-19T23:20:11.305Z" },
-    { url = "https://files.pythonhosted.org/packages/4c/1f/ae45ccb7edef9eead14eacb0e8b472ce3d72ee3863a0f9eb6c916e09e6e3/iree_base_compiler-3.11.0-cp312-abi3-macosx_13_0_universal2.whl", hash = "sha256:2e9fc888b9044662a14eeba01b6302d75a6118f68874699dcf8f9c7e991a4ee2", size = 71963066, upload-time = "2026-03-19T23:20:15.961Z" },
-    { url = "https://files.pythonhosted.org/packages/24/a3/67dda13e131479d17a5f8c63c0e43bd6674ddc5ff84d49f77b9155a917f8/iree_base_compiler-3.11.0-cp312-abi3-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1aea934fdc2ebe1dd64e5f2063a96de675a35f0b4856f9ddb76b2df58dfefb87", size = 82753538, upload-time = "2026-03-19T23:20:20.781Z" },
-    { url = "https://files.pythonhosted.org/packages/47/9c/f7cd82016c869ceb37b787b628608b68225c9e7bc46e0de9f18a9932ef3c/iree_base_compiler-3.11.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:99fc3369375405485f11da541a75ef2b153d529fa3712c1d9771c98a35e2669e", size = 83137835, upload-time = "2026-03-19T23:20:26.161Z" },
-    { url = "https://files.pythonhosted.org/packages/ce/9f/f8c8cd7ed546a59266e2e76847f4795549d1451b6be1e3c4bea62192f2e4/iree_base_compiler-3.11.0-cp312-abi3-win_amd64.whl", hash = "sha256:67b3656c473d6dd3059b9ad9676190591f11b77c6e2f785d55e79730be677be7", size = 57917646, upload-time = "2026-03-19T23:20:30.796Z" },
-    { url = "https://files.pythonhosted.org/packages/b5/65/a3de9aef2cdc64fcde2fb13f1e3f56d874973dafecb0aa5751e52c60b05b/iree_base_compiler-3.11.0-cp313-cp313t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3c99a4484d3e56ae9e83bc2d079e5f3d8329cd7836568b60c39cf9ff8847dd6c", size = 82806062, upload-time = "2026-03-19T23:20:35.266Z" },
-    { url = "https://files.pythonhosted.org/packages/86/1c/0d0fabfeff79b1f0b53b190dea6f5e65546f74d821693ebe200ffd195ca6/iree_base_compiler-3.11.0-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5be5421f6a447f04188a571d7e7668430b2fe1ec413fb2a3ab997fb7e4e46671", size = 83171193, upload-time = "2026-03-19T23:20:40.594Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/a2/1a50d71a13b0e83bb47c85963c0ea04bb8a96795d9e04f3142a7f513ce6d/iree_base_compiler-3.13.0-cp311-cp311-macosx_13_0_universal2.whl", hash = "sha256:951f09f8b8843710a2c227449fdd1c3b5dcab3eb095cf24b617a670cb317212f", size = 68132746, upload-time = "2026-10-19T11:11:15.866Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/ed/0f7ac26e50fc8d89c340788205fb127b1a6930cdfc32a17547f924080446/iree_base_compiler-3.13.0-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:21accf5c9eb352f39bc31fb1deea7701923d4ec65aa4ba7fcbd12e8ae0ce4dbb", size = 84954036, upload-time = "2026-10-19T11:11:33.831Z" },
+    { url = "https://files.pythonhosted.org/packages/09/fa/0b0f042390809ed6a4a59efc56026d5f893150cd76f76be3ac8c9b1f5782/iree_base_compiler-3.13.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6e1f83dc404f5dcdd76354a869cbbb389bd3f93b4623096de3195799ceb323a7", size = 83606091, upload-time = "2026-10-19T11:11:48.944Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/44/ab40db192a1d9a9cfad3e30b3f4491a27842e9c0f7026502d901549cddcb/iree_base_compiler-3.13.0-cp311-cp311-win_amd64.whl", hash = "sha256:33f308ed23f693f05ed6ceb3f99fb08bc6058a6e157c9182c4ea2d2775e47fcd", size = 62488532, upload-time = "2026-10-19T11:12:23.927Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/ed/14d46d679d3cb0c0674480fb8643cf1dbde40050a6f8a1dfeb87fab80466/iree_base_compiler-3.13.0-cp312-abi3-macosx_13_0_universal2.whl", hash = "sha256:31143d2b12736b37e3ad197aeb65bb18ef42baa18eb78db1243f2d882c1e46ec", size = 68153284, upload-time = "2026-10-19T11:12:41.028Z" },
+    { url = "https://files.pythonhosted.org/packages/62/2d/d470fc9278ecbc4dfd0d43dea6f45557f6b190d8c49eb29481888108e7aa/iree_base_compiler-3.13.0-cp312-abi3-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:230aec9b5d63c49f3f1ba228c35a7ce950075ce7b7780b786c85fa6fb0be3dbb", size = 84974273, upload-time = "2026-10-19T11:13:28.384Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/82/a6fa7086b3bb0ffc5453a2133de6141f82dfe502ed4d0634138c3c5a7cea/iree_base_compiler-3.13.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d09d2ebd8955d3eeeab5677007c3d26830c8585c61a0e0ccdfc020b63c129e6f", size = 83634623, upload-time = "2026-10-19T11:13:42.262Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/23/5f7ddd5fb3cbeb662357a0964cc7649f6b5961f0e645eee661440b6e2e25/iree_base_compiler-3.13.0-cp312-abi3-win_amd64.whl", hash = "sha256:0b3dfcacef9e889e97365d94f2751893371ae92396fb8b27a790cfb8b2c14d8b", size = 62501131, upload-time = "2026-10-19T11:13:53.783Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/89/0352feff411789fd5ca6cf6319f66ec961d0e2a4e13e9eb3522f334feb1e/iree_base_compiler-3.13.0-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:19ecee2ff3609cfa15206db4df505545a0adf2f886b47670756ad457c13a7281", size = 83674357, upload-time = "2026-10-19T11:14:47.063Z" },
 ]
 
 [[package]]
 name = "iree-base-runtime"
-version = "3.11.0"
+version = "3.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ml-dtypes" },
@@ -599,16 +588,15 @@ dependencies = [
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bc/86/627c2581fc82c59f0649ab0614de1e504db60efad851f152b7f0113d5787/iree_base_runtime-3.11.0-cp311-cp311-macosx_13_0_universal2.whl", hash = "sha256:3d4829bfd1978f6bec12ef776f6b6a23328ef20108e5d54ad2746bd3c65f3c37", size = 4099429, upload-time = "2026-03-19T23:20:47.701Z" },
-    { url = "https://files.pythonhosted.org/packages/a5/5e/433eeb287f71922fd9f96cbe888cf21d259f0b78df564adcac1c5e0552c5/iree_base_runtime-3.11.0-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3f95193494528b060b0f119006bdbb550accef42707cf591d2c335e5f2cad616", size = 8430071, upload-time = "2026-03-19T23:20:49.576Z" },
-    { url = "https://files.pythonhosted.org/packages/de/0a/0923ec6d2331f8da604d739a1fe02570eb658c4dc632eef3a48621d0a97c/iree_base_runtime-3.11.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:f2ec0acead1341acbf723743bf62227e216eceb75ac4cef206c8a8001fa44cad", size = 8304070, upload-time = "2026-03-19T23:20:51.606Z" },
-    { url = "https://files.pythonhosted.org/packages/a0/9a/7cd9b46620b720c145bf43cc50711d84141ad1f750d8629a928313a949e0/iree_base_runtime-3.11.0-cp311-cp311-win_amd64.whl", hash = "sha256:8ac0b4ec9a1bc0bb43cd73ce68e0925be6b1885470c2740c8d31ffa9d3711c00", size = 6530642, upload-time = "2026-03-19T23:20:53.295Z" },
-    { url = "https://files.pythonhosted.org/packages/57/9f/123ed3bc84f3a390ac7594a5219a70ae2ae35ac0b58ed54c0c0711c6d881/iree_base_runtime-3.11.0-cp312-abi3-macosx_13_0_universal2.whl", hash = "sha256:5f30d5666b6d007a781d9f7b6094664c64e3c30a379d1c1011b8ee299422c61e", size = 4101155, upload-time = "2026-03-19T23:20:54.707Z" },
-    { url = "https://files.pythonhosted.org/packages/10/21/4e7907106c2ebef71f607ed9b6250b6337c4fedec3a230d84b1912d04e70/iree_base_runtime-3.11.0-cp312-abi3-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7b428bebe14ba5f16f838c6651c3d3ed8ff36c1933c0ec212c2dc8d212a0e919", size = 8432745, upload-time = "2026-03-19T23:20:56.369Z" },
-    { url = "https://files.pythonhosted.org/packages/20/dc/c1db63d258ff5e484f1c739aa5cafd9ad9fcc7e8ffd914869937b6fc28ca/iree_base_runtime-3.11.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b3ff2b214780871d5677994b82332f9d1bae365a2e115c928464bd15ab5a5098", size = 8308112, upload-time = "2026-03-19T23:20:58.799Z" },
-    { url = "https://files.pythonhosted.org/packages/0f/f4/1269abdde6e65b25e6468c6eef9e8c90c402cb951fcb5bb44969c97851de/iree_base_runtime-3.11.0-cp312-abi3-win_amd64.whl", hash = "sha256:796f999394bb573b69edf47d45d7d221554704f30363f9d5553d170ea2f58054", size = 6528550, upload-time = "2026-03-19T23:21:00.981Z" },
-    { url = "https://files.pythonhosted.org/packages/ce/0f/9a6c9d0987c0aad5186c81df2555e997f60505b876f523fd4bb3ef983da5/iree_base_runtime-3.11.0-cp313-cp313t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:bca18e87a606dbfa09585a5a5b86f9fa46b10b1ccbf1dec6fc0a7fdd73b0c85f", size = 8448426, upload-time = "2026-03-19T23:21:02.558Z" },
-    { url = "https://files.pythonhosted.org/packages/ef/03/3f7714c7fc09632bd79667f7b4a5cd401ee504cf8209a49c949e10fac4ae/iree_base_runtime-3.11.0-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:57c2b92a283e9d84c84f377aeea4549b7f1d3db3b5d93ca3ea984730b24e99bb", size = 8319903, upload-time = "2026-03-19T23:21:04.876Z" },
+    { url = "https://files.pythonhosted.org/packages/96/3b/b35612fdf6fbe65f264a7f9f9e2b6f874b3a36a355822f0eebf5caf07763/iree_base_runtime-3.13.0-cp311-cp311-macosx_13_0_universal2.whl", hash = "sha256:86ef7aaaecd6bfac3ef32be128049a9d58343b214bc43f811d574236c52128e4", size = 8068081, upload-time = "2026-10-19T11:15:08.223Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/65/c15b8a48260eceb27ec1937f52f22d857dd534359342b0fc516025e13289/iree_base_runtime-3.13.0-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e09a3505f2c4d00f33518e668b4e9830c1569cad5ffa9f2a3b985b888ff2815a", size = 15486064, upload-time = "2026-10-19T11:15:13.539Z" },
+    { url = "https://files.pythonhosted.org/packages/54/ce/ca78bc36785c4c5e1dd623c3e3dd504ca71b9be4b3d84e6776f84264ae01/iree_base_runtime-3.13.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:4ecb03d5a33989d765eaa8bf1fe6199a937c88c1004e56c85714532cd95934fa", size = 15115310, upload-time = "2026-10-19T11:15:18.694Z" },
+    { url = "https://files.pythonhosted.org/packages/db/5b/28e2ae89bff481558e4bdae0ce62425a724e31e14b2cafe37d9d8eb9980f/iree_base_runtime-3.13.0-cp311-cp311-win_amd64.whl", hash = "sha256:f1b7c54fe816afca4e3238edd7310a417cc63937c2f144ce78a12236b4b0618a", size = 12614302, upload-time = "2026-10-19T11:15:23.22Z" },
+    { url = "https://files.pythonhosted.org/packages/97/6a/f8b6a7adf8ff691bfc198732eec18b69aa8f150341a9d80e7a6686bcacb9/iree_base_runtime-3.13.0-cp312-abi3-macosx_13_0_universal2.whl", hash = "sha256:1e7761c5b3f8210d86774e6ef6b5eb05d0f0dea22dde14ff11cb728a84da0e3c", size = 8070468, upload-time = "2026-10-19T11:15:26.968Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/2f/001955c5c4681fcc032a5f456a76b2b89020690bc4ac28346261b65e4064/iree_base_runtime-3.13.0-cp312-abi3-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:2a46a517c7dbdaa8701f9ee324dd94089af51a8251f36bd689949ee37e30d1d1", size = 15488841, upload-time = "2026-10-19T11:15:31.424Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/23/c08210f1bedb87e66d1bf815efc42daaeb8ddbe18c0edc47dd69750352d8/iree_base_runtime-3.13.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:e342bf407010dd42ee2fb431ab763d97c6ebbcad0762c1e843806db3db31572c", size = 15120024, upload-time = "2026-10-19T11:15:36.499Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/b9/b78c9e1551811620940cffdb16ccf8d30d5eb72da0f1220069fa47012ca1/iree_base_runtime-3.13.0-cp312-abi3-win_amd64.whl", hash = "sha256:7e850a228ae1f7db46f3af8b212d3dce1bd0ac654bc017e2e3f413fc1bae31dd", size = 12612448, upload-time = "2026-10-19T11:15:40.999Z" },
+    { url = "https://files.pythonhosted.org/packages/10/b4/062ce1b651dd2f8363ba6e265d0147e17eeb2d668d539fc4562f7e4dec0e/iree_base_runtime-3.13.0-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:08cedfaf03c675a4c20f348a85294cb525eea60dca45114c8eec64032f6b787c", size = 15133937, upload-time = "2026-10-19T11:15:46.589Z" },
 ]
 
 [[package]]
@@ -1806,7 +1794,9 @@ bench = [
     { name = "pytest" },
 ]
 compilers = [
-    { name = "evoxc", extra = ["compilers"] },
+    { name = "evoxc", extra = ["tvm"] },
+    { name = "iree-base-compiler" },
+    { name = "iree-base-runtime" },
 ]
 docs = [
     { name = "sphinx", version = "9.0.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1815,7 +1805,8 @@ docs = [
     { name = "sphinx-rtd-theme" },
 ]
 iree = [
-    { name = "evoxc", extra = ["iree"] },
+    { name = "iree-base-compiler" },
+    { name = "iree-base-runtime" },
 ]
 test = [
     { name = "pytest" },
@@ -1832,9 +1823,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "evoxc", git = "https://github.com/EMI-Group/evoxc?tag=v0.1.1" },
-    { name = "evoxc", extras = ["compilers"], marker = "extra == 'compilers'", git = "https://github.com/EMI-Group/evoxc?tag=v0.1.1" },
-    { name = "evoxc", extras = ["iree"], marker = "extra == 'iree'", git = "https://github.com/EMI-Group/evoxc?tag=v0.1.1" },
+    { name = "evoxc", extras = ["tvm"], marker = "extra == 'compilers'", git = "https://github.com/EMI-Group/evoxc?tag=v0.1.1" },
     { name = "evoxc", extras = ["tvm"], marker = "extra == 'tvm'", git = "https://github.com/EMI-Group/evoxc?tag=v0.1.1" },
+    { name = "iree-base-compiler", marker = "extra == 'compilers'", specifier = ">=3.13,<3.14" },
+    { name = "iree-base-compiler", marker = "extra == 'iree'", specifier = ">=3.13,<3.14" },
+    { name = "iree-base-runtime", marker = "extra == 'compilers'", specifier = ">=3.13,<3.14" },
+    { name = "iree-base-runtime", marker = "extra == 'iree'", specifier = ">=3.13,<3.14" },
     { name = "jax", marker = "extra == 'bench'", specifier = ">=0.4.28" },
     { name = "matplotlib", specifier = ">=3.9.0" },
     { name = "networkx", specifier = ">=3.3" },
