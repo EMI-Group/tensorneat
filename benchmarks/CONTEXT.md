@@ -134,6 +134,7 @@ The reproduce block names the record the report was rendered from: a record that
 - `BACKENDS.md` says `results/iree.json`/`iree.md` "were not re-rendered for this report", but `iree.md` carries a 2026-11-05T04:05 re-render banner; the intent is "not re-measured".
 - `run_benchmark.py::execute_run` catches only `subprocess.TimeoutExpired`, so an `OSError` from `subprocess.run` aborts the matrix before the JSON and report are written; a synthesised skipped record carries only `case/impl/backend/repeat/seed/status/error` (no `schema`/`env`/`protocol`), unlike a worker record.
 - `test/unit/benchmarks/test_protocol.py` covers only the git fingerprint; aggregation, `gens_to_target_all` and the render-from-json note contract are untested.
+- The committed records themselves keep the recording host's absolute paths: `authoritative.json` and `xor3d_quality_2026-11-04.json` store the recording worktree's interpreter/`out_path` in `meta`, and `iree.json` stores five `/root/.../worker_T1_A293/...` paths in its `error` tracebacks; the report scrubs them at render time, the evidence file does not.
 - Harness-internal dead code and rendering quirks (unreachable `_group_status` branch, unused `n_errors`/`meta.impls`/`display`, bare `harness.*` imports, `GIT_DIRTY_PATHS` omitting `uv.lock`, hard-coded `PARITY_TEST_COUNT`, `inf`-to-`null` asymmetry) are recorded in `./harness/CONTEXT.md` `## Known Issues`.
 ## Constraints
 - Python >= 3.11; harness dependencies are stdlib + `numpy` (plus `jax` on the old side only, via the `bench` extra).
