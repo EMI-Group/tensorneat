@@ -43,7 +43,7 @@ A per-level node step therefore stays `O(max_nodes x K)` gathers plus a constant
 `repr` reuses `to_dict` and prints `TypeName(idx=..., bias=..., [response=...,] aggregation=<name>, activation=<name>)`; `BaseNode.repr` / `BaseNode.to_dict` are the generic label-driven rendering for a family without named options.
 `sympy_func(node_dict, inputs, is_output_node=False)` takes the incoming edge contributions (an iterable of sympy expressions, or one expression treated as a one-term list) and returns `(expression, {symbol: value})` with the `n_<idx>_b` / `n_<idx>_r` symbol names.
 A custom option callable that is not in the global `ACT` / `AGG` registry is named by its own `__name__`; an option id outside `[0, len(options))` raises `ConfigError` instead of wrapping.
-`genome/step.py::_node_step` calls `node_gene.forward(state, node_operands, msg, update_mask)` once per level/tick (after `prepare`); `genome/operations/mutation/` uses `new_identity_attrs` for add-node splits.
+`genome/step.py::_node_step` calls `node_gene.forward(state, node_operands, messages, output_rows, live)` once per level/tick (the operands come from `prepare` at pass start, `live` is the `present & (xv == xv)` slot mask); `genome/operations/mutation/` uses `new_identity_attrs` for add-node splits.
 `BaseNode.repr`/`to_dict` are generic super()-pass-throughs in practice: every shipped family overrides both, so the generic rendering has no caller (`../CONTEXT.md` `## Unread and untested surface`).
 
 ## Constraints
