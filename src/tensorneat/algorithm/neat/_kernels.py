@@ -131,12 +131,12 @@ def payload_like(
 ) -> Any:
     """Rebuild ``template``'s payload type from the four split arrays.
 
-    ``distance_fn`` receives a *population-shaped* payload on both sides -- one
-    row per (centre, individual) pair (see :mod:`._distance`) -- so a per-slot
-    centre row is tiled to ``pop_size`` rows before it is wrapped in the caller's
-    own payload class (``genome.utils.GenomeTensors``) instead of a second,
-    locally defined copy; importing ``tensorneat.genome`` from here would make
-    ``algorithm`` depend on a sibling node at package import time.
+    ``distance_fn`` receives a *one-individual* centre payload -- leading axis
+    ``1``, paired against the digest's ``pop_size`` rows (see :mod:`._distance`),
+    which is the width this subtree builds everywhere -- so a per-slot centre row
+    is wrapped in the caller's own payload class (``genome.utils.GenomeTensors``)
+    instead of a second, locally defined copy; importing ``tensorneat.genome`` from
+    here would make ``algorithm`` depend on a sibling node at package import time.
     """
     return type(template)(node_keys, node_attrs, conn_keys, conn_attrs)
 
@@ -620,8 +620,8 @@ def speciate(
     **Distance rows.**  ``distance_fn`` is the digest-backed callable built by
     ``NEAT.tell`` from ``genome.prepare_distance`` (see
     :class:`._distance.DistanceRows`).  Every call it receives carries a
-    *population-shaped* centre payload -- ``pop_size`` rows, row ``p`` measured
-    against population member ``p`` -- and returns one ``(pop_size,)`` row, so a
+    *one-individual* centre payload -- one row per field, paired against the
+    digest's ``pop_size`` rows -- and returns one ``(pop_size,)`` row, so a
     phase's rows are one such call per slot, never one
     ``species_size * pop_size`` batch.  Which form a phase uses is a static
     choice on ``gate``:
@@ -636,7 +636,7 @@ def speciate(
       scan 1, ``take`` in scan 2) discards, so the substitution is bit-identical:
       no reader ever consumes the row of a slot that is not allowed to write.
     * **Dense table** (``gate`` false): scan 1's whole centre table is measured
-      *before* the scan through ``distance_fn.matrix`` -- one population-shaped
+      *before* the scan through ``distance_fn.matrix`` -- one one-individual
       call per centre row -- and each iteration reads its own row with a
       ``gather``.  Above ``GATED_ROWS`` the species table is full, so a skipped
       slot's ``if`` region would cost more than the row it skips (see
@@ -644,8 +644,8 @@ def speciate(
       kernel out of the reservation ``while`` body entirely.  ``matrix`` runs
       those calls inside its own fixed-length ``scan``, one centre per
       iteration, so each iteration's region environment -- the kernel's
-      ``(pop_size, 2 * max_conns, ...)`` transients -- is released before the
-      next centre is measured, where a top-level loop would keep all
+      transient gene arrays -- is released before the next centre is measured,
+      where a top-level loop would keep all
       ``species_size`` of them alive for the rest of the generation.  Scan 1's
       rows are the ones the gated path would read: slot ``i``'s centre is the
       pre-scan centre row ``i``, and no earlier iteration can rewrite it (every
@@ -660,8 +660,8 @@ def speciate(
 
     ``gate`` is a static Python ``bool``, so exactly one of the two paths is
     traced.  Bit-identity holds across the two paths by construction -- both
-    compute the same ``(pop_size,)`` rows from the same kernel with the same
-    population-shaped centre.
+    compute the same ``(pop_size,)`` rows from the same kernel and the same
+    one-individual centre payload.
     """
     keys_ext = enp.concatenate(
         [species_state.species_keys, enp.reshape(species_state.next_species_key, (1,))],
@@ -709,25 +709,23 @@ def speciate(
             "accepts an arbitrary callable"
         )
 
-    def single_payload(rows):
-        """Wrap four 1-D centre rows as a population-shaped payload.
+    def one_row_payload(rows):
+        """Wrap four 1-D centre rows as a one-individual payload.
 
-        The genome's distance kernel takes a population-shaped centre -- one row
-        per (centre, individual) pair -- so the slot's single centre row is
-        repeated ``pop_size`` times with one rank-raising ``evoxc.broadcast`` per
-        field: every row of the payload is the same centre, which is what makes
-        the returned ``(pop_size,)`` vector the centre's distance row.  A bare row
-        would be read as a rank-1 payload.
+        The genome measures one centre against the digest's ``pop_size`` rows, so
+        a slot's centre row only gains a leading axis of length ``1``: one
+        ``evoxc.reshape`` per field, and the returned ``(pop_size,)`` vector is that
+        centre's distance row.
         """
         return payload_like(
             population,
-            *(evoxc.broadcast(row, (pop_size,) + tuple(row.shape)) for row in rows),
+            *(evoxc.reshape(row, (1,) + tuple(row.shape)) for row in rows),
         )
 
     def centre_rows(fields, slot):
         """Gather the centre row held in ``slot`` of each of the four ``fields``.
 
-        The result is the input of :func:`single_payload`: a tuple of 1-D rows,
+        The result is the input of :func:`one_row_payload`: a tuple of 1-D rows,
         one per split gene array.
         """
         return tuple(evoxc.gather(field, slot, axis=0) for field in fields)
@@ -794,7 +792,7 @@ def speciate(
             """
             return distance_fn(
                 state,
-                single_payload(centre_rows(centre_fields, centre_slot)),
+                one_row_payload(centre_rows(centre_fields, centre_slot)),
                 payload_like(
                     population,
                     pop_node_keys,
@@ -882,7 +880,7 @@ def speciate(
             """Distance row of this slot's centre, ``(P,)`` floats."""
             return distance_fn(
                 state,
-                single_payload(
+                one_row_payload(
                     (
                         centre_node_keys,
                         centre_node_attrs,
@@ -922,7 +920,7 @@ def speciate(
     #
     # ``distance_fn.matrix`` does the measuring inside its own fixed-length
     # ``scan``, one centre per iteration: that region is the memory scope, so
-    # only one centre's ``(pop_size, 2 * max_conns, ...)`` transients are live at
+    # only one centre's transient gene arrays are live at
     # a time instead of the arrays of all ``species_size`` of them.  A kernel at
     # the top level would keep every one of those alive until the generation
     # graph returns, which is both a peak-RSS and a build cost.
