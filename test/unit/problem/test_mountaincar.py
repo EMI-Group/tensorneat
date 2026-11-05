@@ -24,10 +24,20 @@ at 20, ``-5.9999967`` at 60, ``-99.89905`` at 999); the idle policy returns exac
 and is the deceptive optimum the example converges to; the right wall does **not** zero the
 velocity while the left wall does, by exact float equality; ``|tanh| <= 1`` makes
 ``clip(a, -1, 1)`` unobservable; a NaN poisons a live episode to ``-inf``, dropped once the
-episode is done. Numpy backend, ``pop <= 4``.
+episode is done; ``ATTAINABLE_CEILING`` is ``93.0`` (the nominal ``100`` bonus is paid
+once while the penalty is charged on every scoring step), and ``show`` prints ``n/a`` for a
+non-finite return instead of claiming the goal was missed.
+
+The long-horizon oracle is the transcription :func:`_mountaincar_rollout`; because it shares
+its recurrence with nothing else, :func:`_one_step_by_hand` derives single transitions from
+the published equations (explicit coefficients, numeric literals, ``position != 0``) and
+:func:`test_one_step_matches_hand_derived_values_at_non_zero_position` pins the kernel
+against it. Numpy backend, ``pop <= 4``.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 import pytest
@@ -546,6 +556,159 @@ def test_the_step_clips_the_velocity_and_tests_the_goal(problem, run_in_graph):
 
 
 # --------------------------------------------------------------------------- #
+# one Euler step derived by hand from the published equations
+# --------------------------------------------------------------------------- #
+
+
+def _one_step_by_hand(
+    position,
+    velocity,
+    action,
+    *,
+    min_position=-1.2,
+    max_position=0.6,
+    max_speed=0.07,
+    goal_position=0.45,
+    goal_velocity=0.0,
+    power=0.0015,
+    gravity=0.0025,
+):
+    """Advance one MountainCar state with Gym's equations, written out by hand.
+
+    Independent of the kernel and of ``_mountaincar_rollout``: the coefficients
+    are the published ``power``/``gravity``/``cos(3 * position)`` terms spelled as
+    plain Python ``float`` arithmetic (float64), with the two clips, the left-wall
+    velocity reset and the goal conjunction in the documented order, so a wrong
+    coefficient or a reordered clip moves the expected value instead of moving
+    both sides together.
+
+    Args:
+        position: Car position on the track.
+        velocity: Car velocity in units/step.
+        action: The **pre-clip** action ``tanh(logit)``.
+
+    Returns:
+        ``(next_position, next_velocity, done)``.
+    """
+    force = min(max(action, -1.0), 1.0)
+    next_velocity = velocity + force * power - gravity * math.cos(3.0 * position)
+    next_velocity = min(max(next_velocity, -max_speed), max_speed)
+    next_position = min(max(position + next_velocity, min_position), max_position)
+    if next_position == min_position and next_velocity < 0.0:
+        next_velocity = 0.0
+    done = next_position >= goal_position and next_velocity >= goal_velocity
+    return next_position, next_velocity, done
+
+
+@pytest.mark.parametrize(
+    "position, velocity, action, expected",
+    [
+        # At a=tanh(1)=0.761594156, from (-0.5, 0):
+        # drive = 0.761594156*0.0015 - 0.0025*cos(-1.5)
+        #       = 0.001142391 - 0.000176843 = 0.000965548, so
+        # position' = -0.5 + 0.000965548 = -0.499034452.
+        (-0.5, 0.0, 0.7615941559557649, (-0.499034451770, 0.000965548229764, False)),
+        # A push back down the slope from (-0.3, 0.06):
+        # v' = 0.06 - 0.00075 - 0.0025*cos(-0.9)
+        #    = 0.06 - 0.00075 - 0.001554025 = 0.057695975, pos' = -0.242304025.
+        (-0.3, 0.06, -0.5, (-0.242304024921, 0.0576959750793, False)),
+        # Just short of the goal, rolling forward at full force:
+        # v' = 0.03 + 0.0015 - 0.0025*cos(1.32) = 0.030879561 (no clip), so
+        # pos' = 0.470879561 >= 0.45 with v' >= 0 -> done.
+        (0.44, 0.03, 1.0, (0.470879561371, 0.0308795613709, True)),
+        # A gentle forward push while rolling backwards:
+        # v' = -0.02 + 0.000375 - 0.0025*cos(-0.3) = -0.022013341, pos' = -0.122013341.
+        (-0.1, -0.02, 0.25, (-0.122013341223, -0.0220133412228, False)),
+    ],
+    ids=["from_rest", "down_slope", "reaches_goal", "rolling_back"],
+)
+def test_one_step_matches_hand_derived_values_at_non_zero_position(
+    problem, run_in_graph, position, velocity, action, expected
+):
+    """Invariant: ``_advance`` reproduces hand-computed transitions off the centre.
+
+    Oracle: :func:`_one_step_by_hand`, Gym's transition transcribed in this module
+    from the published equations, plus the numeric literals in the parametrization
+    -- the two are asserted to agree with each other (float64) and the float32
+    kernel with both (``rtol=1e-6``).
+
+    Notes:
+        The ``dtype``-parameterized rollout oracle runs one recurrence twice, so a
+        wrong coefficient cancels out there; here it cannot. Every row has
+        ``position != 0``, where ``cos(3 * position)`` is neither ``1`` nor
+        degenerate, and the four rows cover a free step, a downhill push, a goal
+        transition and a step with no clip at all.
+    """
+    assert position != 0.0, "cos(3 * position) is at its trivial value at the centre"
+
+    next_position, next_velocity, done = _one_step_by_hand(position, velocity, action)
+    np.testing.assert_allclose(
+        [next_position, next_velocity], expected[:2], rtol=1e-10, atol=0
+    )
+    assert done is expected[2]
+
+    mountaincar = problem.MountainCarContinuous(max_step=20)
+    obs = np.array([[position, velocity]], dtype=np.float32)
+    actions = np.array([[action]], dtype=np.float32)
+
+    def kernel(values, action_value):
+        return mountaincar._advance(values, action_value, mountaincar._constants())
+
+    kernel_obs, kernel_done = run_in_graph(kernel, obs, actions)
+    np.testing.assert_allclose(kernel_obs[0], [next_position, next_velocity], rtol=1e-6)
+    assert bool(np.asarray(kernel_done)[0]) is done
+
+
+# --------------------------------------------------------------------------- #
+# the host-side report is finite-safe
+# --------------------------------------------------------------------------- #
+
+
+def test_show_reports_a_nan_poisoned_policy_instead_of_raising(
+    state, problem, enp, fake_schedule, evoxc_key, capsys
+):
+    """Invariant: a NaN-poisoned rollout prints an honest report and never raises.
+
+    Oracle: the documented rule ("a non-finite return (a NaN-poisoned policy)
+    compares false, so the goal reads as ``n/a`` with the honest return value
+    instead of claiming the goal was missed"). The NaN poisoning test above
+    proves ``evaluate`` carries NaN into the return; this test drives the same
+    poisoned ``act_fn`` through ``show`` -- a host-side call that builds its own
+    one-off graph -- and asserts the report reaches stdout for every repeat plus
+    the mean line.
+
+    Notes:
+        ``value > 0.0`` on a NaN return is ``False``, so a report that did not
+        special-case non-finite values would claim "goal not reached" for a
+        poisoned episode: a wrong statement, not just a missing one. The idle
+        policy is the finite control and must still print ``goal not reached``
+        with no ``nan`` in the report.
+    """
+    mountaincar = problem.MountainCarContinuous(max_step=10, repeat_times=2)
+    schedule = fake_schedule(pop_size=1)
+
+    returned = mountaincar.show(
+        state, evoxc_key, _constant_logits(enp, float("nan")), schedule
+    )
+    report = capsys.readouterr().out
+
+    assert returned is None
+    assert report.count("MountainCarContinuous repeat") == 2
+    assert report.count("return nan, goal n/a (NaN return)") == 2
+    assert report.count("final state: position=nan, velocity=nan") == 2
+    assert "MountainCarContinuous mean return: nan" in report
+    assert "goal not reached" not in report
+
+    healthy = mountaincar.show(state, evoxc_key, _constant_logits(enp, 0.0), schedule)
+    finite = capsys.readouterr().out
+
+    assert healthy is None
+    assert finite.count("MountainCarContinuous repeat") == 2
+    assert finite.count("goal not reached") == 2
+    assert "nan" not in finite
+
+
+# --------------------------------------------------------------------------- #
 # configuration errors
 # --------------------------------------------------------------------------- #
 
@@ -566,21 +729,33 @@ def test_out_of_domain_configuration_raises_tensorneat_error(problem, common, kw
     repeat count must be ints (a ``bool`` is rejected explicitly: an ``int``, never a
     horizon), ``max_speed``/``power`` strictly positive, ``gravity`` non-negative, the track
     of positive width, the goal on the clipped track and reachable at ``max_speed``, and
-    ``fitness_target`` no higher than the ``100`` bonus ceiling. One case per knob, and the
-    message must name the offending knob.
+    ``fitness_target`` no higher than :data:`ATTAINABLE_CEILING` (``93.0``), the *attainable*
+    ceiling rather than the nominal ``100`` bonus. One case per knob, and the message must
+    name the offending knob.
     """
     with pytest.raises(common.TensorNEATError, match=next(iter(kwargs))):
         problem.MountainCarContinuous(**kwargs)
 
 
-def test_in_domain_configuration_is_accepted(problem):
+def test_in_domain_configuration_is_accepted(problem, common):
     """Invariant: Gym's defaults construct, are stored as given, and fix the arity.
 
     Oracle: the constructor signature and the class docstring's attribute table.
-    ``gravity = 0.0`` is legal (``require_non_negative``), ``fitness_target = 100`` is the
-    hard ceiling and is legal while ``None`` disables the check and a negative value is
-    stored verbatim, and the arity is two observations in and one action logit out.
+    ``gravity = 0.0`` is legal (``require_non_negative``), ``fitness_target =
+    ATTAINABLE_CEILING`` (``93.0``) is the hard ceiling and is legal while ``None``
+    disables the check and a negative value is stored verbatim, and the arity is two
+    observations in and one action logit out.
+
+    Notes:
+        The ceiling is the *attainable* one, not the nominal ``100`` goal bonus: the
+        bonus is paid once while the ``0.1 * a**2`` penalty is charged on every scoring
+        step of the climb, so a reaching policy returns about ``89``-``91``. The
+        boundary is asserted from both sides -- ``93.0`` accepted, ``93.5`` rejected --
+        so a regression to the nominal ``100`` ceiling fails here rather than silently
+        validating an unreachable target.
     """
+    assert problem.rl.mountaincar.ATTAINABLE_CEILING == 93.0
+
     defaults = problem.MountainCarContinuous()
     assert (defaults.max_step, defaults.repeat_times) == (999, 1)
     assert (defaults.min_position, defaults.max_position) == (-1.2, 0.6)
@@ -591,9 +766,12 @@ def test_in_domain_configuration_is_accepted(problem):
 
     configured = problem.MountainCarContinuous(
         max_step=1, repeat_times=3, gravity=0.0, max_speed=0.05, goal_velocity=0.04,
-        fitness_target=100.0,
+        fitness_target=93.0,
     )
     assert (configured.max_step, configured.repeat_times) == (1, 3)
     assert (configured.gravity, configured.max_speed) == (0.0, 0.05)
-    assert (configured.goal_velocity, configured.fitness_target) == (0.04, 100.0)
+    assert (configured.goal_velocity, configured.fitness_target) == (0.04, 93.0)
     assert problem.MountainCarContinuous(fitness_target=-0.5).fitness_target == -0.5
+
+    with pytest.raises(common.TensorNEATError, match="attainable ceiling"):
+        problem.MountainCarContinuous(fitness_target=93.5)

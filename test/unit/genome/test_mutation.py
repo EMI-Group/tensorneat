@@ -23,6 +23,11 @@ only where they are deterministic):
 * rows the operator did not touch are bit-identical (no accidental rewrite of an
   attribute or a key column), and a probability of ``0`` removes the operation entirely.
 
+The *magnitude* of a value mutation and its replace-vs-perturb branch are pinned
+separately in ``test_mutation_weight.py``: this module only relies on value mutation as
+the stage that must leave the *key* columns alone, so the scale and branch laws live
+next to the payload builder that makes them exact.
+
 Oracles and gotchas
 -------------------
 Every assertion is counting or set algebra on the returned payload — node/connection
@@ -666,43 +671,6 @@ def test_rows_outside_the_mutated_gene_are_bit_identical(genome, payloads, run_k
         assert _changed_rows(payload.node_attrs[p], mutated[1][p]) == changed_nodes
 
 
-def test_value_mutation_never_touches_key_columns(genome, payloads, run_kernel, evoxc_key):
-    """Invariant: ``mutate_values`` changes float attributes only.
-
-    Oracle: ``np.array_equal`` on ``node_keys``/``conn_keys`` before and after the
-    stage, plus "the attribute rows of present genes stay finite" (a mutation of a
-    padded row would produce a finite value where ``NaN`` belongs, and a mutation
-    of a key column would corrupt the topology). Value mutation is documented to be
-    one batched draw per gene family at the genes' configured rates, so at the
-    defaults it cannot be a no-op; the test therefore asserts *which* columns moved
-    (only float attributes, never a key) as well as that something moved.
-    """
-    # Default gene rates, no structural operation: this isolates the value stage.
-    mutation = genome.DefaultMutation(conn_add=0.0, conn_delete=0.0, node_add=0.0, node_delete=0.0)
-    genome_object = _genome(
-        genome, mutation, node_gene=genome.DefaultNode(), conn_gene=genome.DefaultConn()
-    )
-    state = payloads.genome_state(genome_object)
-    payload = payloads.chain_payload(pop_size=3)
-    sentinel = payloads.I_INF
-
-    mutated = _mutate(run_kernel, genome_object, state, payload, evoxc_key)
-
-    assert mutated[0].tobytes() == payload.node_keys.tobytes()
-    assert mutated[2].tobytes() == payload.conn_keys.tobytes()
-
-    node_present = payload.node_keys != sentinel
-    conn_present = payload.conn_keys[:, :, 0] != sentinel
-    assert np.isfinite(mutated[1][node_present]).all()
-    assert np.isfinite(mutated[3][conn_present]).all()
-    # Padded rows are passed through untouched — still the exact input NaNs.
-    assert mutated[1][~node_present].tobytes() == payload.node_attrs[~node_present].tobytes()
-    assert mutated[3][~conn_present].tobytes() == payload.conn_attrs[~conn_present].tobytes()
-
-    # Non-vacuous: the weights (mutate rate 0.8) really were perturbed.
-    assert (mutated[3][conn_present] != payload.conn_attrs[conn_present]).any()
-
-
 def _classify_change(payload, mutated, new_node_keys, sentinel, interface):
     """Assert the per-operation mutation law; return ``(gained, lost, both, extra_added,
     unexplained_removed)`` totals over the population.
@@ -1005,3 +973,78 @@ def test_delete_node_never_removes_an_input_or_output_row(genome, payloads, run_
         assert edges_before - _edges(mutated[2][p], sentinel) == {
             edge for edge in edges_before if deleted_key in edge
         }
+
+
+def test_execute_mutation_rejects_non_int32_key_tensors(
+    genome, payloads, run_kernel, evoxc_key, common
+):
+    """Invariant: caller-allocated structural keys are ``int32`` or refused, never cast.
+
+    Oracle: the documented ``TensorNEATError`` naming the field and the dtype
+    (``must be an int32 key tensor``), for a float32 ``new_node_keys`` and, separately,
+    for a float32 ``new_conn_keys`` at the otherwise correct shapes. Keys are ``int32``
+    throughout the payload, so a cast would be a traced op hiding a host-side violation.
+    """
+    mutation = genome.DefaultMutation(
+        conn_add=0.0, conn_delete=0.0, node_add=0.0, node_delete=0.0
+    )
+    genome_object = _genome(genome, mutation)
+    state = payloads.genome_state(genome_object)
+    payload = _small_payload(payloads)
+    node_keys = _node_slots(payload.pop_size)
+    conn_keys = _conn_slots(payload.pop_size)
+
+    for label, new_node_keys, new_conn_keys in (
+        ("new_node_keys", node_keys.astype(np.float32), conn_keys),
+        ("new_conn_keys", node_keys, conn_keys.astype(np.float32)),
+    ):
+        with pytest.raises(common.TensorNEATError) as info:
+            _mutate(
+                run_kernel,
+                genome_object,
+                state,
+                payload,
+                evoxc_key,
+                new_node_keys=new_node_keys,
+                new_conn_keys=new_conn_keys,
+            )
+        message = str(info.value)
+        assert "must be an int32 key tensor" in message, message
+        assert label in message, message
+        assert "float32" in message, message
+
+
+def test_execute_mutation_rejects_wrong_key_shapes(
+    genome, payloads, run_kernel, evoxc_key, common
+):
+    """Invariant: ``new_node_keys`` is ``(P,)`` and ``new_conn_keys`` is ``(P, 3)``.
+
+    Oracle: the documented ``TensorNEATError`` naming the field and the expected shape
+    (``must have shape``), for a ``(P, 3)`` node-key block and, separately, a ``(P,)``
+    connection-key block. Both shapes are static at build time, so a wrong one is refused
+    on the host instead of reaching ``evoxc.build`` as a mis-shaped graph input.
+    """
+    mutation = genome.DefaultMutation(
+        conn_add=0.0, conn_delete=0.0, node_add=0.0, node_delete=0.0
+    )
+    genome_object = _genome(genome, mutation)
+    state = payloads.genome_state(genome_object)
+    payload = _small_payload(payloads)
+    pop = payload.pop_size
+
+    for label, new_node_keys, new_conn_keys, expected in (
+        ("new_node_keys", np.zeros((pop, 3), np.int32), _conn_slots(pop), f"({pop},)"),
+        ("new_conn_keys", _node_slots(pop), np.zeros((pop,), np.int32), f"({pop}, 3)"),
+    ):
+        with pytest.raises(common.TensorNEATError) as info:
+            _mutate(
+                run_kernel,
+                genome_object,
+                state,
+                payload,
+                evoxc_key,
+                new_node_keys=new_node_keys,
+                new_conn_keys=new_conn_keys,
+            )
+        message = str(info.value)
+        assert f"{label} must have shape {expected}" in message, message

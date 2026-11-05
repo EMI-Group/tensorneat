@@ -16,10 +16,14 @@ individual-major order, and a reward of ``-cost`` read from the
 
 Fitness is the mean over ``repeat_times`` of the episode returns, then
 ``finalize_fitness``, so every return lives in ``[-max_step * max_cost, 0]``.
-The legacy RL problems were deleted, so there is no parity oracle: the oracle
-**is** the transcription below (:func:`_pendulum_rollout`), and the closed forms
-in :func:`test_the_velocity_is_clipped_before_the_angle_integrates`, in
-:func:`_unwrapped_return` and in the documented cost ceiling keep it honest.
+The legacy RL problems were deleted, so there is no parity oracle. The long-horizon
+oracle **is** the transcription below (:func:`_pendulum_rollout`); it is kept
+honest by three *independent* references --
+:func:`_one_step_by_hand` (the published equations written out with explicit
+coefficients and numeric literals, at ``theta != 0`` and therefore not the same
+function as the transcription, which would move with a coefficient typo), the
+closed forms in :func:`test_the_velocity_is_clipped_before_the_angle_integrates`,
+in :func:`_unwrapped_return` and in the documented cost ceiling.
 Unlike ``CartPole`` there is no ``reset_scale`` knob, so the graph's own
 ``_reset`` is traced in a one-op graph (:func:`_reset_observations`) and the
 resulting ``(B, 2)`` block is the host ``obs0`` the oracle starts from.
@@ -36,13 +40,21 @@ Gotchas this module encodes
 * The velocity is clipped *before* the angle integrates: from ``theta_dot = 7.9``
   at maximum torque, ``theta`` advances by ``8.0*dt``, not ``8.2*dt``.
 * There is no NaN census: ``tanh(NaN)`` makes the control penalty NaN, the
-  carried accumulator NaN, and ``finalize_fitness`` maps it to ``-inf``.
+  carried accumulator NaN, and ``finalize_fitness`` maps it to ``-inf``. ``show``
+  is finite-safe on the same policy -- it prints ``nan`` in the return columns
+  instead of raising.
+* The constructor validates every physics knob with
+  :func:`tensorneat.problem.rl._common.require_finite`, so ``NaN``/``inf``/a
+  non-number is a ``TensorNEATError`` naming the knob; the knob matrix lives in
+  ``test_rl_common.py``.
 
 Everything runs on the numpy backend with small batches (``pop <= 4``,
 ``max_step <= 200``): the interpreter pays per traced op, not per element.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 import pytest
@@ -434,6 +446,118 @@ def test_nan_logits_poison_the_fitness_to_negative_infinity(
 
 
 # --------------------------------------------------------------------------- #
+# one Euler step derived by hand from the published equations
+# --------------------------------------------------------------------------- #
+
+
+def _one_step_by_hand(
+    theta,
+    theta_dot,
+    logit,
+    *,
+    gravity=10.0,
+    mass=1.0,
+    length=1.0,
+    max_speed=8.0,
+    max_torque=2.0,
+    dt=0.05,
+):
+    """Advance one Pendulum state with Gym's equations, written out from the papers.
+
+    Independent of both the kernel and ``_pendulum_rollout``/``_physics``: the
+    coefficients are spelled from their definitions -- ``3*g/(2*l)`` and
+    ``3/(m*l**2)`` -- the wrap is the textbook ``((x + pi) % 2pi) - pi`` written
+    as a floor-mod, and every intermediate is a plain Python ``float``
+    (float64), so the comparison against the float32 kernel is a *rounding*
+    comparison rather than a re-run of the same transcription.
+
+    Args:
+        theta: Angle in radians (any value; it is wrapped in the cost only).
+        theta_dot: Angular velocity in rad/s.
+        logit: Raw policy output.
+
+    Returns:
+        ``(next_theta, next_theta_dot, cost)`` of the documented step: the cost
+        is read on the **pre-transition** state, the velocity is integrated and
+        clipped, and only then does the angle advance by the clipped velocity.
+    """
+    torque = max_torque * math.tanh(logit)
+    two_pi = 2.0 * math.pi
+    wrapped = theta - two_pi * math.floor((theta + math.pi) / two_pi)
+    cost = wrapped**2 + 0.1 * theta_dot**2 + 0.001 * torque**2
+    drive = (3.0 * gravity / (2.0 * length)) * math.sin(theta) + (
+        3.0 / (mass * length**2)
+    ) * torque
+    next_theta_dot = min(max(theta_dot + drive * dt, -max_speed), max_speed)
+    return theta + next_theta_dot * dt, next_theta_dot, cost
+
+
+@pytest.mark.parametrize(
+    "theta, theta_dot, logit, expected",
+    [
+        # 0.5 rad, at rest, half-saturated torque: u = 2*tanh(1) = 1.523188312,
+        # drive = 15*sin(0.5) + 3*u = 7.191383079 + 4.569564936 = 11.760948015,
+        # v' = 0 + 11.760948015*0.05 = 0.588047401, theta' = 0.5 + 0.029402370,
+        # cost = 0.5**2 + 0 + 0.001*u**2 = 0.252320103.
+        (0.5, 0.0, 1.0, (0.529402370037, 0.588047400740, 0.252320102634)),
+        # Negative angle, rolling forward, negative torque:
+        # u = -1.523188312, drive = 15*sin(-2) + 3*u = -13.639892905 - 4.569564936
+        # = -18.209457841, v' = 3 - 0.910472892 = 2.089548683 (no clip),
+        # cost = 4 + 0.9 + 0.002320 = 4.902320.
+        (-2.0, 3.0, -1.0, (-1.895522565850, 2.089548683090, 4.902320102630)),
+        # 4 rad is past +pi, so the cost sees 4 - 2pi = -2.283185307 (squared
+        # 5.2135...); u = 2*tanh(0.5) = 0.924..., v' = -1 + (15*sin(4) + 3*u)*0.05
+        # = -1.428966724, theta' = 4 - 0.071448336.
+        (4.0, -1.0, 0.5, (3.928551663780, -1.428966724300, 5.313789355990)),
+        # Saturated torque at theta = -3.5: v' would be 8.189208274, so the
+        # max_speed clip carries exactly 8.0 and theta advances by 0.4 only, while
+        # the cost is read on the pre-clip 7.9 (0.1*7.9**2 = 6.241 plus the
+        # wrapped angle 2.783185307**2 = 7.746122... and 0.001*2**2 = 0.004).
+        (-3.5, 7.9, 30.0, (-3.100000000000, 8.000000000000, 13.991120454100)),
+    ],
+    ids=["theta_at_half", "negative_theta", "theta_past_pi", "velocity_clipped"],
+)
+def test_one_step_matches_hand_derived_values_at_non_zero_theta(
+    problem, run_in_graph, theta, theta_dot, logit, expected
+):
+    """Invariant: ``_advance`` reproduces hand-computed values at non-zero angles.
+
+    Oracle: :func:`_one_step_by_hand`, the published Gym equations transcribed in
+    this module with explicit coefficients, plus the numeric literals in the
+    parametrization -- the two must agree with each other (below, in float64) and
+    the float32 kernel must agree with both within ``rtol=1e-6`` rounding.
+
+    Notes:
+        This is the independence the ``dtype``-parameterized rollouts cannot give:
+        those call one recurrence twice, so a wrong coefficient in the recurrence
+        is invisible to them, while a wrong coefficient here moves the expected
+        value. ``theta != 0`` on every row means ``sin(theta)`` really drives the
+        step (at ``theta = 0`` the gravity term vanishes and half the equation is
+        untested); the four rows cover the wrap (``theta = 4``), the velocity clip
+        (``theta_dot = 7.9``) and both torque signs.
+    """
+    assert theta != 0.0, "the published dynamics are only exercised away from sin(0)"
+
+    next_theta, next_theta_dot, cost = _one_step_by_hand(theta, theta_dot, logit)
+    # The literals and the in-test arithmetic are the same claim, stated twice.
+    np.testing.assert_allclose(
+        [next_theta, next_theta_dot, cost], expected, rtol=1e-10, atol=0
+    )
+
+    pendulum = problem.Pendulum(max_step=20)
+    obs = np.array([[theta, theta_dot]], dtype=np.float32)
+    logits = np.array([[logit]], dtype=np.float32)
+
+    def kernel(values, logits_value):
+        return pendulum._advance(values, logits_value, pendulum._constants())
+
+    kernel_obs, kernel_cost = run_in_graph(kernel, obs, logits)
+
+    np.testing.assert_allclose(kernel_obs[0], [next_theta, next_theta_dot], rtol=1e-6)
+    np.testing.assert_allclose(float(kernel_cost[0]), cost, rtol=1e-6)
+
+
+# --------------------------------------------------------------------------- #
 # Gym-semantics spot checks: the angle wrap and the velocity clip
 # --------------------------------------------------------------------------- #
 
@@ -531,6 +655,52 @@ def test_the_velocity_is_clipped_before_the_angle_integrates(state, problem, run
     np.testing.assert_allclose(
         cost, np.array([6.245, 6.245, 1000.0], dtype=np.float32), rtol=1e-6
     )
+
+
+# --------------------------------------------------------------------------- #
+# the host-side report is finite-safe
+# --------------------------------------------------------------------------- #
+
+
+def test_show_reports_a_nan_poisoned_policy_instead_of_raising(
+    state, problem, enp, fake_schedule, evoxc_key, capsys
+):
+    """Invariant: a NaN-poisoned rollout prints an honest report and never raises.
+
+    Oracle: the documented rule ("a non-finite return (a NaN-poisoned policy)
+    prints as ``nan`` in the return columns rather than raising"). The NaN
+    poisoning test above proves ``evaluate`` carries NaN into the return; this
+    test drives the same poisoned ``act_fn`` through ``show`` -- a host-side call
+    that builds its own one-off graph -- and asserts the report reaches stdout
+    for every repeat plus the mean line, with the final state printed as ``nan``
+    rather than formatted as a number.
+
+    Notes:
+        A finite ``act_fn`` is run immediately afterwards and its report must
+        contain no ``nan`` at all, so the naive "always print nan" cannot pass;
+        the two runs differ only in the policy.
+    """
+    pendulum = problem.Pendulum(max_step=10, repeat_times=2)
+    schedule = fake_schedule(pop_size=1)
+
+    returned = pendulum.show(
+        state, evoxc_key, _constant_logits(enp, float("nan")), schedule
+    )
+    report = capsys.readouterr().out
+
+    assert returned is None
+    assert report.count("Pendulum repeat") == 2
+    assert report.count("return nan") == 2
+    assert report.count("final state: theta=nan rad, theta_dot=nan") == 2
+    assert "Pendulum mean return: nan" in report
+
+    healthy = pendulum.show(state, evoxc_key, _constant_logits(enp, 0.0), schedule)
+    finite = capsys.readouterr().out
+
+    assert healthy is None
+    assert finite.count("Pendulum repeat") == 2
+    assert "nan" not in finite
+    assert "Pendulum mean return:" in finite
 
 
 # --------------------------------------------------------------------------- #
