@@ -46,7 +46,7 @@ It is the route `_kernels.speciate` uses (`distance_fn(state, centre, pop)` from
 `row(state, centre)` is the single-row form and `matrix(state, centres)` the explicit by-name `(S, P)` whole-table form — `__call__` never dispatches to `matrix`, because a `species_size`-row table and a population-shaped centre are indistinguishable when `pop_size == species_size`.
 `matrix` runs one fixed-length `evoxc.scan` over the `S` centre rows and measures one population-shaped `genome.measure_distance` call per iteration; it returns the stacked `(S, P)` table, so its callers and its `(K, P)` contract are unchanged.
 It validates that the digest's population axis and the measured population's static shapes match `pop_size` (`TensorNEATError` otherwise).
-`repeat_leading(x, repeats)` repeats each *centre* row (`k*repeats .. k*repeats+repeats-1` are `x[k]`), which is the row order `measure_distance`'s row-wise pairing needs.
+A centre is tiled to population shape by one rank-raising `evoxc.broadcast` per field (`population_shaped`), which produces the row order `measure_distance`'s row-wise pairing needs and is a single IR op, because the target rank is one above a batch-`1` field's.
 
 `SpeciesState` — frozen dataclass, one leaf per field, stored under `state.species`:
 `species_keys (S,) f32` (NaN = dead slot), `best_fitness (S,) f32`, `last_improved (S,) f32`, `member_count (S,) f32`, `idx2species (P,) f32` (NaN = unassigned, only inside `speciate`), `center_node_keys (S, N) i32`, `center_node_attrs (S, N, NA) f32`, `center_conn_keys (S, E, CK) i32`, `center_conn_attrs (S, E, CA) f32`, `next_species_key` (0-d f32).
