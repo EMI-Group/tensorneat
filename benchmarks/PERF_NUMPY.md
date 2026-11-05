@@ -10,7 +10,6 @@
 > pass — pass 1 with both cells taken in one session, alternating trees so drift cancels, pass 2 with
 > an interleaved same-session no-regression control beside a cross-session `before` column that is
 > labelled indicative.
-
 ## Pass 1 — op-count pass (`a697531` → pass-1 tree)
 
 ### Headline
@@ -84,13 +83,15 @@ the 1 360 older notes claimed.
 
 ### Value identity
 
-`test/parity/` compares every kernel against `benchmarks/legacy_jax` bit-for-bit (53 passed).
+`test/parity/` compares every kernel against `benchmarks/legacy_jax` within the suite's documented
+`rtol`/`atol` tolerances (53 passed).
 Independently, 3 generations of the full pipeline at pop 500 and pop 1000 hash identically to
 `a697531` over all four payload arrays, the `(P,)` fitness and the returned `State`
-(`fitness_history`, `SpeciesState` leaves, `randkey`, `generation`). Full suite: **551 passed,
-0 failed, 0 skipped** (baseline at `a697531` with the same extras: 540 passed, 1 skipped; the 8 new
-tests are `test/unit/genome/test_distance_digest.py`, and the 3 `test/backends` IREE tests now pass
-because the `evoxc[iree]` extra is installed and the blocker below is fixed).
+(`fitness_history`, `SpeciesState` leaves, `randkey`, `generation`). Full suite: **659 passed,
+0 failed, 0 skipped** with `uv sync --all-extras` and `uv run pytest -o addopts="" -q` (66.5 s on this
+run; `test/unit` 578, `test/parity` 53, `test/integration` 21, `test/backends` 3, release gate 4).
+The counts need the optional extras: `test/parity` needs the `bench` extra (`jax`) and `test/backends`
+needs `evoxc[iree]` (without it those three tests skip rather than fail).
 
 ### IREE stayed compilable (and one regression was caught and fixed)
 
@@ -142,15 +143,14 @@ does not claim a contract PASS.
 The `xor_p1000` quality row fails against the JAX side, which is a search-trajectory difference, not a
 kernel one: the two sides use different PRNGs, and the new tree is bit-identical to `a697531` (same
 seed ⇒ same evolution), so that verdict is unchanged by this pass.
-
 ### Caveats
 
 - The box drifts ±30 % between sessions; every comparison above is *within* one session, alternating
   the two trees, and the median is the load-bearing statistic (the pop-1000 mean is skewed by one slow
   generation and is reported for completeness).
-- The contract verdict against the frozen JAX baseline still has to be re-rendered by
-  `run_benchmark.py` (it is generated evidence); this file states the before/after pair of the pass,
-  not a re-verdict.
+- The contract verdict is still owned by the generated report; this file states the before/after pair
+  of the pass, not a re-verdict. The committed `RESULTS.md` postdates the pass and its new-side rows
+  agree with the `after` column within the documented box drift.
 - Build time is one-off per shape signature and improved on every cell, but a `T=50`-step build now
   traces the distance kernel inside a scan body instead of 20 times, which is why it fell.
 

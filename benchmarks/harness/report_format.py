@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from pathlib import Path
 
 from harness.protocol import NO_ERROR_TEXT, REPO_ROOT, short_error
@@ -46,6 +47,7 @@ __all__ = [
     "recorded_lengths",
     "repo_relative",
     "run_flag",
+    "scrub_paths",
     "seconds",
     "sort_key",
     "spaced_headings",
@@ -289,6 +291,50 @@ def display_path(value, fallback: str) -> str:
     text_value = text(value, fallback)
     relative = repo_relative(text_value)
     return relative if relative is not None else Path(text_value).name
+
+
+_ABSOLUTE_PATH = re.compile(r"(?<![\w:/])(?:/[\w.+-]+){2,}")
+"""An absolute path token in free text (two or more components, not after ``:`` or a word).
+
+The lookbehind keeps it off URLs (``https://…``), thread-variable names
+(``OMP/MKL/…``) and ratios (``38.99/295.33``): each candidate must start at a real
+path boundary.
+"""
+
+CHECKOUT_ANCHORS = ("src", "benchmarks", "test")
+"""Top-level directories of a checkout, used to recognise a machine path as a repo path."""
+
+
+def _relative_from_anchor(absolute: str) -> str | None:
+    """``…/workers/x/src/pkg/mod.py`` -> ``src/pkg/mod.py``; ``None`` when no anchor is present.
+
+    A recorded path such as ``/root/<checkout>/src/tensorneat/…/species.py`` names a file of
+    *this* repo, so everything before its first checkout directory is machine noise. A path
+    with no such component (a virtualenv's ``site-packages``, ``/proc/cpuinfo``) is left
+    alone: it is not a repo path and its head carries meaning the report should keep.
+    """
+    parts = [part for part in absolute.split("/") if part]
+    for index, part in enumerate(parts):
+        if part in CHECKOUT_ANCHORS and index < len(parts) - 1:
+            return "/".join(parts[index:])
+    return None
+
+
+def scrub_paths(markdown: str) -> str:
+    """Rewrite absolute machine paths in free text (error messages) to repo-relative ones.
+
+    ``display_path`` covers the paths the report formats itself, but a recorded traceback or
+    backend error is free text that still holds the recording machine's checkout root
+    (``evoxc.core.errors.BackendError: … at /root/<checkout>/src/…/species.py:295``). The
+    record is evidence and is never rewritten, so the normalisation happens here, at render
+    time: a committed report names files relative to the repo a reader cloned.
+    """
+
+    def replace(match: re.Match) -> str:
+        relative = _relative_from_anchor(match.group(0))
+        return relative if relative is not None else match.group(0)
+
+    return _ABSOLUTE_PATH.sub(replace, markdown)
 
 
 def json_path(doc: dict) -> str:

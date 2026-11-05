@@ -15,7 +15,7 @@ if os.path.isdir(SRC_DIR):
 # -- Project information -----------------------------------------------------
 
 project = "TensorNEAT"
-copyright = "2025, Lishuang Wang"
+copyright = "2026, Lishuang Wang"
 author = "Lishuang Wang"
 
 try:

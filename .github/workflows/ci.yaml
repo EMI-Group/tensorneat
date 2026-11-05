@@ -101,8 +101,31 @@ jobs:
         run: |
           uv run python -c "import sys, tensorneat; bad = [m for m in ('jax', 'torch', 'brax', 'gymnax', 'mujoco') if m in sys.modules]; assert not bad, bad; print(tensorneat.__version__, 'clean')"
 
+  # Strict docs gate: the Sphinx site must build with `-W`, so a warning that
+  # broke a page (unreachable toctree entry, duplicate object, unresolved
+  # cross-reference) fails here instead of reaching Read the Docs. Same command
+  # as the documented local build; no native toolchain, no secrets.
+  docs:
+    name: docs (Sphinx, warnings are errors)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install Python 3.12
+        run: uv python install 3.12
+      - name: Install dependencies (docs extra)
+        run: uv sync --extra docs
+      # `-W` turns every Sphinx warning into an error; `docs/_build` is gitignored.
+      - name: Build docs (strict)
+        run: uv run --extra docs sphinx-build -W -b html docs docs/_build
   # Optional compiled-backend leg. `iree` installs the ~80 MB iree-base-compiler
-  # wheel and `iree-compile` costs ~9-11 s per static shape, so this job is NOT
+  # wheel and `iree-compile` costs ~7-10 s per static shape, so this job is NOT
   # part of the numpy verdict and the `test` job never depends on it;
   # `continue-on-error` keeps a heavy/flaky compile from masking a numpy
   # regression. Drop it (or promote the job) once the leg is stable in CI.

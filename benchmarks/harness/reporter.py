@@ -48,6 +48,7 @@ from harness.report_format import (
     protocol_meta,
     recorded_lengths,
     run_flag,
+    scrub_paths,
     seconds,
     sort_key,
     spaced_headings,
@@ -718,10 +719,14 @@ def _reference_section(doc: dict) -> str:
 
     explanation = "\n".join(
         [
-            "The performance contract in `../CONTEXT.md` declares legacy CPU numbers measured on a",
-            "1-thread-bound box (51 ms/gen at pop 100, 109 ms/gen at pop 500, 157 ms/gen at pop 1000).",
-            "The generator prints those next to the old row measured on this box; the verdict uses the",
-            "measured row.",
+            "The performance contract in `../CONTEXT.md` declares the legacy CPU reference",
+            "baseline (51 ms/gen at pop 100, 109 ms/gen at pop 500, 157 ms/gen at pop 1000),",
+            "recorded as `reference_ms_per_generation` in `cases.py` and copied into every run",
+            "record. It is a reference figure, not a reading of this box: the declared numbers",
+            "reproduce at neither thread setting here, so the generator prints them next to the",
+            "old row measured in the same run and the verdict uses that measured row. The",
+            "win/lose section quotes the measured readings at both thread settings whenever it",
+            "has comparable pairs.",
         ]
     )
     if not rows:
@@ -801,19 +806,27 @@ def _companions(doc: dict, report_path=None) -> dict[str, bool]:
 
 
 def _banner(doc: dict) -> str:
-    """The blockquote that marks the file as generated (and re-rendered, when it was)."""
+    """The blockquote that marks the file as generated (and re-rendered, when it was).
+
+    One sentence per line: the provenance (what produced it, from which record, when), the
+    optional re-render notice, then the do-not-edit rule. The re-render line therefore never
+    splits the "It must not be hand-edited: rerun the CLI instead" sentence, which stays
+    whole whether or not the file was re-rendered.
+    """
     lines = [
-        "> **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from",
-        f"> `{json_path(doc)}` at {timestamp(doc)}. It must not be hand-edited:",
-        "> rerun the CLI instead, or the numbers below stop matching the recorded evidence.",
+        "> **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered "
+        f"from `{json_path(doc)}` at {timestamp(doc)}.",
     ]
     rendered = text(meta(doc).get("rendered_at"), "")
     if rendered and rendered != timestamp(doc):
-        lines.insert(
-            2,
+        lines.append(
             f"> Re-rendered from that same JSON at {rendered} with `--render-from-json` "
-            "(no worker was re-run; the dirty state is re-probed on this tree).",
+            "(no worker was re-run; the dirty state is re-probed on this tree)."
         )
+    lines.append(
+        "> It must not be hand-edited: rerun the CLI instead, or the numbers below stop "
+        "matching the recorded evidence."
+    )
     return "\n".join(lines)
 
 
@@ -860,7 +873,9 @@ def render_report(doc: dict, report_path=None) -> str:
 
     Returns:
         Markdown text with a trailing newline. Without ``meta.report_title`` /
-        ``meta.report_note`` the output is exactly the default ``RESULTS.md``.
+        ``meta.report_note`` the output is exactly the default ``RESULTS.md``. The whole
+        document goes through :func:`report_format.scrub_paths` last, so a recorded backend
+        error's absolute checkout path is rendered repo-relative.
     """
     document = doc or {}
     companions = _companions(document, report_path)
@@ -883,8 +898,10 @@ def render_report(doc: dict, report_path=None) -> str:
         _footer(document),
     ]
     return (
-        spaced_headings(
-            "\n\n".join(block.rstrip() for block in blocks if block.rstrip())
+        scrub_paths(
+            spaced_headings(
+                "\n\n".join(block.rstrip() for block in blocks if block.rstrip())
+            )
         )
         + "\n"
     )

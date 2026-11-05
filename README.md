@@ -88,8 +88,7 @@ final loss: 8.68e-04 after 67 generations
 ```
 
 That is the whole quickstart: seed 42 converges at generation 67 in about 4 s on this box, so the demo budget is pop 200 with at most 150 generations and `fitness_target=-1e-3` (`fitness_target` is in fitness space and fitness is maximised, so "error below 1e-3" is `-1e-3`).
-The script itself is `examples/func_fit/xor.py`, 41 lines including comments; a real run raises `pop_size` into the thousands and the generation limit into the hundreds.
-`compile finished` is the one-off evoxc build of the generation graph: `Pipeline.setup()` only prepares host state, the build happens inside the first `step` (that is, inside `auto_run`), and the resulting executable is then reused for every generation of that shape.
+The script itself is `examples/func_fit/xor.py`, 41 lines including comments; a real run raises `pop_size` into the thousands and the generation limit into the hundreds.`compile finished` is the one-off evoxc build of the generation graph: `Pipeline.setup()` only prepares host state, the build happens inside the first `step` (that is, inside `auto_run`), and the resulting executable is then reused for every generation of that shape.
 
 After evolution the best individual is available host-side, with no graph involved (`pipeline` is the one built by `examples/func_fit/xor.py`):
 
@@ -167,7 +166,7 @@ Every item below is backed by a file in this tree and, where a test exists, by t
 - **Speciation and distance kernels** — compatibility distance with node/connection gene digests, species assignment, stagnation, spawn allocation (`algorithm/neat/species.py`, `genome/operations/distance/`).
 - **Visualization** — `genome.visualize(network)` draws the decoded topology to SVG via matplotlib (`examples/interpret_visualize/visualize_genome.py`).
 - **Sympy formula + Python code generation** — `genome.sympy_func(...)` returns an 8-tuple consumed by `to_python_code` / `to_latex_code` from `tensorneat.common.sympy_tools` (`examples/interpret_visualize/genome_sympy.py`). `RecurrentGenome` refuses it by design: a cyclic network has no closed form.
-- **CartPole RL** — `problem.CartPole` is the only RL problem: a batched, evoxc-native Gym CartPole rollout (fixed horizon, return as fitness, `max_step` is the ceiling). `examples/rl/cartpole.py` reaches 200/200 steps in 2 generations at pop 200 on CPU.
+- **Three RL problems, all simulator-free** — `problem.CartPole` (discrete, fixed `max_step` horizon, return as fitness), `problem.Pendulum` (continuous torque, the logit squashed inside the problem as `max_torque * tanh(logit)`, a hidden layer needed to learn quickly) and `problem.MountainCarContinuous` (continuous force at the Gym-faithful 999-step default, one-time goal bonus). Fitness is the return (mean over `repeat_times`) in all three. Two documented caveats: `MountainCarContinuous` has a bang-bang idle optimum — a stationary policy scores ≈ `−0.00` and never reaches the goal, so its demo budget cannot "solve" it — and `Pendulum.show` "runs its own graph of one individual ... and reads both the return and the final observation out of the rollout carry" from `state.randkey`, a different reset key from any training episode, so its printed return (`−48.08`) is a different measurement from the training fitness (`−238.84`), not a contradiction. `examples/rl/cartpole.py` reaches 200/200 steps at pop 200 on CPU.
 - **Checkpointing** — `Pipeline(..., is_save=True, save_dir=...)` writes `config.txt`, `log.txt`, `genomes/<generation>.npz` per generation and `genomes/best_genome.npz` (verified: 2 generations → `genomes/1.npz`, `genomes/2.npz`, `genomes/best_genome.npz`). `test/integration/test_checkpoint.py` round-trips it.
 - **Deterministic per-seed runs** — all randomness is `evoxc.random` keys created from `seed`; the same `(seed, config, shape)` reproduces a run (`test/integration/test_determinism.py`).
 - **Per-genome activation/aggregation menus** — `node_gene=genome.BiasNode(activation_options=[...], aggregation_options=[...])` takes plain callables; the built-in registries are `ACT` (12 options: `scaled_sigmoid`, `sigmoid`, `scaled_tanh`, `tanh`, `sin`, `relu`, `lelu`, `identity`, `inv`, `log`, `exp`, `abs`) and `AGG` (`sum`, `product`, `max`, `min`, `maxabs`, `mean`). There is no global `ACT.add_func` registry any more.
@@ -181,53 +180,55 @@ Not in the library any more (they required JAX): the Brax/Gymnax/mujoco RL envir
 
 | backend | install | status on this box | compile |
 |---|---|---|---|
-| `numpy` | always available (default) | everything runs; fastest CPU option measured here | 1.6–2.0 s per graph set (interpreter build) |
-| `iree` (llvm-cpu) | `uv sync --extra iree` | runs end to end for every shipped problem family (recorded in [`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md)); `test/backends` → **3 passed** here | 8–11 s of `iree-compile` per generation graph, one-off per static shape |
+| `numpy` | always available (default) | everything runs; fastest CPU option measured here | 0.26–0.40 s per generation graph (interpreter build) |
+| `iree` (llvm-cpu) | `uv sync --extra iree` | runs end to end for every shipped problem family (recorded in [`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md)); `test/backends` → **3 passed** here | 7.0–10.4 s of `iree-compile` per generation graph, one-off per static shape (8.4–8.8 s on the timed XOR rows) |
 | `xla` | needs a PJRT C API plugin `.so` via `EVOXC_PJRT_PLUGIN` | not available here (no plugin) | — |
 | `tvm` | `uv sync --extra tvm` | not attempted | — |
 
-Measured XOR, `DefaultGenome(2 -> 1, max_nodes=12, max_conns=24)`, `species_size=20`, seed 42, 3 warmup + 20 timed generations, one fresh process per row (`benchmarks/backend_measure.py`, recorded in [`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md)):
+Getting `iree` to run took five exporter/compiler gates (rank-3 `scatter`, unsigned dtypes, v1-deferred ops, one shared index block `iree-compile` could not legalize, and a negative `concatenate` axis); each failure and the fix that removed it is recorded in [`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md).
+
+Measured XOR, `DefaultGenome(2 -> 1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, seed 42, 3 warmup + 20 timed generations, one fresh process per row (`benchmarks/backend_measure.py`, recorded in [`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md)):
 
 | case | pop | backend | build (s) | ms/gen (median) | peak RSS (MiB) | final max fitness |
 |---|---|---|---|---|---|---|
-| xor | 100 | `numpy` | 1.60 | **42.74** | 120.9 | −0.193043 |
-| xor | 100 | `iree` | 9.35 | **213.12** | 108.6 | −0.193043 |
-| xor | 500 | `numpy` | 1.62 | **262.80** | 263.6 | −0.152052 |
-| xor | 500 | `iree` | 9.97 | **6366.20** | 153.0 | −0.152052 |
-| xor | 1000 | `numpy` | 1.70 | **546.70** | 433.9 | −0.151799 |
-| xor | 1000 | `iree` | 10.86 | **12765.81** | 210.2 | −0.143853 |
+| xor | 100 | `numpy` | 0.262 | **39.738** | 120.95 | −0.193043 |
+| xor | 100 | `iree` | 8.391 | **370.372** | 111.91 | −0.193043 |
+| xor | 500 | `numpy` | 0.321 | **158.923** | 240.63 | −0.152052 |
+| xor | 500 | `iree` | 8.786 | **14929.106** | 161.90 | −0.152052 |
+| xor | 1000 | `numpy` | 0.403 | **291.021** | 391.63 | −0.151799 |
+| xor | 1000 | `iree` | 8.765 | **29890.517** | 223.81 | −0.143853 |
 
-Re-run for this README on the same box, pop 100: `numpy` 43.42 ms/gen, `iree` 213.77 ms/gen after a 7.67 s build, peak RSS 108.6 vs 118.2 MiB, and the identical final max fitness `−0.193043` on both backends.
+Reading it honestly: the compiled leg is **9.3× (pop 100), 93.9× (pop 500) and 102.7× (pop 1000) slower per generation** than the numpy interpreter here. The ratio jumps between pop 100 and pop 500 and then flattens (93.9× → 102.7×) — it does not grow with population, and there is no measured population at which `iree` flips ahead. What `iree` does win is peak memory (7 % lower at pop 100, 33 % at pop 500 and 43 % at pop 1000: llvm-cpu keeps tensors in its own buffers while the interpreter materialises numpy temporaries) and code that is portable to accelerators. Compile is paid once per static shape and is 46.7 % / 2.5 % / 1.3 % of a 3-warmup + 20-timed-generation run at pop 100/500/1000; `opt_level="O0"` is within ~2 % of the default.
 
-Reading it honestly: the compiled leg is **5.0× (pop 100), 24.2× (pop 500) and 23.4× (pop 1000) slower per generation** than the numpy interpreter here, and the gap grows with population size. What `iree` does win is peak memory (30–50% lower: llvm-cpu keeps tensors in its own buffers while the interpreter materialises numpy temporaries) and code that is portable to accelerators. Compile cost must be paid once per static shape, and at 20-generation budgets it is 35–50% of the wall clock.
-
-Practical notes if you want to run `backend="iree"`: `uv sync --extra iree`, leave `compile_options` at the default (`opt_level="O2"`/`"O3"` exceed IREE's per-function stack-promotion limit for this graph and fail inside `iree-compile` with a `BackendError`), and expect a recompile on every shape change. `test/backends` skips cleanly without the extra.
+Practical notes if you want to run `backend="iree"`: `uv sync --extra iree`, leave `compile_options` at the default or use `O0`/`O1` (`opt_level="O2"` fails inside `iree-compile` — `'func.func' op exceeded stack allocation limit of 32768 bytes ... Got 40064 bytes` — surfaced as a `BackendError`), and expect a recompile on every shape change. `test/backends` skips cleanly without the extra.
 
 ## Performance
 
-Honest state: on CPU, with the numpy reference interpreter, **this rewrite is slower per generation than the frozen pre-rewrite JAX implementation**. The table is the committed harness record in [`benchmarks/RESULTS.md`](./benchmarks/RESULTS.md) (150 timed generations, 3 repeats at seeds 42/43/44, one process per run, measured on a shared 20-core INTEL Xeon Platinum 8568Y+ box, Python 3.12, JAX 0.12.0.1, git `89f6200d6bba`; per-repeat spread and protocol in that file).
+Honest state: on CPU, with the numpy reference interpreter, **the rewrite is not uniformly faster per generation than the frozen pre-rewrite JAX implementation**. The table is the committed harness record in [`benchmarks/RESULTS.md`](./benchmarks/RESULTS.md), rendered from `benchmarks/results/authoritative.json` at 2026-11-04T19:01Z, git `ebeaf1f`, 3 repeats at seeds 42/43/44, **JAX 0.10.2**, 150 timed generations after 3 warmup, one process per run, on a **shared** 20-core INTEL Xeon Platinum 8568Y+ (other jobs ran concurrently, so the per-repeat spread is the honest uncertainty — `0.59×`–`1.37×` on the pop-100 XOR row; a median alone would hide it).
 
-| case | pop | legacy JAX ms/gen | this library (`numpy`) ms/gen | JAX is |
+| case | pop | legacy JAX ms/gen | this library (`numpy`) ms/gen | speed-up (old / new) |
 |---|---|---|---|---|
-| XOR | 100 | 31.35 | 58.02 | 1.85× faster |
-| XOR | 500 | 157.01 | 357.25 | 2.28× faster |
-| XOR | 1000 | 246.76 | 671.73 | 2.72× faster |
-| XOR3d | 100 | 19.59 | 69.48 | 3.55× faster |
-| XOR3d | 500 | 81.42 | 380.42 | 4.67× faster |
-| XOR3d | 1000 | 141.18 | 698.15 | 4.94× faster |
-| Pagie (`CustomFuncFit`) | 500 | 371.83 | 3443.44 | 9.26× faster |
+| XOR | 100 | 38.99 | 36.44 | 1.07× (new faster) |
+| XOR | 500 | 295.33 | 161.73 | 1.83× (new faster) |
+| XOR | 1000 | 807.30 | 279.92 | 2.88× (new faster) |
+| XOR3d | 100 | 24.53 | 39.12 | 0.63× (new slower) |
+| XOR3d | 500 | 107.59 | 171.16 | 0.63× (new slower) |
+| XOR3d | 1000 | 255.41 | 300.17 | 0.85× (new slower) |
+| Pagie (`CustomFuncFit`) | 500 | 496.45 | 3156.73 | 0.16× (new slower) |
 
-Build/compile is the one latency number that went the other way: the evoxc build is 0.56 / 1.52 / 2.19 s for XOR at pop 100/500/1000 against 2.74 / 2.82 / 2.76 s for `jax.jit(...).lower().compile()`. Peak RSS is lower at small populations (145 vs 587 MiB at pop 100) and much higher at large ones (1992 vs 631 MiB at pop 1000) — the interpreter's per-generation working set grows with `pop_size × max_nodes × max_conns`, while the XLA side stays close to its runtime floor.
+The new side is 1.07×/1.83×/2.88× faster on XOR and 0.63×/0.63×/0.85×/0.16× of the old speed on XOR3d at pop 100/500/1000 and Pagie at pop 500.
 
-So the stated CPU contract ("at least as fast as the frozen JAX baseline") is **not met today**, and `benchmarks/RESULTS.md` records the verdict as `FAIL` on timing. Where the rewrite does win:
+Build/compile is the one latency number that went the other way: the evoxc build is 0.30 / 0.53 / 0.80 s for XOR at pop 100/500/1000 against 2.94 / 2.93 / 2.96 s for `jax.jit(...).lower().compile()`. Peak RSS is lower at every XOR population (114.9 vs 676.7 MiB at pop 100, 241.3 vs 720.7 at pop 500, 392.2 vs 705.1 at pop 1000) but 5.4× higher on Pagie (4577.1 vs 853.3 MiB), where the interpreter's per-generation working set grows with `pop_size × max_nodes × max_conns` while the XLA side stays close to its runtime floor.
+
+So the stated CPU contract ("at least as fast as the frozen JAX baseline") is **not met today**, and `benchmarks/RESULTS.md` records the verdict as `FAIL`: four timing rows fail (XOR3d at pop 100, 500 and 1000, and Pagie at pop 500) and three quality rows fail (`xor3d_p100` −0.0894 vs −0.2500, `xor3d_p500` −0.1789 vs −0.2500, `custom_pagie_p500` −0.0064 vs −0.0219, the new side below the old). The numpy interpreter beats the frozen JAX side on the whole XOR family and loses on XOR3d and Pagie. Where the rewrite does win:
 
 - **No JAX, no torch, no CUDA toolchain.** `import tensorneat` pulls in neither, enforced by `test/release_gate_no_jax.py`; the runtime dependency set is `evoxc`, `numpy`, `networkx`, `matplotlib`, `sympy`.
 - **The graph is data.** It is inspectable, cacheable and transformable (`evoxc.Graph`, `evoxc.lower(...)`), instead of being an opaque `jax.jit` dispatch; one executable per static shape is built once and reused.
-- **Latency to first generation.** Build 0.56 s at pop 100 vs 2.74 s of XLA compilation, and 0.32 s for a tiny genome in the quickstart run above.
-- **Switchable backends.** The same kernels run on the IREE compiler today (verified end to end), which is where a GPU or a large-batch workload would pay off — that win is **not measured here**; on this CPU `iree` is 5–24× slower (see Backends).
-- **Memory at small scale and on the compiled leg** (see above and `benchmarks/BACKENDS.md`).
+- **Latency to first generation.** Build 0.30 s at pop 100 vs 2.94 s of XLA compilation, and 0.30 s for the XOR quickstart graph above (the run prints `compile finished, cost time: 0.298339s`).
+- **Switchable backends.** The same kernels run on the IREE compiler today (verified end to end), which is where a GPU or a large-batch workload would pay off — that win is **not measured here**; on this CPU `iree` is 9–103× slower (see Backends).
+- **Memory at small scale and on the compiled leg.** Peak RSS is 1.8–5.9× lower than the frozen JAX side on the three XOR rows (114.9/241.3/392.2 vs 676.7/720.7/705.1 MiB) and 5.4× higher on Pagie; on the compiled leg `iree` uses 7–43 % less than numpy (see Backends).
 
-The measured bottleneck on the numpy backend is `tell` (speciation: 4 000–40 000 genome-distance pairs per generation), not the forward pass; `src/tensorneat/pipeline.py` documents the per-phase breakdown.
+The measured bottleneck on the numpy backend is `tell` (speciation), not the forward pass: at pop 500 two `speciate` scans were 9 160 of 10 767 executed ops per generation (85 %) and ~63 % of a generation is `evoxc` interpreter per-op overhead, both recorded in [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md).
 
 ## Install
 
@@ -289,7 +290,7 @@ Caveats, both verified on 2026-11-04:
 
 ## Examples
 
-All scripts use the public API only and print a per-generation log. Wall times below are from this box (`uv run` startup included, ~1 s).
+The ten pipeline scripts use the public API only and print a per-generation log; the two `interpret_visualize` scripts are host-only introspection and import `evoxc` directly for that. Wall times below are from this box (`uv run` startup included, ~1 s).
 
 | script | what it demonstrates | command | verified |
 |---|---|---|---|
@@ -307,7 +308,6 @@ All scripts use the public API only and print a per-generation log. Wall times b
 | `examples/interpret_visualize/visualize_genome.py` | draw one genome as SVG (host only) | `uv run python examples/interpret_visualize/visualize_genome.py` | ran, 0.9 s; writes an untracked `network.svg` next to the script |
 
 The ten pipeline scripts use demo budgets (`# Demo budget:` in the source: pop 100–400, 10–250 generations, numpy backend), and six of them reach their fitness target on seed 42 — `xor.py`, `xor3d.py`, `xor_origin.py`, `xor_recurrent.py`, `cartpole.py`, `pendulum.py`; three (`custom_func_fit.py`, the two HyperNEAT scripts) stop at the generation limit with a visibly falling loss and claim no convergence, and `mountaincar.py` sets `fitness_target=float("inf")`, so it has no target to cross. A real run raises `pop_size` into the thousands and the generation limit into the hundreds. The two `interpret_visualize` scripts are host-only (no `Pipeline`, under 1 s). Fitness is maximised everywhere, so a function-fitting `fitness_target` is a negative error bound. The Brax/Gymnax/mujoco examples of 0.1.x no longer exist.
-
 ## Tutorials
 
 - `tutorials/quickstart.ipynb` — the current-API notebook, executed top to bottom: build a genome/algorithm/problem, `Pipeline.setup`/`step`/`auto_run`, the batch-first `best` payload, switching `backend=`, and inspecting the built `evoxc` executable.
@@ -320,7 +320,7 @@ The ten pipeline scripts use demo budgets (`# Demo budget:` in the source: pop 1
 | `src/tensorneat/pipeline.py` | the host compile site, generation loop, logging and checkpoint writer |
 | `src/tensorneat/genome/` | gene payload, genetic operators, forward/grad algebra, host-only introspection |
 | `src/tensorneat/algorithm/` | `NEAT` (speciation, spawn, breeding) and `HyperNEAT`/`HyperNEATFeedForward` + substrates |
-| `src/tensorneat/problem/` | `XOR`, `XOR3d`, `FuncFit`/`CustomFuncFit`, `CartPole` |
+| `src/tensorneat/problem/` | `XOR`, `XOR3d`, `FuncFit`/`CustomFuncFit`, `CartPole`, `Pendulum`, `MountainCarContinuous` |
 | `src/tensorneat/common/` | `State`, error types, tensorization/schedule, ACT/AGG registries, sympy codegen |
 | `benchmarks/` | old-vs-new harness, the frozen legacy JAX implementation, `RESULTS.md`, `BACKENDS.md` |
 | `test/` | `unit/`, `parity/` (vs legacy JAX), `integration/`, `backends/` (iree), release gate |
@@ -339,34 +339,22 @@ uv run pytest -m requires_iree         # needs: uv sync --extra iree
 uv run pytest test/release_gate_no_jax.py
 ```
 
-Measured on this box, no optional extras installed:
+Measured on this box with every extra installed (`uv sync --all-extras`):
 
 ```
-$ uv run pytest -o addopts="" --co -q
-505 tests collected in 0.43s
-
 $ uv run pytest -o addopts="" -q
-505 passed, 5 skipped in 31.57s
+659 passed, 3 warnings in 59.88s
 ```
 
-(`-o addopts=""` is needed because `pyproject.toml` sets `addopts = "-q"` and a doubled `-q` suppresses the summary line.) The five skips are the four JAX parity modules and `test/backends`, which skip at import when their extra is missing:
+(`-o addopts=""` is needed because `pyproject.toml` sets `addopts = "-q"` and a doubled `-q` suppresses the summary line.) The counts come apart as `test/unit` 578, `test/parity` 53, `test/integration` 21, `test/backends` 3 and `test/release_gate_no_jax.py` 4. The parity tests need the `bench` extra (`jax`) and the backend tests need `--extra iree`; without those extras the parity modules and `test/backends` skip at import instead of failing, and everything else runs on a bare `uv sync`.
 
-```
-SKIPPED [1] test/parity/test_distance.py:57: parity needs the `bench` extra (jax)
-SKIPPED [1] test/parity/test_fitness.py:49: parity needs the `bench` extra (jax)
-SKIPPED [1] test/parity/test_forward.py:50: parity needs the `bench` extra (jax)
-SKIPPED [1] test/parity/test_grad.py:58: parity needs the `bench` extra (jax)
-```
-
-With the `iree` extra installed the backend suite runs too: `uv run --extra iree pytest -o addopts="" -q` → `508 passed, 4 skipped in 40.21s`, and `uv run --extra iree pytest test/backends` → `3 passed in 8.31s` (a real XOR generation on `backend="iree"` compared against numpy).
-
-| suite | proves |
-|---|---|
-| `test/unit/` | kernels against numpy oracles: schedule derivation, forward/NaN rules, mutation/crossover invariants, speciation bookkeeping, distance, `grad` vs finite differences, ACT/AGG tables, CartPole vs a host Euler rollout |
-| `test/parity/` | the same kernels on identical payloads against `benchmarks/legacy_jax` (rtol 1e-5 forward, 1e-4 gradients), marker `parity` |
-| `test/integration/` | whole-pipeline XOR evolution, per-seed determinism, rebuild on shape change, checkpoint round-trip, `show(state, best)`, marker `slow` |
-| `test/backends/` | `backend="iree"` end to end and its agreement with numpy, marker `requires_iree` (in no gate) |
-| `test/release_gate_no_jax.py` | `import tensorneat` leaves `jax`, `jaxlib`, `torch`, `brax`, `gymnax`, `mujoco` out of `sys.modules` — even under an import hook that raises for them — and a tiny XOR run still evolves |
+| suite | tests | extra needed | proves |
+|---|---|---|---|
+| `test/unit/` | 578 | none | kernels against numpy oracles: schedule derivation, forward/NaN rules, mutation/crossover invariants, speciation bookkeeping, distance, `grad` vs finite differences, ACT/AGG tables, CartPole vs a host Euler rollout |
+| `test/parity/` | 53 | `--extra bench` | the same kernels on identical payloads against `benchmarks/legacy_jax` (rtol 1e-5 forward, 1e-4 gradients), marker `parity` |
+| `test/integration/` | 21 | none | whole-pipeline XOR evolution, per-seed determinism, rebuild on shape change, checkpoint round-trip, `show(state, best)`, marker `slow` |
+| `test/backends/` | 3 | `--extra iree` | `backend="iree"` end to end and its agreement with numpy, marker `requires_iree` (optional CI `iree` job; not part of the numpy gate) |
+| `test/release_gate_no_jax.py` | 4 | none | `import tensorneat` leaves `jax`, `jaxlib`, `torch`, `brax`, `gymnax`, `mujoco` out of `sys.modules` — even under an import hook that raises for them — and a tiny XOR run still evolves |
 
 ## Citation
 
@@ -408,7 +396,7 @@ TensorNEAT is released under the **GNU General Public License v3.0**; the full t
 
 ## Roadmap
 
-- **Close the CPU gap on the numpy interpreter.** The measured bottleneck is `tell`, dominated by speciation's genome-distance pairs (4 000–40 000 per generation at pop 100–1000); the forward pass is not the problem.
+- **Close the CPU gap on the numpy interpreter.** The measured bottleneck is `tell`, dominated by speciation (two `speciate` scans were 85 % of the executed ops per generation at pop 500, and `evoxc` interpreter per-op overhead is ~63 % of a generation; see [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md)); the forward pass is not the problem.
 - **Make a compiled backend actually competitive.** The IREE leg works but loses on llvm-cpu because the dense key-table `gather`/`argsort`/`scatter` traffic lowers to generic loops; that is a kernel-formulation project (sparse/segment reductions), not a compiler-flag one. No compiled win is claimed until it is measured.
 - **Lift the remaining `evoxc` v1 exporter deferrals** upstream, then re-evaluate the compiled backends and re-run the contract.
 - **More NEAT-family algorithms and substrates** (e.g. ES-HyperNEAT), and more RL problems that do not need JAX.

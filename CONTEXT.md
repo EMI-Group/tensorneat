@@ -9,7 +9,7 @@ The library keeps its research identity (GECCO 2024 Best Paper, arXiv 2404.01817
 - `test/` — pytest suite: `unit/`, `parity/` (vs a frozen legacy implementation), `integration/`, `backends/` (compiled backends).
 - `benchmarks/` — old-vs-new harness, the frozen pre-rewrite JAX implementation used as timing baseline and numerical oracle, and the committed measured reports.
 - `examples/` — runnable scripts per problem family (`func_fit/`, `rl/`, `interpret_visualize/`).
-- `docs/` — Sphinx autodoc site (strict build is clean); `tutorials/` — `quickstart.ipynb` (current API) plus `legacy_jax/` (pre-rewrite notebooks, concepts only).
+- `docs/` — Sphinx autodoc site built strictly (`uv run --extra docs sphinx-build -W -b html docs docs/_build`, zero warnings), enforced by the `docs` job in `.github/workflows/ci.yaml` and by `fail_on_warning: true` in `.readthedocs.yaml`; `tutorials/` — `quickstart.ipynb` (current API) plus `legacy_jax/` (pre-rewrite notebooks, concepts only).
 - `pyproject.toml` + `uv.lock` + `.python-version` — packaging, the locked environment, and the interpreter pin; `README.md` is the front page and must match the code.
 ## API Surface
 - `from tensorneat import Pipeline, algorithm, genome, problem, common`; `tensorneat.__version__` is the installed distribution version.
@@ -23,9 +23,9 @@ The library keeps its research identity (GECCO 2024 Best Paper, arXiv 2404.01817
 `evoxc` is resolved by `[tool.uv.sources]` from git tag `v0.1.1` because PyPI only ships 0.1.0, which predates the frontend work that makes a build 0.32 s instead of 1.55 s; the metadata floor is `evoxc >= 0.1.1`, which PyPI cannot satisfy, so a plain `pip install tensorneat` fails and the README's git-pinned `evoxc` plus `pip install --no-deps` recipe is the supported pip path.
 ## Backends
 `backend=` is forwarded verbatim to `evoxc.build`; `compile_options` is expanded into its `**options`.
-`"numpy"` is the default, the fastest leg on CPU today, and the only one with no optional dependency.
-`"iree"` lowers, compiles and runs every shipped problem family on llvm-cpu, agrees with numpy numerically, and is 5–24× slower per generation here at 8–11 s of compile per static shape (`benchmarks/BACKENDS.md`).
-`"xla"` requires a user-supplied PJRT C API plugin (unavailable on this box) and `"tvm"` is untested.
+`"numpy"` is the default, the fastest leg on CPU today (9–103× faster per generation than iree at the measured populations), and the only one with no optional dependency.
+`"iree"` lowers, compiles and runs one full generation of each shipped problem class on llvm-cpu (`XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum`, `MountainCarContinuous`) plus the `RecurrentGenome` and `HyperNEAT` paths, agrees with numpy numerically, and is 9.3×/93.9×/102.7× slower per generation than numpy at pop 100/500/1000, paying one 7.0–10.4 s `iree-compile` per static shape (`benchmarks/BACKENDS.md`).
+`"xla"` needs a user-supplied PJRT C API plugin `.so` (via `compile_options["plugin_path"]` or `EVOXC_PJRT_PLUGIN`) that nothing provides on this box, and `"tvm"` is untested here.
 A backend that cannot run a kernel raises; nothing ever silently falls back to another backend.
 ## Performance
 `benchmarks/RESULTS.md` is the generated full-matrix old-vs-new report; its committed verdict is **FAIL** (timing and quality) and was rendered from a record that predates the search-quality and performance fixes below, so only a full harness re-run changes it.
@@ -43,8 +43,7 @@ It holds the `-0.05` XOR3d tolerance on `xor3d_p500` (median −2.9e−12 agains
 `xor3d_p100` still misses the three-seed median (−0.2500 against −0.0894): at pop 100, leaving the constant-0.5 basin is a per-seed lottery in *both* implementations — the new side escapes on 13 of 20 seeds against the frozen oracle's 4 of 20 and seed 42 escapes at generation 55 against the oracle's 81, while seeds 43/44 do not escape inside the budget.
 Two search contracts, both matching the frozen implementation: parent pairing pins elite slot *k* to its species' *k*-th ranked member (never the champion cloned into every elite slot), and the four structural gates are independent per individual and compose sequentially add-node → delete-node → add-conn → delete-conn.
 `DefaultGenome` ships `conn_add=0.4`/`conn_delete=0.05` because the add gate is the one refused roughly half the time (duplicate/self/cycle refusals), which made equal declared probabilities thin the population; an explicitly constructed `DefaultMutation()` keeps NEAT-python's `0.2`/`0.2`.
-Every allocated node and connection key stays inside `key_span`: a key outside the schedule's window is dropped from the phenotype without an error.
-## Constraints
+Every allocated node and connection key stays inside `key_span`: a key outside the schedule's window is dropped from the phenotype without an error.## Constraints
 - `import tensorneat` must never import `jax`, `torch`, `brax`, `gymnax` or `mujoco` (a release-gate test enforces this); compiled backends are pulled in only by `evoxc.build(backend=...)`.
 - All computation lives inside `@evoxc.defn` graphs or helpers called during an active trace; there is no eager mode — host code only orchestrates build/run/log.
 - Shapes are static: population, `max_nodes`, `max_conns` are fixed at build time; a shape change forces a rebuild (the Pipeline caches one executable per shape signature).
@@ -56,7 +55,7 @@ Every allocated node and connection key stays inside `key_span`: a key outside t
 - No silent error swallowing: configuration errors raise `tensorneat.common.errors.TensorNEATError`; trace/shape/backend errors propagate from `evoxc` unchanged.
 - Dropped on purpose: the Brax/Gymnax/mujoco-playground RL environments required JAX; `problem.rl` ships three simulator-free evoxc-native replacements instead — `CartPole` (discrete), `Pendulum` (continuous torque), `MountainCarContinuous` (continuous force, one-time goal bonus).
 ## Test Strategy
-`uv run pytest` from the repo root (`testpaths = ["test"]` in `pyproject.toml`); `test/` mirrors the source tree and the current full run is green with `uv sync --all-extras` (see `test/CONTEXT.md` for the live per-directory counts).
+`uv run pytest` from the repo root (`testpaths = ["test"]` in `pyproject.toml`); `test/` mirrors the source tree and the current full run is green with `uv sync --all-extras`: 659 passed (`test/unit` 578, `test/parity` 53 with `--extra bench`, `test/integration` 21, `test/backends` 3 with `--extra iree`, `test/release_gate_no_jax.py` 4).
 `test/unit/` runs on the numpy backend with no optional dependency (the Pendulum and MountainCarContinuous suites carry their own in-file host-numpy oracles, in the same spirit as `test_cartpole.py`); `test/parity/` needs `--extra bench` and compares kernels against `benchmarks/legacy_jax` within documented tolerances (rtol 1e-5 forward, 1e-4 gradients; 53 tests); `test/integration/` evolves XOR, asserts determinism per seed, rebuild-on-shape-change and checkpoint round-trips; `test/backends/` runs a real `iree` generation and skips when the extra is absent; `test/unit/benchmarks/` covers the harness's own git fingerprint; `test/release_gate_no_jax.py` enforces the import hygiene.
 ## Routing Table
 | Path | Responsibility |
@@ -68,8 +67,7 @@ Every allocated node and connection key stays inside `key_span`: a key outside t
 | `./docs` | Sphinx configuration, autodoc stubs (one per public module) and the built-site rules. |
 | `./tutorials` | `quickstart.ipynb` for the current API (`legacy_jax/` keeps the pre-rewrite notebooks, concepts only). |
 | `./imgs` | Static assets; holds only the two `evox_brand_*.svg` logos the README header uses. |
-| `./.github/workflows` | `ci.yaml` (uv sync + test + parity + import-hygiene + optional iree) and the PyPI release workflow. |
-| `pyproject.toml`, `uv.lock`, `.python-version` | Packaging metadata, the locked environment, the interpreter pin — a dependency change needs `uv lock`. |
-| `.readthedocs.yaml` | Read the Docs build (Python 3.12, uv-based install, sphinx-build). |
+| `./.github/workflows` | `ci.yaml` (uv sync + test + parity + import-hygiene + optional iree) and the PyPI release workflow. || `pyproject.toml`, `uv.lock`, `.python-version` | Packaging metadata, the locked environment, the interpreter pin — a dependency change needs `uv lock`. |
+| `.readthedocs.yaml` | Read the Docs build (Python 3.12, uv-based install, sphinx-build with warnings as errors). |
 ## License
 `LICENSE` is GPL-3.0 and the packaging metadata says so; nothing in this repo is BSD-licensed.

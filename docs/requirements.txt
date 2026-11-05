@@ -1,2 +1,8 @@
+# Sphinx toolchain pin only -- the `docs` extra in pyproject.toml is the source
+# of truth. This is NOT a build path for TensorNEAT: the package depends on
+# `evoxc` resolved from a git tag by `[tool.uv.sources]`, and pip cannot satisfy
+# `evoxc >= 0.1.1` from PyPI, so `pip install -r docs/requirements.txt` leaves
+# `tensorneat` uninstallable and autodoc cannot import it. The supported build:
+#   uv run --extra docs sphinx-build -W -b html docs docs/_build
 sphinx >= 7.0
 sphinx-rtd-theme

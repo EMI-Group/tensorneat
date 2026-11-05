@@ -28,10 +28,13 @@ _IMPLS = frozenset({"old", "new"})
 """Valid values of an entry of :attr:`Case.impls`."""
 
 _XOR_MS_PER_GENERATION: dict[int, float] = {100: 51.0, 500: 109.0, 1000: 157.0}
-"""Declared legacy CPU baseline (root ``CONTEXT.md``, 1-thread-bound box).
+"""Recorded legacy reference baseline (an upstream record, not a reading of this box).
 
 These are a sanity check printed next to the *measured* old row; the verdict is
-computed from the row measured in the same run on the same box.
+computed from the row measured in the same run on the same box. This box does not
+reproduce the record under either thread setting (``--threads 0``: 38.99 / 295.33 /
+807.30 ms per generation, ``RESULTS.md``; ``--threads 1``: 35.79 / 127.71 / 252.06,
+``THREADS.md``), so the reference is informational only.
 """
 
 _XOR3D_FITNESS_TARGET: float = -0.05

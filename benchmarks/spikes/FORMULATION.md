@@ -6,19 +6,21 @@ This record holds the measurements that justify the rewrite's *design* decision 
 It answers one question: how much work does each formulation execute per forward, and what does that work cost on this box.
 Every number below carries its population, `max_nodes`, connection count, depth, interpreter/backend and box, because a number without conditions is a rumour.
 
-## Declared baseline (not measured by this spike)
+## Recorded reference baseline (not measured by this spike)
 
-`../CONTEXT.md` declares the frozen legacy cost on a 1-thread-bound CPU box as 51 ms/generation at pop 100, 109 ms/generation at pop 500 and 157 ms/generation at pop 1000.
+`../cases.py` carries the recorded legacy reference as `reference_ms_per_generation = {100: 51.0, 500: 109.0, 1000: 157.0}` ms/generation.
 Those are whole-generation numbers (transform + forward + `tell`); reproducing and comparing them is the end-to-end harness's job (`../run_benchmark.py`, verdict in `../RESULTS.md`), not this spike's.
+They are a recorded reference, not this box's measured 1-thread condition: the measured `--threads 1` old-side rows here are 35.79 / 127.71 / 252.06 ms/generation (`../THREADS.md`), and the default-thread old-side rows are 38.99 / 295.33 / 807.30 ms/generation (`../RESULTS.md`).
 
 ## Where this sits in the measured end-to-end run
 
-`../RESULTS.md` (measured 2026-11-02T07:29:02Z on this box, `--threads 0`, new side on the `numpy` backend, 150 timed generations, 3 repeats) measures XOR at **31.35 / 157.01 / 246.76 ms per generation on the old JAX side** and **58.02 / 357.25 / 671.73 ms per generation on the new evoxc side**, at pop 100 / 500 / 1000.
-The same CLI with `--threads 1` (record in `../THREADS.md`, 2 repeats) gives **35.79 / 127.71 / 252.06 ms on the old side** and **53.92 / 360.12 / 665.46 ms on the new side** at the same populations, so thread binding does not close the gap.
-That is the whole generation (transform + forward + `tell` + the species controller + the problem's `evaluate`), and the old-side pop-1000 row is 1.6× the declared 157 ms, so the measured row, not the declared contract, is what the harness verdict uses.
-Of the rows below only the legacy transform+forward at pop 1000 (27.84 ms) maps onto that generation, and it is ≈ 11 % of the measured 246.76 ms; the legacy forward alone (8.95 ms) is ≈ 4 %.
-The remaining ≈ 219 ms of an old-side generation is work this spike never times (`tell`, the species controller and its `analysis`, the problem's `evaluate` loop, the per-generation host sync), so these numbers explain the transform+forward part of the old side and no more.
-They say even less about the new side's 671.73 ms/generation: the 0.69–15.90 ms prototype rows time a level loop over prebuilt tables, with no evoxc build/run, no transform of an evolving population and no host orchestration.
+`../RESULTS.md` (rendered 2026-11-04T19:01:27Z from `results/authoritative.json`, git `ebeaf1f`, `--threads 0`, new side on the `numpy` backend, 150 timed generations, 3 repeats) measures XOR at **38.99 / 295.33 / 807.30 ms per generation on the old JAX side** and **36.44 / 161.73 / 279.92 ms per generation on the new evoxc side**, at pop 100 / 500 / 1000.
+The same CLI with `--threads 1` (record in `../THREADS.md`, 2 repeats) gives **35.79 / 127.71 / 252.06 ms on the old side** and **53.92 / 360.12 / 665.46 ms on the new side** at the same populations; in that record the new side is slower at every population.
+That `--threads 1` record resolves jax 0.12.0.1 while the 0-thread `RESULTS.md` was regenerated with jax 0.10.2 (`../THREADS.md` and `../RESULTS.md` environment tables), so the two pairs are not a controlled thread-only comparison.
+That is the whole generation (transform + forward + `tell` + the species controller + the problem's `evaluate`), and the 1-thread old-side pop-1000 row (252.06 ms) is 1.6× the recorded 157 ms reference while the 0-thread row (807.30 ms) is 5.1× it; the measured row, not the reference, is what the harness verdict uses.
+Of the rows below only the legacy transform+forward at pop 1000 (27.84 ms) maps onto that generation: it is ≈ 3.4 % of the measured 0-thread old-side 807.30 ms (≈ 11.0 % of the 1-thread 252.06 ms), and the legacy forward alone (8.95 ms) is ≈ 1.1 % (≈ 3.6 %).
+The remaining ≈ 779 ms of the 0-thread old-side generation (≈ 224 ms of the 1-thread row) is work this spike never times (`tell`, the species controller and its `analysis`, the problem's `evaluate` loop, the per-generation host sync), so these numbers explain the transform+forward part of the old side and no more.
+They say even less about the new side's 279.92 ms/generation (or 665.46 ms under `--threads 1`): the 0.69–15.90 ms prototype rows time a level loop over prebuilt tables, with no evoxc build/run, no transform of an evolving population and no host orchestration.
 The spike also fixes P = 1000 in every row it records, so the pop 100 and pop 500 end-to-end rows have no counterpart here at all.
 Nothing below is a prediction of, or an argument about, that end-to-end timing verdict: the micro-kernel rows cannot adjudicate the end-to-end gap, because they measure formulations rather than the compiled pipeline; the verdict is the harness's, and what this record supports is work per forward and how it scales with depth and real edges.
 
@@ -27,7 +29,7 @@ Nothing below is a prediction of, or an argument about, that end-to-end timing v
 When: measured 2026-11-02, 06:17–06:19 UTC, with the `uptime` 1-minute load average between 1.4 and 2.9 around the runs.
 Box: Linux 6.8.0-146 x86_64 on a shared 20-core QEMU/KVM guest (`INTEL(R) XEON(R) PLATINUM 8568Y+`, 241611 MiB RAM), `sys.executable` = `/tmp/tn-venv/bin/python`, Python 3.12.3, numpy 2.5.4, jax 0.12.0.1 (`cpu` backend for the legacy rows); `evoxc` 0.1.0 is installed but the micro-benchmark never imports it.
 Load: co-tenant jobs share those 20 cores, so the load average is part of the conditions and the spread line below — never a single median — is the uncertainty measure.
-Threads: `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `NUMEXPR_NUM_THREADS` and `XLA_FLAGS` unset, i.e. runtime defaults — this is *not* the 1-thread-bound box of the declared baseline.
+Threads: `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `NUMEXPR_NUM_THREADS` and `XLA_FLAGS` unset, i.e. runtime defaults — this is the `--threads 0` condition, not the `--threads 1` condition of `../THREADS.md` and not the recorded reference baseline.
 Population: P = 1000 synthetic individuals, `max_nodes` = 50 padded node slots, 150 real connections per individual (144 at depth 4, where the level skeleton has no room for the last 6).
 Population layout: node keys equal the slot index in the legacy genome's order (slots 0–1 inputs, slot 2 output, slots 3–49 hidden), 2 inputs / 1 output.
 Population shape: per individual a random, level-ordered DAG (so no cycles, and the legacy `topological_sort` sees a legal graph), fan-in per node capped by the window K, weights uniform in [-1, 1].
@@ -43,7 +45,8 @@ Depth is not an input of the legacy formulation (it walks the 50 node slots in t
 Measured: **forward only = 8.95 ms per forward for the whole population (8.92–9.12 ms over the 4 runs), 8.95 µs per individual**, P=1000, `max_nodes`=50, 150 connections, jax 0.12.0.1 CPU on the 20-core box, jit-compiled, transform hoisted out — command in "How to re-run" below.
 `transform` + forward together cost **27.84 ms per generation (27.61–28.41 ms over the 4 runs)** at the same conditions, so the graph transform (`topological_sort`'s data-dependent `while_loop`) costs ≈ 18.9 ms of that and is the larger half.
 One-off costs at the same conditions: jax compile of the transform+forward program 327 ms median (315–336 ms), plus an informational 1790 ms for `NEAT.setup` (it builds the population and the species controller; it is not inside any timed region).
-The declared 157 ms/generation at pop 1000 in `../CONTEXT.md` is the *whole* generation (transform + forward + `tell` + the problem's `evaluate`) on a 1-thread-bound box, so it is ≈ 5.6× the 27.84 ms transform+forward measured here and is not a competing measurement of the same thing.
+The recorded reference 157 ms/generation at pop 1000 (`reference_ms_per_generation` in `../cases.py`) is a *whole* generation (transform + forward + `tell` + the problem's `evaluate`), so it is ≈ 5.6× the 27.84 ms transform+forward measured here and is not a competing measurement of the same thing.
+On this box the whole-generation old-side rows are 807.30 ms (`--threads 0`, `../RESULTS.md`) and 252.06 ms (`--threads 1`, `../THREADS.md`), so the transform+forward above is 3.4 % / 11.0 % of them, not 5.6×.
 The expectation for this row was ≈ 6 ms at P=1000 / `max_nodes`=50 / ~150 connections; the measured value on this box is 8.95 ms (≈ 1.5× the expectation), and 8.95 ms is what the record uses.
 
 ## Depth-unrolled prototype, window-gather form (`--mode unrolled`)
@@ -86,7 +89,7 @@ The structural win is that nothing scales with `max_nodes × max_nodes` padding:
 This is a micro-benchmark of formulations, not the end-to-end benchmark: it does not execute the evoxc kernels, and the end-to-end evidence (timing and quality verdict) lives in `../RESULTS.md`.
 The edge-segment and window-gather rows are numpy prototypes, so their absolute milliseconds say nothing about the compiled evoxc backend's cost — they bound the *op count* and show how it scales, which is what the design argument rests on.
 The population is synthetic and every individual shares the same node/level skeleton (only the edges differ), so the measurements do not include the cost of building a per-individual level schedule from a real evolving population.
-The legacy row includes `transform` and forward of the frozen implementation but not the problem's `evaluate` loop, and it runs with runtime-default thread settings, so it is not the declared 1-thread-bound generation baseline.
+The legacy row includes `transform` and forward of the frozen implementation but not the problem's `evaluate` loop, and it runs with runtime-default thread settings, so it is neither the recorded reference generation baseline nor either end-to-end old-side row.
 The build cost cannot be assumed amortised across generations unless the topology is unchanged: NEAT mutates structure every generation, and how much of the table build can be reused or made incremental is not measured here.
 Accelerator behaviour (`iree`/`xla`/`tvm`) is not measured; the contract these numbers support is CPU.
 
@@ -102,5 +105,5 @@ python benchmarks/spikes/forward_micro.py --mode legacy
 
 The script prints the conditions table, the environment (python, numpy, installed jax, CPU count, thread variables), the exact command line, then the numbers; `--mode legacy`/`all` exits non-zero with a message when jax is not importable.
 Defaults reproduce this record's conditions (one run lands inside the spread documented above; quote a median of repeats, never a single run): `--pop 1000 --max-nodes 50 --max-conns 150 --depth 8 --levels 4,8,16 --iters 20 --build-iters 5 --seed 0`.
-Useful variants: `--levels 4,8,16 --depth 8` for the sweep shape, `--window 2` to force a narrower pad (only ~98 of the 150 edges then fit), `--pop 100` or `--pop 500` to match the declared baseline's population sizes, and `--iters 50 --build-iters 7` for tighter medians.
+Useful variants: `--levels 4,8,16 --depth 8` for the sweep shape, `--window 2` to force a narrower pad (only ~98 of the 150 edges then fit), `--pop 100` or `--pop 500` to match the recorded reference populations, and `--iters 50 --build-iters 7` for tighter medians.
 `--mode unrolled` never imports jax: it is the numpy-only prototype and the way to reproduce the segment/window rows on a machine without the `bench` extra.

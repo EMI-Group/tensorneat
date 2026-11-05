@@ -4,10 +4,13 @@ TensorNEAT
 TensorNEAT is a NEAT / HyperNEAT neuroevolution library: irregular network
 topologies are *tensorized* into fixed-shape arrays, so a whole population of
 differently shaped networks is evaluated at once.  Its compute layer is the
-**EvoX Compiler** (``evoxc``) -- a computation graph is built once and executed
-on a switchable backend (the reference ``numpy`` interpreter by default,
-``iree``/``xla``/``tvm`` opt-in).  There is no JAX and no PyTorch anywhere in
-the library.
+**EvoX Compiler** (``evoxc``) -- a computation graph is built once per shape and
+then executed once per generation on a switchable backend.  ``backend="numpy"``
+(the default) is the reference interpreter; ``backend="iree"`` is the compiled
+backend that works end to end here (``uv sync --extra iree``); ``backend="xla"``
+requires a user-supplied PJRT C API plugin ``.so`` named by
+``EVOXC_PJRT_PLUGIN``, and none ships with the package; ``tvm`` is untested
+here.  There is no JAX and no PyTorch anywhere in the library.
 
 Quickstart
 ----------
@@ -40,9 +43,10 @@ Quickstart
    state, best = pipeline.auto_run(state)
    pipeline.show(state, best)
 
-``Pipeline.setup`` creates the host-side state; the evoxc executable for a shape
-signature is compiled lazily by the first ``Pipeline.step`` and then reused for
-every generation of that shape.  ``Pipeline.auto_run`` evolves until
+``Pipeline.setup`` creates the host-side state and builds nothing; the evoxc
+executable for a shape signature is compiled lazily by the first ``Pipeline.step``
+(or the start of ``Pipeline.auto_run``) and then reused for every generation of
+that shape.  ``Pipeline.auto_run`` evolves until
 ``fitness_target`` or ``generation_limit`` is reached and returns the best genome
 as a one-individual, batch-first payload.
 

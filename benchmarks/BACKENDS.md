@@ -1,20 +1,22 @@
 # The `iree` backend: it runs, and it is slower than numpy here
 
-**Verdict: `backend="iree"` now compiles and runs TensorNEAT end to end — every gate that used to kill it in `Pipeline.setup()` is gone — but on this box it is 5.0× (pop 100), 24.2× (pop 500) and 23.4× (pop 1000) slower per generation than the numpy reference interpreter, and the gap grows with population.**
-Every shipped problem family runs on it (`XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `RecurrentGenome`, `HyperNEAT`); each takes one 8–11 s `iree-compile` per static shape.
+**Verdict: `backend="iree"` now compiles and runs TensorNEAT end to end — every gate that used to kill it in `Pipeline.setup()` is gone — but on this box it is 9.3× (pop 100), 93.9× (pop 500) and 102.7× (pop 1000) slower per generation than the numpy reference interpreter; the gap jumps between pop 100 and pop 500 and then flattens rather than scaling with population.**
+The problem classes exercised on iree are `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum` and `MountainCarContinuous`, plus the `RecurrentGenome` and `HyperNEAT` paths: this pass re-ran every one of them for at least one full generation (configurations and outputs under "Measured: numpy vs iree").
+`CartPole` postdates the historical `iree.md`, whose `cartpole_p100 / iree` row is an `error` from the pre-fix record that file labels as historical.
+Each run pays one 7.0–10.4 s `iree-compile` per static shape.
 `xla` is not available here: the evoxc xla adapter needs a PJRT C API plugin `.so` (`EVOXC_PJRT_PLUGIN`, unset on this box) and nothing provides one. `tvm` was not attempted.
 The CPU performance contract therefore stays on the numpy backend (`RESULTS.md`, unchanged by this report).
 
 This file replaces an earlier version that recorded 8/8 cases dying in `Pipeline.setup()` with
 `BackendError: stablehlo export: op 'scatter' ... rank-3 operand along axis 0`.
-That failure was real and is now fixed at its source in `src/` (section "The four gates, in the order they fired").
+That failure was real and is now fixed at its source in `src/` (section "The five gates, in the order they fired").
 `benchmarks/results/iree.json` and `benchmarks/iree.md` are the **historical** record of that pre-fix attempt (8/8 `error`); they were not re-rendered for this report.
 
 ## Environment (measured, not assumed)
 
 | Item | Value |
 |---|---|
-| Date (UTC) | 2026-11-04, runs 05:39–05:55 |
+| Date (UTC) | 2026-11-04, runs 19:36–19:59 |
 | CPU | `INTEL(R) XEON(R) PLATINUM 8568Y+`, QEMU/KVM guest, 1 socket, 1 thread/core, no SMT |
 | `nproc` | 20 |
 | Platform | `Linux-6.8.0-146-generic-x86_64-with-glibc2.39` |
@@ -28,8 +30,8 @@ That failure was real and is now fixed at its source in `src/` (section "The fou
 
 | backend | install | what runs | compile needed |
 |---|---|---|---|
-| `numpy` | always available | everything | 1.6–2.0 s per graph set (the evoxc interpreter build) |
-| `iree` (llvm-cpu) | `pip install "evoxc[iree]"` | `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `RecurrentGenome`, `HyperNEAT` — one full generation each, verified | 8.1–10.9 s per generation graph, one-off per static shape |
+| `numpy` | always available | everything | 0.26–0.40 s per generation graph (the evoxc interpreter build) |
+| `iree` (llvm-cpu) | `pip install "evoxc[iree]"` | `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum`, `MountainCarContinuous`, `RecurrentGenome`, `HyperNEAT` — one full generation each, verified (see the coverage note above) | 7.0–10.4 s per generation graph, one-off per static shape |
 | `xla` | plugin `.so` required | nothing | not reached: `the xla adapter requires a PJRT C API plugin library (.so exporting GetPjRtApi) and none was found` |
 | `tvm` | extra | not attempted | — |
 
@@ -40,7 +42,7 @@ at pop 1000 the two trajectories separate at `1e-08`-scale and land on `-0.15179
 
 ## The five gates, in the order they fired
 
-Each gate below was reproduced verbatim on this machine, then removed **at its source in `src/`**, never by editing evoxc (`/root/evoxc` is a read-only foreign repo; the installed `evoxc` 0.1.0 was left untouched).
+Each gate below was reproduced verbatim on this machine, then removed **at its source in `src/`**, never by editing evoxc (the `evoxc` checkout used for the investigation is a read-only foreign repo; the installed `evoxc` 0.1.0 was left untouched).
 The offending op's location is `op.location` in the traced evoxc IR, which is why the errors name a TensorNEAT `file:line`.
 
 ### Gate 1 — rank-3 `scatter` (15 sites, export-time)
@@ -120,29 +122,43 @@ Rule: **axes in graph ops are non-negative static integers**; the sweep found no
 End-to-end after the fix: `HyperNEAT(FullSubstrate(4/3/1), activate_time=3)` + `XOR3d`, seed 42, `backend="iree"` → one 10.4 s compile, then 35.8/36.4 ms per step, keys and NaN masks bit-identical to numpy, weights within 2.4e-07, same `randkey`.
 
 ## Measured: numpy vs iree
-Protocol: `benchmarks/backend_measure.py` (new), one `(case, backend, pop)` per **fresh process** (peak RSS is a process high-water mark).
+
+Protocol: `benchmarks/backend_measure.py`, one `(case, backend, pop, opt_level)` per **fresh process** (peak RSS is a process high-water mark).
 `Pipeline.setup()` wall time is reported as `setup_s` (host-only plus NEAT's small operator graph); the expensive generation graph compiles on the **first** `step()`, reported as `build_s` (`Pipeline.build_seconds`, the `evoxc.build` alone) and `first_step_s` (build + one run). The build is charged to no generation.
-Then **3 untimed warmup** generations and **20 timed** generations; ms/generation is wall clock per `step()` including host materialisation. One run each, seed 42, XOR, `DefaultGenome(2→1, max_nodes=12, max_conns=24)`, `species_size=20`.
+Then **3 untimed warmup** generations and **20 timed** generations; ms/generation is wall clock per `step()` including host materialisation.
+One run each, seed 42, XOR, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, `DefaultGenome(2→1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`.
+Measured 2026-11-04, 19:36–19:55 UTC, on the box in the environment table; the exact commands are in "Reproduce".
 
 | case | pop | backend | opt_level | setup (s) | build (s) | ms/gen mean | ms/gen median | min / max | gens/s | peak RSS (MiB) | final max fitness |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| xor | 100 | numpy | — | 0.04 | 1.60 | 44.37 | **42.74** | 39.75 / 62.61 | 22.54 | 120.9 | −0.193043 |
-| xor | 100 | iree | default | 0.97 | 9.35 | 212.67 | **213.12** | 179.11 / 229.28 | 4.70 | 108.6 | −0.193043 |
-| xor | 100 | iree | O0 | 0.98 | 9.28 | 211.25 | **211.56** | 180.10 / 221.93 | 4.73 | 108.7 | −0.193043 |
-| xor | 500 | numpy | — | 0.04 | 1.62 | 265.27 | **262.80** | 255.86 / 292.09 | 3.77 | 263.6 | −0.152052 |
-| xor | 500 | iree | default | 0.99 | 9.97 | 6371.71 | **6366.20** | 6297.28 / 6483.87 | 0.157 | 153.0 | −0.152052 |
-| xor | 500 | iree | O0 | 1.02 | 9.87 | 6350.53 | **6344.47** | 6301.80 / 6438.72 | 0.157 | 154.4 | −0.152052 |
-| xor | 1000 | numpy | — | 0.04 | 1.70 | 500.86 | **546.70** | 331.77 / 570.72 | 2.00 | 433.9 | −0.151799 |
-| xor | 1000 | iree | default | 1.01 | 10.86 | 12766.70 | **12765.81** | 12629.17 / 12910.57 | 0.078 | 210.2 | −0.143853 |
+| xor | 100 | numpy | — | 0.035 | 0.262 | 41.620 | **39.738** | 37.164 / 66.956 | 24.027 | 120.95 | −0.193043 |
+| xor | 100 | iree | default | 1.052 | 8.391 | 371.117 | **370.372** | 298.230 / 395.471 | 2.695 | 111.91 | −0.193043 |
+| xor | 100 | iree | O0 | 1.016 | 8.355 | 374.009 | **377.283** | 299.406 / 391.832 | 2.674 | 109.82 | −0.193043 |
+| xor | 500 | numpy | — | 0.015 | 0.321 | 162.576 | **158.923** | 154.402 / 198.631 | 6.151 | 240.63 | −0.152052 |
+| xor | 500 | iree | default | 0.996 | 8.786 | 14993.328 | **14929.106** | 14756.630 / 15297.450 | 0.067 | 161.90 | −0.152052 |
+| xor | 1000 | numpy | — | 0.016 | 0.403 | 300.789 | **291.021** | 274.574 / 426.174 | 3.325 | 391.63 | −0.151799 |
+| xor | 1000 | iree | default | 0.982 | 8.765 | 30036.253 | **29890.517** | 29519.491 / 31254.606 | 0.033 | 223.81 | −0.143853 |
+
+Coverage smoke for the problem classes and network paths beyond the XOR timing rows (one full generation each, `generation_limit=1`, `pop_size=20`, `species_size=4`, `survival_threshold=0.1`, seed 42, one fresh process per row; command in "Reproduce"):
+
+| problem / path | config | build (s) | one generation |
+|---|---|---|---|
+| `XOR3d` | `DefaultGenome(3→1, 50/100)`, sigmoid read-out | 8.381 | finite, max fitness −0.284553 |
+| `CustomFuncFit` | Pagie sample, `num_samples=50`, 2→1 | 8.032 | finite, max fitness −0.045864 |
+| `CartPole` | `max_step=200`, `repeat_times=1`, 4→2 | 7.690 | finite, max fitness 56.0 |
+| `Pendulum` | `max_step=200`, 2→1 with a 6-node hidden layer | 7.507 | finite, max fitness −1062.370850 |
+| `MountainCarContinuous` | `max_step=999`, 2→1, no hidden layer | 7.517 | finite, max fitness −0.697044 |
+| `RecurrentGenome` | `activate_time=3`, 3→1, 16 node slots, `max_in_degree=16` | 7.026 | finite, max fitness −0.284553 |
+| `HyperNEAT` | `FullSubstrate(4/3/1)`, `activate_time=3` | 8.830 | finite, max fitness −0.375114 |
 
 Reading it honestly:
 
-- **The compiled leg never wins here.** Slower by 5.0× at pop 100, 24.2× at pop 500, 23.4× at pop 1000 (median ratios); there is no population size in the measured range at which iree flips ahead, and the trend is *worse* as the population grows, so extrapolating to larger pops does not rescue it.
-- **Compile is significant and must be paid per static shape**: ~9.3–10.9 s of `iree-compile` for the generation graph, plus ~1 s of `setup`, against 1.6–1.7 s for the whole numpy build. A 20-generation run therefore spends 35–50 % of its lifetime compiling at these budgets.
-- **Peak RSS is the one place iree wins**: 108.6 vs 120.9 MiB at pop 100, 153.0 vs 263.6 MiB at pop 500, 210.2 vs 433.9 MiB at pop 1000 (llvm-cpu keeps the tensors in its own buffers; the interpreter holds numpy temporaries).
-- **`opt_level` barely matters at O0** (within 1 % of default) and **O2 does not compile here**:
-  `error: 'func.func' op exceeded stack allocation limit of 32768 bytes for function. Got 40064 bytes` — the ~2.4 k-op generation function exceeds IREE's per-function stack-promotion limit at that level. The value is forwarded verbatim and the failure surfaces as `evoxc.core.errors.BackendError`; nothing falls back to another backend.
-- The reported **`iree-compile` SIGSEGV (≥3 loop-carried tensors)** from the earlier investigation does not reproduce in this configuration: the shipped generation graph contains a **9-carried-value** `stablehlo.while` and compiled successfully in every run recorded above (6 fresh compiles), all of which executed and produced matching fitness.
+- **The compiled leg never wins here.** Slower by 9.3× at pop 100, 93.9× at pop 500, 102.7× at pop 1000 (median ratios); the ratio jumps between pop 100 and pop 500 and then flattens (93.9× → 102.7×), so there is no measured population size at which iree flips ahead.
+- **Compile is significant only at the smallest population**: ~8.4–8.8 s of `iree-compile` for the generation graph, plus ~1 s of `setup`, against 0.26–0.40 s for the numpy build. Using `compile ÷ (setup + build + 23 × ms/gen)` (the 3-warmup + 20-timed generations after the build), compile is **46.7 %** of that wall clock at pop 100, **2.5 %** at pop 500 and **1.3 %** at pop 1000; the per-generation cost dominates once the population is large.
+- **Peak RSS is the one place iree wins**: 111.91 vs 120.95 MiB at pop 100 (−7 %), 161.90 vs 240.63 MiB at pop 500 (−33 %), 223.81 vs 391.63 MiB at pop 1000 (−43 %); llvm-cpu keeps the tensors in its own buffers while the interpreter holds numpy temporaries.
+- **`opt_level` barely matters at O0** (0.8 % higher mean, 1.9 % higher median than default at pop 100) and **O2 does not compile here**:
+  `error: 'func.func' op exceeded stack allocation limit of 32768 bytes for function. Got 40064 bytes`, followed by a `vector.gather` operand-type diagnostic; the value is forwarded verbatim and the failure surfaces as `evoxc.core.errors.BackendError`; nothing falls back to another backend.
+- The earlier **`iree-compile` SIGSEGV (≥3 loop-carried tensors)** was a real bug, not a configuration artefact: `genome/operations/mutation/cycle.py` seeded a `while_loop`-carried value with a **boolean `scatter`**; the seed is now a one-hot `equal`/`logical_and`, and the SIGSEGV has not reproduced since that fix (`PERF_NUMPY.md`, "IREE stayed compilable"). The generation graph still contains a `while_loop`, and every run above compiled and executed it. Rule: **never seed a `while`-carried value with a `scatter`**.
 
 Per-generation cost is dominated by the graph's dense `gather`/`argsort`/`scatter` traffic, which llvm-cpu lowers to generic, non-vectorised loops — the reason a compiled backend loses to a tight numpy interpreter on this workload. Making iree competitive is a kernel-formulation project (dense key tables → sparse/segment reductions), not a compiler-flag one.
 
@@ -158,7 +174,7 @@ Per-generation cost is dominated by the graph's dense `gather`/`argsort`/`scatte
   5. Static dims only, **non-negative axes only**, and `select`/`gather` (single axis)/`sort`/`argsort`/`where`-free masks/`cond`/`while_loop`/static-bound slices/`rng_bit_generator` all export.
 - **Activation functions**: no `ACT` entry needs `erf`/`gelu` (the set is `scaled_sigmoid`, `sigmoid`, `scaled_tanh`, `tanh`, `sin`, `relu`, `lelu`, `identity`, `inv`, `log`, `exp`, `abs`); a *user-supplied* activation that calls `evoxc.erf`/`evoxc.gelu` would still die at export with `op 'erf' ... is not supported in v1`.
 - `opt_level="O2"`/`"O3"` fail inside `iree-compile` for this graph size (stack allocation limit). Leave the default or use `O0`/`O1`.
-- Do not expect an iree speed-up: on this CPU, numpy is 5–24× faster per generation. iree's only measured advantage is ~30–50 % lower peak RSS.
+- Do not expect an iree speed-up: on this CPU, numpy is 9–103× faster per generation across the three measured populations. iree's only measured advantage is 7–43 % lower peak RSS.
 
 ## Still deferred by the evoxc v1 exporter (would bite other users)
 
@@ -172,15 +188,85 @@ Straight from the installed evoxc 0.1.0, not inferred:
 ## Reproduce
 
 ```bash
-export PATH=/root/.local/bin:$PATH
-uv venv "$TMPDIR/backend-venv" --python 3.12
-uv pip install --python "$TMPDIR/backend-venv/bin/python" -e . "evoxc[iree]"
+uv sync --all-extras
 
-# one fresh process per (case, backend, pop) — peak RSS and the build are per-process
-"$TMPDIR/backend-venv/bin/python" benchmarks/backend_measure.py --backend numpy --case xor --pop 100
-"$TMPDIR/backend-venv/bin/python" benchmarks/backend_measure.py --backend iree  --case xor --pop 100 --json iree.json
-"$TMPDIR/backend-venv/bin/python" benchmarks/backend_measure.py --backend iree  --case xor --pop 100 --opt-level O0
-"$TMPDIR/backend-venv/bin/python" benchmarks/backend_measure.py --backend iree  --case xor --pop 100 --opt-level O2  # fails inside iree-compile
+# one fresh process per row — peak RSS and the build are per-process
+uv run python benchmarks/backend_measure.py --backend numpy --case xor --pop 100
+uv run python benchmarks/backend_measure.py --backend numpy --case xor --pop 500
+uv run python benchmarks/backend_measure.py --backend numpy --case xor --pop 1000
+uv run python benchmarks/backend_measure.py --backend iree  --case xor --pop 100
+uv run python benchmarks/backend_measure.py --backend iree  --case xor --pop 500
+uv run python benchmarks/backend_measure.py --backend iree  --case xor --pop 1000
+uv run python benchmarks/backend_measure.py --backend iree  --case xor --pop 100 --opt-level O0
+uv run python benchmarks/backend_measure.py --backend iree  --case xor --pop 100 --opt-level O2  # fails inside iree-compile
+
+# coverage smoke: one full generation per RL class, one fresh process each
+for spec in CartPole:4:2::200 Pendulum:2:1:6:200 MountainCarContinuous:2:1::999; do
+  IFS=: read -r CLASS INPUTS OUTPUTS HIDDEN MAX_STEP <<< "$spec"
+  PROBLEM="$CLASS" INPUTS="$INPUTS" OUTPUTS="$OUTPUTS" HIDDEN="$HIDDEN" MAX_STEP="$MAX_STEP" uv run python - <<'PY'
+import os, numpy as np
+from tensorneat import Pipeline, algorithm, genome, problem
+from tensorneat.common import ACT, AGG, to_numpy
+cls = os.environ["PROBLEM"]
+hidden = tuple(int(v) for v in os.environ["HIDDEN"].split(",") if v)
+kwargs = {"max_step": int(os.environ["MAX_STEP"])}
+if cls == "CartPole":
+    kwargs["repeat_times"] = 1
+neat = algorithm.NEAT(pop_size=20, species_size=4, survival_threshold=0.1,
+    genome=genome.DefaultGenome(num_inputs=int(os.environ["INPUTS"]),
+        num_outputs=int(os.environ["OUTPUTS"]), init_hidden_layers=hidden,
+        node_gene=genome.BiasNode(activation_options=ACT.tanh, aggregation_options=AGG.sum)))
+p = Pipeline(algorithm=neat, problem=getattr(problem, cls)(**kwargs), seed=42,
+             generation_limit=1, backend="iree", is_detailed=False)
+state = p.setup(); state, best, fitness = p.step(state)
+fitness = to_numpy(fitness)
+print(cls, "build_s=", round(p.build_seconds, 3), "generation=", int(to_numpy(state.generation)),
+      "finite=", bool(np.all(np.isfinite(fitness))), "max_fitness=", float(np.max(fitness)))
+PY
+done
+
+# coverage smoke: XOR3d, CustomFuncFit, RecurrentGenome, HyperNEAT — one generation each
+uv run python - <<'PY'
+import numpy as np
+from tensorneat import Pipeline, algorithm, genome, problem
+from tensorneat.common import ACT, to_numpy
+from tensorneat.algorithm.hyperneat import FullSubstrate, HyperNEAT
+
+def neat(genome_obj):
+    return algorithm.NEAT(pop_size=20, species_size=4, survival_threshold=0.1,
+                          genome=genome_obj)
+
+def run(name, algo, prob):
+    p = Pipeline(algorithm=algo, problem=prob, seed=42, generation_limit=1,
+                 backend="iree", is_detailed=False)
+    state = p.setup(); state, best, fitness = p.step(state)
+    fitness = to_numpy(fitness)
+    print(name, "build_s=", round(p.build_seconds, 3),
+          "generation=", int(to_numpy(state.generation)),
+          "finite=", bool(np.all(np.isfinite(fitness))),
+          "max_fitness=", float(np.max(fitness)))
+
+run("XOR3d", neat(genome.DefaultGenome(num_inputs=3, num_outputs=1,
+        max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)), problem.XOR3d())
+run("CustomFuncFit", neat(genome.DefaultGenome(num_inputs=2, num_outputs=1,
+        max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)),
+    problem.CustomFuncFit(func=lambda p: np.array(
+        [1/(1+p[0]**-4)+1/(1+p[1]**-4)], dtype=np.float32),
+        low_bounds=[-1.0, -1.0], upper_bounds=[1.0, 1.0], method="sample",
+        num_samples=50, seed=42))
+run("RecurrentGenome", neat(genome.RecurrentGenome(num_inputs=3, num_outputs=1,
+        max_nodes=16, max_in_degree=16, activate_time=3,
+        output_transform=ACT.sigmoid)), problem.XOR3d())
+run("HyperNEAT", HyperNEAT(
+        substrate=FullSubstrate(
+            input_coors=((-1, -1), (-0.33, -1), (0.33, -1), (1, -1)),
+            hidden_coors=((-1, 0), (0, 0), (1, 0)),
+            output_coors=((0, 1),)),
+        neat=neat(genome.DefaultGenome(num_inputs=4, num_outputs=1,
+            max_nodes=50, max_conns=100, output_transform=ACT.tanh)),
+        activation=ACT.tanh, activate_time=3, output_transform=ACT.sigmoid),
+    problem.XOR3d())
+PY
 ```
 
 The end-to-end backend test (`test/backends/test_iree_pipeline.py`) skips cleanly without the extra and runs a real XOR generation with it:
@@ -190,7 +276,7 @@ pytest -q test/backends            # 3 passed, or 1 skipped when evoxc[iree] is 
 pytest -m requires_iree test/backends
 ```
 
-The minimal reproducers for gates 1–4 are ~20 lines of `evoxc` each; the recipes (trace the graphs, walk `op.location`, export with `evoxc.lower(graph, backend="iree").text()`, compile the text with `iree.compiler.compile_str`) live in `src/tensorneat/common/CONTEXT.md` and `src/tensorneat/algorithm/neat/CONTEXT.md`.
+The minimal reproducers for gates 1–5 are ~20 lines of `evoxc` each; the recipes (trace the graphs, walk `op.location`, export with `evoxc.lower(graph, backend="iree").text()`, compile the text with `iree.compiler.compile_str`) live in `src/tensorneat/common/CONTEXT.md` and `src/tensorneat/algorithm/neat/CONTEXT.md`.
 
 ## What this does not change
 
