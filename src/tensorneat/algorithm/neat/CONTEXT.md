@@ -128,7 +128,7 @@ Dispatch budget per generation: `1` `prepare_distance` + `2 · species_size` pop
 `evoxc` de-sugars `scan` into `while` + `gather`/`scatter`, so a trip count must be static and the carry must keep identical dtypes and shapes: both speciation phases are `scan(f, carry, enp.arange(species_size))` with per-slot masks, never a data-dependent `while_loop`.
 The legacy early-exit conditions survive as masks, and because every write is mask-then-single-`scatter` (`scatter_row` for the rank-3 gene tables) the extra iterations are provably no-ops.
 Carries are kept narrow and packed (`idx2species` and the running distance as two `(P,)` arrays; the species keys plus `next_species_key` as one `(S+1,)` array), which keeps the carry list short and every per-step op small.
-Scan 1 carries those three plus the four centre gene tables (9 values); scan 2 carries the same three plus the rank-1 `seed_table`/`created_mask` (7 values), and the created centre rows are rebuilt after it — see `## Species Algebra`.
+Scan 2 carries the same three plus the rank-1 `seed_table`/`created_mask` (7 values), and the created centre rows are rebuilt after it; scan 1 carries the same three plus the rank-1 `closest_table`/`claim_table` (7 values) and its centre rows are rebuilt after it too — see `## Species Algebra`.
 `DistanceRows.matrix` is a third, unrelated kind of scan: its trip count is `species_size` and its carry is a one-element dummy, so it writes no table at all — only its stacked per-iteration output `(S, P)`. It exists purely to bound the interpreter's live set (see `## Distance Rows`); a static Python loop over the same rows is the faster-but-hungrier spelling.
 No random draw happens inside a scan body — keys never travel through a carry.
 
