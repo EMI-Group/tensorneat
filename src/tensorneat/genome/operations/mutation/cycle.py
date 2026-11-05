@@ -61,14 +61,15 @@ payloads), while adding a quadratic ``(P, N*N + 1)`` float32 buffer (5 MB at pop
 bounds.  The scatter hop stays.
 
 The shipped formulation is selected by ``state.kernel_mode`` (:mod:`~.cycle_accelerator`): the
-default ``"host"`` is the scatter hop above, and ``"accelerator"`` is the scatter-free hop that
-carries a ``(P, N)`` reached set and marks destinations with a broadcast reduction and one
-reduce over the edge axis, because a compiled backend lowers ``scatter`` to one workgroup of
-one thread (about 17-21 ns per *update* element, i.e. 1.05 ms per hop for the 50 000 update
-cells of the ``xor_p500`` case at pop 500) while a reduction spreads over its workgroups.
-Both spellings reuse this module's dense key table and resolution, so they answer the same
-boolean for the same payload, and the switch is a static read of a plain string on the
-configuration ``State`` — never a traced value — so a graph contains exactly one of them.
+default ``"host"`` is the scatter hop above, and ``"accelerator"`` is the scatter-free spelling
+that resolves keys with an equality template (no dense table build) and carries a ``(P, N)``
+reached set marked with a broadcast reduction and one reduce over the edge axis, because a
+compiled backend lowers ``scatter`` to one workgroup of one thread (about 17-21 ns per *update*
+element, i.e. 1.05 ms per hop for the 50 000 update cells of the ``xor_p500`` case at pop 500)
+while a reduction spreads over its workgroups.  Both spellings share this module's window law
+(:func:`_in_span`) and answer the same boolean for the same payload, and the switch is a static
+read of a plain string on the configuration ``State`` — never a traced value — so a graph
+contains exactly one of them.
 
 IREE constraint (release gate): the frontier is seeded with a one-hot ``equal`` over the flat
 ``(P, width)`` index, **never** with a boolean ``scatter``.  A ``scatter`` whose result is the
@@ -119,6 +120,40 @@ def _table_offsets(pop_size: int, span: int) -> evoxc.SymbolicTensor:
     )
 
 
+def _in_span(
+    keys: evoxc.SymbolicTensor,
+    zero: evoxc.SymbolicTensor,
+    span_constant: evoxc.SymbolicTensor,
+) -> evoxc.SymbolicTensor:
+    """``0 <= key < key_span``, the window every visible key must lie in.
+
+    Args:
+        keys: ``(P, L) int32`` keys (node keys, connection endpoints, or candidate
+            endpoints).
+        zero (evoxc.SymbolicTensor): The rank-0 ``int32`` literal ``0``, shared per trace.
+        span_constant (evoxc.SymbolicTensor): The rank-0 ``int32`` literal ``key_span``,
+            shared per trace.
+
+    Returns:
+        ``(P, L) bool``: "this key is addressable".
+
+    Notes:
+        The range test is the schedule's own ``0 <= key < key_span`` in the key's **signed**
+        dtype (:func:`tensorneat.common.tensorization._key_indices`), the two-comparison form
+        that keeps every operand an ``int32``/``bool``; the one-comparison
+        ``cast(key, uint32) < span`` alternative is not portable, because no graph in this
+        package may carry an unsigned dtype.
+        The two bound constants are operands rather than arguments so a caller tracing
+        several key blocks (:mod:`~.cycle_accelerator`) pays each ``constant`` op once; this
+        is the single spelling of the window law, shared by the dense table and the
+        equality-template resolution so the two formulations can never disagree about which
+        keys are visible.
+    """
+    return evoxc.logical_and(
+        evoxc.greater_equal(keys, zero), evoxc.less(keys, span_constant)
+    )
+
+
 def _table_cell(keys: evoxc.SymbolicTensor, span: int) -> tuple:
     """Map keys to dense-table columns, sending every out-of-range key to the dump cell.
 
@@ -132,17 +167,10 @@ def _table_cell(keys: evoxc.SymbolicTensor, span: int) -> tuple:
         dump cell — and the ``(P, L) bool`` mask "this key is addressable".
 
     Notes:
-        The range test is the schedule's own ``0 <= key < key_span`` in the key's **signed**
-        dtype (:func:`tensorneat.common.tensorization._key_indices`), the two-comparison form
-        that keeps every operand an ``int32``/``bool``; the one-comparison
-        ``cast(key, uint32) < span`` alternative is not portable, because no graph in this
-        package may carry an unsigned dtype.
+        The range test is :func:`_in_span`, the schedule's own window law.
     """
     span_constant = _static_constant(np.asarray(span))
-    in_range = evoxc.logical_and(
-        evoxc.greater_equal(keys, _static_constant(np.asarray(0))),
-        evoxc.less(keys, span_constant),
-    )
+    in_range = _in_span(keys, _static_constant(np.asarray(0)), span_constant)
     return evoxc.select(in_range, keys, span_constant), in_range
 
 
@@ -402,13 +430,16 @@ def closes_cycle(
             configuration error, never a traced branch).
 
     Notes:
-        Both formulations resolve keys through the same dense table and answer the same
-        boolean, so the caller's decision never depends on the switch: the default
+        Both formulations answer the same boolean — the visibility law (:func:`_in_span`) and
+        the "every endpoint goes through the same injective key -> row map" argument are
+        shared — so the caller's decision never depends on the switch: the default
         ``"host"`` is :func:`_closes_cycle_host`, whose frontier is a flat ``(P, N + 1)``
-        vector written with one ``scatter`` per hop, and ``"accelerator"`` is
-        :func:`~.cycle_accelerator.closes_cycle_accelerator`, which carries a ``(P, N)``
-        reached set and marks destinations with a broadcast reduction instead of a write
-        because a compiled backend serialises ``scatter`` (see that module's note).
+        vector written with one ``scatter`` per hop and whose keys come from the dense table,
+        and ``"accelerator"`` is
+        :func:`~.cycle_accelerator.closes_cycle_accelerator`, which resolves keys with an
+        equality template (no ``scatter``) and carries a ``(P, N)`` reached set marked with a
+        broadcast reduction instead of a write, because a compiled backend serialises
+        ``scatter`` (see that module's note and its measured device numbers).
         The accelerator route carries a second loop value, its growth flag, and consumes it
         after the loop: an unused ``while`` result makes ``iree-compile`` emit an illegal
         ``scf.while`` for the assembled generation graph, so that term is a release gate and

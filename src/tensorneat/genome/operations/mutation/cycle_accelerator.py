@@ -1,48 +1,50 @@
-"""Accelerator formulation of the cycle predicate: a **scatter-free** hop.
+"""Accelerator formulation of the cycle predicate: a **scatter-free** key resolution *and* hop.
 
 This module is the second spelling of :func:`~.cycle.closes_cycle`.  Both answer the same
 question for one candidate edge per individual — *would adding ``src -> dst`` close a cycle?*,
-i.e. *is ``src`` already reachable from ``dst``?* — with the same key resolution and the same
-boolean answer, so the caller's decision is byte-identical whichever route
-:data:`KERNEL_MODE_KEY` selects.
+i.e. *is ``src`` already reachable from ``dst``?* — with the same boolean answer, so the
+caller's decision is byte-identical whichever route :data:`KERNEL_MODE_KEY` selects.
 
-What changes is the **hop**.  The host formulation stores the reached set in a flat
-``(P, N + 1)`` frontier and writes each hop with one ``scatter`` of ``P * E`` updates.  That
-scatter is the single most expensive kernel of the predicate on a compiled accelerator:
-StableHLO lowers ``scatter`` to one workgroup of one thread, so it costs about 17-21 ns per
-*update* element — ``P * max_conns`` = 50 000 update cells = **1.05 ms per hop** at pop 500,
-three dispatches per generation on the ``xor_p500`` case, i.e. **3.18 ms** of the generation
-and the largest single kernel of the predicate (measured on the box's MI300X, ROCm, IREE
-3.13).  ``gather``, elementwise ops and reductions are properly parallel there, so the
-accelerator route pays one extra elementwise/reduction pass instead of a serialised write:
+What changes on a compiled backend is everything a ``scatter`` touches, because StableHLO
+lowers ``scatter`` to **one workgroup of one thread**:
 
-1. carry ``reach`` as a plain ``(P, N) bool`` vector — no dump column, because nothing is
-   index-written any more;
-2. seed it with the destination one-hot ``equal(arange(N), dst_row)`` masked by ``dst_hit``,
-   again **not** a scatter (a scatter as a ``while_loop`` init also SIGSEGVs
-   ``iree-compile``; see :mod:`~.cycle`);
-3. hoist the two loop-invariant operands once per call — the destination one-hot
-   ``dst_onehot (P, E, N)`` and the flat source index ``src_flat = p * N + edge_src`` (the
-   resolution already clamps every row into ``[0, N)``, so the index is always addressable
-   and the liveness mask multiplies afterwards);
-4. hop body: ``live = edge_valid & gather(reach, src_flat)``, then
-   ``new = reduce_max(live[:, :, None] & dst_onehot, axes=1)`` — the edge axis collapses into
-   the node axis, so a reached edge marks its destination through a broadcast reduction
-   instead of a write; ``grown = reach | new`` and ``growing`` is the one-op growth test.
+1. **Key resolution: an equality template, no scatter.**  The dense ``key -> row`` table
+   (:func:`~.cycle._key_table`) is a flat ``scatter`` of ``P * N`` updates into
+   ``P * (key_span + 1)`` cells, i.e. 25 000 serialised writes into 75 500 cells at pop 500,
+   and it measured **0.515-0.578 ms of the predicate's 0.769 ms per call** there (90 % at pop
+   1000).  The template — the one
+   :func:`tensorneat.genome.operations.distance.index_free.resolve` already uses — is one
+   broadcast ``equal`` of the ``Q = 2 * E + 2`` query keys against the node row axis, then the
+   *lowest* matching row (``reduce_min`` of ``select(match, arange(N), N)``): a ``(P, Q, N)``
+   compare plus a reduction, all parallel.  Same representative-function contract (an
+   injective map key -> row; :mod:`~.cycle` proves the answer is invariant over the choice),
+   same visibility law, different, deterministic representative.
+2. **Hop: a broadcast reduction, no scatter.**  The reached set is carried as a plain
+   ``(P, N + 1) bool`` vector (columns ``0 .. N-1`` the reached set, column ``N`` the loop's
+   growth flag), seeded with the destination one-hot ``equal(arange(N), dst_row)``; each hop
+   is ``live = edge_valid & gather(reach, src_flat)`` then
+   ``new = reduce_max(live[:, :, None] & dst_onehot, axes=1)``, so a reached edge marks its
+   destination through a reduction instead of a write.
 
-The cost is an ``O(P * E * N)`` boolean temporary per hop (2.5 M elements at pop 500 /
-``max_conns`` 100 / ``max_nodes`` 50) and four more traced ops per hop than the scatter form,
-which the numpy reference interpreter pays in full — that is why ``"host"`` stays the default
-and this route is selected by :data:`KERNEL_MODE_KEY` on a device where the serialised
-scatter dominates.  The switch is a **static host branch**: both spellings are plain traced
-helpers (never ``@evoxc.defn``), so a graph is exactly one of them and no backend ever sees
-both.
+Measured on the box's MI300X VF (gfx942, ROCm 7.1, IREE 3.13) with the predicate isolated at
+the ``xor`` geometry (``max_nodes`` 50, ``max_conns`` 100, ``key_span`` 150), warmed, device ms
+per call from ``rocprofv3 --kernel-trace``: **0.769 -> 0.173 ms at pop 500** and
+**1.425 -> 0.282 ms at pop 1000**, i.e. -77 % / -80 %, with the graph's last ``scatter`` gone
+(traced ops 92 -> 81, scatters 1 -> 0).  Splitting the resolution into one ``(P, E, N)`` pass
+per key family halves the transient but adds ten dispatches and measured 0.206 / 0.345 ms — so
+the single pass is the shipped form.  The numpy reference interpreter pays the ``(P, Q, N)``
+element volume in full (it is ~6-8x the host call there), which is exactly why ``"host"``
+stays the default and this route is selected by :data:`KERNEL_MODE_KEY` on a device where the
+serialised scatters dominate.
+
+The switch is a **static host branch**: both spellings are plain traced helpers (never
+``@evoxc.defn``), so a graph is exactly one of them and no backend ever sees both.
 
 **The loop's growth flag must be consumed outside the loop** (``iree-compile`` release gate).
 This hop carries ``(reach, growing)`` and only ``reach`` is read after the loop, so the
-``growing`` result is dead.  ``iree-compile`` 3.13 runs an ``scf.while`` canonicalization that
-drops such an unused result together with the corresponding body block argument but *keeps*
-the yield operand and the operand, which makes the op illegal
+``growing`` result would be dead.  ``iree-compile`` 3.13 runs an ``scf.while`` canonicalization
+that drops such an unused result together with the corresponding body block argument but
+*keeps* the yield operand and the operand, which makes the op illegal
 (``region branch point has 2 operands, but region successor needs 4 inputs``) — the failure
 surfaces much later, in ``iree-stream-conversion``, and only for the **assembled** generation
 graph (the same kernel compiles and runs standalone, and the ``"host"`` spelling escapes it
@@ -55,10 +57,10 @@ would answer ``False``, i.e. refuse the mutation instead of admitting a cycle.
 Do not delete it as dead code, and do not "simplify" the pair into one carried tensor without
 re-running ``iree-compile`` on a traced generation graph in this mode.
 
-Correctness is the host formulation's contract, unchanged: the same dense ``key -> row``
-resolution (:func:`~.cycle._key_table` / :func:`~.cycle._rows_of`), so the out-of-span-key
-precondition, the duplicate-key invariance and the "a degenerate candidate answers ``False``"
-rule all hold for the same reasons :mod:`~.cycle` documents.
+Correctness is the host formulation's contract, unchanged: the out-of-span-key precondition,
+the duplicate-key invariance and the "a degenerate candidate answers ``False``" rule all hold
+for the same reasons :mod:`~.cycle` documents, and the window law is shared with it
+(:func:`~.cycle._in_span`) rather than re-spelled.
 """
 
 import numpy as np
@@ -66,14 +68,14 @@ import evoxc
 import evoxc.numpy as enp
 
 from ....common import TensorNEATError
-from .cycle import _key_table, _rows_of, _static_constant
+from .cycle import _in_span, _static_constant
 
 #: State entry selecting the cycle predicate's formulation.
 #:
 #: ``"host"`` is the shipped scatter hop (:func:`~.cycle.closes_cycle`); ``"accelerator"`` is
-#: this module's scatter-free hop.  The entry is a plain Python string on the trace-time
-#: configuration ``State`` — read on the host, never a traced value — and a state that does
-#: not carry it gets ``"host"``.
+#: this module's scatter-free formulation.  The entry is a plain Python string on the
+#: trace-time configuration ``State`` — read on the host, never a traced value — and a state
+#: that does not carry it gets ``"host"``.
 KERNEL_MODE_KEY = "kernel_mode"
 
 #: Accepted values of :data:`KERNEL_MODE_KEY`, in documentation order.
@@ -82,6 +84,15 @@ KERNEL_MODES = ("host", "accelerator")
 #: Formulation a state without the entry gets — the kernel-side default, matching the shipped
 #: behaviour for a state no host code registered the entry on.
 _DEFAULT_KERNEL_MODE = "host"
+
+#: Key value an *invisible* query is rewritten to before the equality template compares it.
+#: Outside ``[0, key_span)`` and distinct from :data:`_NO_NODE`, so a masked query can never
+#: match a masked node row.
+_NO_QUERY = -1
+
+#: Key value an *invisible* node row (``I_INF`` padding or an out-of-span key) is rewritten
+#: to before the comparison.  Never equals :data:`_NO_QUERY`.
+_NO_NODE = -2
 
 
 def kernel_mode(state) -> str:
@@ -122,6 +133,70 @@ def selected(state) -> bool:
     return kernel_mode(state) == "accelerator"
 
 
+def _key_resolver(node_keys: evoxc.SymbolicTensor, key_span: int):
+    """Build the scatter-free ``key -> node row`` resolver of one population.
+
+    Args:
+        node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node key rows (``I_INF`` padded).
+        key_span (int): ``S``, the genome's static ``key_span`` — the addressable window.
+
+    Returns:
+        A callable ``resolve(keys) -> (rows, hit)`` with exactly
+        :func:`~.cycle._rows_of`'s contract: ``rows`` is ``(P, Q) int32`` in ``[0, N)`` (safe
+        to index with) and ``hit`` is ``(P, Q) bool``.
+
+    Notes:
+        The equality template is
+        :func:`tensorneat.genome.operations.distance.index_free.resolve`'s: for every query
+        key, one broadcast ``equal`` against the whole node row axis, then the *lowest*
+        matching row (``reduce_min`` of ``select(match, arange(N), N)``), so a query block
+        costs one ``(P, Q, N)`` compare, one ``(P, Q, N) int32`` select and one reduction, and
+        **no ``scatter`` at all**.
+        The representative function differs from the dense table's (lowest row here,
+        ``scatter`` write order there) and the answer does **not**: both are injective on keys
+        (:mod:`~.cycle` proves the invariance), every edge endpoint and both candidate
+        endpoints go through the same map, so the traversed row graph is the key-level graph
+        under that map and reachability is one predicate for every choice.
+        Visibility is the dense table's, spelled as *value* masks instead of scatter targets:
+        a padded (``I_INF``) or out-of-span node row is replaced by :data:`_NO_NODE` once per
+        call, and an out-of-span query by :data:`_NO_QUERY`, so the two ``(P, Q, N)`` boolean
+        masks a literal spelling would need are folded into the comparison itself (the masks
+        stay ``(P, N)`` / ``(P, Q)`` selects).  A miss therefore lands on ``N`` — one past the
+        last row — which :func:`~.cycle._rows_of`'s ``hit = got != N`` test and
+        ``minimum(got, N - 1)`` clamp read back identically.
+        Every rank-0 constant and the ``(N,)`` row index are built **once** here, and the two
+        visibility masks reuse :func:`~.cycle._in_span`, so the window law has one spelling in
+        the package.
+        The bounds and the mask literals are static per trace and the node axis is static, so
+        the whole resolution is a fixed-shape pass; no ``iota``/``argmax`` is emitted (both
+        are ``iree-compile`` hazards, see
+        :func:`tensorneat.genome.operations.distance.index_free.resolve`).
+    """
+    pop_size, node_count = (int(size) for size in node_keys.shape)
+    span = int(key_span)
+    zero = _static_constant(np.asarray(0))
+    span_constant = _static_constant(np.asarray(span))
+    no_query = _static_constant(np.asarray(_NO_QUERY))
+    no_node = _static_constant(np.asarray(_NO_NODE))
+    no_match = _static_constant(np.asarray(node_count))
+    last_row = _static_constant(np.asarray(node_count - 1))
+    columns = enp.arange(0, node_count, dtype=evoxc.int32)
+    visible_rows = enp.reshape(
+        evoxc.select(_in_span(node_keys, zero, span_constant), node_keys, no_node),
+        (pop_size, 1, node_count),
+    )
+
+    def resolve(keys: evoxc.SymbolicTensor) -> tuple:
+        """Resolve one ``(P, Q) int32`` key block to ``(rows, hit)``, both ``(P, Q)``."""
+        rows, count = (int(size) for size in keys.shape)
+        masked = evoxc.select(_in_span(keys, zero, span_constant), keys, no_query)
+        table = evoxc.equal(enp.reshape(masked, (rows, count, 1)), visible_rows)
+        lowest = evoxc.reduce_min(evoxc.select(table, columns, no_match), axes=2)
+        return evoxc.minimum(lowest, last_row), evoxc.less(lowest, no_match)
+
+    return resolve
+
+
 def closes_cycle_accelerator(
     node_keys: evoxc.SymbolicTensor,
     conn_keys: evoxc.SymbolicTensor,
@@ -137,9 +212,9 @@ def closes_cycle_accelerator(
             source and destination node keys; absent rows are ``I_INF``.
         src_keys: ``(P,) int32`` candidate edge source node key.
         dst_keys: ``(P,) int32`` candidate edge destination node key.
-        key_span (int): ``S``, ``genome.key_span`` — the static addressable key window of the
-            dense key table, the same one the execution schedule uses.  It cannot be derived
-            from any operand shape, so the caller passes it.
+        key_span (int): ``S``, ``genome.key_span`` — the static addressable key window, the
+            same one the execution schedule uses.  It cannot be derived from any operand
+            shape, so the caller passes it.
 
     Returns:
         ``(P,) bool`` True where the candidate edge would close a cycle.  A degenerate
@@ -148,27 +223,21 @@ def closes_cycle_accelerator(
         never this one.
 
     Raises:
-        ConfigError: when ``key_span`` does not describe the table the shared resolution
-            builds (a host-side configuration error, never a traced branch).
         evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
 
     Notes:
-        The key resolution is literally :mod:`~.cycle`'s — one dense table build and one flat
-        ``gather`` for all ``2 * E + 2`` endpoints — so the representative function, and with
-        it both correctness arguments of that module, are shared rather than re-derived.
+        The key resolution is :func:`_key_resolver` — one broadcast equality for all
+        ``2 * E + 2`` endpoints, no ``scatter`` — so the representative function, and with it
+        both correctness arguments of :mod:`~.cycle`, are shared rather than re-derived.
         Everything the hop needs that does not depend on ``reach`` (``dst_onehot``,
         ``src_flat``, ``valid_flat``) is traced once, outside the loop region.
-        The ``scatter`` that the host formulation pays per hop is the whole point of this
-        route: it is replaced by one broadcast ``logical_and`` plus one reduction over the
-        edge axis, both of which a compiled backend spreads over its workgroups.
         Both loop results are consumed (the second through a ``logical_not`` that is the
-        identity on every backend), because an unused ``while`` result makes
-        ``iree-compile`` produce an illegal ``scf.while`` for the assembled generation graph —
-        the module note holds the compiler evidence and the exact rewrite at fault.
+        identity on every backend), because an unused ``while`` result makes ``iree-compile``
+        produce an illegal ``scf.while`` for the assembled generation graph — the module note
+        holds the compiler evidence and the exact rewrite at fault.
     """
     pop_size, node_count = node_keys.shape
     edge_count = conn_keys.shape[1]
-    table = _key_table(node_keys, key_span)
     queries = enp.concatenate(
         [
             conn_keys[:, :, 0],
@@ -178,7 +247,7 @@ def closes_cycle_accelerator(
         ],
         axis=1,
     )
-    rows, hits = _rows_of(table, queries, key_span, node_count)
+    rows, hits = _key_resolver(node_keys, key_span)(queries)
     edge_src = evoxc.slice(rows, (0, 0), (pop_size, edge_count))
     edge_dst = evoxc.slice(rows, (0, edge_count), (pop_size, edge_count))
     src_hit = evoxc.slice(hits, (0, 2 * edge_count), (pop_size, 1))
