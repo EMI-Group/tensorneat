@@ -636,24 +636,24 @@ def speciate(
       scan 1, ``take`` in scan 2) discards, so the substitution is bit-identical:
       no reader ever consumes the row of a slot that is not allowed to write.
     * **Dense table** (``gate`` false): scan 1's whole centre table is measured
-      *before* the scan through ``distance_fn.matrix`` -- one grouped call per
-      centre block (two centres, twice-tiled digest) -- and each iteration
-      reads its own row with a ``gather``.  Above ``GATED_ROWS`` the species
-      table is full, so a skipped slot's ``if`` region would cost more than the
-      row it skips (see ``GATED_ROWS``), while measuring the rows up front
-      keeps the compatibility kernel out of the reservation ``while`` body
-      entirely.  ``matrix`` runs those calls inside its own fixed-length
-      ``scan``, one centre block per iteration, so each iteration's region
-      environment -- the kernel's ``(k * pop_size, 2 * max_conns, ...)`` --
-      is released before the next block is measured, where a top-level loop
-      would keep all ``species_size`` of them alive for the rest of the
-      generation.  Scan 1's rows are the ones the gated path would read: slot
-      ``i``'s centre is the pre-scan centre row ``i``, and no earlier
-      iteration can rewrite it (every ``scatter`` writes index ``slot`` and each
-      slot is visited once).  Scan 2 still measures its selected centre per
-      iteration (``pop[seed]`` for a creating slot, the rebuilt scan-1 centre
-      row otherwise -- a closed-over value, because neither scan carries the
-      centre tables), because a creating slot's centre is data-dependent.
+      *before* the scan through ``distance_fn.matrix`` -- one population-shaped
+      call per centre row -- and each iteration reads its own row with a
+      ``gather``.  Above ``GATED_ROWS`` the species table is full, so a skipped
+      slot's ``if`` region would cost more than the row it skips (see
+      ``GATED_ROWS``), while measuring the rows up front keeps the compatibility
+      kernel out of the reservation ``while`` body entirely.  ``matrix`` runs
+      those calls inside its own fixed-length ``scan``, one centre per
+      iteration, so each iteration's region environment -- the kernel's
+      ``(pop_size, 2 * max_conns, ...)`` transients -- is released before the
+      next centre is measured, where a top-level loop would keep all
+      ``species_size`` of them alive for the rest of the generation.  Scan 1's
+      rows are the ones the gated path would read: slot ``i``'s centre is the
+      pre-scan centre row ``i``, and no earlier iteration can rewrite it (every
+      ``scatter`` writes index ``slot`` and each slot is visited once).  Scan 2
+      still measures its selected centre per iteration (``pop[seed]`` for a
+      creating slot, the rebuilt scan-1 centre row otherwise -- a closed-over
+      value, because neither scan carries the centre tables), because a creating
+      slot's centre is data-dependent.
       This form needs a callable with ``matrix`` (:class:`._distance.DistanceRows`);
       any other callable raises ``TensorNEATError`` instead of falling back to the
       slower shape, and the gated path keeps accepting an arbitrary callable.
@@ -921,11 +921,11 @@ def speciate(
     # out of the reservation ``while`` body.
     #
     # ``distance_fn.matrix`` does the measuring inside its own fixed-length
-    # ``scan``, one grouped block per iteration: that region is the memory
-    # scope, so only one block's ``(k * pop_size, 2 * max_conns, ...)``
-    # transients are live at a time instead of all ``species_size`` of them.
-    # A kernel at the top level would keep every one of those alive until the
-    # generation graph returns, which is both a peak-RSS and a build cost.
+    # ``scan``, one centre per iteration: that region is the memory scope, so
+    # only one centre's ``(pop_size, 2 * max_conns, ...)`` transients are live at
+    # a time instead of the arrays of all ``species_size`` of them.  A kernel at
+    # the top level would keep every one of those alive until the generation
+    # graph returns, which is both a peak-RSS and a build cost.
     rows1 = None if gate else distance_fn.matrix(state, centre_payload)
 
     carry, _ = evoxc.scan(reserve, carry, iota_i32(species_size))
