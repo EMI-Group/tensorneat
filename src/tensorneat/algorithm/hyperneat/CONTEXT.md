@@ -125,7 +125,7 @@ Python `if`/`for` over constructor configuration is legal and unrolls at trace t
 All shapes must be static: `Q`, `N`, `I`, `O`, `NA`, `CK`, `CA` come from configuration, and `P` from the payload argument's static axis-0 length — never from a value only known at run time.
 Nothing here mutates `State`, the substrate, the genome objects, or any array in place; the substrate geometry is read-only.
 User-facing validation raises `TensorNEATError`/`ConfigError`, never `assert`; backend/shape errors propagate unchanged.
-Files stay under ~1000 lines (`hyperneat.py` ≈ 820, `genes.py` ≈ 300).
+Files stay under ~1000 lines (`hyperneat.py` 888, `genes.py` 297).
 
 ## Known Issues
 `NEAT.forward(state, transformed, inputs)` cannot serve the `(P * Q)` query batch because it reads the un-expanded population from `state`; the decode therefore calls `neat.genome.forward` directly and depends on the `NEAT.genome` attribute plus the `GenomeTensors` field order. If `../neat` renames the attribute or changes the payload arity, `_query_substrate` breaks first.
