@@ -54,7 +54,7 @@ Numpy reference backend, ``species_size=20``, one configuration per fresh
 process, ``benchmarks/backend_measure.py --backend numpy --generations 20
 --warmup 3`` (its numbers are ``Pipeline.step``): one population-shaped call per
 centre is 160.9-162.2 ms per generation and 233.6 MiB peak RSS at ``P = 500``
-with a 0.40 s build, and 314.7 ms / 391.7 MiB / 0.40 s at ``P = 1000``.  The
+with a 0.33 s build, and 314.7 ms / 391.7 MiB / 0.40 s at ``P = 1000``.  The
 table costs exactly one ``measure_distance`` call per centre row; what the scan
 buys is the *region* around those calls, not fewer of them.
 
