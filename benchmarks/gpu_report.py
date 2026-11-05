@@ -64,6 +64,13 @@ TRAJECTORY_NOTE = (
     "necessarily a kernel defect."
 )
 
+#: One-sentence reading rule recorded with every lockstep trajectory (``--trace``).
+LOCKSTEP_NOTE = (
+    "Both legs share one PRNG from one seed and one graph, so a first key divergence "
+    "beyond generation 1 is a selection near-tie flip caused by a sub-ulp float "
+    "difference between the backends, not a kernel defect."
+)
+
 __all__ = [
     "SCHEMA",
     "BEGIN_MARKER",
@@ -71,14 +78,14 @@ __all__ = [
     "FLOAT_RTOL",
     "FLOAT_ATOL",
     "PAYLOAD_FIELDS",
-    "TRAJECTORY_NOTE",
+    "TRAJECTORY_NOTE", "LOCKSTEP_NOTE",
     "RenderError",
     "fmt",
     "last_error_line",
     "snapshot",
     "compare_keys",
     "compare_float",
-    "compare_snapshots",
+    "compare_snapshots", "trajectory_row",
     "read_document",
     "cross_summary",
     "environment",
@@ -230,6 +237,39 @@ def compare_snapshots(
     }
 
 
+def trajectory_row(
+    generation: int, accelerated: dict[str, Any], reference: dict[str, Any],
+    accelerated_species: int | None = None, reference_species: int | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """One generation of the lockstep trace: compare two snapshots into one row.
+
+    The species counts are ``None`` when a state does not expose them cheaply; the
+    mask counts are :func:`compare_float`'s (both attribute NaN masks summed; fitness
+    NaN and ``-inf`` masks). Returns ``(row, float_exceeds)``, the flag saying whether
+    any float payload exceeded ``FLOAT_RTOL``/``FLOAT_ATOL`` in this generation.
+    """
+    fields = compare_snapshots(accelerated, reference)["fields"]
+    node, conn, fit = fields["node_attrs"], fields["conn_attrs"], fields["fitness"]
+    row = {
+        "generation": int(generation),
+        "node_keys_mismatches": fields["node_keys"].get("mismatching_entries"),
+        "conn_keys_mismatches": fields["conn_keys"].get("mismatching_entries"),
+        "node_attrs_max_abs_diff": node.get("max_abs_diff"),
+        "conn_attrs_max_abs_diff": conn.get("max_abs_diff"),
+        "attr_nan_mask_mismatches": int(node.get("nan_mask_mismatches") or 0)
+        + int(conn.get("nan_mask_mismatches") or 0),
+        "fitness_max_abs_diff": fit.get("max_abs_diff"),
+        "fitness_mask_mismatches": int(fit.get("nan_mask_mismatches") or 0)
+        + int(fit.get("neginf_mask_mismatches") or 0),
+        "max_fitness_numpy": float(_numpy().max(reference["fitness"])),
+        "max_fitness_accelerated": float(_numpy().max(accelerated["fitness"])),
+        "species_count_numpy": reference_species,
+        "species_count_accelerated": accelerated_species,
+    }
+    exceeds = any(
+        fields[name].get("shape_match") is False or fields[name].get("allclose") is False
+        for name in ("node_attrs", "conn_attrs", "fitness"))
+    return row, exceeds
 
 
 def display_path(path: Path | str | None) -> str:
@@ -491,7 +531,7 @@ def _git_text(env: dict[str, Any]) -> str:
     return f"`{commit[:12]}` (dirty: {named})"
 
 
-# --- The five block sections ------------------------------------------------------------
+# --- The six block sections -------------------------------------------------------------
 
 
 def _environment_section(document: dict[str, Any]) -> list[str]:
@@ -701,8 +741,70 @@ def _cross_check_section(document: dict[str, Any]) -> list[str]:
     )
 
 
+def _trajectory_section(document: dict[str, Any]) -> list[str]:
+    """Section 4: the per-generation lockstep trace; empty without an ``ok`` trace."""
+    traced = [r for r in document.get("records") or []
+              if isinstance(r.get("trajectory"), dict)]
+    ok = [r for r in traced if r["trajectory"].get("status") == "ok"]
+    if not ok:
+        return []
+    headers = [
+        "Generation", "Node-key mismatches", "Conn-key mismatches",
+        "Node attr max abs diff", "Conn attr max abs diff", "Attr NaN-mask mismatches",
+        "Fitness max abs diff", "Fitness mask mismatches",
+        "Max fitness (numpy / accelerated)", "Species (numpy / accelerated)",
+    ]
+    lines = [
+        "## Per-generation trajectory",
+        "",
+        "Every traced row was re-run after the timed region, with the peak-RSS sample "
+        "already taken, as a lockstep pair: a fresh accelerated pipeline and a fresh "
+        "`backend=\"numpy\"` pipeline of the same case and seed, each paying its own "
+        "build, compared per generation with the cross-check rules above. The trace "
+        "touches neither the timings nor the recorded RSS.",
+        "",
+    ]
+    for record in ok:
+        trace = record["trajectory"]
+        steps = fmt(trace.get("steps"))
+        none = f"none within {steps} generations"
+        key, floated = trace.get("first_key_divergence"), trace.get("first_float_exceedance")
+        lines += [
+            f"**{record.get('case', '?')} / `{record.get('target', '?')}`** — {steps} "
+            f"generation(s) compared in lockstep; first node-key divergence: "
+            f"{none if key is None else key}; first float exceedance: "
+            f"{none if floated is None else floated}; wall time {fmt(trace.get('trace_s'))} s.",
+            "",
+        ]
+        lines += [f"*{trace['note']}*", ""] if trace.get("note") else []
+        lines += _table(
+            headers,
+            [
+                [
+                    fmt(item.get("generation")),
+                    fmt(item.get("node_keys_mismatches")),
+                    fmt(item.get("conn_keys_mismatches")),
+                    fmt(item.get("node_attrs_max_abs_diff"), 9),
+                    fmt(item.get("conn_attrs_max_abs_diff"), 9),
+                    fmt(item.get("attr_nan_mask_mismatches")),
+                    fmt(item.get("fitness_max_abs_diff"), 9),
+                    fmt(item.get("fitness_mask_mismatches")),
+                    f"{fmt(item.get('max_fitness_numpy'), 6)} / "
+                    f"{fmt(item.get('max_fitness_accelerated'), 6)}",
+                    f"{fmt(item.get('species_count_numpy'))} / "
+                    f"{fmt(item.get('species_count_accelerated'))}",
+                ]
+                for item in trace.get("generations") or []
+            ],
+        ) + [""]
+    errors = [f"The trajectory trace of {r.get('case', '?')} / {r.get('target', '?')} "
+              f"errored ({last_error_line(r['trajectory'].get('error'))}); its timings "
+              "stay valid." for r in traced if r["trajectory"].get("status") == "error"]
+    return lines + errors if errors else lines[:-1]  # no trailing blank before the next section
+
+
 def _blocked_section(document: dict[str, Any]) -> list[str]:
-    """Section 4: one row per error record, with the tail of its error."""
+    """Section 5: one row per error record, with the tail of its error."""
     rows = [
         [str(record.get("case", "?")), f"`{record.get('target', '?')}`",
          last_error_line(record.get("error"))]
@@ -721,7 +823,7 @@ def _blocked_section(document: dict[str, Any]) -> list[str]:
 
 
 def _provenance_section(document: dict[str, Any], record_path: Path | str | None) -> list[str]:
-    """Section 5: data-derived provenance of the block (tree, session, record)."""
+    """Section 6: data-derived provenance of the block (tree, session, record)."""
     meta = document.get("meta") or {}
     env = meta.get("env") or {}
     records = document.get("records") or []
@@ -849,6 +951,9 @@ def render_block(
     lines += _environment_section(document) + [""]
     lines += _measured_section(document) + [""]
     lines += _cross_check_section(document) + [""]
+    trajectory = _trajectory_section(document)
+    if trajectory:
+        lines += trajectory + [""]
     lines += _blocked_section(document) + [""]
     lines += _provenance_section(document, record_path)
     if env.get("probe_error"):

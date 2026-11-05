@@ -68,6 +68,18 @@ target records ``{"status": "skipped"}`` (it is the reference), and a cross-chec
 that cannot run records its traceback while the measured row keeps its timings, so
 missing numerical evidence is visible instead of silently green.
 
+Lockstep trajectory trace (``--trace N``, off by default)
+--------------------------------------------------------
+``--trace N`` (also forwarded by ``matrix`` to every child) re-runs the row after the
+timed region and after ``peak_rss_mib`` is sampled as a lockstep pair: a fresh
+accelerated pipeline and a fresh ``backend="numpy"`` pipeline of the same case and
+seed, each stepped once (each pays its own build), compared for generations ``1..N``
+with the cross-check rules. ``record["trajectory"]`` holds one row per generation plus
+``first_key_divergence``, ``first_float_exceedance`` and the trace's wall time. It
+costs ``N`` x (accelerated generation + numpy generation) on top of the timed region,
+so it is off by default, and it is the reproducible form of the near-tie drift
+analysis (:data:`gpu_report.LOCKSTEP_NOTE`); a failing leg records ``status="error"``.
+
 Subcommands
 -----------
 ``run`` measures exactly one row, prints its table and optionally writes ``--json``
@@ -139,10 +151,12 @@ if str(HERE) not in sys.path:  # the record/report half is a sibling module, not
 from gpu_report import (  # noqa: E402  (after the sys.path guard)
     FLOAT_ATOL,
     FLOAT_RTOL,
+    LOCKSTEP_NOTE,
     SCHEMA,
     TRAJECTORY_NOTE,
     RenderError,
     compare_snapshots,
+    trajectory_row,
     display_path,
     environment,
     last_error_line,
@@ -160,6 +174,7 @@ DEFAULT_TARGETS = "numpy,iree-llvm-cpu,iree-rocm"
 DEFAULT_SEED = 42
 DEFAULT_WARMUP = 3
 DEFAULT_GENERATIONS = 10
+DEFAULT_TRACE = 0  #: generations the lockstep trajectory trace compares (0 = off)
 #: Seconds one row subprocess may take before it is killed and recorded as an error.
 DEFAULT_TIMEOUT = 3600
 DEFAULT_JSON = HERE / "results" / "gpu.json"
@@ -180,6 +195,8 @@ TARGETS: dict[str, dict[str, Any]] = {
         "compile_options": {"target_backends": ["rocm"]},
     },
 }
+#: The build plan of the ``backend="numpy"`` reference leg (cross-check and trace).
+NUMPY_PLAN: dict[str, Any] = {"name": "numpy", **TARGETS["numpy"], "device_index": None}
 
 
 # --- Lazy imports (module scope stays numpy/evoxc/tensorneat-free) ----------------------
@@ -326,6 +343,7 @@ def _protocol(args: argparse.Namespace) -> dict[str, Any]:
         "logging_in_timed_region": False,
         "cross_check_enabled": not args.no_cross_check,
         "cross_check_reference": "numpy",
+        "trajectory_generations": args.trace,
         "float_rtol": FLOAT_RTOL,
         "float_atol": FLOAT_ATOL,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped",
@@ -359,8 +377,7 @@ def _numpy_reference(
     """
     from tensorneat.common import to_numpy
 
-    plan = {"name": "numpy", **copy.deepcopy(TARGETS["numpy"]), "device_index": None}
-    pipeline = _build_pipeline(tn, case, plan, args)
+    pipeline = _build_pipeline(tn, case, NUMPY_PLAN, args)
     state = pipeline.setup()
     state, evaluated, fitnesses = pipeline.step(state)
     generation_1 = snapshot(evaluated, fitnesses)
@@ -404,6 +421,63 @@ def _cross_check(
         "final_state": final,
         "reference_build_s": round(reference["build_s"], 6),
     }
+
+
+def _species_count(state: Any) -> int | None:
+    """Live species count from ``state.species.member_count`` (``None`` if unreadable).
+
+    ``NaN`` marks a dead slot and ``NaN > 0`` is False (as in ``show_details``).
+    """
+    try:
+        from tensorneat.common import to_numpy
+
+        return int(sum(1 for count in to_numpy(state.species.member_count) if count > 0))
+    except Exception:
+        return None
+
+
+def _trajectory(
+    tn: Any, case: Any, plan: dict[str, Any], args: argparse.Namespace
+) -> dict[str, Any]:
+    """Per-generation lockstep trace of this row, inside the devnull redirect.
+
+    Never raises: a failing leg is recorded as ``status="error"`` with its traceback
+    so the measured row keeps its timings (see the module docstring).
+    """
+    steps = args.trace
+    base = {"steps": steps, "rtol": FLOAT_RTOL, "atol": FLOAT_ATOL, "note": LOCKSTEP_NOTE}
+    if steps <= 0:
+        return {**base, "status": "skipped", "reason": "--trace 0 (off)"}
+    if plan["name"] == "numpy":
+        return {**base, "status": "skipped", "reason": "target is the numpy reference"}
+    started = time.perf_counter()
+    try:
+        with (open(os.devnull, "w", encoding="utf-8") as devnull,
+              contextlib.redirect_stdout(devnull),
+              contextlib.redirect_stderr(devnull)):
+            accelerated = _build_pipeline(tn, case, plan, args)
+            reference = _build_pipeline(tn, case, NUMPY_PLAN, args)
+            acc = list(accelerated.step(accelerated.setup()))  # each pays its own build
+            ref = list(reference.step(reference.setup()))
+            generations, first_key, first_float = [], None, None
+            for generation in range(1, steps + 1):
+                row, exceeds = trajectory_row(
+                    generation, snapshot(acc[1], acc[2]), snapshot(ref[1], ref[2]),
+                    _species_count(acc[0]), _species_count(ref[0]))
+                generations.append(row)
+                if first_key is None and row["node_keys_mismatches"] != 0:
+                    first_key = generation
+                if first_float is None and exceeds:
+                    first_float = generation
+                if generation == steps:
+                    break
+                acc, ref = list(accelerated.step(acc[0])), list(reference.step(ref[0]))
+    except Exception:
+        return {**base, "status": "error", "error": traceback.format_exc(),
+                "trace_s": round(time.perf_counter() - started, 6)}
+    return {**base, "status": "ok", "generations": generations,
+            "first_key_divergence": first_key, "first_float_exceedance": first_float,
+            "trace_s": round(time.perf_counter() - started, 6)}
 
 
 def _measure(
@@ -464,6 +538,7 @@ def _measure(
         record["cross_check"] = {"status": "skipped", "reason": "target is the numpy reference"}
     else:
         record["cross_check"] = _cross_check(tn, case, args, generation_1, final_state)
+    record["trajectory"] = _trajectory(tn, case, plan, args)  # last: after the RSS sample
 
 
 def measure_row(args: argparse.Namespace) -> dict[str, Any]:
@@ -580,6 +655,8 @@ def _child_command(
         command += ["--iree-compile-arg", flag]
     if args.no_cross_check:
         command.append("--no-cross-check")
+    if args.trace:
+        command += ["--trace", str(args.trace)]
     return command
 
 
@@ -802,6 +879,11 @@ def _add_measurement_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-cross-check", action="store_true",
         help="skip the numpy numerical cross-check (timing only)")
+    parser.add_argument(
+        "--trace", type=_non_negative_int, default=DEFAULT_TRACE, metavar="N",
+        help="compare N generations in lockstep against a fresh numpy leg after the "
+             "timed region (default: %(default)s = off; costs N x (accelerated + numpy "
+             "generation); the reproducible form of the near-tie drift analysis)")
     parser.add_argument(
         "--device", default=None, metavar="KIND",
         help=("raw device kind (rocm, hip, cuda, ...); with --device-index it builds "
