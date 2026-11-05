@@ -427,9 +427,13 @@ def pair_parents(
 
     The winner decision is taken on the *species-space* draws (ties go to the
     father, ``>=``, matching the legacy comparison) before elite pinning, so it
-    does not depend on which population slot ends up owning the pair.  Elite
-    slots (``idx_in_block < genome_elitism``) then pin both parents to the owning
-    species' best member.
+    does not depend on which population slot ends up owning the pair.
+
+    Elite slot ``k`` of a block (``idx_in_block == k < genome_elitism``) pins both
+    parents to that block's ``k``-th ranked member (the legacy elementwise pin), so
+    the species' top ``genome_elitism`` **distinct** members survive unmutated; the
+    rank is clamped at ``live_members - 1`` so an elite never adopts a non-member or
+    a sanitised ``-inf`` genome.
     """
     members = membership(species_keys, idx2species)
     masked = evoxc.select(members, enp.expand_dims(fitness, 0), neg_inf())
@@ -462,7 +466,15 @@ def pair_parents(
     winner = evoxc.gather(winner_species, flat_slot, axis=0)
     loser = evoxc.gather(loser_species, flat_slot, axis=0)
     elite_mask = evoxc.less(idx_in_block, genome_elitism)
-    pinned = evoxc.gather(evoxc.gather(ranking, 0, axis=1), loc, axis=0)
+    # Elite slot ``c`` pins rank ``min(c, live_members - 1)``: the ranking is descending
+    # and every finite fitness beats the ``-inf`` a sanitised genome maps to, so the
+    # finite members head the row and the clamp stays on a live member.
+    alive = evoxc.cast(evoxc.greater(fitness, neg_inf()), evoxc.float32)
+    live = evoxc.sum(evoxc.select(members, enp.expand_dims(alive, 0), const(0.0)), axes=1)
+    cap = evoxc.maximum(evoxc.subtract(evoxc.cast(live, evoxc.int32), int_const(1)), int_const(0))
+    ranks = enp.reshape(enp.arange(pop_size, dtype=evoxc.int32), (1, pop_size))
+    block_rank = evoxc.minimum(ranks, enp.expand_dims(cap, 1))
+    pinned = evoxc.gather(evoxc.reshape(flat_gather(ranking, block_rank), (width,)), flat_slot, axis=0)
     return (
         evoxc.select(elite_mask, pinned, winner),
         evoxc.select(elite_mask, pinned, loser),

@@ -1,4 +1,4 @@
-"""NEAT-python style mutation: at most one structural change plus value mutation.
+"""NEAT-python style mutation: independent structural changes plus value mutation.
 
 All four structural operations are batch-wide kernels: each gate is an elementwise mask on
 the population axis, and an individual whose gate is off — or whose candidate is invalid —
@@ -8,14 +8,17 @@ genome's ``max_in_degree`` are never exceeded, a refused add is a no-op for that
 ``arrays.first_row`` over the stage's ``context.free_node`` / ``context.free_conn`` masks —
 in the same layout for keys and attributes.
 
-Because the four operations are mutually exclusive, this module **plans** them instead of
-applying them one after another: each helper resolves one operation's candidate rows and
-values, and :meth:`.base.BaseMutation.mutate_structure` merges the four plans into a single
-per-array write (see :mod:`~.plan`).  That keeps the traced-op count of the stage
-proportional to the number of distinct accesses rather than to the number of intermediate
-whole-array rewrites.  The gate draw, the merge and the value mutation are shared and live
-in :class:`~.base.BaseMutation`; this module supplies the four probabilities and the four
-per-operation plans.
+The four operations have **independent** per-individual gates and run in the fixed order
+add-node → delete-node → add-conn → delete-conn, each stage planning against the payload the
+previous stage produced.  This module therefore **plans** each stage instead of applying it
+directly: a helper resolves one operation's candidate rows and values, and
+:meth:`.base.BaseMutation.mutate_structure` turns that plan into the stage's writes (see
+:mod:`~.plan`).  Planning keeps a stage's traced-op count proportional to the number of
+distinct accesses rather than to the number of intermediate whole-array rewrites, while the
+sequential composition keeps the legacy semantics — a single call may apply several
+structural changes to one individual.  The gate draw, the stage composition, the writes and
+the value mutation are shared and live in :class:`~.base.BaseMutation`; this module supplies
+the four probabilities and the four per-operation plans.
 """
 
 from typing import TYPE_CHECKING
@@ -82,12 +85,20 @@ def _fetch_two(
 class DefaultMutation(BaseMutation):
     """Structural and value mutation with per-operation probabilities.
 
-    The four probabilities are independent per individual and per generation, but at most
-    one structural mutation is applied per individual: one shared
-    ``evoxc.random.uniform(key, (4, P))`` draw gates all of them and the first operation
-    that hits wins.  A probability of ``0`` therefore removes its operation from the draw's
-    reach entirely (an all-``False`` row) — and, because the plan is built per operation,
-    from the traced graph as well.
+    The four probabilities are independent per individual and per generation: one shared
+    ``evoxc.random.uniform(key, (4, P))`` draw is compared against them and **each row is
+    its own Bernoulli decision**, so an individual may fire any subset of the four
+    operations and one call can apply up to four structural changes to the same genome (the
+    frozen pre-rewrite library behaved the same way).
+
+    The stages run in the fixed order add-node → delete-node → add-conn → delete-conn, and
+    each plans against the payload the previous stage left behind: delete-node may delete
+    the node add-node just created, delete-conn may consume an edge add-node or add-conn
+    just created, and add-conn's duplicate / ``max_in_degree`` / cycle tests see the
+    post-add-node and post-delete-node graph.  A refused candidate (duplicate edge,
+    self-connection, cycle, capacity, ``max_in_degree``, a colliding caller allocation) is a
+    bit-exact no-op for that individual, never a repair.  A probability of ``0`` still
+    removes its operation — the cycle predicate included — from the traced graph entirely.
 
     Args:
         conn_add (float): Probability per individual of attempting to add one connection.
@@ -446,5 +457,7 @@ class DefaultMutation(BaseMutation):
             context.uniform_high,
         )
         return DeleteConnPlan(evoxc.logical_and(gate, has_connection), conn_row)
+
+
 
 __all__ = ["DefaultMutation"]

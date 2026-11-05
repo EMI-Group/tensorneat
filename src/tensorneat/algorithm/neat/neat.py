@@ -20,8 +20,8 @@ Conventions that hold everywhere in this module:
   :class:`tensorneat.genome.utils.GenomeTensors` (``evoxc`` has no bitcast, so
   integer keys and float attributes are never packed together) with a
   genome-owned padding encoding: this module never inspects padding, it asks the
-  genome (``node_exists``, ``conn_exists``, ``max_node_key``,
-  ``max_conn_marker``) instead;
+  genome (``node_exists``, ``conn_exists``, ``max_conn_marker``) and the
+  ``_keys`` allocator instead;
 * host-side Python is limited to ``__init__`` validation and ``show_details``;
   ``numpy`` is the one other host import, used only for the *static* dtype bound
   of :func:`_finite_bound` (``numpy.finfo``), never for tensor arithmetic --
@@ -49,6 +49,7 @@ from ...genome.utils import GenomeTensors
 from ..base import BaseAlgorithm
 from .species import SpeciesController, SpeciesState
 from ._distance import DistanceRows
+from ._keys import node_keys_for_split, validate_key_space
 from ._validation import positive_int
 
 
@@ -192,6 +193,10 @@ class NEAT(BaseAlgorithm):
             species/spawn knobs are validated by :class:`SpeciesController`; this
             constructor validates ``genome``, ``pop_size`` and
             ``pop_batch_size`` (including that the latter divides the former).
+            It also requires ``genome.key_span > genome.max_nodes``
+            (:func:`._keys.validate_key_space`): the structural node keys the
+            mutation kernel allocates must be addressable by the schedule's
+            dense key table, and one free key must always exist.
 
     Note:
         Nothing here builds an ``evoxc`` graph: the constructor only stores host
@@ -237,6 +242,10 @@ class NEAT(BaseAlgorithm):
                     f"'{attribute}'; the algorithm forwards the network arity "
                     "from the genome"
                 )
+
+        # Structural node keys are allocated inside ``[0, genome.key_span)``, so
+        # the key table has to have at least one key no individual can hold.
+        validate_key_space(genome)
 
         self._pop_size = positive_int(pop_size, "pop_size")
         self._pop_batch_size = None
@@ -608,7 +617,9 @@ class NEAT(BaseAlgorithm):
         cross_key, mut_key, next_randkey = evoxc.random.split_n(state.randkey, 3)
         crossed = self.genome.execute_crossover(state, cross_key, winners, losers)
 
-        new_node_keys, new_conn_markers = self._new_gene_keys(state)
+        new_node_keys, new_conn_markers = self._new_gene_keys(
+            state, crossed.node_keys
+        )
 
         def _mutate(key: Any, *fields: Any) -> tuple:
             # Reassemble the split payload, mutate it, and report the four
@@ -644,16 +655,18 @@ class NEAT(BaseAlgorithm):
 
         return state.update(pop=GenomeTensors(*next_fields), randkey=next_randkey)
 
-    def _new_gene_keys(self, state: State) -> tuple[Any, Any]:
+    def _new_gene_keys(self, state: State, node_keys: Any) -> tuple[Any, Any]:
         """Allocate per-genome unique keys for the structural mutations.
 
         A batch-first mutation creates nodes and connections for the whole
-        population in one kernel, so every individual needs key ranges that do
-        not collide with *its own* existing rows:
+        population in one kernel, so every individual needs keys that do not
+        collide with *its own* existing rows:
 
-        * ``new_node_keys = max_node_key(state, node_keys) + (1 + enp.arange(P))``
-          -- with ``arange(P)`` inserted in the ``"add_node"`` path, each genome
-          adds at most one node per mutation call;
+        * ``new_node_keys = node_keys_for_split(node_keys, key_span, max_nodes,
+          max_node_key(node_keys))`` -- the wrapped spread ``max_nodes +
+          (max_node_key + 1 + slot) mod (key_span - max_nodes)`` with the
+          lowest-free key as collision fallback (:func:`._keys.node_keys_for_split`);
+          the ``"add_node"`` path adds at most one node per mutation call;
         * ``new_conn_markers`` is ``(P, 3)`` int32:
           ``reshape(max_conn_marker(state, conn_keys), (P, 1))
           + (1 + arange(P * 3)).reshape(P, 3)`` when the connection gene carries
@@ -661,45 +674,60 @@ class NEAT(BaseAlgorithm):
           ``enp.zeros((P, 3), dtype=evoxc.int32)``.
 
         Args:
-            state (State): State carrying the population.
+            state (State): State carrying the population and the connection
+                keys the marker path continues from.
+            node_keys (Any): ``(P, max_nodes) int32`` node keys of the payload
+                that will receive the new key -- the **crossover child** handed
+                to ``genome.execute_mutation``, not the pre-crossover parents.
 
         Returns:
             tuple: ``(new_node_keys (P,) int32, new_conn_markers (P, 3) int32)``.
 
         Note:
-            **Rank contract.** ``max_node_key``/``max_conn_marker`` return one
-            maximum per individual, ``(P,) int32``, so the base is per-individual
-            and uniqueness is only guaranteed *within* an individual's own gene
-            keys: keys are effectively namespaced per individual, and a key
-            allocated for one genome may collide with a key held by another
-            genome (legal -- the mutation kernel is batch-first and only ever
-            inspects an individual's own rows).  ``base + 1 + arange(P)`` is
-            strictly greater than *that* individual's own maximum.  The marker
-            path therefore reshapes the ``(P,)`` base to ``(P, 1)`` before adding
-            the ``(P, 3)`` offsets, so each individual's three markers are
-            strictly above its own maximum marker and distinct from each other.
-            Node keys and markers live in different key columns, so a numerical
-            coincidence between an allocated node key and an allocated marker
-            within one individual is meaningless.
-            The width ``3`` is a genome-level convention: one mutation call may
-            add at most three connections per genome.  Both maxima come from the
-            genome helpers ``max_node_key``/``max_conn_marker``, which apply the
-            padding encoding themselves; this module never infers validity from
-            NaN.  The ``+1`` offsets are baked into the ``int32`` arange
-            constants (``arange(1, P + 1)``, ``arange(1, 3P + 1)``) rather than
-            added as a separate rank-0 constant, so each allocation is a single
-            ``add`` and no ``int64`` promotion can creep in.
+            **Bounded allocation from the child.**  The schedule addresses node
+            keys through a dense table of width ``genome.key_span`` and silently
+            drops a key outside ``[0, key_span)``, so the allocator wraps the
+            ``max_node_key + 1 + slot`` spread into the free-key window
+            ``[max_nodes, key_span)`` instead of letting it outrun the table;
+            ``NEAT.__init__`` enforces ``key_span > max_nodes`` statically, which
+            guarantees the window -- and hence a free key -- always exists.  The
+            spread matters for search quality (the distance aligns node genes by
+            key, so a compact lowest-free policy inflates node homology and
+            collapses speciation; see :func:`._keys.node_keys_for_split`).  The
+            key is chosen from ``crossed.node_keys`` -- the payload that
+            actually receives it -- not from the pre-crossover parents: a base
+            derived from the parents can already be owned by the child, and the
+            genome's ``plan_add_node`` alias guard would then silently refuse the
+            split (a skipped structural mutation).  The allocation is free where
+            it lands, so the genome-side alias guard stops firing for legal payloads.
+
+            **Rank contract.**  Uniqueness is guaranteed *within* an
+            individual's own gene keys only: keys are namespaced per individual,
+            two individuals with the same occupied set receive the same new key,
+            and the compatibility distance reads that shared key as a homologue
+            -- the intended meaning of "both invented the same structural node".
+            The free-key window is ``key_span - max_nodes`` keys wide, so with
+            ``pop_size`` above it different individuals regularly share a key;
+            that sharing is the pre-rewrite behaviour, not a defect.
+
+            **Markers.**  ``max_conn_marker`` still continues from
+            ``state.pop.conn_keys``: a ``historical_marker`` is a population-wide
+            identity matched exactly by the distance kernel, never an index into
+            the dense key table, so it is not range tested and does not share the
+            silent-drop defect.  The marker path reshapes the ``(P,)`` base to
+            ``(P, 1)`` before adding the ``(P, 3)`` offsets, so each
+            individual's three markers are distinct; the width ``3`` is a
+            genome-level convention (one mutation call adds at most three
+            connections).  Both helpers apply the padding encoding themselves --
+            this module never infers validity from NaN -- and the ``+1`` offsets
+            are baked into the ``int32`` arange constant, so no ``int64``
+            promotion can creep in.
         """
-        node_keys = state.pop.node_keys
-        node_base = self.genome.max_node_key(state, node_keys)
-        if node_base.dtype != evoxc.int32:
-            # The genome documents ``(P,) int32``; cast only when it does not
-            # already hold that dtype, so the default path pays no ``cast`` op.
-            node_base = evoxc.cast(node_base, evoxc.int32)
-        # ``1 + arange(P)`` is one constant: the whole offset is baked in, so the
-        # allocation costs a single ``add`` against the base.
-        new_node_keys = evoxc.add(
-            node_base, enp.arange(1, self._pop_size + 1, dtype=evoxc.int32)
+        new_node_keys = node_keys_for_split(
+            node_keys,
+            self.genome.key_span,
+            self.genome.max_nodes,
+            self.genome.max_node_key(state, node_keys),
         )
 
         if self.genome.conn_gene.uses_historical_marker:
