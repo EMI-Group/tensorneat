@@ -58,8 +58,8 @@ class BaseCrossover(StatefulBaseClass):
 
         Args:
             state (State): Immutable host configuration container.
-            genome ("BaseGenome"): Genome owning the gene objects, their ``key_width``s and
-                the ``crossover`` hooks.
+            genome ("BaseGenome"): Genome owning the gene objects, their ``key_width``
+                values and the ``crossover`` hooks.
             key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this call.
             node_keys1 (evoxc.SymbolicTensor): ``(P, N) int32`` node keys of parent 1
                 (fitter parent), ``I_INF`` padded.
