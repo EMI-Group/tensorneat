@@ -28,7 +28,7 @@ module-scoped fixtures, so the iree compile happens once.
 
 Run it:
 
-    uv sync --extra iree                  # or: uv pip install "evoxc[iree]"
+    uv sync --extra iree                  # without uv: the git-pinned pip form in the reason below
     pytest -q test/backends               # or: pytest -q -m requires_iree
 
 ``pytest.importorskip("iree")`` below is a structural optional-dependency skip,
@@ -53,8 +53,9 @@ pytest.importorskip(
     reason=(
         "structural optional-dependency skip: the compiled-backend suite needs "
         "the optional iree extra, which is not installed; install it with "
-        '`uv sync --extra iree` (equivalently `uv pip install "evoxc[iree]"`: '
-        "iree-base-compiler + iree-base-runtime). A default or whole-tree run "
+        '`uv sync --extra iree`; without uv, `pip install "evoxc[iree] @ '
+        'git+https://github.com/EMI-Group/evoxc@v0.1.1"` (the plain-PyPI wheel '
+        "is 0.1.0 and unsupported). A default or whole-tree run "
         "skips this module on purpose; an explicit `pytest -m requires_iree` run "
         "fails in ./conftest.py instead of skipping silently."
     ),
