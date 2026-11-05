@@ -4,8 +4,12 @@ What this module proves
 -----------------------
 The rewrite replaces the computation layer (``jax.jit``/``vmap``) with the EvoX
 Compiler, so *the package* — not the tests, not the benchmarks — has to be free
-of ``jax``, ``jaxlib``, ``torch``, ``brax``, ``gymnax`` and ``mujoco``. Four
-separate statements, from weakest to strongest:
+of ``jax``, ``jaxlib``, ``optax``, ``flax``, ``torch``, ``brax``, ``gymnax`` and
+``mujoco``. ``optax`` and ``flax`` are in the list because they are the training
+layers a JAX user would connect to a gradient-based NEAT rewrite first (this
+library keeps its batched gradient descent through evolved topologies), so they
+are the most plausible way for a JAX dependency to sneak back in behind the
+compiler. Four separate statements, from weakest to strongest:
 
 1. ``import tensorneat`` leaves every forbidden top-level module (and any
    submodule of one) out of ``sys.modules``.
@@ -37,10 +41,11 @@ test here is allowed to use.
 Current state: green
 --------------------
 ``src/tensorneat/pipeline.py`` is evoxc-native and ``import tensorneat`` succeeds
-without binding ``jax``/``torch``/``brax``/``gymnax``/``mujoco``, so every test
-here passes. Nothing here is skipped or xfailed — a skip would make the ratchet
-invisible — and every failure message carries the offending module list or the
-subprocess traceback, so it names what leaked or what raised.
+without binding any of ``jax``/``jaxlib``/``optax``/``flax``/``torch``/``brax``/
+``gymnax``/``mujoco``, so every test here passes. Nothing here is skipped or
+xfailed — a skip would make the ratchet invisible — and every failure message
+carries the offending module list or the subprocess traceback, so it names what
+leaked or what raised.
 
 No ``jax`` import happens in this module (the *subprocess script strings* may
 mention module names), there is no network and no fixture. The file is collected
@@ -70,8 +75,11 @@ PACKAGE_DIR = SRC_DIR / "tensorneat"
 #: Seconds a subprocess may take before the gate fails instead of hanging CI.
 TIMEOUT_S = 300
 
-#: Importing any of these (or a submodule of one) fails the gate.
-FORBIDDEN = ("jax", "jaxlib", "torch", "brax", "gymnax", "mujoco")
+#: Importing any of these (or a submodule of one) fails the gate. ``optax`` and
+#: ``flax`` sit beside ``jax`` because the training layer is where a JAX
+#: dependency would come back in; ``test/test_release_gate_surface.py`` imports
+#: this tuple rather than restating it.
+FORBIDDEN = ("jax", "jaxlib", "optax", "flax", "torch", "brax", "gymnax", "mujoco")
 
 #: The documented public surface, written as dotted paths so both the script and
 #: the assertion message come from this one list.
@@ -312,8 +320,10 @@ print("RUN=ok")
 
 
 def test_import_pulls_no_legacy_framework() -> None:
-    """Invariant: ``import tensorneat`` loads no JAX/torch/brax/gymnax/mujoco module.
+    """Invariant: ``import tensorneat`` loads no forbidden framework module.
 
+    The forbidden set is ``FORBIDDEN``: ``jax``, ``jaxlib``, ``optax``, ``flax``,
+    ``torch``, ``brax``, ``gymnax`` and ``mujoco``.
     Checked in a clean interpreter, so an import made anywhere else in the
     pytest session cannot mask the leak (a module already in ``sys.modules`` is
     never re-imported). The report covers submodules too: ``jax.numpy``
@@ -332,7 +342,7 @@ def test_import_pulls_no_legacy_framework() -> None:
 
 
 def test_import_is_guarded_by_an_import_hook() -> None:
-    """Invariant: ``import tensorneat`` succeeds with a finder that refuses JAX/torch/...
+    """Invariant: ``import tensorneat`` succeeds with a finder that refuses every forbidden module.
 
     The module-list check above can only see imports that already happened. A
     *deferred* import — one that fires on first use, inside a function — passes
