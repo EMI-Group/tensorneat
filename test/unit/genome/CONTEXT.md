@@ -64,7 +64,7 @@ Whole node: 117 passed in ≈9 s on the numpy backend, with about one `evoxc.bui
 The guard in `test/unit/conftest.py` is the test-side counterpart of `test/release_gate_no_jax.py`: it freezes a session baseline at session start and records every import statement of `jax`/`jaxlib`/`torch`/`brax`/`gymnax`/`mujoco`, attributed to the file that executed it.
 It therefore catches any import of an optional framework executed from `test/unit/**`, whether at module scope or inside a test body.
 It excuses the imports originating in `src/` or in `pytest.importorskip`.
-`pytest.mark.slow` is reserved for the oversized-population cases; the default gate is `pytest -m "not parity and not slow"`.
+No test here carries a `slow` marker, including `test_distance_digest.py`'s pop-100, two-generation XOR fixture, so the whole node runs in the default gate (`pytest -m "not parity and not slow"`).
 
 ## Notes for Agents
 `hash` is an **in-graph** kernel (no `state`, returns a symbolic `(P,) uint32`, traced via `runner.run_defn`), although `src/tensorneat/genome/CONTEXT.md` still lists it among the host-only helpers — trust the code.
