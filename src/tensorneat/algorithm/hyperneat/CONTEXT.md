@@ -23,7 +23,7 @@ Subclass hooks used by the feedforward variant: class attrs `_genome_cls` (execu
 `SubstrateSchedule(NamedTuple)` = `(schedule, node_keys, node_attrs, conn_keys, conn_attrs)`: the substrate genome's `Transformed` **plus** the dense gene payload it executes.
 It exists because `genome.forward` needs the payload while the algorithm protocol carries exactly one `transformed` object through `problem.evaluate`; the base protocol's `transform -> schedule` return alone cannot express it.
 Every leaf of the container keeps the population on axis 0, so `problem.static_batch_size` and any `evoxc.tree_map`/`tree_leaves` walk still see a plain batch-first pytree.
-Properties `level` and `overflow` delegate to `self.schedule`; `overflow` must stay, because the pipeline reads it to decide on an executable rebuild.
+Properties `level` and `overflow` delegate to `self.schedule`, but nothing in the tree reads them: `host_payload._schedule_overflow` takes the nested `getattr(transformed.schedule, "edge_overflow")` fallback, so both are convenience aliases for direct callers only.
 
 ## CPPN → Substrate Decode Algebra
 Static sizes: `P` = the **payload's** leading dimension — `neat.pop_size` during an evolution step, but any static batch is legal (`Pipeline.show` decodes one individual), because `transform` reads `P` off `pop.node_keys.shape[0]` rather than off the config; `Q = substrate.conns_cnt`, `N = substrate.nodes_cnt`, `I = substrate.num_inputs` (substrate inputs *including* the bias), `O = substrate.num_outputs`, `C = neat.num_inputs = substrate.query_coors.shape[1] = 2 * CD` (CPPN input width), `NA = node_gene.attr_width = 2` (the `aggregation` / `activation` option columns), `CK = conn_gene.key_width`, `CA = conn_gene.attr_width`, all fixed at construction.
