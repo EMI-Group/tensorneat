@@ -126,6 +126,8 @@ Traced ops are counted recursively over `module.functions[*].entry_block` and ev
 
 The pair's two trees differ only in the cycle predicate (127 → 81 traced ops), so the −46 is entirely key resolution; per-pair ratios are load-bearing and absolute milliseconds drift with the box load (this box is shared).
 The two columns of that table were counted by one script with one counter, which reads ~4 ops above the older `de943ca` figures for identical code (its own trace helper contributes ops), so compare inside a column and never across counters.
+Recurrent cells on this tree (same counter, `max_nodes=50` / `max_conns=100`, payload evolved by six mutation rounds from `initialize`, pop 1000): `RecurrentGenome` + `DefaultMutation` **452 traced ops / 16.3 ms** per call, with `RecurrentMutation(p_recur=0.0)` **481 / 20.5** (the region stays elided, so the +29 is the recurrent attempt tableau alone) and `RecurrentMutation(p_recur=0.1)` **570 / 23.1** (the +89 over `p_recur = 0.0` is the 81-op cycle predicate plus the `p_recur` draw and the must-cycle requirement).
+That same counter reads 532 on the feedforward pop-500 cell above (536 in the table), so it agrees to 4 ops and only same-counter comparisons are meaningful — quote these three rows rather than the pre-dense-table recurrent pairs recorded by the parent nodes.
 The frozen `de943ca` one-plan-per-call baseline of the four-stage refactor is 432 traced ops on its own counter, 127 of which were the cycle predicate.
 
 Per-stage traced ops at pop 500 (each row = that probability `1.0`, the other three `0.0`, cumulative with the base):
