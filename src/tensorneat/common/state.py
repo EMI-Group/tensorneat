@@ -17,7 +17,7 @@ batch-first convention (population on axis 0, static shapes, ``NaN`` = absent
 float, ``I_INF`` = absent int index).
 
 Error rule: a missing entry raises :class:`StateKeyError` from attribute access
-(an ``AttributeError`` for ``getattr``/``hasattr``/``copy``/``pickle`` that is
+(an ``AttributeError`` for ``getattr``/``hasattr``/``copy.deepcopy`` that is
 also a ``KeyError`` for the legacy catch sites) and the plain ``KeyError`` from
 ``state["missing"]``.
 """
@@ -34,19 +34,19 @@ class StateKeyError(AttributeError, KeyError):
 
     The dual base is deliberate, and each half has a concrete caller:
 
-    * ``AttributeError`` is what the object protocols around an instance's
-      namespace require: :func:`copy.deepcopy` probes ``__deepcopy__`` on the
-      instance with :func:`getattr` and reads a missing name (i.e. an
-      ``AttributeError``) as "no hook", :func:`copy.copy` and :mod:`pickle`
-      take the same answer from ``__copy__``/``__reduce_ex__``/``__setstate__``,
-      and the builtins :func:`getattr` (with a default) and :func:`hasattr`
-      swallow exactly this type. Only an ``AttributeError`` is absorbed, so any
-      other type escapes out of ``copy.deepcopy`` and out of
-      ``getattr(state, "pop", None)`` -- the probe
-      ``Pipeline._shape_signature`` uses to reach its own "call setup() first"
-      ``TensorNEATError``.
+    * ``AttributeError`` is what the callers that do need it require.
+      :func:`copy.deepcopy` probes ``__deepcopy__`` on the *instance* with
+      :func:`getattr` and reads a missing name (i.e. an ``AttributeError``) as
+      "no hook"; the builtins :func:`getattr` (with a default) and
+      :func:`hasattr` swallow exactly this type; and
+      ``Pipeline._shape_signature``'s ``getattr(state, "pop", None)`` probe
+      (``pipeline.py``) reaches its own "call setup() first" ``TensorNEATError``
+      only while the miss is an ``AttributeError``. :func:`copy.copy` and
+      :mod:`pickle` are *not* a reason for the dual base: both already worked
+      with a bare ``KeyError``, because CPython resolves
+      ``__copy__``/``__reduce_ex__`` on the type, never on the instance.
     * ``KeyError`` is what the legacy catch sites expect -- in particular
-      ``Genome._read_pop_size`` in ``genome/base.py``, which wraps
+      ``Genome._resolve_pop_size`` in ``genome/base.py``, which wraps
       ``state.pop_size`` in ``except KeyError`` and raises its own
       ``TensorNEATError``; that file belongs to a sibling node and may not be
       edited, so the exception *class* (not the catch site) is what keeps both
@@ -125,11 +125,11 @@ class State:
         Raises:
             StateKeyError: If ``name`` is not a registered entry. It is both an
                 ``AttributeError`` -- so ``hasattr``, ``getattr(state, name,
-                default)``, ``copy.deepcopy`` and the pickle path treat a
-                missing entry as "absent" instead of crashing -- and a
-                ``KeyError``, so the legacy ``except KeyError`` around
-                ``state.pop_size`` in ``genome/base.py`` keeps raising its own
-                error; see :class:`StateKeyError` for the full rationale.
+                default)`` and ``copy.deepcopy`` treat a missing entry as
+                "absent" instead of crashing -- and a ``KeyError``, so the
+                legacy ``except KeyError`` around ``state.pop_size`` in
+                ``genome/base.py`` keeps raising its own error; see
+                :class:`StateKeyError` for the full rationale.
                 Consequence: ``hasattr`` answers ``False`` for a typo instead
                 of propagating the failure.
 

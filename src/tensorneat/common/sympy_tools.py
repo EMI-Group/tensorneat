@@ -145,16 +145,21 @@ def replace_variable_names(expression, mode):
 class _NumPySourcePrinter(NumPyPrinter):
     """Render a sympy expression as runnable NumPy source using the ``np`` alias.
 
-    ``sympy``'s stock :class:`~sympy.printing.numpy.NumPyPrinter` is *almost*
-    what is needed, but three of its spellings are unusable in a snippet that
-    must simply be ``exec``-ed:
+    ``sympy``'s stock :class:`~sympy.printing.numpy.NumPyPrinter` is not
+    directly usable in a snippet that must simply be ``exec``-ed, for two
+    reasons:
 
-    * ``Max``/``Min`` print as ``functools.reduce(numpy.maximum, [...])``;
-    * ``Abs`` prints as the builtin ``abs`` (fine for scalars, wrong name in a
-      NumPy snippet that binds only ``np``);
-    * ``Piecewise`` prints as ``numpy.select(...)`` and an unknown
-      ``sp.Function`` prints as a bare ``SympyClip(...)`` call, which is an
-      undefined name in the emitted source.
+    * ``Max``/``Min`` print as ``functools.reduce(numpy.maximum, [...])``,
+      which is a ``NameError`` in a snippet that binds only ``np``;
+    * an unregistered ``sp.Function`` prints as a bare ``SympyClip(...)`` call
+      (sympy's strict mode raises instead), which is an undefined name in the
+      emitted source.
+
+    Stock ``Abs``/``Piecewise`` are *not* broken -- ``Abs`` prints as the
+    builtin ``abs(...)`` and ``Piecewise`` as
+    ``numpy.select([...], [...], default=...)``, both of which ``exec`` fine --
+    they are overridden anyway so that the emitted source is uniformly
+    ``np``-aliased and evaluates eagerly through ``np.where``.
 
     Every other node kind (arithmetic, powers, relationals, the known sympy
     functions) is left to sympy and then normalised to the ``np`` alias.
@@ -431,6 +436,19 @@ def to_python_code(
     A sympy function NumPy does not provide raises
     :class:`~tensorneat.common.errors.ConfigError` instead of emitting a bare
     undefined name.
+
+    Only rendering precision is reproduced, not the network bit-exactly: every
+    emitted constant and weight is rounded by ``round_expr(..., 6)``, so the
+    snippet matches the graph forward to within that rounding — measured up to
+    ~2.5e-5 absolute / ~4.7e-4 relative on an ``inv``-dominated genome, and
+    float32 round-off (~1e-7) when the rounding is bypassed.
+
+    When ``input_symbols`` is empty, the fallback header collects the ``i<k>``
+    symbols from the expressions *before* the ``args_symbols``/``norm_symbols``
+    substitutions are applied, so a hand-built 8-tuple whose node expressions
+    carry only argument symbols can miss the binding header while the body
+    still references ``i[k]``; pass ``input_symbols`` explicitly when
+    hand-building the 8-tuple.
 
     Args:
         symbols (dict): Node index → sympy symbol (the genome's node ordering).
