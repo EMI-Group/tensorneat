@@ -49,8 +49,9 @@ With `acyclic=True` the cycle-detection relaxation, its in-graph test and the `e
   The same helper refuses `None`, a non-four-field payload, a `P > 1` batch (with the slice recipe) and fields that disagree about the spelling, so the two public helpers (`Pipeline.show` via `host_payload._one_individual` and these two) agree on what one genome is.
   `_split_payload` (`base.py`) still enforces batch-first for every compute entry point.
   A `P > 1` batch raises `ConfigError` telling the caller to slice (`GenomeTensors(*(a[i:i+1] for a in payload))`; there is no `payload.of(i)`).
-- `hash` is **in-graph** (evoxc ops on `SymbolicTensor`, returns `(P,) uint32`), not host-only, and nothing in `src/` calls it — only `test/unit/genome/test_host_helpers.py`, so it is a public kernel with test-only coverage and no backend (iree) coverage.
-  Its `uint32` result contradicts the repo's "no unsigned dtypes" portability rule, and its `HASH_QUANT_SCALE` docstring claim that float attributes "are clipped to ±5" (`host.py:24-25`) is false for the shipped `DefaultConn` (`lower_bound=None`/`upper_bound=None`, unclipped), so an attribute of magnitude above ~2.1e3 would overflow the `cast(..., int32)` in `_row_hashes`.
+- `hash` is **host-only numpy** (`(P,) np.uint32`), the xor-fold of `common.tools.hash_rows` over each gene family's key rows and its quantised attribute rows (`rint(attrs * HASH_QUANT_SCALE)`, NaN → `0`), folded across rows so padding that sits on other rows hashes equal.
+  It emits no evoxc op and therefore no unsigned dtype, and a payload whose leaves are `SymbolicTensor`s is refused with a `TensorNEATError` naming that: in-graph gene identity is the key columns plus `evoxc.equal`.
+  `HASH_QUANT_SCALE` (1e6) reaches the `int32` range at `|attr| ≈ 2147.48` and wraps beyond it, so the hash is a heuristic de-duplication key, never an identity test anywhere.
 `GenomeTensors` is a namedtuple-like pytree of exactly the four payload arrays, always taken and returned by field.
 Structural mutation keys (`new_node_keys`, `new_conn_keys`) are **allocated by the caller** (globally unique across the population) and passed in as int32 tensors — they are not RNG draws.
 ## Execution schedule (`Transformed`, owned by `../common/tensorization.py`)
