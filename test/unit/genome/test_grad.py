@@ -68,6 +68,7 @@ Backend is ``"numpy"`` throughout, through the shared runner only; no
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 
 #: Static geometry of the hand-built networks below: two inputs, three hidden
@@ -232,6 +233,57 @@ def _central_difference(
         tensor[individual, row, column] = original
     plus, minus = shifted
     return (plus - minus) / (2 * step)
+
+
+def _compare_with_finite_differences(
+    payloads, run_forward, genome_object, state, payload, transformed, inputs,
+    node_grad, conn_grad,
+):
+    """Assert every present attribute entry equals its central difference, per member.
+
+    Reference: the plain ``forward`` (never the gradient path), one entry at a time at
+    ``rtol=0``/``atol=FD_TOLERANCE``; each differentiated entry must also be *not*
+    approximately zero, so two zeros cannot pass, while an input row — seeded, not
+    computed — must be exactly ``0`` on both sides. Returns the largest difference seen.
+    """
+    nodes = [r for r in range(payload.max_nodes) if payload.node_keys[0, r] != payloads.I_INF]
+    conns = [r for r in range(payload.max_conns) if payload.conn_keys[0, r, 0] != payloads.I_INF]
+    cases = [("conn_attrs", row, 0) for row in conns] + [
+        ("node_attrs", row, column) for row in nodes for column in (0, 1)
+    ]
+    worst = 0.0
+    for member in range(payload.pop_size):
+        for field, row, column in cases:
+            measured = float(
+                (conn_grad if field == "conn_attrs" else node_grad)[member, row, column]
+            )
+            fd = float(
+                _central_difference(
+                    payload, run_forward, genome_object, state, transformed, inputs,
+                    field, row, column, individual=member,
+                )[member]
+            )
+            np.testing.assert_allclose(
+                measured, fd, rtol=0.0, atol=FD_TOLERANCE,
+                err_msg=f"individual {member}, {field} row {row}, column {column}",
+            )
+            if field == "node_attrs" and row < NUM_INPUTS:
+                assert measured == 0.0 and fd == 0.0  # seeded, not computed
+            else:
+                assert abs(measured) > FD_TOLERANCE, f"{field} {row}/{column} is ~0"
+                worst = max(worst, abs(measured - fd))
+    return worst
+
+
+def _expect_raises(error, fragment, call):
+    """Assert ``call()`` raises ``error`` whose message contains ``fragment`` verbatim.
+
+    The fragment is a distinctive part of the documented message, never the exception type
+    alone, so a refusal that moved to another check fails here.
+    """
+    with pytest.raises(error) as info:
+        call()
+    assert fragment in str(info.value), f"{fragment!r} not in {info.value}"
 
 
 # --------------------------------------------------------------------------- #
@@ -700,3 +752,312 @@ def test_scalarized_loss_leaves_per_individual_gradients_unchanged(
         tuple(np.round(conn_grad[member, :, 0], 6)) for member in range(pop_size)
     }
     assert len(distinct) == pop_size
+
+
+# --------------------------------------------------------------------------- #
+# grad_from_payload: the host-only wrapper, its refusals, and dense_grad_plan's
+# --------------------------------------------------------------------------- #
+
+
+def test_grad_from_payload_matches_finite_differences_for_one_individual(
+    payloads, run_forward, run_transform
+):
+    """Invariant: the host wrapper returns the same derivatives as ``grad`` for ``P == 1``.
+
+    Oracle: central differences of the loss through the *plain* ``forward``, entry by
+    entry. The wrapper derives its own schedule from the payload, then builds, compiles and
+    runs the gradient graph, so a schedule that disagreed with ``transform`` would put a
+    weight on another ``(destination, source)`` cell and fail here.
+    """
+    genome_object, state, payload, transformed = _chain(payloads, run_transform)
+    inputs = np.array([[0.4, -0.9]], dtype=np.float32)
+
+    node_grad, conn_grad = genome_object.grad_from_payload(
+        state, payload.args(), inputs, _loss
+    )
+
+    assert type(node_grad) is np.ndarray and type(conn_grad) is np.ndarray
+    assert node_grad.shape == payload.node_attrs.shape
+    assert conn_grad.shape == payload.conn_attrs.shape
+    assert node_grad.dtype == conn_grad.dtype == np.float32
+
+    worst = _compare_with_finite_differences(
+        payloads, run_forward, genome_object, state, payload, transformed, inputs,
+        node_grad, conn_grad,
+    )
+    assert worst < FD_TOLERANCE  # the headroom the float32 pair left
+
+
+def test_grad_from_payload_matches_finite_differences_for_a_batch(
+    payloads, runner, run_forward, run_transform
+):
+    """Invariant: on distinct members the wrapper stays per-individual, never a broadcast.
+
+    Oracle: (a) bit equality with the two-step recipe (the fixture's ``transform`` plus
+    ``genome.grad``), since the wrapper derives the schedule from the payload itself; (b)
+    central differences of the plain ``forward`` per member, which a gradient leaking
+    across the population axis would fail. The three members differ in weights, biases and
+    inputs, and their gradient rows are asserted pairwise distinct.
+    """
+    pop_size = 3
+    genome_object, state, payload, transformed = _chain(
+        payloads, run_transform, pop_size=pop_size
+    )
+    payload.conn_attrs[:, : len(CHAIN_WEIGHTS), 0] *= np.array(
+        [1.0, 1.1, 1.2], dtype=np.float32
+    )[:, None]
+    payload.node_attrs[:, 2:, 0] += np.array([0.0, 0.05, 0.1], dtype=np.float32)[:, None]
+    inputs = np.array([[0.3, -0.4], [-0.2, 0.5], [0.5, 0.2]], dtype=np.float32)
+
+    pair_node, pair_conn = _run_grad(
+        runner, genome_object, state, payload, transformed, inputs
+    )
+    node_grad, conn_grad = genome_object.grad_from_payload(
+        state, payload.args(), inputs, _loss
+    )
+
+    assert np.array_equal(node_grad, pair_node)
+    assert np.array_equal(conn_grad, pair_conn)
+    _compare_with_finite_differences(
+        payloads, run_forward, genome_object, state, payload, transformed, inputs,
+        node_grad, conn_grad,
+    )
+    # three different objectives: a broadcast along the population axis collapses these
+    weights = {tuple(np.round(conn_grad[p, :, 0], 6)) for p in range(pop_size)}
+    nodes = {tuple(np.round(node_grad[p, 2:, :2], 6).ravel()) for p in range(pop_size)}
+    assert len(weights) == pop_size and len(nodes) == pop_size
+
+
+def test_grad_from_payload_padding_gradients_are_exactly_zero(payloads):
+    """Invariant: the wrapper's padding rows gradient to exactly ``0``, in every member.
+
+    Oracle: the padding mask against ``np.zeros_like`` *exactly* (never ``allclose``), on a
+    payload whose node rows 5 and 6 and connection rows 5..7 are absent while a live chain
+    reads out at row 7 (the row/key invariant puts an output row at ``max_nodes - 1``).
+    The present rows are asserted nonzero, so the zeros can only come from the mask.
+    """
+    genome_object = payloads.default_genome(
+        num_inputs=NUM_INPUTS, num_outputs=NUM_OUTPUTS, max_nodes=8, max_conns=8,
+        max_in_degree=4,
+    )
+    state = payloads.genome_state(genome_object)
+    payload = payloads.new_payload(pop_size=2, max_nodes=8, max_conns=8)
+    attrs = {2: (0.1, 1.0), 3: (-0.2, 0.9), 4: (0.15, 1.1), 7: (0.05, 1.0)}
+    edges = [(0, 2), (1, 2), (2, 3), (3, 4), (4, 7)]
+    for p in range(payload.pop_size):
+        payloads.set_node(payload, p, 0, 0)
+        payloads.set_node(payload, p, 1, 1)
+        for row, (bias, response) in attrs.items():
+            payloads.set_node(payload, p, row, row, attrs=(bias, response, 0.0, IDENTITY))
+        for row, (source, target) in enumerate(edges):
+            payloads.set_conn(payload, p, row, source, target, attrs=(CHAIN_WEIGHTS[row],))
+
+    node_grad, conn_grad = genome_object.grad_from_payload(
+        state, payload.args(), np.array([[0.4, -0.9], [0.2, 0.3]], np.float32), _loss
+    )
+
+    rows = np.arange(payload.max_nodes)
+    for member in range(payload.pop_size):
+        absent_nodes = payload.node_keys[member] == payloads.I_INF
+        absent_conns = payload.conn_keys[member, :, 0] == payloads.I_INF
+        assert absent_nodes.any() and absent_conns.any()
+        np.testing.assert_array_equal(
+            node_grad[member, absent_nodes], np.zeros_like(node_grad[member, absent_nodes])
+        )
+        np.testing.assert_array_equal(
+            conn_grad[member, absent_conns], np.zeros_like(conn_grad[member, absent_conns])
+        )
+        assert np.all(conn_grad[member, ~absent_conns, 0] != 0.0)
+        assert np.all(node_grad[member, (rows >= NUM_INPUTS) & ~absent_nodes, :2] != 0.0)
+
+
+def test_grad_from_payload_rejects_bare_per_individual_rows(
+    payloads, common, run_transform
+):
+    """Invariant: only the batch-first spelling is accepted, never the bare rows.
+
+    Oracle: the documented ``TensorNEATError`` naming the spelling (``must be
+    batch-first``); a checkpoint stores the bare rows, so accepting them would read an
+    ``(N,)`` key row as ``N`` individuals.
+    """
+    genome_object, state, payload, _ = _chain(payloads, run_transform)
+    bare = tuple(array[0] for array in payload.args())
+
+    _expect_raises(
+        common.TensorNEATError, "must be batch-first",
+        lambda: genome_object.grad_from_payload(
+            state, bare, np.array([[0.4, -0.9]], np.float32), _loss
+        ),
+    )
+
+
+def test_grad_from_payload_rejects_inputs_with_the_wrong_row_count(
+    payloads, common, run_transform
+):
+    """Invariant: ``inputs`` must carry one row per individual.
+
+    Oracle: the documented ``TensorNEATError`` naming the counts (``one input row per
+    individual``); the wrapper cannot broadcast an input row.
+    """
+    genome_object, state, payload, _ = _chain(payloads, run_transform, pop_size=2)
+    wrong = np.zeros((3, NUM_INPUTS), dtype=np.float32)
+
+    _expect_raises(
+        common.TensorNEATError, "one input row per individual",
+        lambda: genome_object.grad_from_payload(state, payload.args(), wrong, _loss),
+    )
+
+
+def test_grad_from_payload_rejects_a_traced_payload_leaf(
+    payloads, common, genome, runner, run_transform
+):
+    """Invariant: the helper is host-only and refuses a traced ``SymbolicTensor``.
+
+    Oracle: the documented ``TensorNEATError`` containing ``host-only``, reached by calling
+    the helper inside an active trace, where building and running another executable is
+    exactly what it must refuse.
+    """
+    genome_object, state, payload, _ = _chain(payloads, run_transform)
+    inputs = np.array([[0.4, -0.9]], dtype=np.float32)
+
+    def traced(*arrays):
+        """Call the host-only helper from inside a trace: it must refuse."""
+        return genome_object.grad_from_payload(
+            state, genome.GenomeTensors(*arrays), inputs, _loss
+        )
+
+    _expect_raises(
+        common.TensorNEATError, "host-only", lambda: runner.run_defn(traced, *payload.args())
+    )
+
+
+def _expect_grad_refusal(
+    payloads, run_transform, genome_object, error, fragment, payload=None
+):
+    """Assert ``grad`` refuses ``payload`` (default: the chain) of ``genome_object``.
+
+    Returns:
+        ``(state, payload, transformed)`` of the refused call.
+    """
+    state = payloads.genome_state(genome_object)
+    if payload is None:
+        payload = payloads.chain_payload(
+            pop_size=1, max_nodes=MAX_NODES, max_conns=MAX_CONNS,
+            num_inputs=NUM_INPUTS, num_outputs=NUM_OUTPUTS,
+        )
+    transformed = run_transform(genome_object, state, payload)
+    inputs = np.array([[0.4, -0.9]], dtype=np.float32)
+    _expect_raises(
+        error, fragment,
+        lambda: genome_object.grad(state, transformed, *payload.args(), inputs, _loss),
+    )
+    return state, payload, transformed
+
+
+def test_grad_rejects_a_recurrent_genome(payloads, common, run_transform):
+    """Invariant: a non-feedforward genome cannot use the dense gradient pass.
+
+    Oracle: the documented ``ConfigError`` naming the sweep (``level-synchronous``); a
+    recurrent ring has no finite node level for the level loop to follow.
+    """
+    _expect_grad_refusal(
+        payloads, run_transform, payloads.recurrent_genome(), common.ConfigError,
+        "level-synchronous", payload=payloads.ring_payload(pop_size=1),
+    )
+
+
+def test_grad_rejects_a_node_gene_without_a_single_sum_or_mean_aggregation(
+    payloads, common, genome, run_transform
+):
+    """Invariant: only a one-option ``AGG.sum``/``AGG.mean`` node gene is differentiable.
+
+    Oracle: the documented ``ConfigError`` naming the options (``AGG.sum and AGG.mean``),
+    for a gene configured with *both*: the traced pass selects one aggregation per node,
+    while the dense matrix carries a single ``dot``, so two options would drop the choice.
+    """
+    genome_object = genome.DefaultGenome(
+        num_inputs=NUM_INPUTS, num_outputs=NUM_OUTPUTS, max_nodes=MAX_NODES,
+        max_conns=MAX_CONNS, max_in_degree=4,
+        node_gene=genome.DefaultNode(
+            aggregation_options=[common.AGG.sum, common.AGG.mean]
+        ),
+    )
+    _expect_grad_refusal(
+        payloads, run_transform, genome_object, common.ConfigError, "AGG.sum and AGG.mean"
+    )
+
+
+def test_grad_rejects_a_connection_gene_without_a_weight_column(
+    payloads, common, genome, run_transform
+):
+    """Invariant: the dense weight matrix is built from the declared ``weight`` column.
+
+    Oracle: the documented ``ConfigError`` naming that column (``weight' column``), for a
+    family whose only attribute column is called ``gain``.
+    """
+
+    class GainConn(genome.DefaultConn):
+        """A connection gene whose attribute column is ``gain`` instead of ``weight``."""
+
+        def __init__(self):
+            super().__init__()
+            self.attr_specs = (genome.GeneAttr(name="gain", kind="float"),)
+
+    genome_object = genome.DefaultGenome(
+        num_inputs=NUM_INPUTS, num_outputs=NUM_OUTPUTS, max_nodes=MAX_NODES,
+        max_conns=MAX_CONNS, max_in_degree=4, conn_gene=GainConn(),
+    )
+    _expect_grad_refusal(
+        payloads, run_transform, genome_object, common.ConfigError, "weight' column"
+    )
+
+
+def test_grad_rejects_two_connections_with_the_same_endpoints(
+    payloads, common, run_transform
+):
+    """Invariant: one weight per ``(destination, source)`` cell, or nothing.
+
+    Oracle: the documented ``ConfigError`` naming the collision (``same endpoints``). A
+    chain plus one extra row repeating ``0 -> 2`` with another weight is a topology a
+    scatter would silently resolve to whichever row it kept.
+    """
+    genome_object = payloads.default_genome(
+        num_inputs=NUM_INPUTS, num_outputs=NUM_OUTPUTS, max_nodes=MAX_NODES,
+        max_conns=MAX_CONNS + 2, max_in_degree=4,
+    )
+    payload = payloads.chain_payload(
+        pop_size=1, max_nodes=MAX_NODES, max_conns=MAX_CONNS + 2,
+        num_inputs=NUM_INPUTS, num_outputs=NUM_OUTPUTS,
+    )
+    payloads.set_conn(payload, 0, len(CHAIN_WEIGHTS), 0, 2, attrs=(0.7,))
+    _expect_grad_refusal(
+        payloads, run_transform, genome_object, common.ConfigError, "same endpoints",
+        payload=payload,
+    )
+
+
+def test_grad_rejects_an_edge_outside_every_incoming_window(
+    payloads, common, run_transform
+):
+    """Invariant: a window too narrow for an in-degree is a ``ShapeBoundError``, not a drop.
+
+    Oracle: the documented ``ShapeBoundError`` naming the bound (``outside every incoming
+    window``), plus the ``edge_overflow`` the same schedule reports. A lossy schedule is
+    legal (pinned in ``test_payload.py``); what is refused is differentiating an edge that
+    exists in the payload but in no window.
+    """
+    genome_object = payloads.default_genome(
+        num_inputs=NUM_INPUTS, num_outputs=NUM_OUTPUTS, max_nodes=8, max_conns=8,
+        max_in_degree=2,
+    )
+    payload = payloads.new_payload(pop_size=1, max_nodes=8, max_conns=8)
+    for row in (0, 1, 2, 7):
+        payloads.set_node(payload, 0, row, row)
+    payloads.set_conn(payload, 0, 0, 0, 7)  # three edges into node 7, window width 2
+    payloads.set_conn(payload, 0, 1, 2, 7)
+    payloads.set_conn(payload, 0, 2, 1, 7)
+    _, _, transformed = _expect_grad_refusal(
+        payloads, run_transform, genome_object, common.ShapeBoundError,
+        "outside every incoming window", payload=payload,
+    )
+    assert int(np.asarray(transformed.edge_overflow)[0]) == 1  # the schedule is lossy
