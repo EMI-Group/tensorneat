@@ -68,6 +68,17 @@ Pendulum and MountainCar have neither a reset knob nor a NaN census: NaN logits 
 `algorithm.NEAT` rejects `pop_size < species_size * min_species_size` (default `10 * 1`), so the arity cross-check builds it at `pop_size = 10`; a smaller population raises `TensorNEATError` before the arity can be read.
 `setup(state)` returns the same `State` and registers no keys; `setup(None)` starts from the same empty key set.
 
+## Known gaps (audit)
+`FuncFit.MAX_DATASET_NBYTES` / `validate_dataset` / `dataset_nbytes` and the `setup`/bake-time budget checks have no test anywhere under `test/`.
+`CustomFuncFit` grid generation is only tested on a 2-D box; 1-D/3-D grids and the oversized-grid rejection are not covered.
+The O=2 reduction is pinned for `mse` only; `rmse`/`mae`/`mape` over both axes are not.
+CartPole's default reset distribution is never bounded (only determinism/divergence), Pendulum's `_reset` is checked for shape/dtype only, and only MountainCar's reset interval is asserted independently.
+`Pendulum.show` and `MountainCar.show` are never called, and `FuncFit.show`'s `P > 1` `individual:` branch is untested.
+MountainCar's `_advance` force clip (`clip(action, -1, 1)`) is never reached with `|action| > 1`: the policies only emit `tanh` values and the hand-built rows pass actions in `[-1, 1]`.
+`test_prepared_rollout.py` pins the prepared pass at the CartPole call site only; the Pendulum/MountainCar `prepared_query` call sites are untested.
+The `BaseProblem` skeleton (`evaluate`/`input_shape`/`output_shape`/`show` raising `NotImplementedError`) and `_common.to_numpy`'s non-`evoxc.Tensor` branch are untested.
+`setup` is tested only on an empty `State` (the `state` fixture has no keys), so dropping or replacing registered keys cannot be detected.
+
 ## Conventions
 Nothing imports `tensorneat`, `support` or `evoxc` at module scope: `../conftest.py` prepends `src/`, `benchmarks/legacy_jax` and `test/` to `sys.path` at collection time, so every input is a `scope="module"` fixture that imports inside its body.
 Those imports are plain statements — the suite must never convert a broken or regressed module into a skip, so a green run here really executed every kernel it claims to.
