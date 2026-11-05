@@ -127,7 +127,8 @@ Files stay under ~1000 lines.
 | `./conftest.py` | Lazy legacy/new imports and the fixture set that builds one genome in both libraries. |
 | `./convert.py` | Column-layout conversion, `max_in_degree` and hidden-layer rules (plain Python, no libraries). |
 | `./test_convert.py` | Real tests of `convert.py`: layouts, round trip, rejections, layout rules (18). |
-| `./test_forward.py` | `forward` parity: values + NaN pattern on chains, skipped/isolated nodes, random DAGs, transforms, the lossless-schedule guard (12). |
+| `./test_forward.py` | `forward` parity: values + NaN pattern on chains, skipped/isolated nodes, random DAGs, matching output keys, transforms, the lossless-schedule guard (13). |
+| `./test_oracle_integrity.py` | Oracle independence (AST scan of the legacy tree, import-origin check), the four modules' collection guard, and the 60-test collected-count ratchet (6). |
 | `./test_distance.py` | `execute_distance` parity: exact `0`, `0.125`, `0.4`/`0.45`, batch-vs-pairwise, empty pair (5). |
 | `./test_fitness.py` | `problem.XOR`/`XOR3d` parity for the four `error_method` values + the NaN divergence (13). |
 | `./test_grad.py` | `grad` parity against `jax.grad` of the same loss, single-option ACT/AGG (5). |
