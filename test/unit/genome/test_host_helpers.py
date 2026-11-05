@@ -292,10 +292,107 @@ def test_network_dict_renumbers_hidden_keys_when_asked(genome, payloads):
     assert renumbered["useful_nodes"] == {0, 9, 7}
     assert set(renumbered["useful_nodes"]) <= set(renumbered["nodes"])
 
-    # Renumbering is idempotent for the caller and never rewrites the payload.
-    assert g.network_dict(state, individual) == renumbered
+    # Renumbering is idempotent: the renumbered keys are themselves contiguous above
+    # ``max(input, output)``, so a payload that already carries them is a fixed point
+    # of the same walk (a second pass cannot renumber again). The comparison is
+    # between two *different* payloads — the original hidden keys 20/41 and the
+    # renumbered 8/9 — so a helper that only renumbered once by accident would fail.
+    already = payloads.new_payload()
+    for row, key in ((0, 0), (1, 1), (2, 8), (3, 9), (7, 7)):
+        payloads.set_node(already, 0, row, key)
+    payloads.set_conn(already, 0, 0, 0, 8)
+    payloads.set_conn(already, 0, 1, 1, 8)
+    payloads.set_conn(already, 0, 2, 0, 9)
+    payloads.set_conn(already, 0, 3, 9, 7)
+    assert already.node_keys[0, 2] == 8 and already.node_keys[0, 3] == 9
+    assert g.network_dict(state, genome.GenomeTensors(*already.args())) == renumbered
+
+    # ... and the walk never rewrites the payload it was handed.
     assert np.array_equal(payload.node_keys, node_keys_before)
     assert np.array_equal(payload.conn_keys, conn_keys_before)
+
+
+def test_network_dict_and_repr_accept_both_one_individual_spellings(genome, payloads):
+    """Invariant: the ``(1, ...)`` batch and the bare per-individual rows render identically.
+
+    Oracle: the two documented spellings name the same individual — the batch's
+    leading population axis of one row is a container, not data — so every host walk
+    must return the same dict (both renumbering branches) and the same string for
+    either spelling, and the rendered counts must equal the payload's own gene mask.
+    ``Pipeline.auto_run`` hands the helpers a one-individual batch and a checkpoint
+    stores bare rows, so both spellings reaching the same genes is the contract, not
+    a convenience: a helper that walked the wrong axis would either raise or describe
+    ``max_nodes`` "individuals".
+    """
+    g = payloads.default_genome(
+        num_inputs=2, num_outputs=1, max_nodes=8, max_conns=16, max_in_degree=4
+    )
+    state = payloads.genome_state(g)
+    payload = payloads.skip_payload()
+    batch = genome.GenomeTensors(*payload.args())
+    bare = genome.GenomeTensors(*(array[0] for array in payload.args()))
+    assert batch.node_keys.ndim == 2 and batch.node_keys.shape[0] == 1
+    assert bare.node_keys.ndim == 1
+
+    for renumber in (True, False):
+        batched = g.network_dict(state, batch, whether_re_cound_idx=renumber)
+        rows = g.network_dict(state, bare, whether_re_cound_idx=renumber)
+        assert batched == rows
+        # Non-degenerate: the walk found the payload's genes, not an empty graph. The
+        # verbatim branch is the payload's own key set; the renumbering branch renames
+        # the hidden keys above the interface (that is its subject elsewhere), so only
+        # the gene *count* and the untouched input/output keys are shared.
+        assert batched["nodes"] and batched["conns"]
+        assert batched["topo_order"] and batched["useful_nodes"]
+        verbatim_keys = {
+            int(key) for key in payload.node_keys[0] if int(key) != payloads.I_INF
+        }
+        if renumber:
+            assert len(batched["nodes"]) == len(verbatim_keys)
+            assert {0, 1, *g.get_output_idx()} <= set(batched["nodes"])
+        else:
+            assert set(batched["nodes"]) == verbatim_keys
+
+    # The rendered text is identical for both spellings, and its counted header is
+    # the payload's own mask — so a helper that read the population axis as the gene
+    # axis would print the wrong count (or 16 "individuals").
+    batched_text = g.repr(state, batch)
+    assert batched_text == g.repr(state, bare)
+    present_nodes = int((payload.node_keys[0] != payloads.I_INF).sum())
+    present_conns = int((payload.conn_keys[0, :, 0] != payloads.I_INF).sum())
+    assert batched_text.startswith(
+        f"DefaultGenome(nodes={present_nodes}, conns={present_conns}):"
+    )
+    assert len(batched_text.splitlines()) == 1 + present_nodes + present_conns
+
+
+@pytest.mark.parametrize("helper", ["network_dict", "repr"])
+def test_one_individual_helpers_reject_a_batch_with_the_slicing_hint(
+    genome, common, payloads, helper
+):
+    """Invariant: ``P > 1`` is a usage error naming the fix, never a silent first row.
+
+    Oracle: the helpers' documented contract (``ConfigError``, a ``TensorNEATError``)
+    and its message, which must name the received population, the rule ("takes one
+    individual"), and the exact slicing expression to use — the caller of
+    ``network_dict``/``repr`` on ``state.pop`` hits this on every generation, so an
+    error that does not say *how* to slice sends them to the source.
+    """
+    g = payloads.default_genome(
+        num_inputs=2, num_outputs=1, max_nodes=8, max_conns=16, max_in_degree=4
+    )
+    state = payloads.genome_state(g)
+    batch = payloads.skip_payload(pop_size=3)
+
+    with pytest.raises(common.TensorNEATError) as caught:
+        getattr(g, helper)(state, genome.GenomeTensors(*batch.args()))
+
+    message = str(caught.value)
+    assert "takes one individual" in message
+    assert "slice it first" in message
+    assert "GenomeTensors(*(array[p : p + 1] for array in payload))" in message
+    # The population it reports is the tensor's, not a guess.
+    assert "holds 3 individuals" in message
 
 
 # --------------------------------------------------------------------------- #
