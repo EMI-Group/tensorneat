@@ -126,6 +126,8 @@ Two structural contracts keep the search from silently losing genes: every alloc
 `algorithm/neat/_kernels.py::pair_parents` pins elite slot k of a species block to that block's rank-k member, so a species never clones its champion into both elite slots.
 
 ## Known Issues / Notes for Agents
+`HyperNEAT`, `HyperNEATFeedForward` and every substrate class have **no functional test**: `test/release_gate_no_jax.py` only resolves their dotted names and the `examples/func_fit/xor_hyperneat*.py` scripts are the only execution, so their `_validate` raise paths, the substrate decode and `Pipeline.show` on a substrate schedule are unproven by the suite.
+`algorithm/neat/neat.py` (1031 lines) and `algorithm/neat/_kernels.py` (1004 lines) exceed the ~1000-line rule; `algorithm/CONTEXT.md` names them as exceptions with a cohesive split each (`tell`/diagnostics and `gated`+`speciate`), not yet done.
 `test/unit/genome/test_mutation.py` pins the per-operation structural contract — at most one change per operation, the four gates composing sequentially, refusals bit-exact no-ops — and is green on this tree; `genome/operations/mutation/CONTEXT.md` states the contract.
 `test/integration/` drives `Pipeline` end-to-end on the numpy backend (`setup`/`step`/`auto_run`, the batch-first best-genome payload, determinism per seed, one build per shape signature, checkpoint round-trip); `test/unit/` covers the kernels and `test/parity/` the legacy comparison, the latter needing the `bench` extra so its jax-dependent cases skip without it.
 `benchmarks/RESULTS.md` stays the generated pre-fix verdict described under `## Measured Cost`: only a full `run_benchmark.py` re-run replaces it, never a hand edit.
