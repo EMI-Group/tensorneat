@@ -42,7 +42,7 @@ The bias is the **last** substrate input, which is why `num_inputs` reports `sub
 The substrate schedule is at `P` rows, so a tiled `B = P * samples` query prepares the substrate genome's own sample axis; the CPPN query expansion (`_expand_schedule`, `samples=1`) happens once inside `HyperNEAT.transform`, not in either prepared method.
 The expansion row order is `p * Q + q` (individual slowest) and matches the `(P, Q, C) -> (P * Q, C)` reshape; changing one without the other silently permutes weights across connections.
 `neat.pop_batch_size` does not chunk this pass: the CPPN query is a single whole-population forward over the static `(P, Q, C)` grid, so peak memory scales with `P * conns_cnt`.
-A shape change (`pop_size`, `conns_cnt`, `nodes_cnt`, or a bound change) changes the traced graph, so the pipeline rebuilds the executable; nothing in this node caches per-shape state.
+A change to `pop_size`, `conns_cnt`/`nodes_cnt` or a `_static_bounds` value changes the traced graph, so the executable must be rebuilt; nothing in this node caches per-shape state, but `pipeline._shape_signature` keys only the CPPN's genome statics (`pop_size`, `max_nodes`, `max_conns`, `max_in_degree`, `max_depth`, `key_span`) and nothing substrate-derived, so a pipeline given a different substrate would silently reuse the stale executable — construct a new `Pipeline` after changing the substrate.
 
 ## Gene Contract (split payload, matching `genome/gene`)
 `HyperNEATNode(BaseNode)` declares `fixed_attrs = ("index",)` → `key_width == 1`, and `attr_specs = (GeneAttr("aggregation", kind="int", replace_rate=0.1, options=(0,)), GeneAttr("activation", kind="int", replace_rate=0.1, options=(0,)))` → `attr_width == 2`.
