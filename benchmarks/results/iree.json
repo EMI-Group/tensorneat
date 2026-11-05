@@ -355,7 +355,7 @@
     "json_path": "benchmarks/results/iree.json",
     "out_path": "benchmarks/iree.md",
     "report_title": "TensorNEAT benchmark \u2014 IREE backend attempt (llvm-cpu)",
-    "report_note": "Every case errors in `Pipeline.setup` before generation 0; see `BACKENDS.md` for the failure signature and the minimal reproducer. The measured CPU contract is `RESULTS.md` (numpy reference backend)."
+    "report_note": "Historical pre-fix record, superseded by `BACKENDS.md` \u2014 the current measured `iree` evidence, where the backend lowers, compiles and runs every shipped case. Every case below errored in `Pipeline.setup` before generation 0, so no row here is current. The measured CPU contract is `RESULTS.md` (numpy reference backend)."
   },
   "runs": [
     {

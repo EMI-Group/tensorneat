@@ -1,7 +1,7 @@
 # TensorNEAT benchmark — evoxc rewrite vs frozen JAX baseline
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from `benchmarks/results/authoritative.json` at 2026-11-04T19:01:27+00:00.
-> Re-rendered from that same JSON at 2026-11-05T02:25:22+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-05T04:48:30+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > It must not be hand-edited: rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *Pre-fix record, not a description of the merged tree: measured at `ebeaf1f8` on 2026-11-04, before the tiled-evaluate / RL-rollout-hoist performance pass (`90d97b4`) and before the search-quality fixes, so the new-side rows below are the pre-fix cost (pagie 3156.73 ms/gen and 4577.1 MiB) and the pre-fix convergence — `PERF_NUMPY.md` carries the post-fix case-scoped numbers and `results/xor3d_quality_2026-11-04.md` the post-fix quality record.*
@@ -354,7 +354,7 @@ python benchmarks/run_benchmark.py --list
 python benchmarks/run_benchmark.py --dry-run
 ```
 
-Interpreter used: .venv/bin/python
+Interpreter used: python
 
 Cases: xor_p100, xor_p500, xor_p1000, xor3d_p100, xor3d_p500, xor3d_p1000, custom_pagie_p500, cartpole_p100. Timed generations: 150, warmup generations (untimed): 3, repeats: 3 (seeds 42, 43, 44), threads: runtime defaults (`--threads 0`). Backend(s) of the new side: numpy; the old side always runs on JAX, once per case. `--out` defaults to `benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (scratch, git-ignored); the record this report was rendered from (`authoritative.json`) is committed at `benchmarks/results/authoritative.json` beside that default, so every table cell is traceable. A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
 
