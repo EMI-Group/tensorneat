@@ -6,7 +6,8 @@ It owns three things only: (1) **tensorization** of variable topology into fixed
 
 ## Kernel Contract (binding for all child nodes)
 **Batch-first.** The population is axis 0 and every shape is static at build time.
-Kernels are written already batched, with control flow only at their outermost level; `evoxc.vmap` is never applied to a kernel.
+Kernels are written already batched; `evoxc.vmap` is never applied to a kernel.
+Control flow may nest inside an `evoxc.scan` body when the inner controller is a `cond`/mask over statically built branches (no host control flow on a traced value), the nested form has been proven to compile on iree-llvm-cpu, and the numpy interpreter stays the reference — the shipped case is `algorithm/neat/_kernels.py::gated_row` inside its two speciation scans below `GATED_ROWS`.
 **Split gene payload.** `evoxc` has no bitcast/reinterpret op, so a mixed-dtype gene row is impossible: `node_keys (P,max_nodes) int32` + `node_attrs (P,max_nodes,A) float32`, `conn_keys (P,max_conns,2..3) int32` + `conn_attrs (P,max_conns,W) float32`. Absent rows are `I_INF` in key arrays and NaN in attr arrays. Mutation therefore twiddles int keys and float attrs separately.
 **Execution schedule.** `Genome.transform(state, *arrays)` accepts the four-array payload (or the two key arrays) and returns the `Transformed` pytree defined in `./common/CONTEXT.md` (authority: that table, not this one) — `in_src`/`in_conn`/`in_valid (P,N,K)`, `node_level`/`node_exists`, `input_slot`/`output_slot`, `edge_overflow (P,)`.
 `common/tensorization.py::derive_schedule` derives it **inside the graph** at cost `O(P·(C log C + N·K·D))` — never the legacy `max_nodes²` matrix.
