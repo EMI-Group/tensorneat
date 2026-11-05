@@ -70,6 +70,16 @@ Verified against the real legacy code: with that layer list the legacy forward o
 Legacy arrays are wrapped with `jnp.asarray` inside the fixtures: under JAX 0.12 the legacy forward indexes with a traced `lax.fori_loop` counter and raises `TracerArrayConversionError` on numpy input.
 `Transformed` / `GenomeTensors` namedtuples are passed **field by field** and rebuilt inside the traced closure, because the shared runner classifies only top-level numpy leaves as data.
 
+## Known coverage gaps (what parity cannot detect)
+Every usable payload has edges that point from a lower row/key to a higher one, so topological order coincides with row order and a schedule that used the row index as the level would pass every value comparison; no acyclic descending edge (`source key > target key`) is ever compared (chain/skip/isolated in `../../support/payloads.py`, and `./test_forward.py:233-247` draws ascending targets only; `ring_payload`'s `3->2` is cyclic and used for the overflow counter alone).
+`./test_fitness.py` only scores one-individual payloads (`P == 1`), so `FuncFit.evaluate`'s individual-major `(P * S, I)` tiling order is unobservable there — a transposed tiling would pass.
+Only `activation="sigmoid"` / `aggregation="sum"` are ever configured (`./conftest.py:86-87`), i.e. 1 of 12 ACTs and 1 of 6 AGGs, and `mape` is only ever compared as `-inf` because both datasets contain zero targets (`./test_fitness.py:86-89`), so a wrong finite `mape` magnitude has no oracle.
+`_assert_matches` compares values only where both sides are finite (`./test_forward.py:81-82`) and the five random-DAG cases never assert finiteness (`./test_forward.py:258`), so a case whose output row is unreachable compares NaN patterns only.
+Never parity-compared at all: `initialize`, mutation, crossover, `NEAT.tell`/speciation, the `Pipeline`, `RecurrentGenome`, HyperNEAT, the three RL problems, `network_dict`/`sympy_func`/`visualize`; `execute_distance` is the only genetic-operator kernel with an oracle.
+Parity runs on the numpy interpreter only (`../../support/runner.py` `DEFAULT_BACKEND`); a compiled backend's agreement with the oracle is inferred from its agreement with numpy (`../backends`).
+Without `jax` or `benchmarks/legacy_jax` the four oracle modules skip at module scope (`./test_forward.py:50`, `./test_distance.py:57`, `./test_fitness.py:49`, `./test_grad.py:58`, `./conftest.py:141-145`) and `pytest -m parity` exits 0 with `18 passed` — nothing asserts that 53 tests ran.
+`./test_convert.py:275-301`'s docstring claims `new_genome.get_output_idx() == legacy_genome.get_output_idx()`, but no test in this directory calls `get_output_idx`; the layout rule is only validated indirectly through forward values.
+
 ## Tolerances
 `forward` values — `np.allclose(rtol=1e-5, atol=1e-6)` on `float32`, **plus** `np.isnan(new) == np.isnan(old)` elementwise: `NaN` is data here, so a matching `NaN` is as binding as a matching number.
 `execute_distance` — `atol=1e-6` against the legacy kernel and against hand-computed closed forms; the identical-genome and empty-pair cases are asserted with exact `==` (`0` is the value speciation depends on).
