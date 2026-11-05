@@ -91,6 +91,7 @@ from .layout import (
     build_statics,
     dense_rows,
     dense_width,
+    order_positions,
 )
 
 #: Width of the side tag carried in the low bits of the composite sort key.
@@ -714,13 +715,11 @@ def measure_alignment(
     # ``order[i]`` is the merged index that sorts to position ``i``, so sorting the permutation
     # itself is its inverse: ``inverse[j]`` is the sorted position of merged index ``j`` — i.e.
     # of the centre gene that sits there (centre genes occupy merged columns ``count..2*count-1``).
-    # ``order`` is a permutation, so stability cannot change the inverse; it is only the
-    # cheaper sort on the reference interpreter (see the Notes).
-    position = evoxc.slice(
-        evoxc.cast(evoxc.argsort(order, axis=-1, stable=True), evoxc.int32),
-        (0, count),
-        (pop_size, count),
-    )
+    # ``order`` is a permutation, so stability cannot change the inverse.
+    # :func:`~.layout.order_positions` takes that inverse with one *values-only* ``sort`` of the
+    # encoded key ``order[i] * R + i`` instead of a second ``argsort``: ``argsort`` is four wide
+    # reduces in ``evoxc``'s count-mode emission, ``sort`` only one (see its Notes).
+    position = order_positions(order, count=count, statics=statics)
     offsets = statics.offsets
     # The trailing column is the merged block's maximum, so no centre gene sits at the last
     # position and ``position + 1 <= 2M`` holds for every one of them: the flat base is one
