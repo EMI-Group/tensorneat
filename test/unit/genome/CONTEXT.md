@@ -49,6 +49,16 @@ It excuses the imports originating in `src/` or in `pytest.importorskip`.
 `grad`'s loss should be written `residual * residual`: evoxc's `power` pullback emits `log(base)` regardless of exponent, so `residual ** 2` warns on negative residuals.
 Two support-layer changes would be welcome and are out of this node's scope: `runner.run_built(executable, *args)` (the run-only entry point the executable cache needs, so the cache can move into `test/support/` and serve the other unit suites) and public `runner.is_data`/`runner.split_args` (the cache currently mirrors the private split so its key can never be coarser than the `TensorSpec` that reaches `build`).
 
+## Known test gaps (crossover / distance)
+`test_crossover.py` writes the *same* genes for every row of the population axis (`_payload`), so no test can detect a cross-individual alignment collapse in crossover; `test_distance.py` and `test_distance_digest.py` do vary pairs within a batch.
+`test_crossover.py`'s "per-attribute 50/50" is only checked as elementwise membership in `{parent1, parent2}` with *identical* parent-2 rows per family, so a whole-gene pick, a wrongly-thresholded pick, or a neighbouring-row gather all pass; `gene/blocks.py::crossover_attrs` has no direct test.
+The two `(child == parent2).any()` assertions are draw-based and coupled to the internal RNG consumption order; a legitimate change to `BaseCrossover`'s key split can flip them.
+Connection-gene attribute values are never mapping-checked on homozygous rows (only the lonely row is), and `crossover.find_homologous` — the function the tests pin exactly — is not the function `__call__` uses (`align_gene_rows` → `alignment.homologous_pair`).
+`digest.node_oor`/`conn_oor` are only asserted zero on a payload with no out-of-range key, so a hard-coded zero passes; no fixture carries a key outside `key_span`.
+No assertion proves the dense single-centre route ran: if `dense.measure_centre` bailed, the "dense" and "merge" labels name the same merge and the bit-identity tests still pass.
+The digest's bit-identity rests on a *shared* scalar tail (`_scalar_distance`) and the same gene hook, so it proves alignment agreement only, not the formula.
+The node family's float attribute term (`|delta|` over bias/response) has no numeric oracle; only the connection weight and the activation int column are pinned.
+`test_distance_is_deterministic` replays one cached executable, not two independent builds.
 ## Routing Table
 No subdirectories — this node is a leaf.
 Read-only inputs: `../../../src/tensorneat/genome/` (code under test), `../../../src/tensorneat/common/tensorization.py` (`Transformed`), `../../support/` (payloads, oracle, runner).
