@@ -9,6 +9,9 @@ so the raising frame is under the test's control and no test depends on any
 current (or future) state of ``src/tensorneat``.
 The suite's own modules are never the subject: a `NotImplementedError` raised by
 test-support code is exactly the case that must stay a failure.
+A test that expects a raise or a clean import wraps its body in `_forbids_skip`,
+because an escaped `pytest.skip` would otherwise be *reported* as a skip instead
+of as the failure it is.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import importlib
 import sys
 import textwrap
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 
@@ -27,6 +31,22 @@ from support.lazy import require
 
 #: ``<repo>``, derived independently of the constant the module under test derives.
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@contextmanager
+def _forbids_skip() -> Iterator[None]:
+    """Turn a ``pytest.skip`` raised by the code under test into a failure.
+
+    ``pytest.skip.Exception`` derives from ``BaseException``, so it slips past
+    ``pytest.raises(NotImplementedError)`` and would report the test as *skipped*
+    — the very outcome these tests exist to forbid.
+    Every test that expects a raise or a successful import wraps its body in this
+    guard, so a wrongly converted skip is a red test, not a grey one.
+    """
+    try:
+        yield
+    except pytest.skip.Exception as exc:
+        pytest.fail(f"a skip escaped where a raise was required: {exc}")
 
 
 def _make_package(root: Path, package: str, body: str) -> Path:
@@ -81,7 +101,7 @@ def tmp_sys_path(tmp_path: Path) -> Iterator[Path]:
 
 
 def test_library_dir_is_derived_from_this_file() -> None:
-    """Invariant: ``LIBRARY_DIR`` is the package under test, not a hardcoded absolute path.
+    """Invariant: ``LIBRARY_DIR`` is derived from this file's location, not a fixed absolute path.
 
     Oracle: ``Path(__file__).resolve().parents[2] / "src" / "tensorneat"``, built
     here without calling the module.
@@ -116,14 +136,15 @@ def test_default_mode_propagates_not_implemented_error(tmp_sys_path: Path) -> No
     ``Skipped``), and the message is the one the module raised.
     """
     _make_package(tmp_sys_path, "pending_default", 'raise NotImplementedError("still pending")\n')
-    with pytest.raises(NotImplementedError, match="still pending"):
-        require("pending_default.mod")
+    with _forbids_skip():
+        with pytest.raises(NotImplementedError, match="still pending"):
+            require("pending_default.mod")
 
 
 def test_allow_pending_skips_and_names_module_file_line_and_function(
     tmp_sys_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Invariant: an opted-in pending implementation in the library under test is a diagnosable skip.
+    """Invariant: an opted-in pending implementation inside the library is a diagnosable skip.
 
     Oracle: a temporary package patched in as ``LIBRARY_DIR`` whose ``mod.py``
     raises ``NotImplementedError`` on its first line, in the module body
@@ -164,8 +185,9 @@ def test_allow_pending_still_propagates_outside_the_library(tmp_sys_path: Path) 
     )
     assert not (directory / "mod.py").resolve().is_relative_to(lazy.LIBRARY_DIR)
 
-    with pytest.raises(NotImplementedError, match="support-side pending"):
-        require("pending_outside.mod", allow_pending=True)
+    with _forbids_skip():
+        with pytest.raises(NotImplementedError, match="support-side pending"):
+            require("pending_outside.mod", allow_pending=True)
 
 
 @pytest.mark.parametrize("allow_pending", [False, True])
@@ -178,14 +200,15 @@ def test_missing_module_raises_import_error(allow_pending: bool) -> None:
     rather than skipping — a missing module is a broken package, not an unfinished
     one.
     """
-    with pytest.raises(ImportError):
-        require("tensorneat_support_absent_module_xyz", allow_pending=allow_pending)
+    with _forbids_skip():
+        with pytest.raises(ImportError):
+            require("tensorneat_support_absent_module_xyz", allow_pending=allow_pending)
 
 
 def test_allow_pending_propagates_import_error_from_the_library(
     tmp_sys_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Invariant: only ``NotImplementedError`` is convertible — an ``ImportError`` inside the library is a bug.
+    """Invariant: only ``NotImplementedError`` converts — an in-library ``ImportError`` is a bug.
 
     Oracle: a temporary package patched in as ``LIBRARY_DIR`` whose module body
     raises ``ImportError``.
@@ -198,8 +221,9 @@ def test_allow_pending_propagates_import_error_from_the_library(
     )
     monkeypatch.setattr(lazy, "LIBRARY_DIR", directory)
 
-    with pytest.raises(ImportError, match="broken dependency"):
-        require("broken_in_library.mod", allow_pending=True)
+    with _forbids_skip():
+        with pytest.raises(ImportError, match="broken dependency"):
+            require("broken_in_library.mod", allow_pending=True)
 
 
 def test_healthy_module_imports_and_is_the_cached_module() -> None:
@@ -212,7 +236,8 @@ def test_healthy_module_imports_and_is_the_cached_module() -> None:
     equal) to what ``importlib.import_module`` returns, and a second call returns
     that same object, so callers can rely on module identity and module state.
     """
-    module = require("support.payloads", allow_pending=True)
-    assert isinstance(module, ModuleType)
-    assert module is importlib.import_module("support.payloads")
-    assert require("support.payloads") is module
+    with _forbids_skip():
+        module = require("support.payloads", allow_pending=True)
+        assert isinstance(module, ModuleType)
+        assert module is importlib.import_module("support.payloads")
+        assert require("support.payloads") is module

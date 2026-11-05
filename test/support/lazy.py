@@ -1,9 +1,17 @@
-"""Deferred imports at fixture time, with an opt-in, library-scoped pending-implementation skip.
+"""Deferred imports at fixture time, with an opt-in, library-scoped skip for pending work.
 
-:func:`require` imports a module when the fixture that needs it runs, rather than at module scope, so a failing import is attributed to the test that needed it.
-By default every error propagates — a ``NotImplementedError`` included, because a pending implementation in the library under test is a defect, not a reason to skip.
-``allow_pending=True`` opts into one narrow conversion: a ``NotImplementedError`` whose raising frame is a file inside :data:`LIBRARY_DIR` (``src/tensorneat/``) becomes :func:`pytest.skip`, and the skip message names the dotted module, that file and the line and function that raised it.
-A ``NotImplementedError`` raised anywhere else — a ``support`` helper, ``evoxc``, site-packages — propagates even then, because converting it would hide a real failure instead of a pending feature.
+:func:`require` imports a module when the fixture that needs it runs, rather than
+at module scope, so a failing import is attributed to the test that needed it.
+By default every error propagates — a ``NotImplementedError`` included, because a
+pending implementation in the library under test is a defect, not a reason to skip.
+
+``allow_pending=True`` opts into one narrow conversion: a ``NotImplementedError``
+whose raising frame is a file inside :data:`LIBRARY_DIR` (``src/tensorneat/``)
+becomes :func:`pytest.skip`, and the message names the dotted module, that file
+and the line and function that raised it.
+A ``NotImplementedError`` raised anywhere else — a ``support`` helper, ``evoxc``,
+site-packages — propagates even then, because converting it would hide a real
+failure instead of a pending feature.
 """
 
 from __future__ import annotations
@@ -21,7 +29,7 @@ LIBRARY_DIR = Path(__file__).resolve().parents[2] / "src" / "tensorneat"
 
 
 def _raising_frame(exc: BaseException) -> traceback.FrameSummary | None:
-    """The innermost frame of ``exc``'s traceback, i.e. the file, line and function that raised it."""
+    """The innermost frame of ``exc``'s traceback: the file, line and function that raised it."""
     frames = traceback.extract_tb(exc.__traceback__)
     return frames[-1] if frames else None
 
