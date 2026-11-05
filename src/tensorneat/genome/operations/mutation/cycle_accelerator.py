@@ -40,22 +40,23 @@ serialised scatters dominate.
 The switch is a **static host branch**: both spellings are plain traced helpers (never
 ``@evoxc.defn``), so a graph is exactly one of them and no backend ever sees both.
 
-**The loop's growth flag must be consumed outside the loop** (``iree-compile`` release gate).
-This hop carries ``(reach, growing)`` and only ``reach`` is read after the loop, so the
-``growing`` result would be dead.  ``iree-compile`` 3.13 runs an ``scf.while`` canonicalization
-that drops such an unused result together with the corresponding body block argument but
-*keeps* the yield operand and the operand, which makes the op illegal
-(``region branch point has 2 operands, but region successor needs 4 inputs``) — the failure
+**The loop carries one value, and every column of it is consumed** (``iree-compile`` release
+gate).  A ``while_loop`` result nothing reads is dropped by ``iree-compile`` 3.13's
+``scf.while`` canonicalization together with the corresponding body block argument, while the
+yield operand and the loop operand stay, which makes the op illegal
+(``region branch point has 2 operands, but region successor needs 4 inputs``); the failure
 surfaces much later, in ``iree-stream-conversion``, and only for the **assembled** generation
-graph (the same kernel compiles and runs standalone, and the ``"host"`` spelling escapes it
+graph — the same kernel compiles and runs standalone, and the ``"host"`` spelling escapes it
 only because its destination-passing scatter aliases the carried value, so its body reduces to
-``scf.yield %arg`` and the rewrite stays consistent).  The answer therefore ends with
-``logical_not(growing)``: a value-identity term (the loop only exits once its condition — the
-carried flag itself — is ``False``, so the final flag is always ``False``) that keeps the
-result live.  It also *reads* as what it is, a convergence guard: an unconverged reached set
-would answer ``False``, i.e. refuse the mutation instead of admitting a cycle.
-Do not delete it as dead code, and do not "simplify" the pair into one carried tensor without
-re-running ``iree-compile`` on a traced generation graph in this mode.
+``scf.yield %arg`` and the rewrite stays consistent.  A separate ``(reach, growing)`` pair
+therefore fails on the assembled graph even when ``growing`` is consumed by a value-identity
+``logical_not``; what compiles is the packed form shipped here — one ``(P, N + 1) bool`` tensor
+whose columns ``0 .. N-1`` are the reached set and whose column ``N`` is the growth flag
+(broadcast over the population rows), read by ``cond``, recomputed by the body and read again
+after the loop as a convergence guard (an unreached-stable set answers ``False``, i.e. refuses
+the mutation instead of admitting a cycle).  Do not split it back into two carried values, and
+do not drop the flag column, without re-running ``iree-compile`` on a traced generation graph
+in this mode.
 
 Correctness is the host formulation's contract, unchanged: the out-of-span-key precondition,
 the duplicate-key invariance and the "a degenerate candidate answers ``False``" rule all hold
@@ -231,10 +232,11 @@ def closes_cycle_accelerator(
         both correctness arguments of :mod:`~.cycle`, are shared rather than re-derived.
         Everything the hop needs that does not depend on ``reach`` (``dst_onehot``,
         ``src_flat``, ``valid_flat``) is traced once, outside the loop region.
-        Both loop results are consumed (the second through a ``logical_not`` that is the
-        identity on every backend), because an unused ``while`` result makes ``iree-compile``
-        produce an illegal ``scf.while`` for the assembled generation graph — the module note
-        holds the compiler evidence and the exact rewrite at fault.
+        The loop carries a single ``(P, N + 1) bool`` tensor — the reached set plus its growth
+        flag in column ``N`` — and every column is consumed (``cond``, the body, and the final
+        convergence guard), because an unused ``while`` result makes ``iree-compile`` produce
+        an illegal ``scf.while`` for the assembled generation graph; the module note holds the
+        compiler evidence and the exact rewrite at fault.
     """
     pop_size, node_count = node_keys.shape
     edge_count = conn_keys.shape[1]
