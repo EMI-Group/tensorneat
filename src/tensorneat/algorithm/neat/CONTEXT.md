@@ -90,7 +90,7 @@ The four centre tables are rebuilt once after the scan as `select(created[:, Non
 Scan 1 carries `assign`, `dist`, `keys_ext` plus two rank-1 per-slot tables — `closest_table (S,) int32` and `claim_table (S,) float32`, one single-element rank-1 `axis=0` `scatter` each — and **not** the four centre gene tables: a slot re-elects its centre to `pop[closest]`, so recording that index and applying it after the scan (`select(claim, gather(population.<field>, closest_table, axis=0), pre_scan_table)`, four gathers + four selects) is value-identical to the four row scatters per iteration it replaces.
 Both scans close over their graph-time constants (`I_INF`, `0`, `0.0`, `iota_i32(pop_size)`, the compatibility threshold and the gated false-branch zero row) instead of rebuilding them per iteration — one `constant` op each at the top level instead of one per slot.
 Speciation post-pass: leftovers adopt the last species key, slots created this generation get `best_fitness = -inf` / `last_improved = generation`, and `member_count` is one masked compare-sum over `(S, P)`.
-Body sizes: scan-1 body 55 traced ops, scan-2 body 221 traced ops with a 7-value `while` carry.
+Body sizes (dense path, measured per-iteration executed dispatches at `P=500`): scan-1 body 14, scan-2 body 124 of which 94 are its nested `measure_distance` call, plus the 5 scaffolding ops every `evoxc.scan` adds per iteration.
 
 ## Search Quality (XOR3d / XOR, measured)
 Config: `DefaultGenome(num_inputs=3 (XOR3d) / 2 (XOR), num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, `XOR3d()` / `XOR()`, `backend="numpy"`, `fitness_target=-1e-9`, 150 generations, `Pipeline.setup` + a manual `step` loop.
