@@ -1,7 +1,7 @@
 # TensorNEAT benchmark — thread-bound sensitivity (XOR family, --threads 1)
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from `benchmarks/results/threads1.json` at 2026-11-02T06:31:32+00:00.
-> Re-rendered from that same JSON at 2026-11-04T19:39:35+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-05T04:05:58+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > It must not be hand-edited: rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *This is the thread-bound sensitivity run (`--threads 1`, the declared-contract condition) of the XOR family; the authoritative default-thread matrix is `RESULTS.md`.*
@@ -225,7 +225,7 @@ python benchmarks/run_benchmark.py --list
 python benchmarks/run_benchmark.py --dry-run
 ```
 
-Interpreter used: /tmp/tn-venv/bin/python
+Interpreter used: python
 
 Cases: xor_p100, xor_p500, xor_p1000. Timed generations: 150, warmup generations (untimed): 3, repeats: 2 (seeds 42, 43), threads: `--threads 1`. Backend(s) of the new side: numpy; the old side always runs on JAX, once per case. `--out` defaults to `benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (scratch, git-ignored); the record this report was rendered from (`threads1.json`) is committed at `benchmarks/results/threads1.json` beside that default, so every table cell is traceable.
 
