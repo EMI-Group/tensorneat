@@ -4,6 +4,16 @@ This module is the small, genuinely generic part of the environment recipe: the
 ``evoxc.Tensor`` accessor ``show`` needs, the constructor validators every
 environment repeats verbatim, and the ``(B,) -> (P, R)`` return layout.
 
+Every validator is a **configuration** check, so it raises
+``TensorNEATError`` and nothing else: a non-numeric knob (a string, a list, a
+``None``) and a non-finite one ``NaN``/``+/-inf`` are rejected by
+:func:`require_finite` before any comparison runs, because ``NaN`` compares
+false against everything and would otherwise silently pass a ``<``/``>`` gate.
+That matters numerically here: a ``NaN`` physics knob poisons every episode
+through the dynamics, and a ``NaN`` ``fitness_target`` never terminates a run,
+so both are refused at construction instead of surfacing as ``-inf`` fitness on
+every individual.
+
 Two rules keep it honest:
 
 * **No host-only logic that is actually environment algebra.** Dynamics, reward
@@ -19,6 +29,7 @@ they are inlined into the caller's graph exactly like
 ``problem.base.finalize_fitness`` -- while every other name runs on the host only.
 """
 
+import math
 from typing import Any
 
 import numpy as np
@@ -30,6 +41,7 @@ from ...common.errors import TensorNEATError
 
 __all__ = [
     "prepared_query",
+    "require_finite",
     "require_non_negative",
     "require_positive",
     "require_positive_int",
@@ -80,11 +92,46 @@ def require_positive_int(owner: str, name: str, value: Any) -> int:
     return number
 
 
-def require_positive(owner: str, name: str, value: Any) -> float:
-    """Validate a strictly positive scalar configuration value.
+def require_finite(owner: str, name: str, value: Any) -> float:
+    """Validate that a scalar configuration value is a finite number.
 
-    The comparison is ``number > 0.0`` rather than ``number <= 0.0`` so a NaN
-    is rejected as well.
+    This is the base of every float validator here: it owns the conversion, so
+    a knob that is not a number at all (``None``, a string, a sequence) raises
+    the same ``TensorNEATError`` as one that is a number but not finite
+    (``NaN``, ``+inf``, ``-inf``), instead of escaping as a bare ``TypeError``
+    or ``ValueError``. ``NaN`` in particular must be rejected: it compares
+    false against every ``<``/``>`` gate, so it would silently pass a range
+    check and then poison the dynamics (or make a ``fitness_target``
+    unreachable) with no diagnostic at all.
+
+    Args:
+        owner: Environment name, used as the message prefix.
+        name: Configuration name, used in the error message.
+        value: The value to validate; anything ``float`` can convert, except
+            ``bool`` (``True`` is an ``int`` in Python but never a physical
+            constant).
+
+    Returns:
+        The value as a Python ``float``.
+
+    Raises:
+        TensorNEATError: If ``value`` is a ``bool``, cannot be converted to a
+            ``float``, or converts to ``NaN``/``+inf``/``-inf``.
+    """
+    message = f"{owner}: {name} must be a finite number, got {value!r}"
+    if isinstance(value, bool):
+        raise TensorNEATError(message)
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TensorNEATError(message) from exc
+    if not math.isfinite(number):
+        raise TensorNEATError(message)
+    return number
+
+
+def require_positive(owner: str, name: str, value: Any) -> float:
+    """Validate a strictly positive, finite scalar configuration value.
 
     Args:
         owner: Environment name, used as the message prefix.
@@ -95,16 +142,17 @@ def require_positive(owner: str, name: str, value: Any) -> float:
         The value as a Python ``float``.
 
     Raises:
-        TensorNEATError: If ``value`` is not positive (or is NaN).
+        TensorNEATError: If ``value`` is not a finite number (see
+            :func:`require_finite`), or is not strictly positive.
     """
-    number = float(value)
+    number = require_finite(owner, name, value)
     if not number > 0.0:
         raise TensorNEATError(f"{owner}: {name} must be positive, got {number}")
     return number
 
 
 def require_non_negative(owner: str, name: str, value: Any) -> float:
-    """Validate a non-negative scalar configuration value.
+    """Validate a non-negative, finite scalar configuration value.
 
     Args:
         owner: Environment name, used as the message prefix.
@@ -115,10 +163,11 @@ def require_non_negative(owner: str, name: str, value: Any) -> float:
         The value as a Python ``float``.
 
     Raises:
-        TensorNEATError: If ``value`` is negative (a NaN passes, as in the
-            reference ``CartPole`` validators).
+        TensorNEATError: If ``value`` is not a finite number (see
+            :func:`require_finite`), or is negative. A ``NaN`` is rejected by
+            the finiteness check, so ``0.0`` is the only admitted zero.
     """
-    number = float(value)
+    number = require_finite(owner, name, value)
     if number < 0.0:
         raise TensorNEATError(f"{owner}: {name} must be non-negative, got {number}")
     return number

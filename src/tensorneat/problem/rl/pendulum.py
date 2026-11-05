@@ -7,10 +7,11 @@ import numpy as np
 import evoxc
 import evoxc.numpy as enp
 
-from ..base import BaseProblem, finalize_fitness, static_batch_size
+from ..base import BaseProblem, build_options, finalize_fitness, static_batch_size
 from ...common.errors import TensorNEATError
 from ._common import (
     prepared_query,
+    require_finite,
     require_positive,
     require_positive_int,
     returns_of,
@@ -100,7 +101,8 @@ class Pendulum(BaseProblem):
         max_torque: Bound of the applied torque (default ``2.0``).
         dt: Integration timestep (default ``0.05``).
         fitness_target: Optional fitness target used only for validation; any
-            positive value is unreachable and is rejected.
+            positive value is unreachable and is rejected, and so is one that is
+            not a finite number.
     """
 
     def __init__(
@@ -141,8 +143,9 @@ class Pendulum(BaseProblem):
         Raises:
             TensorNEATError: If ``max_step <= 0``, ``repeat_times <= 0``, or any
                 of ``gravity``/``mass``/``length``/``max_speed``/``max_torque``/
-                ``dt`` is not positive.
-            TensorNEATError: If ``fitness_target`` is positive.
+                ``dt`` is not a finite, positive number.
+            TensorNEATError: If ``fitness_target`` is not a finite number, or is
+                positive.
         """
         self.max_step = require_positive_int("Pendulum", "max_step", max_step)
         self.repeat_times = require_positive_int(
@@ -155,7 +158,7 @@ class Pendulum(BaseProblem):
         self.max_torque = require_positive("Pendulum", "max_torque", max_torque)
         self.dt = require_positive("Pendulum", "dt", dt)
         if fitness_target is not None:
-            target = float(fitness_target)
+            target = require_finite("Pendulum", "fitness_target", fitness_target)
             if target > 0.0:
                 raise TensorNEATError(
                     f"Pendulum: fitness_target ({target}) is positive, but every "
@@ -282,6 +285,18 @@ class Pendulum(BaseProblem):
         return and the final observation out of the rollout carry, so no extra
         stacked output is needed.
 
+        That graph is built with the options the run registered on ``state``
+        (``backend``/``device``/``compile_options``, see
+        :func:`tensorneat.problem.base.build_options`), so
+        ``Pipeline(backend="iree").show`` reports from the backend the training
+        ran on, while a problem used directly -- a state registering no backend
+        -- reports from the numpy reference interpreter. There is no silent
+        fallback: a backend that cannot run the report raises.
+
+        A non-finite return (a NaN-poisoned policy) prints as ``nan`` in the
+        return columns rather than raising: unlike ``CartPole``'s survival
+        count, nothing here needs an integer.
+
         Args:
             state: Host container with configuration.
             key: One evoxc key for the reset draw.
@@ -305,12 +320,12 @@ class Pendulum(BaseProblem):
             total, final_obs = self._rollout(key_value, act_fn, 1)
             return enp.reshape(total, (self.repeat_times,)), final_obs
 
-        executable = evoxc.build(report, key_spec)
+        executable = evoxc.build(report, key_spec, **build_options(state))
         returns, final_obs = evoxc.run(executable, key)
         returns = to_numpy(returns)
         final_obs = to_numpy(final_obs)
         for repeat in range(self.repeat_times):
-            theta, theta_dot = (float(value) for value in final_obs[repeat])
+            theta, theta_dot = (float(entry) for entry in final_obs[repeat])
             print(
                 f"Pendulum repeat {repeat}: return {float(returns[repeat]):.2f}"
             )

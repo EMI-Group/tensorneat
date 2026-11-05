@@ -1,5 +1,6 @@
 """Batched ``MountainCarContinuous-v0`` on evoxc: Gym dynamics, fixed horizon."""
 
+import math
 from typing import Any, Callable, NamedTuple
 
 import numpy as np
@@ -7,10 +8,11 @@ import numpy as np
 import evoxc
 import evoxc.numpy as enp
 
-from ..base import BaseProblem, finalize_fitness, static_batch_size
+from ..base import BaseProblem, build_options, finalize_fitness, static_batch_size
 from ...common.errors import TensorNEATError
 from ._common import (
     prepared_query,
+    require_finite,
     require_non_negative,
     require_positive,
     require_positive_int,
@@ -18,7 +20,7 @@ from ._common import (
     to_numpy,
 )
 
-__all__ = ["MountainCarContinuous"]
+__all__ = ["ATTAINABLE_CEILING", "MountainCarContinuous"]
 
 #: Message prefix shared by every host-side validation error of this problem.
 _OWNER = "MountainCarContinuous"
@@ -32,6 +34,34 @@ _ACTION_DIM = 1
 _RESET_LOW = -0.6
 #: Upper bound of Gym's reset distribution for the car position.
 _RESET_HIGH = -0.4
+
+#: Highest return a reaching policy can be defended to attain: ``93.0``.
+#:
+#: ``100`` is the **nominal** bonus, not an attainable return, because the
+#: ``0.1 * a**2`` penalty is charged on the pre-clip action of *every* scoring
+#: step of the climb and the bonus is paid once. Derivation, with
+#: ``power = 0.0015``, ``gravity = 0.0025``, ``max_speed = 0.07`` and
+#: ``goal_position = 0.45``:
+#:
+#: * the per-step velocity gain is at most ``power + gravity = 0.004`` (full
+#:   force with the slope term at its most favourable value,
+#:   ``cos(3 * position) = -1``), so reaching the ``max_speed`` clip from rest
+#:   takes at least ``ceil(0.07 / 0.004) = 18`` scored steps;
+#: * the shortest remaining travel is from the highest reset position
+#:   (``_RESET_HIGH = -0.4``) to the goal, ``0.85``, at no more than
+#:   ``max_speed = 0.07`` per step, i.e. at least ``ceil(0.85 / 0.07) = 13``
+#:   more scored steps, each charged up to ``0.1 * 1**2 = 0.1``;
+#: * a real trajectory cannot hold that idealised ramp: the slope term
+#:   oscillates, the car has to pump, and the measured climb of a solving
+#:   policy is ~106 steps, at which the accumulated penalty is ~10.6.
+#:
+#: The best reaching policy measured on this box -- the bang-bang
+#: ``a = sign(velocity)`` at ``P = 8`` -- returns ``90.8`` (min ``89.1``) at both
+#: ``max_step = 999`` and ``max_step = 200``, so no policy can approach ``100``
+#: and this constant is a small margin over the measured best: a
+#: ``fitness_target`` above it validates as "reachable" and then never
+#: terminates.
+ATTAINABLE_CEILING = 93.0
 
 
 class _MountainCarConstants(NamedTuple):
@@ -120,7 +150,8 @@ class MountainCarContinuous(BaseProblem):
         power: Acceleration per unit action (default ``0.0015``).
         gravity: Slope gravity constant (default ``0.0025``).
         fitness_target: Optional fitness target used only for validation; a
-            value above ``100`` is unreachable and is rejected.
+            value above :data:`ATTAINABLE_CEILING` (``93.0``) is unreachable and
+            is rejected, and so is one that is not a finite number.
     """
 
     def __init__(
@@ -158,26 +189,37 @@ class MountainCarContinuous(BaseProblem):
             power: Acceleration per unit action.
             gravity: Slope gravity constant.
             fitness_target: Optional fitness target; ``None`` disables the
-                check. The one-time goal bonus is ``100`` and the per-step
-                penalty ``0.1 * a**2`` is only ever subtracted, so ``100`` is
-                the hard ceiling and a larger target can never be reached.
+                check. The one-time goal bonus is ``100``, but it is paid on a
+                single step while the ``0.1 * a**2`` penalty is charged on every
+                scoring step of the climb, so an attaining policy returns about
+                ``89``-``91``: a target above :data:`ATTAINABLE_CEILING`
+                (``93.0``) can never be reached and is rejected. A target below
+                it can still be out of reach on a short horizon -- a
+                structurally minimal climb needs ``ceil(max_speed /
+                (power + gravity)) + ceil((goal_position - _RESET_HIGH) /
+                max_speed) = 18 + 13 = 31`` scoring steps, a reaching policy
+                needs ~106, so pick ``max_step`` well above that for a positive
+                target.
 
         Raises:
             TensorNEATError: If ``max_step`` or ``repeat_times`` is not a
-                positive int, ``max_speed``/``power`` is not positive, or
-                ``gravity`` is negative.
+                positive int, ``max_speed``/``power`` is not a finite, positive
+                number, ``gravity`` is not a finite, non-negative number, or any
+                of ``min_position``/``max_position``/``goal_position``/
+                ``goal_velocity`` is not a finite number.
             TensorNEATError: If ``min_position >= max_position``, if
                 ``goal_position`` lies outside ``[min_position, max_position]``,
                 or if ``goal_velocity > max_speed``.
-            TensorNEATError: If ``fitness_target`` is greater than ``100``.
+            TensorNEATError: If ``fitness_target`` is not a finite number, or is
+                greater than :data:`ATTAINABLE_CEILING`.
         """
         self.max_step = require_positive_int(_OWNER, "max_step", max_step)
         self.repeat_times = require_positive_int(_OWNER, "repeat_times", repeat_times)
-        self.min_position = float(min_position)
-        self.max_position = float(max_position)
+        self.min_position = require_finite(_OWNER, "min_position", min_position)
+        self.max_position = require_finite(_OWNER, "max_position", max_position)
         self.max_speed = require_positive(_OWNER, "max_speed", max_speed)
-        self.goal_position = float(goal_position)
-        self.goal_velocity = float(goal_velocity)
+        self.goal_position = require_finite(_OWNER, "goal_position", goal_position)
+        self.goal_velocity = require_finite(_OWNER, "goal_velocity", goal_velocity)
         self.power = require_positive(_OWNER, "power", power)
         self.gravity = require_non_negative(_OWNER, "gravity", gravity)
         if self.min_position >= self.max_position:
@@ -201,14 +243,17 @@ class MountainCarContinuous(BaseProblem):
                 "[-max_speed, max_speed], so the goal could never be reached"
             )
         if fitness_target is not None:
-            target = float(fitness_target)
-            if target > 100.0:
+            target = require_finite(_OWNER, "fitness_target", fitness_target)
+            if target > ATTAINABLE_CEILING:
                 raise TensorNEATError(
-                    f"{_OWNER}: fitness_target ({target}) exceeds 100, the hard "
-                    "fitness ceiling -- the 100 goal bonus is paid once, on the "
-                    "single step that reaches the goal, while the 0.1 * a**2 "
-                    "penalty is charged on the pre-clip action a in (-1, 1) of "
-                    "every other scoring step, so no return can exceed 100"
+                    f"{_OWNER}: fitness_target ({target}) exceeds the attainable "
+                    f"ceiling {ATTAINABLE_CEILING} -- the nominal 100 goal bonus "
+                    "is paid once, on the single step that reaches the goal, "
+                    "while the 0.1 * a**2 penalty is charged on the pre-clip "
+                    "action a in (-1, 1) of every scoring step of the ~106-step "
+                    "climb, so a reaching policy returns about 89-91 (the best "
+                    f"measured one returns 90.8) and no target above "
+                    f"{ATTAINABLE_CEILING} can ever be reached"
                 )
         self.fitness_target = fitness_target
 
@@ -312,16 +357,27 @@ class MountainCarContinuous(BaseProblem):
         The goal indicator is ``return > 0`` rather than a test against the
         ``100`` bonus: a successful episode pays the ``100`` **once** but is
         charged ``0.1 * a**2`` on every step it took to get there, so a reaching
-        policy (about 106 steps from rest) returns roughly ``89``, not ``100``.
-        A failed episode's return is at most ``0`` (the bonus was never paid),
-        so a positive return means the bonus was paid. The indicator is exact
-        for any horizon below ``1000`` steps (the default is ``999``) and can
-        only under-report above it.
+        policy (about 106 steps from rest) returns roughly ``89``-``91``, not
+        ``100`` -- which is why :data:`ATTAINABLE_CEILING` is ``93`` and not
+        ``100``. A failed episode's return is at most ``0`` (the bonus was never
+        paid), so a positive return means the bonus was paid. The indicator is
+        exact for any horizon below ``1000`` steps (the default is ``999``) and
+        can only under-report above it. A non-finite return (a NaN-poisoned
+        policy) compares false, so the goal reads as ``n/a`` with the honest
+        return value instead of claiming the goal was missed.
 
         The reported final state is the one the carry holds: for an episode that
         reached the goal that is the state *before* the terminal transition
         (the same freeze rule as ``CartPole``), so its position sits just short
         of ``goal_position``.
+
+        The report graph is built with the options the run registered on
+        ``state`` (``backend``/``device``/``compile_options``, see
+        :func:`tensorneat.problem.base.build_options`), so
+        ``Pipeline(backend="iree").show`` reports from the backend the training
+        ran on, while a problem used directly -- a state registering no backend
+        -- reports from the numpy reference interpreter. There is no silent
+        fallback: a backend that cannot run the report raises.
 
         Args:
             state: Host container with configuration.
@@ -346,17 +402,21 @@ class MountainCarContinuous(BaseProblem):
             total, final_obs = self._rollout(key_value, act_fn, 1)
             return enp.reshape(total, (self.repeat_times,)), final_obs
 
-        executable = evoxc.build(report, key_spec)
+        executable = evoxc.build(report, key_spec, **build_options(state))
         returns, final_obs = evoxc.run(executable, key)
         returns = to_numpy(returns)
         final_obs = to_numpy(final_obs)
         for repeat in range(self.repeat_times):
-            position, velocity = (float(value) for value in final_obs[repeat])
-            reached = bool(float(returns[repeat]) > 0.0)
+            position, velocity = (float(entry) for entry in final_obs[repeat])
+            value = float(returns[repeat])
+            if math.isfinite(value):
+                goal = "reached" if value > 0.0 else "not reached"
+            else:
+                kind = "NaN" if math.isnan(value) else "non-finite"
+                goal = f"n/a ({kind} return)"
             print(
                 f"MountainCarContinuous repeat {repeat}: return "
-                f"{float(returns[repeat]):.2f}, goal "
-                f"{'reached' if reached else 'not reached'}"
+                f"{value:.2f}, goal {goal}"
             )
             print(
                 f"\tfinal state: position={position:.4f}, "

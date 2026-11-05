@@ -1,5 +1,6 @@
 """Batched CartPole rollout on evoxc: Gym dynamics, fixed horizon, return fitness."""
 
+import math
 from typing import Any, Callable, NamedTuple
 
 import numpy as np
@@ -7,10 +8,11 @@ import numpy as np
 import evoxc
 import evoxc.numpy as enp
 
-from ..base import BaseProblem, finalize_fitness, static_batch_size
+from ..base import BaseProblem, build_options, finalize_fitness, static_batch_size
 from ...common.errors import TensorNEATError
 from ._common import (
     prepared_query,
+    require_finite,
     require_non_negative,
     require_positive,
     require_positive_int,
@@ -106,7 +108,8 @@ class CartPole(BaseProblem):
         reset_scale: Reset states are ``U(-reset_scale, reset_scale)^4``
             (default ``0.05``).
         fitness_target: Optional fitness target used only for validation; a
-            value above ``max_step`` is unreachable and is rejected.
+            value above ``max_step`` is unreachable and is rejected, and so is
+            one that is not a finite number.
     """
 
     def __init__(
@@ -151,9 +154,11 @@ class CartPole(BaseProblem):
 
         Raises:
             TensorNEATError: If ``max_step <= 0``, ``repeat_times <= 0``, any
-                mass/length/dt/force is not positive, ``theta_threshold <= 0``,
-                or ``x_threshold``/``reset_scale`` is negative.
-            TensorNEATError: If ``fitness_target`` is greater than ``max_step``.
+                mass/length/dt/force is not finite and positive,
+                ``theta_threshold`` is not finite and positive, or
+                ``x_threshold``/``reset_scale`` is not finite and non-negative.
+            TensorNEATError: If ``fitness_target`` is not a finite number, or is
+                greater than ``max_step``.
         """
         self.max_step = require_positive_int("CartPole", "max_step", max_step)
         self.repeat_times = require_positive_int(
@@ -175,7 +180,7 @@ class CartPole(BaseProblem):
             "CartPole", "reset_scale", reset_scale
         )
         if fitness_target is not None:
-            target = float(fitness_target)
+            target = require_finite("CartPole", "fitness_target", fitness_target)
             if target > self.max_step:
                 raise TensorNEATError(
                     f"CartPole: fitness_target ({target}) exceeds max_step "
@@ -287,7 +292,18 @@ class CartPole(BaseProblem):
         The report runs its own graph of one individual -- one data argument
         (the rank-0 key) and ``pop_size = 1`` -- and reads both the return and
         the final observation out of the rollout carry, so no extra stacked
-        output is needed.
+        output is needed. That graph is built with the options the run
+        registered on ``state`` (``backend``/``device``/``compile_options``,
+        see :func:`tensorneat.problem.base.build_options`), so
+        ``Pipeline(backend="iree").show`` reports from the backend the training
+        ran on, while a problem used directly -- a state registering no backend
+        -- reports from the numpy reference interpreter. There is no silent
+        fallback: a backend that cannot run the report raises.
+
+        A NaN-poisoned policy is reported, not crashed on: the rollout
+        deliberately accumulates NaN into the return (see :meth:`evaluate`), and
+        a non-finite return has no integer survival length, so the step count is
+        printed as ``n/a`` with the honest return value instead.
 
         Args:
             state: Host container with configuration.
@@ -312,16 +328,21 @@ class CartPole(BaseProblem):
             total, final_obs = self._rollout(key_value, act_fn, 1)
             return enp.reshape(total, (self.repeat_times,)), final_obs
 
-        executable = evoxc.build(report, key_spec)
+        executable = evoxc.build(report, key_spec, **build_options(state))
         returns, final_obs = evoxc.run(executable, key)
         returns = to_numpy(returns)
         final_obs = to_numpy(final_obs)
         for repeat in range(self.repeat_times):
-            survived = int(round(float(returns[repeat])))
-            x, x_dot, theta, theta_dot = (float(value) for value in final_obs[repeat])
+            value = float(returns[repeat])
+            x, x_dot, theta, theta_dot = (float(entry) for entry in final_obs[repeat])
+            if math.isfinite(value):
+                survived = f"survived {int(round(value))}/{self.max_step} steps"
+            else:
+                kind = "NaN" if math.isnan(value) else "non-finite"
+                survived = f"survived n/a ({kind} return)"
             print(
-                f"CartPole repeat {repeat}: survived {survived}/{self.max_step} steps, "
-                f"return {float(returns[repeat]):.2f}"
+                f"CartPole repeat {repeat}: {survived}, "
+                f"return {value:.2f}"
             )
             print(
                 f"\tfinal state: x={x:.4f}, x_dot={x_dot:.4f}, "
