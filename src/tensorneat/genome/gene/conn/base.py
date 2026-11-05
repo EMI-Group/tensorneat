@@ -32,12 +32,9 @@ class ConnOperands(NamedTuple):
         columns: One tensor per ``attr_specs`` column, in table order, with the NaN of the
             padding rows cleaned to ``0`` (the default "absent row" policy of
             :meth:`BaseConn.prepare`).
-        zero: Rank-0 ``float32`` zero, created once per pass so a family can sanitise its
-            ``NaN`` operand without materialising a fresh constant on every level.
     """
 
     columns: tuple
-    zero: Any
 
 
 class BaseConn(BaseGene):
@@ -196,7 +193,7 @@ class BaseConn(BaseGene):
         for index in range(width):
             values = column(attrs, index)
             columns.append(evoxc.select(evoxc.isnan(values), zero, values))
-        return ConnOperands(tuple(columns), zero)
+        return ConnOperands(tuple(columns))
 
     def column_of(
         self, attrs: Any, name: str, default: float | None = None

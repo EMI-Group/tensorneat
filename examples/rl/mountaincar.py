@@ -29,8 +29,9 @@ Backend note: the rollout is a fixed-horizon loop, so evaluation cost grows
 linearly with ``max_step`` -- 999 steps at ``pop_size=100`` costs 0.63–1.24 s
 per generation on this CPU (measured). That is why the budget below is 10
 generations: about 10.4 s of generations, a 0.28 s build and ~1 s of
-interpreter startup, 11.6–11.8 s wall in total, on the numpy reference
-interpreter, which needs no optional extra. A compiled
+interpreter startup, 11.9–12.5 s wall in total (measured; wall clock is
+machine-specific, the per-generation cost is this box's), on the numpy
+reference interpreter, which needs no optional extra. A compiled
 backend pays a one-off compile per static shape and, on CPU, is measured no
 faster end to end for this workload.
 """

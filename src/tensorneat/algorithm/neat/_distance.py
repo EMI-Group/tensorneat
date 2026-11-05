@@ -20,6 +20,18 @@ tiling.
 :meth:`DistanceRows.__call__` is single-valued: it accepts a centre payload of
 batch ``pop_size`` (measured as it stands) or batch ``1`` (tiled to
 ``pop_size`` rows and measured in one call) and rejects every other batch width.
+It **is** the production route: ``_kernels.speciate`` calls ``distance_fn(...)``
+from its per-iteration ``compute_row`` bodies for the gated ``reserve`` and
+``assign_members`` scans, and unconditionally for every ``assign_members``
+iteration on the dense path (a small ``Pipeline`` run traced 4 ``__call__``
+invocations on the gated path and 2 on the dense one, plus one :meth:`matrix`:
+``evoxc.scan`` peels step 0 at the enclosing level and traces the body again, so
+each scan body is traced twice).
+What no in-repo call site reaches through it is only the batch-``1`` tiling
+branch and the batch-width rejection, because ``compute_row`` always wraps its
+slot's centre with ``single_payload`` (``pop_size`` rows), and
+:meth:`_check_population`'s payload rejection, because every call site passes the
+four arrays the digest was prepared from.
 :meth:`DistanceRows.row` is the same measurement spelled explicitly for one
 centre, and :meth:`DistanceRows.matrix` is the explicit whole-table form: one
 such call per centre row, run as a single fixed-length ``evoxc.scan`` over the
@@ -29,7 +41,7 @@ compatibility kernel is row-independent, and one centre per call keeps the
 kernel's transient footprint at one population instead of ``S`` of them, which
 the scan body then releases again before the next iteration.  ``matrix`` is
 never selected by ``__call__``: a caller that wants a whole table asks for it by
-name.
+name, which is what the dense path's scan 1 does.
 
 Nothing here re-implements distance arithmetic: every number comes from the
 genome's own kernel, so the rows are bit-identical to
@@ -173,9 +185,16 @@ class DistanceRows:
                 static shape, or if the centre batch is neither ``1`` nor ``P``.
 
         Note:
-            A whole ``(S, P)`` species table is not a ``__call__`` shape: ask
-            for it by name with :meth:`matrix`, so a table can never be mistaken
-            for a population-shaped centre.
+            This is the callable ``_kernels.speciate`` invokes as
+            ``distance_fn(state, centre, pop)``: the gated path reaches it from
+            both scan bodies, the dense path from every ``assign_members``
+            iteration.  Those call sites always hand over a population-shaped
+            centre and the digested population, so the batch-``1`` tiling branch
+            and both rejections in the body are unexercised from inside the
+            package.
+            A whole ``(S, P)`` species table is not a ``__call__`` shape either:
+            ask for it by name with :meth:`matrix`, so a table can never be
+            mistaken for a population-shaped centre.
         """
         if pop is not None:
             self._check_population(pop)
@@ -275,7 +294,9 @@ class DistanceRows:
             This is the explicit whole-table form, never reached through
             :meth:`__call__`: a caller holding an ``(S, ...)`` centre table asks
             for it by name, so a table cannot be mistaken for a population-shaped
-            centre when ``S == P``.
+            centre when ``S == P``.  The one in-package caller is
+            ``_kernels.speciate``'s dense path, which measures scan 1's whole
+            centre table this way before the reservation scan.
             One population-shaped ``measure_distance`` call per centre row, run
             as one fixed-length ``evoxc.scan`` over the ``K`` centre rows: the
             kernel never sees a ``K * P`` batch, and because a scan body's region

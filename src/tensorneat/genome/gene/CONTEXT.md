@@ -1,14 +1,14 @@
 # gene — attr-table driven gene families
 
 ## Intent
-Define what a gene *is* (its int32 key columns and its float32 attribute columns) and how it converts, mutates, crosses over, distances, hashes, and forwards, so that node and conn families are declarations over one shared mechanism instead of copy-paste.
+Define what a gene *is* (its int32 key columns and its float32 attribute columns) and how it converts, mutates, crosses over, distances, and forwards, so that node and conn families are declarations over one shared mechanism instead of copy-paste.
 `BaseGene` owns the table-driven plumbing; `node/` and `conn/` add only their structural hooks.
 Nothing here imports `jax`/`torch`, and no hook on the compute path runs eager NumPy.
 
 ## API Surface
 `BaseGene(StatefulBaseClass)`:
 - class data: `fixed_attrs: tuple[str, ...]` (int32 key columns), `attr_specs: tuple[GeneAttr, ...]` (float32 attribute columns in row order), `labels: dict[str, str]` (short render names; `repr`/`to_dict` fall back to the declared name).
-- `key_width` / `attr_width` (`len(fixed_attrs)` / `len(attr_specs)`); `length = key_width + attr_width` is display-only and has no caller in `src/`, `test/` or `examples/`.
+- `key_width` / `attr_width` (`len(fixed_attrs)` / `len(attr_specs)`); `length = key_width + attr_width` is a display/benchmark convenience with no compute-path reader (keys and attributes travel as separate tensors with separate dtypes, so no packed row exists), and its only caller is `benchmarks/spikes/forward_micro.py`.
 - `setup(state=None)` validates the table (`_validate_specs`: unique names across keys and attrs, a `float` spec carrying no `options`, an `int` spec carrying the contiguous list `0..n-1`, a known `kind`, `lower <= upper`, `mutate_rate`/`replace_rate` in `[0, 1]`) and returns the incoming state unchanged (genes register nothing); violations raise `common.errors.ConfigError`.
 It does **not** reject an empty column name, a negative `init_std` or a negative `mutate_power` (`## Unread and untested surface`), and no test exercises any of its raise paths.
 - `attr_index(name)` / `key_index(name)` (host ints, `ConfigError` if unknown), `attr_column(attrs, name)` / `key_column(keys, name)` (trace-time column read through `column`), `has_attr(name)` (host bool, for the zero-width table).
@@ -17,7 +17,6 @@ It does **not** reject an empty column name, a negative `init_std` or a negative
 - `mutate(state, key, attrs)` — batched over leading axes: floats `mutate_float` noise `mutate_rate` of the time and `replace_rate` re-init from the spec distribution, ints re-drawn uniformly over the option list with `replace_rate`.
 - `crossover(state, key, attrs1, attrs2)` — one `U[0, 1)` block draw and a per-entry 50/50 pick (`< 0.5` selects the first parent); `node/origin.py` / `conn/origin.py` override it with one draw per gene row, so a child gene copies one parent's whole attribute vector.
 - `distance(state, attrs1, attrs2)` — sum over the attribute axis of `|Δ|` for floats and `!=` (as 0/1) for ints; a NaN padding row yields NaN from the float columns and contributes **1** per `"int"` column (`not_equal(NaN, NaN)` is True), so absent-row masking is mandatory and belongs to the caller (`operations/distance/default.py::distance_from_alignment` does `select(homologous, pair_distance, 0)`).
-- `hash(keys)` — `hash_int32` over the int32 key columns (xor-mix: `h = h ^ (k + HASH_GOLDEN + (h << 6) + (h >> 2))`), bit-identical to `common.tools.hash_rows`.
 - `from_attrs(state, keys, attrs=None)` — split-payload assembly from pre-built columns; validation of a wrong column count / width raises `ConfigError`.
 - Host-only: `repr`/`to_dict` (label-driven, `-1` activation renders `"identity"`), plus each family's `sympy_func`.
 
@@ -26,7 +25,6 @@ Module helpers (trace-time, used by every family):
 - `_column_view(tensor, index) -> tensor[..., 1]` — the slice half alone; a kernel that reads several columns of one block uses it and pays **one** trailing `reshape` instead of one per read (`BaseGene.distance` does: 18 ops / 0.42 ms per node-gene call at `(500, 50, 4)`, against 17 ops / 0.51 ms for one wide `subtract` plus per-column reads of its strided views; the one-column conn gene drops only a `slice` view, 3 vs 4 ops at the same 0.14 ms — this node's own measurement on the reference numpy interpreter).
 - `BaseGene.distance` works on **one attribute column at a time**: a float column is `subtract` of the two columns' width-1 views plus `abs` (both operands of the following `add` are then contiguous), an option-index column is `not_equal` of the two views (never `|Δ|`: `inf - inf` is NaN where `not_equal(inf, inf)` is False), and its **bool result is added as a bool** — `evoxc.add` promotes bool to the float32 result dtype exactly (0/1 are representable), which saves the `cast` op and exports as an explicit `stablehlo.convert` — the StableHLO writer converts any operand whose dtype differs from the result dtype.
 A fully blocked form (block `subtract`/`abs`/indicator, static kind mask, one `select`, last-axis `reduce_sum`) is fewer ops and about 3× the wall clock of the per-column form at `(500, 50, 4)` (the six measured forms are tabulated under `## Constraints`) — element traffic, not op count, decides this kernel.
-- `hash_int32(keys) -> (...,) uint32` — the hash body; `uint32` ops only, because there is no bitcast in evoxc.
 
 `GeneAttr` is a dataclass: `name`, `kind` (`"float"`/`"int"`), `init_mean`/`init_std` (floats) or `options` (ints), `mutate_power`, `mutate_rate`, `replace_rate`, optional `lower`/`upper`.
 
@@ -61,7 +59,7 @@ The neutral fallbacks are fixed and shared by the traced and host paths: aggrega
 
 ## Hooks other nodes rely on
 `genome/base.py`: `initialize` uses `new_random_attrs`, `new_identity_attrs` (add-node), `new_zero_attrs`; the forward step calls `conn_gene.forward` then `node_gene.forward`; `grad` differentiates only the float attr arrays, which works because `attr_column` is differentiable.
-`genome/operations/**`: `mutate`, `crossover`, `distance`, `hash`, `attr_width`/`key_width`, `from_attrs`.
+`genome/operations/**`: `mutate`, `crossover`, `distance`, `attr_width`/`key_width`, `from_attrs`.
 `algorithm/**`: `from_attrs` (payload assembly), `uses_historical_marker`, `node_gene.from_attrs(keys)` + `conn_gene.from_attrs(in_keys, out_keys, weights)` for the HyperNEAT substrate.
 `get_historical_marker` has **no caller**: `../step.py` reads `conn_gene.key_column(conn_keys, "historical_marker")` directly, so the abstract raise in `conn/base.py` and `OriginConn`'s override are unread surface (`## Unread and untested surface`).
 `BaseConn.from_attrs` accepts `attrs=None` (zeros), `(*shape,)` per-connection scalars broadcast over the attribute axis, or full `(*shape, attr_width)` rows.
@@ -89,9 +87,9 @@ The remaining reported symptoms trace to code outside this node: `algorithm/neat
 The families themselves need no behavioural change; their `crossover` is whole-gene, their `mutate`/`distance`/`forward` are the inherited and unit-tested ones.
 
 ## Unread and untested surface
-`BaseConn.get_historical_marker` (abstract raise in `conn/base.py` plus `OriginConn`'s override) and `BaseGene.length` have no caller in `src/`, `test/` or `examples/`; both survive only in docstrings (`algorithm/neat/neat.py`'s static-surface note names `node_gene.length`/`conn_gene.length`, `conn/origin.py`'s class docstring names the marker hook), so a grep hit is not a use site.
-`ConnOperands.zero` is stored by `BaseConn.prepare` and read nowhere; `NodeOperands.aggregation_ids`/`activation_ids` are stored by `BaseNode.prepare` and read nowhere (only the derived `*_masks` are consumed); `BaseNode.repr`/`to_dict` are pure `super()` pass-throughs.
-`common.tools.hash_rows` is the host-only twin of `hash_int32` and is now caller-free in `src/` — production hashes through `gene.hash` (`genome/host.py::_row_hashes`), so the two folds are cross-checked only by tests.
+`BaseConn.get_historical_marker` (abstract raise in `conn/base.py` plus `OriginConn`'s override) has no caller in `src/`, `test/` or `examples/`; it survives only in docstrings (`conn/origin.py`'s class docstring names the marker hook), so a grep hit is not a use site.
+`BaseNode.repr`/`to_dict` are pure `super()` pass-throughs.
+Hashing is **host-only**: `genome/host.py::BaseGenomeHost.hash` folds `common.tools.hash_rows` over the numpy payload, and this node carries no in-graph hash, so nothing here emits an unsigned dtype.
 `attr_width == 0` (the section above) is unreachable in this tree: no shipped family declares `attr_specs = ()` and `test/support/payloads.py` rejects a zero width, so every width-0 branch is untested as well as unused.
 `_validate_specs` never checks `init_std`/`mutate_power`: a negative `init_std` reaches `evoxc.random.normal` (an opaque backend error where the table implies a `ConfigError`) while the same value only flips a sign in the mutation path, and a negative `mutate_power` passes every check.
 `BaseNode.self_neutral_aggregations = (AGG.sum, AGG.mean)` duplicates `common/functions/agg.py`'s `zero_on_empty` set, which also marks `AGG.maxabs`; the gene's copy is the conservative one, so the divergence costs one `any_slot` + `select` per level when `maxabs` is configured.
@@ -109,7 +107,7 @@ What the unit suite pins: the attribute table (widths, sentinels, draw shapes an
 ## Routing Table
 | Path | Responsibility |
 |---|---|
-| `./base.py` | `GeneAttr` and `BaseGene`: table-driven attrs, `column`/`hash_int32`, batched mutate/crossover/distance/hash, `from_attrs`, host `repr`/`to_dict`. |
+| `./base.py` | `GeneAttr` and `BaseGene`: table-driven attrs, `column`, batched mutate/crossover/distance, `from_attrs`, host `repr`/`to_dict`. |
 | `./blocks.py` | Block-shaped (whole-attribute-block) genetic operators: `init_attrs`, `mutate_attrs`, `crossover_attrs`, plus the static-operand builders `static_row`/`column_constant`/`_parameter_table`; `BaseGene`'s `new_random_attrs`/`mutate`/`crossover`/`_attr_row` are one-line delegations to it (one draw per participating column, one gate/`select`/`clip` cascade over the whole `(*shape, attr_width)` block, one `U[0,1)` block draw for the crossover pick). |
 | `./node/` | Node genes: key column, hit-window aggregation, combine, activation selection. |
 | `./conn/` | Conn genes: key columns (optional historical marker), per-edge message from (attrs, source value). |

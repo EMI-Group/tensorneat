@@ -27,7 +27,6 @@ if __name__ == "__main__":
         backend="numpy",
     )
     payload = evoxc.run(exe, evoxc.random.key(42))
-    # payload = best  # the P == 1 payload that Pipeline.auto_run returns
 
     network = g.network_dict(state, payload)
     print(g.repr(state, payload))

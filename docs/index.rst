@@ -8,9 +8,12 @@ differently shaped networks is evaluated at once.  Its compute layer is the
 then executed once per generation on a switchable backend.  ``backend="numpy"``
 (the default) is the reference interpreter; ``backend="iree"`` is the compiled
 backend that works end to end here (``uv sync --extra iree``); ``backend="xla"``
-requires a user-supplied PJRT C API plugin ``.so`` named by
-``EVOXC_PJRT_PLUGIN``, and none ships with the package; ``tvm`` is untested
-here.  There is no JAX and no PyTorch anywhere in the library.
+requires a user-supplied PJRT C API plugin ``.so``, named either by the
+``EVOXC_PJRT_PLUGIN`` environment variable or by the
+``Pipeline(..., compile_options={"plugin_path": "/path/to/plugin.so"})``
+(the compile option wins over the variable), and none ships with the
+package; ``tvm`` is untested here.  There is no JAX and no PyTorch
+anywhere in the library.
 
 Quickstart
 ----------

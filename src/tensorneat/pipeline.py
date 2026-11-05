@@ -24,6 +24,16 @@ split (``eval_key, tell_key``), hands ``eval_key`` to the problem and
 resulting key on the returned state -- so exactly one key advance per generation
 reaches the caller and ``(seed, config, shape)`` reproduces a run.
 
+The ``ask`` hook is part of the graph: once the state's payload is registered,
+the kernel calls ``algorithm.ask(current)`` and hands its result to ``transform``
+and to the problem's ``evaluate``, so an algorithm that overrides ``ask`` is
+honoured instead of silently bypassed.  Every shipped ``ask`` returns
+``state.pop`` unchanged, which makes the call bit-identical to reading the
+payload straight off the state.  The host-side report is narrower by contract:
+``previous_pop``, the checkpointed genomes and ``tell`` all describe
+``state.pop``, so an ``ask`` that returns a *different* population must document
+that its evaluated phenotype is not the one reported.
+
 Overflow policy: an execution schedule is lossy when a node has more incoming
 edges than the static window ``max_in_degree`` can hold (``edge_overflow > 0``).
 The graph returns ``evoxc.max(edge_overflow)``; after the run a positive host
@@ -101,9 +111,11 @@ from .host_payload import (
     _NetworkActFn,
     _config_value,
     _declared_shape,
+    _finite_fitness,
     _jsonable,
     _one_individual,
     _schedule_overflow,
+    _substrate_signature,
 )
 from .problem import BaseProblem
 
@@ -116,6 +128,7 @@ _RUNTIME_KEYS: tuple[str, ...] = ("pop", "generation", "species", "randkey")
 
 # The host payload helpers (``_NetworkActFn``, ``_one_individual``, ...) live in
 # :mod:`tensorneat.host_payload` and are imported above.
+
 
 # --------------------------------------------------------------------------- #
 # the pipeline
@@ -206,10 +219,13 @@ class Pipeline(StatefulBaseClass):
         self.fitness_history: list[tuple[int, float]] = []
         self.best_fitness: float = float("-inf")
         self.best_genome: Optional[GenomeTensors] = None
+        #: First failure per diagnostics hook, keyed by hook label: the
+        #: reporting-only record that keeps a broken printer visible.
+        self.detail_failures: dict[str, tuple[str, str]] = {}
 
         # Per-shape executable cache: signature -> evoxc.Executable.
-        self._executables: dict[tuple[int, ...], Any] = {}
-        self.shape_signature: Optional[tuple[int, ...]] = None
+        self._executables: dict[tuple[Any, ...], Any] = {}
+        self.shape_signature: Optional[tuple[Any, ...]] = None
         self.build_seconds: float = 0.0
         self.builds: int = 0
 
@@ -309,6 +325,11 @@ class Pipeline(StatefulBaseClass):
         genome = self._genome()
         algorithm: dict[str, Any] = {"class": type(self.algorithm).__name__}
         species = getattr(self.algorithm, "species", None)
+        if species is None:
+            # A wrapper algorithm (`HyperNEAT`) owns no species table of its own:
+            # the search law lives on the inner `NEAT`, exactly like the genome
+            # `_genome()` falls back to.
+            species = getattr(getattr(self.algorithm, "neat", None), "species", None)
         for name in (
             "pop_size", "pop_batch_size", "species_size", "max_stagnation",
             "species_elitism", "spawn_number_change_rate", "genome_elitism",
@@ -399,6 +420,7 @@ class Pipeline(StatefulBaseClass):
         self.fitness_history = []
         self.best_fitness = float("-inf")
         self.best_genome = None
+        self.detail_failures = {}
         self._executables = {}
         self.shape_signature = None
         self.build_seconds = 0.0
@@ -426,7 +448,7 @@ class Pipeline(StatefulBaseClass):
             genome = getattr(getattr(self.algorithm, "neat", None), "genome", None)
         return genome
 
-    def _shape_signature(self, state: State) -> tuple[int, ...]:
+    def _shape_signature(self, state: State) -> tuple[Any, ...]:
         """The static signature that keys the executable cache.
 
         Args:
@@ -434,8 +456,11 @@ class Pipeline(StatefulBaseClass):
                 for a genome that does not expose the full static set.
 
         Returns:
-            tuple[int, ...]: ``(pop_size, max_nodes, max_conns, max_in_degree,
-            max_depth, key_span)`` -- a change in any of them forces a rebuild.
+            tuple: ``(pop_size, max_nodes, max_conns, max_in_degree,
+            max_depth, key_span)`` for the CPPN/genome payload, followed by
+            :func:`~tensorneat.host_payload._substrate_signature`'s entries
+            when the algorithm wraps a
+            fixed substrate -- a change in any of them forces a rebuild.
 
         Raises:
             TensorNEATError: If ``state`` carries no four-array payload (it did
@@ -456,7 +481,7 @@ class Pipeline(StatefulBaseClass):
             return int(value) if value is not None else int(fallback)
 
         node_keys, _, conn_keys, _ = tuple(pop)
-        return (
+        payload_signature = (
             int(self.algorithm.pop_size),
             static("max_nodes", node_keys.shape[1]),
             static("max_conns", conn_keys.shape[1]),
@@ -464,6 +489,7 @@ class Pipeline(StatefulBaseClass):
             static("max_depth", 0),
             static("key_span", 0),
         )
+        return payload_signature + _substrate_signature(self.algorithm)
 
     def _build_options(self) -> dict:
         """The ``evoxc.build`` keyword arguments this pipeline forwards.
@@ -534,6 +560,12 @@ class Pipeline(StatefulBaseClass):
             padding, ``(P, E, CK) int32`` and ``(P, E, CA) float32``), the 0-d
             float32 generation counter and the ``SpeciesState`` leaves.
 
+            The payload registered on ``current`` is the graph's own argument;
+            ``algorithm.ask(current)`` then supplies the population that
+            ``transform`` and ``evaluate`` see.  ``tell`` receives ``current``,
+            whose ``pop`` is still the argument payload, so the returned
+            ``next_state.pop`` is bred from it regardless of ``ask``.
+
             Returns:
                 list: ``[randkey, generation, *next_pop, *next_species, fitness,
                 max_overflow]``.
@@ -548,6 +580,15 @@ class Pipeline(StatefulBaseClass):
             current = config.register(
                 pop=pop, generation=generation, species=species, randkey=tell_key
             )
+            # ``ask`` is the algorithm's "population to evaluate" hook and belongs
+            # in the graph: a shipped ``NEAT.ask``/``HyperNEAT.ask`` returns
+            # ``state.pop`` unchanged (zero ops, bit-identical), while an
+            # algorithm that overrides ``ask`` is honoured instead of bypassed.
+            # Its result drives ``transform`` and the problem's evaluate only:
+            # ``tell`` still breeds from ``current``, and the host-side
+            # ``previous_pop``/checkpoints report ``state.pop``, so a non-identity
+            # ``ask`` must document that reporting mismatch.
+            pop = algorithm.ask(current)
             transformed = algorithm.transform(current, pop)
             act_fn = _NetworkActFn(
                 lambda: (current, transformed, pop),
@@ -653,9 +694,14 @@ class Pipeline(StatefulBaseClass):
                 mismatch is never reshaped away.
 
         Notes:
-            Prints nothing (:meth:`auto_run` owns all output). ``algorithm.ask``
-            costs zero ops, so the state's ``pop`` *is* the population that
-            produced ``fitnesses``; it is returned as the evaluated payload.
+            Prints nothing (:meth:`auto_run` owns all output).  The generation
+            graph calls ``algorithm.ask``: every shipped ``ask`` returns
+            ``state.pop`` unchanged (zero ops), so ``state.pop`` *is* the
+            population that produced ``fitnesses`` and it is returned as the
+            evaluated payload.  An algorithm whose ``ask`` returns a different
+            population is honoured for ``transform``/``evaluate``, but the
+            returned ``previous_pop``, the checkpoints and ``tell`` still
+            describe ``state.pop`` -- the documented reporting mismatch.
         """
         executable = self._executable_for(state)
         species_leaves = evoxc.tree_leaves(state.species)
@@ -710,7 +756,11 @@ class Pipeline(StatefulBaseClass):
             The executable is built once here (timed into
             :attr:`build_seconds`) and reused for every generation; the host loop
             is what makes logging, checkpointing and early stopping possible
-            without putting Python control flow into the graph.
+            without putting Python control flow into the graph.  The early stop
+            compares :func:`_finite_fitness`'s view, so a non-finite fitness
+            (``+inf``/``NaN`` from a custom problem) never satisfies
+            ``fitness_target``; ``-inf`` is the only non-finite value selection
+            ever sees.
         """
         self._executable_for(state)
         if self.is_detailed:
@@ -720,7 +770,7 @@ class Pipeline(StatefulBaseClass):
             start = time.perf_counter()
             state, previous_pop, fitnesses = self.step(state)
             self._analyse(state, previous_pop, fitnesses, time.perf_counter() - start)
-            if float(np.max(fitnesses)) >= self.fitness_target:
+            if float(np.max(_finite_fitness(fitnesses))) >= self.fitness_target:
                 if self.is_detailed:
                     print("Fitness limit reached!")
                 break
@@ -751,11 +801,14 @@ class Pipeline(StatefulBaseClass):
         leading population axis of 1 added back, so :attr:`best_genome` is
         ``state.pop`` at ``P = 1``, never a set of bare rows.
         Both diagnostics hooks are *reporting* only, so neither can abort an
-        evolution run: a failing hook is printed (never swallowed silently) and
-        the loop continues.
+        evolution run: a failing hook is printed (never swallowed silently), the
+        failure is recorded in :attr:`detail_failures` and the loop continues.
+        Statistics and best-individual selection read :func:`_finite_fitness`'s
+        view, so a ``NaN``/``+inf`` fitness from a custom problem is logged as a
+        non-finite (excluded) value and can never become :attr:`best_fitness`.
         """
         generation = int(to_numpy(state.generation))
-        valid = fitnesses[~np.isinf(fitnesses)]
+        valid = fitnesses[np.isfinite(fitnesses)]
         if valid.size == 0:
             max_f = min_f = mean_f = std_f = float("nan")
         else:
@@ -765,9 +818,10 @@ class Pipeline(StatefulBaseClass):
             std_f = float(np.std(valid))
         self.fitness_history.append((generation, float(max_f)))
 
-        max_index = int(np.argmax(fitnesses))
-        if float(fitnesses[max_index]) > self.best_fitness:
-            self.best_fitness = float(fitnesses[max_index])
+        clean = _finite_fitness(fitnesses)
+        max_index = int(np.argmax(clean))
+        if float(clean[max_index]) > self.best_fitness:
+            self.best_fitness = float(clean[max_index])
             # ``previous_pop``'s fields are ``(P, ...)``, so an index gives a bare
             # row; add the leading axis back to keep the one-individual batch.
             self.best_genome = GenomeTensors(
@@ -775,7 +829,7 @@ class Pipeline(StatefulBaseClass):
             )
 
         if self.is_save:
-            self._save_generation(generation, previous_pop, fitnesses, max_index)
+            self._save_generation(generation, previous_pop, clean, max_index)
             with open(os.path.join(self.save_dir, "log.txt"), "a") as handle:
                 handle.write(
                     f"{generation},{max_f},{min_f},{mean_f},{std_f},{cost_time}\n"
@@ -803,17 +857,20 @@ class Pipeline(StatefulBaseClass):
                 ),
             )
 
-    @staticmethod
-    def _details(label: str, callback: Callable[[], Any]) -> None:
+    def _details(self, label: str, callback: Callable[[], Any]) -> None:
         """Run one diagnostics hook, reporting a failure instead of aborting.
 
-        The failure is printed with its own message, so it stays visible in the
-        run log -- which is what keeps this different from swallowing the error --
-        while the evolution loop is unaffected.
+        The failure is printed with its own message and its type/message is kept
+        in :attr:`detail_failures` (first failure per hook, so a hook that breaks
+        every generation cannot grow the record without bound).  That is what
+        keeps this different from swallowing the error: the failure stays
+        visible in the run log *and* inspectable on the pipeline, while the
+        evolution loop itself is unaffected.
         """
         try:
             callback()
         except Exception as error:  # noqa: BLE001 - diagnostics must not abort a run
+            self.detail_failures.setdefault(label, (type(error).__name__, str(error)))
             print(
                 f"{label} failed ({type(error).__name__}: {error}); continuing the run"
             )

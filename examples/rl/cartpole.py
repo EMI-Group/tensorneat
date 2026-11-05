@@ -28,9 +28,10 @@ from tensorneat.common import ACT, AGG
 # An unsupported backend raises instead of silently falling back, so the same
 # script runs unchanged on whatever backend you have installed.
 
-# Two output logits: the problem pushes right iff out[1] > out[0].
-# No output_transform here — an argmax-style transform would collapse the two
-# logits into one value and destroy the ordering the environment needs.
+# Two output logits: the problem pushes right iff out[1] > out[0] (a tie pushes
+# left). No output_transform here — the problem owns the discrete decision and
+# compares the two raw logits, so any transform would squash or merge them
+# before that comparison.
 neat = algorithm.NEAT(
     pop_size=200,
     species_size=10,

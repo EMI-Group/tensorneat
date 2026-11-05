@@ -18,6 +18,12 @@ Design constraints that shape every function below:
   function would have to be rewritten batch-first anyway. Every helper here is
   written once over a leading species axis ``S = species_size`` and a population
   axis ``P = pop_size``, spelled out explicitly.
+* **A nested ``cond`` inside a scan body is allowed.**
+  The generation graph keeps one level of control flow, but a ``cond`` may sit
+  inside an ``evoxc.scan`` step body when both branches are statically built and
+  its predicate is a traced mask -- the gated distance rows of
+  :func:`._kernels.speciate` do exactly that, and the nested form is proven on
+  ``iree``-llvm-cpu with numpy as the reference.
 * **No ``.at[]``, no ``cumsum``, no ``where=``-reductions.**
   ``evoxc.scatter`` is replacement-only, prefix sums come from a triangular
   ``dot`` (``evoxc.cumsum`` exists but does not export on compiler backends),
@@ -855,6 +861,10 @@ class SpeciesController(StatefulBaseClass):
             Because ``sum(spawn) == pop_size`` and ``pop_size >= 1``, at least one
             block starts at or before every slot, so ``loc`` stays in
             ``[0, S - 1]``.
+            This method is a **test seam**: production reaches the same algebra
+            through ``_kernels.block_layout`` (via ``_pair_parents``), so a
+            behavioural change belongs in ``_kernels.py`` and this wrapper only
+            keeps the spawn algebra testable without a graph.
         """
         return _kernels.block_layout(spawn_number, self.pop_size, self.species_size)
 
@@ -948,6 +958,12 @@ class SpeciesController(StatefulBaseClass):
 
         Returns:
             Tensor: ``(S,)`` float32 with ``out[i] = sum_{j < i} values[j]``.
+
+        Note:
+            This method is a **test seam**: production calls
+            ``_kernels.prefix_sum_exclusive`` (via
+            ``_kernels.spawn_from_target``), so a behavioural change belongs in
+            ``_kernels.py``.
         """
         return _kernels.prefix_sum_exclusive(values)
 

@@ -20,7 +20,7 @@ from ..common.errors import TensorNEATError
 from ..common.state import State
 from ..common.stateful_class import StatefulBaseClass
 
-__all__ = ["BaseProblem", "finalize_fitness", "static_batch_size"]
+__all__ = ["BaseProblem", "build_options", "finalize_fitness", "static_batch_size"]
 
 
 def finalize_fitness(fitness: Any) -> Any:
@@ -46,6 +46,39 @@ def finalize_fitness(fitness: Any) -> Any:
     nan = evoxc.isnan(fitness)
     floor = enp.full((), float("-inf"))
     return evoxc.select(nan, floor, fitness)
+
+
+def build_options(state: State) -> dict:
+    """Collect the ``evoxc`` keyword arguments a reporting graph runs with.
+
+    ``show`` builds a one-off graph of its own, and the run it reports on may
+    have trained on a compiled backend; the pipeline registers its selection on
+    the state, so the report reads it from there instead of guessing. This
+    mirrors ``BaseAlgorithm._build_options`` (the two nodes cannot share the
+    helper without a layering violation, and it is twelve lines):
+
+    * ``backend`` -- the registered backend, or ``"numpy"`` (the reference
+      interpreter) when the state registers none, so a problem used directly
+      without a pipeline still reports from the default backend;
+    * ``device`` -- forwarded only when registered and not ``None``;
+    * ``compile_options`` -- a mapping expanded into the ``**options`` each
+      build stage picks its own keys from.
+
+    Args:
+        state: Host container, normally a ``Pipeline.setup`` output.
+
+    Returns:
+        Keyword arguments for ``evoxc.build`` / ``evoxc.evaluate``.
+    """
+    registered = state.registered_keys()
+    options: dict[str, Any] = {
+        "backend": state.backend if "backend" in registered else "numpy"
+    }
+    if "device" in registered and state.device is not None:
+        options["device"] = state.device
+    if "compile_options" in registered and state.compile_options:
+        options.update(dict(state.compile_options))
+    return options
 
 
 def static_batch_size(transformed: Any) -> int:
@@ -201,6 +234,15 @@ class BaseProblem(StatefulBaseClass):
         Host-side only: never called from a trace. It evaluates a batch of one
         and prints a readable summary (for func fit one row per sample plus the
         loss, for CartPole the survival length and the return).
+
+        The report runs on the backend the run was configured with: an
+        implementation builds and runs its one-off graph with
+        :func:`build_options`, which reads ``backend``/``device``/
+        ``compile_options`` off ``state`` and falls back to the numpy reference
+        interpreter when the state registers none. So a problem called directly
+        (no pipeline) reports from numpy, and ``Pipeline(backend="iree").show``
+        reports from the same backend the training ran on -- never a silent
+        numpy fallback behind a compiled run.
 
         Args:
             state: Immutable host container with configuration.

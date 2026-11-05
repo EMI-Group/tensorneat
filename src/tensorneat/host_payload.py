@@ -14,7 +14,8 @@ while the schedule and the payload stay at ``P``, and the genome expands the dif
 internally (:func:`tensorneat.genome.window.by_samples`), because every operand a forward
 derives is sample-invariant.
 A batch wider than :data:`EVAL_CHUNK_ROWS` is walked in row groups so the interpreter's
-per-block live set stays bounded.
+per-block live set stays bounded; the trees it slices are declared population-major, and a
+leaf whose population axis cannot be established raises instead of being sliced silently.
 """
 
 from __future__ import annotations
@@ -246,25 +247,133 @@ def _schedule_overflow(schedule: Any) -> Any:
 
 
 def _slice_batch(tree: Any, start: int, stop: int, pop_size: int) -> Any:
-    """Slice a batch-first tree to the individuals ``[start, stop)``.
+    """Slice a **declared population-major** tree to the individuals ``[start, stop)``.
 
-    The static half of the chunked evaluate pass in :func:`_prepared_query`: a leaf
-    carrying the population axis is sliced and a leaf shared by the whole population
-    (a static ordering or key table, which has no such axis) comes through untouched.
-    The bounds are static ints, so the slice is one graph op per leaf.  The walk is
-    whole-tree rather than a declared read set because the slice is a *view* of an
-    operand the caller already holds -- unlike a repeat, it neither derives nor copies
-    anything a forward does not read.
+    The static half of the chunked evaluate pass in :func:`_prepared_query`.  The
+    trees that reach it are declared population-major by the kernel contract: a
+    genome's ``Transformed`` schedule and the four-array gene payload both put
+    the population on axis 0 (``src (P, C)``, ``in_conn (P, N, K)``,
+    ``node_keys (P, N)``, ...), whatever the algorithm wraps around them
+    (``HyperNEAT``'s ``SubstrateSchedule`` holds the substrate schedule and its
+    ``(P, N)``/``(P, Q, ...)`` payload, all population-major).
+
+    The declaration is what makes the slice unambiguous, and it is enforced
+    rather than guessed: inside such a tree a non-scalar leaf **must** carry
+    ``pop_size`` on axis 0, so a leaf whose leading dimension differs is not a
+    population-major tensor (or the tree broke its own contract) and raises
+    :class:`~tensorneat.common.errors.TensorNEATError` instead of being silently
+    passed through or sliced.  A shape-only check cannot tell a population row
+    from a shared table of coincidentally equal length and would mis-evaluate the
+    group; only rank-0 leaves (a scalar, no axis at all) are shared through
+    untouched.  Bounds are static ints, so the slice is one graph op per leaf.
+
+    Args:
+        tree (Any): A population-major pytree (schedule or gene payload).
+        start (int): First individual of the group (static).
+        stop (int): One past the last individual of the group (static).
+        pop_size (int): Static population size that every leaf's axis 0 must
+            equal.
+
+    Returns:
+        Any: The same tree structure with every leaf sliced along axis 0.
+
+    Raises:
+        TensorNEATError: If a non-scalar leaf's leading dimension is not
+            ``pop_size``: its population axis cannot be established, and a
+            chunk group must never be evaluated against a mis-sliced operand.
     """
 
     def take(leaf: Any) -> Any:
-        """Slice one leaf along its population axis, if it carries one."""
-        shape = getattr(leaf, "shape", None)
-        if not shape or int(shape[0]) != pop_size:
+        """Slice one declared population-major leaf along its population axis."""
+        shape = tuple(getattr(leaf, "shape", ()))
+        if not shape:
+            # A rank-0 leaf carries no axis at all, so there is nothing to slice
+            # and nothing that a group could shift.
             return leaf
+        leading = int(shape[0])
+        if leading != pop_size:
+            raise TensorNEATError(
+                f"cannot chunk the tiled evaluate pass: a leaf of shape {shape} "
+                "does not carry "
+                f"the population axis (leading dim {leading} != pop_size "
+                f"{pop_size}); the chunked evaluate pass slices only declared "
+                "population-major tensors, and a leaf whose axis cannot be "
+                "established must never be sliced or shared silently"
+            )
         return leaf[start:stop]
 
     return evoxc.tree_map(take, tree)
+
+
+def _finite_fitness(fitnesses: Any) -> np.ndarray:
+    """A host view of ``fitnesses`` with every non-finite entry set to ``-inf``.
+
+    ``algorithm.tell`` already sanitises its own input inside the graph
+    (``algorithm/neat/neat.py::_sanitize_fitness`` maps ``NaN`` *and* ``±inf`` to
+    ``-inf``) and every shipped problem ends with
+    ``problem.base.finalize_fitness``, which maps ``NaN`` only.  A custom problem
+    can therefore still hand a non-finite fitness to the host, where ``+inf``
+    would falsely satisfy ``Pipeline.fitness_target`` and ``NaN`` would win
+    ``argmax``.  This is the one host-side view that closes that gap, and it is
+    the identity on every recorded run (shipped fitnesses are finite or
+    ``-inf``).
+
+    Args:
+        fitnesses (Any): ``(P,)`` host fitness as ``Pipeline.step`` returns it.
+
+    Returns:
+        np.ndarray: ``(P,)`` with each ``NaN``/``+inf``/``-inf`` entry replaced by
+        ``-inf`` and every finite entry passed through bit-identically.
+    """
+    values = np.asarray(fitnesses)
+    return np.where(np.isfinite(values), values, -np.inf)
+
+
+def _substrate_signature(algorithm: Any) -> tuple[Any, ...]:
+    """The static geometry of ``algorithm.substrate``, or ``()`` with none.
+
+    A ``HyperNEAT`` generation traces the substrate's node/connection counts, its
+    coordinate and endpoint tables and the ``activate_time`` horizon into the
+    graph, and bakes the CPPN-to-weight map's thresholds as constants.  All of
+    them therefore belong in the pipeline's executable-cache key: the substrate is
+    host-only (it is never part of ``State``), so a caller can replace it on a
+    live algorithm, and reusing an executable built for the old geometry would
+    evaluate the wrong phenotype.
+
+    Args:
+        algorithm (Any): The algorithm being driven; a non-wrapper one has no
+            ``substrate`` attribute and contributes nothing.
+
+    Returns:
+        tuple: ``(nodes_cnt, conns_cnt, num_inputs, num_outputs, activate_time,
+        nodes.shape, conn_index.shape, query_coors.shape, weight_threshold,
+        max_weight)``, or ``()`` when the algorithm wraps no substrate.
+    """
+    substrate = getattr(algorithm, "substrate", None)
+    if substrate is None:
+        return ()
+
+    def count(name: str) -> int:
+        """Read one substrate static, ``-1`` when the substrate lacks it."""
+        value = getattr(substrate, name, None)
+        return -1 if value is None else int(value)
+
+    def table(name: str) -> tuple[int, ...]:
+        """The static shape of one substrate host table (``()`` if absent)."""
+        return tuple(int(size) for size in np.shape(getattr(substrate, name, ())))
+
+    return (
+        count("nodes_cnt"),
+        count("conns_cnt"),
+        count("num_inputs"),
+        count("num_outputs"),
+        int(getattr(algorithm, "activate_time", -1)),
+        table("nodes"),
+        table("conn_index"),
+        table("query_coors"),
+        float(getattr(algorithm, "weight_threshold", float("nan"))),
+        float(getattr(algorithm, "max_weight", float("nan"))),
+    )
 
 
 class _NetworkActFn:
@@ -368,8 +477,13 @@ def _prepared_query(
     the peak but needs the control-flow nesting this package forbids -- only
     ``test/backends`` could prove it portable, so it stays out.
 
+    Both trees handed to :func:`_slice_batch` are declared population-major, so every
+    non-scalar leaf must carry ``pop_size`` on axis 0; a leaf whose axis cannot be
+    established raises there instead of being silently shared or mis-sliced.
+
     Raises:
-        TensorNEATError: If ``batch_rows`` is not a positive multiple of ``P``.
+        TensorNEATError: If ``batch_rows`` is not a positive multiple of ``P``, or if a
+            leaf of the schedule/payload cannot be established as population-major.
     """
     row_count = int(payload.node_keys.shape[0])
     batch = int(batch_rows)

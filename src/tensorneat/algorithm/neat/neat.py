@@ -11,11 +11,15 @@ Conventions that hold everywhere in this module:
 
 * population is axis 0 of every population tensor (``P = pop_size``), and the
   batch dimension is written out explicitly;
-* control flow (``scan``/``cond``/``while_loop``) *is* used, but only at the
-  outermost layer of a kernel and only over static axes -- :meth:`NEAT._batched`
-  is an ``evoxc.scan`` over the batch axis.  ``vmap`` is never applied over
-  control flow, and every operation inside a loop body is a whole-batch tensor op
-  on the explicit batch axis;
+* control flow (``scan``/``cond``/``while_loop``) *is* used, but only over static
+  axes -- :meth:`NEAT._batched` is an ``evoxc.scan`` over the batch axis -- and
+  the generation graph keeps a single level of it.  An ``evoxc.cond`` may nest
+  inside an ``evoxc.scan`` body (``_kernels.speciate``'s gated distance-row path
+  does exactly that): the predicate is a traced mask over branches that are both
+  built statically, no host value drives it, and the nested form is proven to
+  compile on ``iree``-llvm-cpu, with the numpy backend as the reference.
+  ``vmap`` is never applied over control flow, and every operation inside a loop
+  body is a whole-batch tensor op on the explicit batch axis;
 * the gene payload is the **four split arrays** of
   :class:`tensorneat.genome.utils.GenomeTensors` (``evoxc`` has no bitcast, so
   integer keys and float attributes are never packed together) with a
@@ -274,7 +278,9 @@ class NEAT(BaseAlgorithm):
             species_fitness_func=species_fitness_func,
             species_number_calculate_by=species_number_calculate_by,
         )
-        # Legacy spelling used by callers/scripts; the same controller object.
+        # Public legacy-compat alias: the same controller object under the
+        # pre-rewrite attribute name.  No in-repo reader; kept for scripts
+        # written against the pre-rewrite API.
         self.species_controller = self.species
         # Cached host-side counting executable for ``show_details`` (see
         # :meth:`_gene_count_executable`); ``None`` until the first call.

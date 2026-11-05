@@ -166,6 +166,11 @@ Out-of-range activation/aggregation ids fall back to identity / `0.0` instead of
 `sympy_module()` binds numpy as the *keyword* `backend` (the pre-rewrite `partial(fn, jnp_or_np)` bound it to `val`, so `lambdify`d `clip` evaluations raised `AttributeError`); and `SympyMaxabs` renders as an explicit `Piecewise` over `Eq(Abs(t_i), max_j Abs(t_j))`, because `sp.Max(*z, key=sp.Abs)` is rejected by current sympy — the signed term and its first-maximum tie-break are unchanged.
 The aggregation combine axis is the last axis of `(P, N, K)` (the pre-rewrite library reduced a per-node axis 0); numerically identical for the same edge order, but HyperNEAT substrate code must reshape its contributions to `(..., K)` instead of calling `AGG.sum(inputs)` on a raw input vector.
 
+## Known Issues
+`SympyMaxabs` returns a `Piecewise` whose conditions are `Eq(Abs(t_i), Max(Abs(...)))` per node, so `Genome.sympy_func`'s closed-form substitution multiplies those branch sets layer by layer: measured ≈27 s at 2 hidden layers, >110 s at 3 and 0.02 s at 1 on a `maxabs` genome.
+Interpretability only — no generation, fitness or trace path is affected.
+If anyone needs deep `maxabs` genomes, the fix is a cheaper signed-argmax formulation that keeps the first-maximum tie-break without a per-node `Piecewise` over `Max`.
+
 ## Constraints
 - No `jax`, `torch`, `numpy.random` anywhere in this package; graph code uses `evoxc` ops only, host code may use `numpy` / `sympy`.
 - Nothing here imports `genome`, `algorithm`, `problem`, `pipeline`, `benchmarks` or `test`; the only intra-package dependency is `..tools.flat_gather` (used by `maxabs`).

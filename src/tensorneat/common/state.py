@@ -15,6 +15,11 @@ Naming rule: ``State`` keys are plain strings (``"nodes"``, ``"conns"``,
 ``"randkey"``, ...); tensors stored in a ``State`` keep the package-wide
 batch-first convention (population on axis 0, static shapes, ``NaN`` = absent
 float, ``I_INF`` = absent int index).
+
+Error rule: a missing entry raises :class:`StateKeyError` from attribute access
+(an ``AttributeError`` for ``getattr``/``hasattr``/``copy.deepcopy`` that is
+also a ``KeyError`` for the legacy catch sites) and the plain ``KeyError`` from
+``state["missing"]``.
 """
 
 import pickle
@@ -22,6 +27,39 @@ import pickle
 import evoxc
 
 from .errors import ConfigError
+
+
+class StateKeyError(AttributeError, KeyError):
+    """A missing ``State`` entry, reported to two kinds of caller at once.
+
+    The dual base is deliberate, and each half has a concrete caller:
+
+    * ``AttributeError`` is what the callers that do need it require.
+      :func:`copy.deepcopy` probes ``__deepcopy__`` on the *instance* with
+      :func:`getattr` and reads a missing name (i.e. an ``AttributeError``) as
+      "no hook"; the builtins :func:`getattr` (with a default) and
+      :func:`hasattr` swallow exactly this type; and
+      ``Pipeline._shape_signature``'s ``getattr(state, "pop", None)`` probe
+      (``pipeline.py``) reaches its own "call setup() first" ``TensorNEATError``
+      only while the miss is an ``AttributeError``. :func:`copy.copy` and
+      :mod:`pickle` are *not* a reason for the dual base: both already worked
+      with a bare ``KeyError``, because CPython resolves
+      ``__copy__``/``__reduce_ex__`` on the type, never on the instance.
+    * ``KeyError`` is what the legacy catch sites expect -- in particular
+      ``Genome._resolve_pop_size`` in ``genome/base.py``, which wraps
+      ``state.pop_size`` in ``except KeyError`` and raises its own
+      ``TensorNEATError``; that file belongs to a sibling node and may not be
+      edited, so the exception *class* (not the catch site) is what keeps both
+      behaviours working without a cross-node change.
+
+    Cost: ``hasattr(state, "typo")`` now answers ``False`` instead of
+    propagating the failure, so a typo is loud only at a bare ``state.typo``
+    read, at an explicit ``except KeyError``/``except AttributeError``, or
+    through :meth:`State.__getitem__` (always a plain ``KeyError``).
+
+    Args:
+        message (str): The message, naming the missing entry.
+    """
 
 
 class State:
@@ -85,19 +123,48 @@ class State:
             The stored value, unchanged (config object, evoxc key, tensor, ...).
 
         Raises:
-            KeyError: If ``name`` is not a registered entry. Deliberately a
-                ``KeyError`` and not an ``AttributeError``: a missing *entry*
-                is a configuration/typo bug, and catching it as
-                ``AttributeError`` would make it silent (``hasattr`` would
-                swallow it).
+            StateKeyError: If ``name`` is not a registered entry. It is both an
+                ``AttributeError`` -- so ``hasattr``, ``getattr(state, name,
+                default)`` and ``copy.deepcopy`` treat a missing entry as
+                "absent" instead of crashing -- and a ``KeyError``, so the
+                legacy ``except KeyError`` around ``state.pop_size`` in
+                ``genome/base.py`` keeps raising its own error; see
+                :class:`StateKeyError` for the full rationale.
+                Consequence: ``hasattr`` answers ``False`` for a typo instead
+                of propagating the failure.
+
+        Notes:
+            ``__getattr__`` is consulted only for names that normal lookup
+            misses, so the real attributes and methods (``state_dict``,
+            ``registered_keys``, ...) never come through here.
         """
         # ``self.__dict__`` is a type-level descriptor, so it never reaches
         # ``__getattr__``; ``.get`` also keeps an unpickling half-built object
         # (no ``state_dict`` yet) from recursing instead of failing.
         state_dict = self.__dict__.get("state_dict")
         if state_dict is None or name not in state_dict:
-            raise KeyError(name)
+            raise StateKeyError(f"State has no entry {name!r}")
         return state_dict[name]
+
+    def __getitem__(self, item):
+        """Read an entry by name through the mapping protocol (``state["pop"]``).
+
+        Args:
+            item (str): Entry name.
+
+        Returns:
+            The stored value, unchanged -- the same object ``state.<item>`` gives.
+
+        Raises:
+            KeyError: If ``item`` is not a registered entry. Always the plain
+                builtin, never :class:`StateKeyError`: mapping code that catches
+                ``KeyError`` and only that keeps its usual semantics, and the
+                message names the missing entry.
+        """
+        state_dict = self.__dict__.get("state_dict")
+        if state_dict is None or item not in state_dict:
+            raise KeyError(f"State has no entry {item!r}")
+        return state_dict[item]
 
     def __contains__(self, item):
         """Membership test over entry names (``"nodes" in state``).

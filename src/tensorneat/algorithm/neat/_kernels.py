@@ -734,6 +734,12 @@ def speciate(
         ``compute_row`` is the single true-branch body of the ``if``; the false
         branch returns the shared zero row (``skipped_row``), which every
         caller's write mask discards.
+
+        This is the one nested-control-flow site of the subtree: the ``cond`` is
+        built *inside* a ``scan`` step body.  Both branches are statically built,
+        ``active`` is a traced mask (never a host value), and the nested form is
+        proven to compile on ``iree``-llvm-cpu, with the numpy backend as the
+        reference; ``vmap`` is still never applied over control flow.
         """
 
         def zero_row(*_skipped):

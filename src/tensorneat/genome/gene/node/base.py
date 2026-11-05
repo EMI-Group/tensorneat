@@ -36,25 +36,20 @@ class NodeOperands(NamedTuple):
     Attributes:
         columns: One ``(P, N) float32`` tensor per ``attr_specs`` column, in table order
             (so ``columns[i]`` is the column ``attr_index(attr_specs[i].name)`` names).
-        aggregation_ids: ``(P, N) int32`` option ids of the ``aggregation`` column.
-        activation_ids: ``(P, N) int32`` option ids of the ``activation`` column with
-            :data:`~tensorneat.common.functions.act.ACT_IDENTITY` written on the output
-            rows, which is what lets :meth:`BaseNode.forward` skip its
-            ``select(is_output_node, z, activated)``: an id of ``-1`` matches no option,
-            so the dispatch cascade returns ``z`` itself there.
-        aggregation_masks: The ``ids == index`` masks of ``aggregation_ids``, one per
-            configured aggregation option (see
+        aggregation_masks: The ``ids == index`` masks of the ``aggregation`` option ids,
+            one per configured aggregation option (see
             :func:`~tensorneat.genome.gene.base.option_masks`), so no level re-derives
             them.
-        activation_masks: The same masks for ``activation_ids``.
+        activation_masks: The same masks for the ``activation`` option ids, with
+            :data:`~tensorneat.common.functions.act.ACT_IDENTITY` written on the output
+            rows: an id of ``-1`` matches no option, which is what lets
+            :meth:`BaseNode.forward` skip its ``select(is_output_node, z, activated)``.
         zero: Rank-0 ``float32`` zero, shared by the dispatch of every level (the
             cascade's "no option matched" value) instead of materialising one constant
             per level.
     """
 
     columns: tuple
-    aggregation_ids: Any
-    activation_ids: Any
     aggregation_masks: tuple
     activation_masks: tuple
     zero: Any
@@ -267,8 +262,6 @@ class BaseNode(BaseGene):
             )
         return NodeOperands(
             columns,
-            aggregation_ids,
-            activation_ids,
             option_masks(aggregation_ids, len(self.aggregation_options)),
             option_masks(activation_ids, len(self.activation_options)),
             enp.zeros((), dtype=evoxc.float32),

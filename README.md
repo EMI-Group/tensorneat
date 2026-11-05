@@ -57,7 +57,7 @@ uv run python examples/func_fit/xor.py
 
 `uv run` creates `.venv/`, installs the package in editable mode and runs the script. If `uv` is not on your `PATH`, it is usually at `~/.local/bin/uv`.
 
-Real output from this checkout (first generation, one middle generation, and the report tail — the run prints one such block per generation):
+Real output from one run of this checkout (first generation, one middle generation, and the report tail — the run prints one such block per generation; the compile time and the per-generation `Cost time` move by a few tens of ms between runs, the fitness and topology numbers do not):
 
 ```
 compile finished, cost time: 0.285115s
@@ -108,7 +108,7 @@ print(len(network["nodes"]), "nodes,", len(network["conns"]), "connections")
 4 nodes, 5 connections
 ```
 
-`network_dict`, `repr`, `sympy_func` and `visualize` are **host-only** converters: they read one individual's payload and never feed back into a graph. `tensorneat.__version__` is `"0.2.0"` in an installed checkout (`"0.0.0"` outside one).
+`network_dict(state, payload)`, `repr(state, payload)`, `sympy_func(state, network, ...)` and `visualize(network, ...)` are **host-only methods on the genome instance** (`pipeline.algorithm.genome`, a `DefaultGenome` here — `tensorneat.genome` has no module-level `visualize`/`sympy_func`): they read one individual's payload and never feed back into a graph. `tensorneat.__version__` is `"0.2.0"` in an installed checkout (`"0.0.0"` outside one).
 
 ## Architecture
 
@@ -131,8 +131,11 @@ genome / algorithm / problem kernels        src/tensorneat/genome, algorithm, pr
                                                        max_in_degree, max_depth, key_span)]
         │
         ▼
-  exe(node_keys, node_attrs, conn_keys, conn_attrs, generation, species, randkey)
-        │  once per generation inside Pipeline.step
+  exe(randkey, node_keys, node_attrs, conn_keys, conn_attrs, generation, *species_leaves)
+        │  once per generation:
+        │  Pipeline.step -> evoxc.run(executable, state.randkey, *state.pop,
+        │                              state.generation, *evoxc.tree_leaves(state.species))
+        │  returns [randkey, generation, *pop, *species, fitness, max_overflow]
         ▼
   host code: logging, checkpointing, early stop   (no eager mode: all numerics are inside the graph)
 ```
@@ -149,8 +152,8 @@ These come from the StableHLO v1 exporter and from what the compiled backends ac
 
 - `scatter` is rank-1 `axis=0` or a rank-2 full row/column write — never a rank >= 3 operand.
 - **One prepared index block feeds exactly one `scatter`**; merge payloads into a wider buffer instead.
-- No unsigned dtype inside a graph: same-width signed carriers (two's complement keeps arithmetic bit-identical) plus one explicit sign flip (`bitwise_xor(v, INT64_MIN)`) wherever unsigned *order* matters.
-- No v1-deferred op: `cumsum`, `cumprod`, `tril`, `triu`, `flip`, `erf`, `gelu`, `where`, `scan`, `convolution`, `runtime_call`, `external_call`, the `sparse_*` family. Use a static constant, a static-index `gather`, or a log2-doubling fold.
+- No unsigned dtype in an exported generation graph: same-width signed carriers (two's complement keeps arithmetic bit-identical) plus one explicit sign flip (`bitwise_xor(v, INT64_MIN)`) wherever unsigned *order* matters. The only `uint32` a graph produces is the digest `Genome.hash` returns, from a standalone helper no generation graph calls, so it never reaches a compiled artifact.
+- No op the StableHLO v1 exporter defers. The gate is `evoxc.backends.stablehlo.ops.status(op.name) != "deferred"`, which covers two disjoint sets: every name in `evoxc`'s `DEFERRED_OPS` (`runtime_call`, `external_call`, `block_call`, `rank`, `world_size`, `erf`, `gelu`, `diagonal`, `cholesky`, `qr`, `matrix_rank`, `svd`, `matrix_exp`, `random_multinomial`, plus the 16 `sparse_*`/`dense_dot_sparse` names, numpy-backend-only in v1) and every op the exporter has no mapping for at all (`call`, `tril`, `triu`, `cumsum`, `cumprod`, `flip`, `roll`, `nan_to_num`, `solve`, ...). Use a static constant, a static-index `gather`, or a log2-doubling fold. Spellings matter, because the deferral is keyed on the graph op name: evoxc spells `where` as `select` and convolution as `conv` (both v1), and `scan`/`while_loop` are frontend loop constructs that trace to a `while` region (v1), so the shipped kernels use them freely — `where`, `convolution` and `scan` are simply not evoxc op names.
 - Static dims only, non-negative axes only (a negative `concatenate` axis is legal at the frontend and rejected by `iree-compile`).
 
 The evidence for each rule, including the exact failures that forced it, is in `benchmarks/BACKENDS.md`; the per-module rules live in the `CONTEXT.md` chain under `src/tensorneat/common/`, `src/tensorneat/algorithm/neat/`, `src/tensorneat/algorithm/hyperneat/`, `src/tensorneat/genome/` and `src/tensorneat/genome/operations/`.
@@ -164,8 +167,8 @@ Every item below is backed by a file in this tree and, where a test exists, by t
 - **HyperNEAT** with substrates — `algorithm.HyperNEAT` (recurrent, `activate_time` tick-unroll) and `HyperNEATFeedForward` over `MLPSubstrate`, plus `FullSubstrate` (`algorithm/hyperneat/`, examples `xor_hyperneat*.py`).
 - **Recurrent genomes** — `genome.RecurrentGenome` with a static `activate_time` unroll (`genome/recurrent.py`).
 - **Speciation and distance kernels** — compatibility distance with node/connection gene digests, species assignment, stagnation, spawn allocation (`algorithm/neat/species.py`, `genome/operations/distance/`).
-- **Visualization** — `genome.visualize(network)` draws the decoded topology to SVG via matplotlib (`examples/interpret_visualize/visualize_genome.py`).
-- **Sympy formula + Python code generation** — `genome.sympy_func(...)` returns an 8-tuple consumed by `to_python_code` / `to_latex_code` from `tensorneat.common.sympy_tools` (`examples/interpret_visualize/genome_sympy.py`). `RecurrentGenome` refuses it by design: a cyclic network has no closed form.
+- **Visualization** — `pipeline.algorithm.genome.visualize(network, save_path=...)` (a genome instance method) draws the decoded topology to SVG via matplotlib (`examples/interpret_visualize/visualize_genome.py`).
+- **Sympy formula + Python code generation** — `pipeline.algorithm.genome.sympy_func(state, network, ...)` (again an instance method, and it needs the `State`) returns an 8-tuple consumed by `to_python_code` / `to_latex_code` from `tensorneat.common.sympy_tools` (`examples/interpret_visualize/genome_sympy.py`). `RecurrentGenome` refuses it by design: a cyclic network has no closed form.
 - **Three RL problems, all simulator-free** — `problem.CartPole` (discrete, fixed `max_step` horizon, return as fitness), `problem.Pendulum` (continuous torque, the logit squashed inside the problem as `max_torque * tanh(logit)`, a hidden layer needed to learn quickly) and `problem.MountainCarContinuous` (continuous force at the Gym-faithful 999-step default, one-time goal bonus). Fitness is the return (mean over `repeat_times`) in all three. Two documented caveats: `MountainCarContinuous` has a bang-bang idle optimum — a stationary policy scores ≈ `−0.00` and never reaches the goal, so its demo budget cannot "solve" it — and `Pendulum.show` "runs its own graph of one individual ... and reads both the return and the final observation out of the rollout carry" from `state.randkey`, a different reset key from any training episode, so on seed 42 its printed return (`-595.12`) is a different measurement from the training fitness (`-271.30`), not a contradiction. `examples/rl/cartpole.py` reaches 200/200 steps at pop 200 on CPU.
 - **Checkpointing** — `Pipeline(..., is_save=True, save_dir=...)` writes `config.txt`, `log.txt`, `genomes/<generation>.npz` per generation and `genomes/best_genome.npz` (verified: 2 generations → `genomes/1.npz`, `genomes/2.npz`, `genomes/best_genome.npz`). `test/integration/test_checkpoint.py` round-trips it.
 - **Deterministic per-seed runs** — all randomness is `evoxc.random` keys created from `seed`; the same `(seed, config, shape)` reproduces a run (`test/integration/test_determinism.py`).
@@ -228,11 +231,11 @@ On the merged tree the search-quality pass closes the two XOR3d quality rows and
 
 - **No JAX, no torch, no CUDA toolchain.** `import tensorneat` pulls in neither, enforced by `test/release_gate_no_jax.py`; the runtime dependency set is `evoxc`, `numpy`, `networkx`, `matplotlib`, `sympy`.
 - **The graph is data.** It is inspectable, cacheable and transformable (`evoxc.Graph`, `evoxc.lower(...)`), instead of being an opaque `jax.jit` dispatch; one executable per static shape is built once and reused.
-- **Latency to first generation.** Build 0.30 s at pop 100 vs 2.94 s of XLA compilation, and 0.30 s for the XOR quickstart graph above (the run prints `compile finished, cost time: 0.298339s`).
+- **Latency to first generation.** Build 0.30 s at pop 100 vs 2.94 s of XLA compilation, and the same order for the XOR quickstart graph above, whose one quoted run printed `compile finished, cost time: 0.285115s` (build time is 0.26-0.40 s across runs and populations; it is a one-off per static shape).
 - **Switchable backends.** The same kernels run on the IREE compiler today (verified end to end), which is where a GPU or a large-batch workload would pay off — that win is **not measured here**; on this CPU `iree` is 9–103× slower (see Backends).
 - **Memory at small scale and on the compiled leg.** Peak RSS is 1.8–5.9× lower than the frozen JAX side on the three XOR rows (114.9/241.3/392.2 vs 676.7/720.7/705.1 MiB) and 5.4× higher on Pagie; on the compiled leg `iree` uses 7–43 % less than numpy (see Backends).
 
-The measured bottleneck on the numpy backend is `tell` (speciation), not the forward pass: on the pre-tiling tree at pop 500 the two `speciate` scans were 9 160 of 10 767 executed ops per generation (85 %), and after the tiled-evaluate pass a pop-500 generation executes 8 336 ops with `evoxc` per-op overhead at ~58-63 % of a generation and the speciation scans at ~9-11 % of one; all of it is recorded in [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md).
+The measured bottleneck on the numpy backend is `tell` (speciation), not the forward pass, and the figures come from the two hand-measured passes recorded in [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md). Profiling 20 generations at pop 500 *before* the first pass put `evoxc`'s interpreter per-op overhead (operand resolution, dtype/shape validation, `Tensor` construction, ~13 µs/op) at ~63 % of a generation against ~37 % of numpy kernel bodies and 0.1 % of host-side Python, and the two `speciate` scans at 9 160 of the 10 767 executed ops per generation (85 %). The op-count pass (`a697531` → tree `f619f46`) brought a pop-500 generation to 8 336 executed ops (−23 %; 8 340 at pop 1000), and at the post-tiling tree `90d97b4` a generation executes 8 263 ops for `xor_p500`, 11 490 for `custom_pagie_p500` and 31 604 for `cartpole_p100` (op count is a leading indicator of wall time, never a proxy: pass 1's `agg` fold *added* 16 ops and made `forward` 26 % faster). No committed artifact records the overhead or speciation share after either pass, and none measures the merged tree.
 
 ## Install
 
@@ -243,7 +246,7 @@ Requires **Python >= 3.11** (`.python-version` is 3.12).
 ```bash
 git clone https://github.com/EMI-Group/tensorneat.git
 cd tensorneat
-uv sync                     # runtime deps only
+uv sync                     # runtime deps + the default `dev` group (pytest); --no-dev skips it
 uv run pytest               # or: uv run python examples/func_fit/xor.py
 ```
 
@@ -294,27 +297,27 @@ Caveats, both verified on 2026-11-04:
 
 ## Examples
 
-The ten pipeline scripts use the public API only and print a per-generation log; the two `interpret_visualize` scripts are host-only introspection and import `evoxc` directly for that. Wall times below are from this box (`uv run` startup included, ~1 s).
+The ten pipeline scripts use the public API only and print a per-generation log; the two `interpret_visualize` scripts are host-only introspection and import `evoxc` directly for that. Wall times below are from this box, one fresh process per script, `uv run` startup included (0.8–20.6 s end to end).
 
 | script | what it demonstrates | command | verified |
 |---|---|---|---|
-| `examples/func_fit/xor.py` | 2-input XOR, `DefaultGenome(2 -> 1, max_nodes=12)`, pop 200, 150 gens, target `-1e-3` | `uv run python examples/func_fit/xor.py` | ran, 4.2-4.6 s; **converges** at generation 67, loss 8.68e-04 |
-| `examples/func_fit/xor3d.py` | 3-bit parity (`problem.XOR3d`), `max_nodes=16`, pop 400, 150 gens, target `-1e-3` | `uv run python examples/func_fit/xor3d.py` | ran, 19.4-19.8 s; **converges** at generation 144, loss 9.34e-04 |
-| `examples/func_fit/xor_origin.py` | `genome.OriginNode`/`OriginConn` (historical markers, whole-gene crossover), pop 300, 250 gens, target `-1e-6` | `uv run python examples/func_fit/xor_origin.py` | ran, 5.8 s; **converges** at generation 89, loss 8.86e-07 |
-| `examples/func_fit/xor_recurrent.py` | `RecurrentGenome(activate_time=10)` on XOR3d, pop 300, 200 gens, target `-1e-4` | `uv run python examples/func_fit/xor_recurrent.py` | ran, 10.6 s; **converges** at generation 72, loss 1.66e-10 |
-| `examples/func_fit/custom_func_fit.py` | Pagie polynomial via `problem.CustomFuncFit`, pop 200, 30 gens | `uv run python examples/func_fit/custom_func_fit.py` | ran, 5.2-5.4 s; demo budget, stops at the generation limit, loss 0.0435 -> 0.0300 |
-| `examples/func_fit/xor_hyperneat.py` | recurrent HyperNEAT over `FullSubstrate` (CPPN 4 coords -> 1 weight), pop 300, 40 gens | `uv run python examples/func_fit/xor_hyperneat.py` | ran, 5.7-5.8 s; demo budget, loss 0.25 -> 0.0165 |
-| `examples/func_fit/xor_hyperneat_feedforward.py` | `HyperNEATFeedForward` + `MLPSubstrate([4, 6, 6, 1])`, pop 300, 40 gens | `uv run python examples/func_fit/xor_hyperneat_feedforward.py` | ran, 9.4-9.5 s; demo budget, loss 0.2232 -> 0.1876 |
-| `examples/rl/cartpole.py` | `problem.CartPole(max_step=200)`, two action logits, no `output_transform`, pop 200, 20 gens | `uv run python examples/rl/cartpole.py` | ran, 1.4-1.5 s; **converges** at generation 2, mean return 200/200 |
-| `examples/rl/pendulum.py` | `problem.Pendulum(max_step=200)`, `init_hidden_layers=(6,)`, pop 100, 20 gens, target `-300` | `uv run python examples/rl/pendulum.py` | ran, 2.7-2.9 s; **converges** at generation 5 (training max -271.30; `show` reports one episode at -595.12) |
-| `examples/rl/mountaincar.py` | `problem.MountainCarContinuous()`, 999-step default, pop 100, 10 gens, `fitness_target=float("inf")` | `uv run python examples/rl/mountaincar.py` | ran, 11.6-11.8 s; no fitness target (never stops early), demo return -0.00, goal not reached |
-| `examples/interpret_visualize/genome_sympy.py` | sympy formula + Python code + LaTeX of one genome (host only) | `uv run python examples/interpret_visualize/genome_sympy.py` | ran, 0.8-0.9 s |
-| `examples/interpret_visualize/visualize_genome.py` | draw one genome as SVG (host only) | `uv run python examples/interpret_visualize/visualize_genome.py` | ran, 0.9-1.8 s (longer on a cold matplotlib font cache); writes an untracked `network.svg` next to the script |
+| `examples/func_fit/xor.py` | 2-input XOR, `DefaultGenome(2 -> 1, max_nodes=12)`, pop 200, 150 gens, target `-1e-3` | `uv run python examples/func_fit/xor.py` | ran, 4.3-4.4 s; **converges** at generation 67, loss 8.68e-04 |
+| `examples/func_fit/xor3d.py` | 3-bit parity (`problem.XOR3d`), `max_nodes=16`, pop 400, 150 gens, target `-1e-3` | `uv run python examples/func_fit/xor3d.py` | ran, 20.0-20.6 s; **converges** at generation 144, loss 9.34e-04 |
+| `examples/func_fit/xor_origin.py` | `genome.OriginNode`/`OriginConn` (historical markers, whole-gene crossover), pop 300, 250 gens, target `-1e-6` | `uv run python examples/func_fit/xor_origin.py` | ran, 5.8-6.2 s; **converges** at generation 89, loss 8.86e-07 |
+| `examples/func_fit/xor_recurrent.py` | `RecurrentGenome(activate_time=10)` on XOR3d, pop 300, 200 gens, target `-1e-4` | `uv run python examples/func_fit/xor_recurrent.py` | ran, 10.6-11.2 s; **converges** at generation 72, loss 1.66e-10 |
+| `examples/func_fit/custom_func_fit.py` | Pagie polynomial via `problem.CustomFuncFit`, pop 200, 30 gens | `uv run python examples/func_fit/custom_func_fit.py` | ran, 5.1-5.4 s; demo budget, stops at the generation limit, loss 0.0435 -> 0.0300 |
+| `examples/func_fit/xor_hyperneat.py` | recurrent HyperNEAT over `FullSubstrate` (CPPN 4 coords -> 1 weight), pop 300, 40 gens | `uv run python examples/func_fit/xor_hyperneat.py` | ran, 5.7-6.1 s; demo budget, loss 0.25 -> 0.0165 |
+| `examples/func_fit/xor_hyperneat_feedforward.py` | `HyperNEATFeedForward` + `MLPSubstrate([4, 6, 6, 1])`, pop 300, 40 gens | `uv run python examples/func_fit/xor_hyperneat_feedforward.py` | ran, 9.4-9.9 s; demo budget, loss 0.2232 -> 0.1876 |
+| `examples/rl/cartpole.py` | `problem.CartPole(max_step=200)`, two action logits, no `output_transform`, pop 200, 20 gens | `uv run python examples/rl/cartpole.py` | ran, 1.4-1.6 s; **converges** at generation 2, mean return 200/200 |
+| `examples/rl/pendulum.py` | `problem.Pendulum(max_step=200)`, `init_hidden_layers=(6,)`, pop 100, 20 gens, target `-300` | `uv run python examples/rl/pendulum.py` | ran, 2.7-3.0 s; **converges** at generation 5 (training max -271.30; `show` reports one episode at -595.12) |
+| `examples/rl/mountaincar.py` | `problem.MountainCarContinuous()`, 999-step default, pop 100, 10 gens, `fitness_target=float("inf")` | `uv run python examples/rl/mountaincar.py` | ran, 11.9-12.5 s; no fitness target (never stops early), demo return -0.00, goal not reached |
+| `examples/interpret_visualize/genome_sympy.py` | sympy formula + Python code + LaTeX of one genome (host only) | `uv run python examples/interpret_visualize/genome_sympy.py` | ran, 0.8-1.1 s |
+| `examples/interpret_visualize/visualize_genome.py` | draw one genome as SVG (host only) | `uv run python examples/interpret_visualize/visualize_genome.py` | ran, 0.95-1.9 s (the first run in a session pays a matplotlib font-cache build); writes an untracked, git-ignored `network.svg` next to the script |
 
-The ten pipeline scripts use demo budgets (`# Demo budget:` in the source: pop 100–400, 10–250 generations, numpy backend), and six of them reach their fitness target on seed 42 — `xor.py`, `xor3d.py`, `xor_origin.py`, `xor_recurrent.py`, `cartpole.py`, `pendulum.py`; three (`custom_func_fit.py`, the two HyperNEAT scripts) stop at the generation limit with a visibly falling loss and claim no convergence, and `mountaincar.py` sets `fitness_target=float("inf")`, so it has no target to cross. A real run raises `pop_size` into the thousands and the generation limit into the hundreds. The two `interpret_visualize` scripts are host-only (no `Pipeline`, under 2 s). Fitness is maximised everywhere, so a function-fitting `fitness_target` is a negative error bound. The Brax/Gymnax/mujoco examples of 0.1.x no longer exist.
+The ten pipeline scripts use demo budgets on `backend="numpy"` (pop 100–400, 10–250 generations): the seven `func_fit` scripts mark theirs with a `# Demo budget:` comment, `rl/cartpole.py` marks its reduced `max_step` with `# Small budget:`, and `rl/pendulum.py` / `rl/mountaincar.py` size theirs through `pop_size` and `generation_limit` alone. Six of them reach their fitness target on seed 42 — `xor.py`, `xor3d.py`, `xor_origin.py`, `xor_recurrent.py`, `cartpole.py`, `pendulum.py`; three (`custom_func_fit.py`, the two HyperNEAT scripts) stop at the generation limit with a visibly falling loss and claim no convergence, and `mountaincar.py` sets `fitness_target=float("inf")`, so it has no target to cross. A real run raises `pop_size` into the thousands and the generation limit into the hundreds. The two `interpret_visualize` scripts are host-only (no `Pipeline`, under 2 s). Fitness is maximised everywhere, so a function-fitting `fitness_target` is a negative error bound. The Brax/Gymnax/mujoco examples of 0.1.x no longer exist.
 ## Tutorials
 
-- `tutorials/quickstart.ipynb` — the current-API notebook, executed top to bottom: build a genome/algorithm/problem, `Pipeline.setup`/`step`/`auto_run`, the batch-first `best` payload, switching `backend=`, and inspecting the built `evoxc` executable.
+- `tutorials/quickstart.ipynb` — the current-API notebook, executed top to bottom: build a genome/algorithm/problem, `Pipeline.setup`/`step`/`auto_run`, the batch-first `best` payload, backend *selection* (documented with an `iree` install probe; the notebook itself only ever builds and runs `backend="numpy"`), and inspecting the built `evoxc` executable.
 - `tutorials/legacy_jax/` — the three pre-rewrite notebooks (`tutorial-00-functional programming and state.ipynb`, `tutorial-01-genome.ipynb`, `tutorial-02-Usage.ipynb`), kept for concepts only: their code is the old `jax`/`vmap` API and does not run against this tree.
 
 ## Project layout
@@ -400,7 +403,7 @@ TensorNEAT is released under the **GNU General Public License v3.0**; the full t
 
 ## Roadmap
 
-- **Close the CPU gap on the numpy interpreter.** The measured bottleneck is `tell`, dominated by speciation, plus `evoxc` interpreter per-op overhead: on the pre-tiling tree two `speciate` scans were 85 % of the executed ops per generation at pop 500 and overhead was ~63 % of a generation, and after the tiled-evaluate pass a pop-500 generation runs 8 336 ops with overhead at ~58-63 % and speciation at ~9-11 % of a generation (see [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md)); the forward pass is not the problem.
+- **Close the CPU gap on the numpy interpreter.** The measured bottleneck is `tell`, dominated by speciation, plus `evoxc`'s interpreter per-op overhead: before the op-count pass the two `speciate` scans were 9 160 of the 10 767 executed ops per generation at pop 500 (85 %) and per-op overhead was ~63 % of a generation; that pass took the same generation to 8 336 executed ops and the post-tiling tree to 8 263 for `xor_p500`, but no committed record re-measures the overhead or speciation share after either pass (see [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md)). The forward pass is not the problem.
 - **Make a compiled backend actually competitive.** The IREE leg works but loses on llvm-cpu because the dense key-table `gather`/`argsort`/`scatter` traffic lowers to generic loops; that is a kernel-formulation project (sparse/segment reductions), not a compiler-flag one. No compiled win is claimed until it is measured.
 - **Lift the remaining `evoxc` v1 exporter deferrals** upstream, then re-evaluate the compiled backends and re-run the contract.
 - **More NEAT-family algorithms and substrates** (e.g. ES-HyperNEAT), and more RL problems that do not need JAX.

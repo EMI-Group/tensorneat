@@ -16,7 +16,12 @@ import numpy as np
 import evoxc
 import evoxc.numpy as enp
 
-from ..base import BaseProblem, finalize_fitness, static_batch_size
+from ..base import (
+    BaseProblem,
+    build_options,
+    finalize_fitness,
+    static_batch_size,
+)
 from ...common import to_numpy
 from ...common.errors import TensorNEATError
 
@@ -268,8 +273,17 @@ class FuncFit(BaseProblem):
         field is itself a schedule) must both round-trip, and only the
         structure does not care how many leaves a container has.
 
+        The graph runs on the backend registered on ``state``
+        (``backend``/``device``/``compile_options``, via
+        :func:`~tensorneat.problem.base.build_options`), so
+        ``Pipeline(backend="iree").show(...)`` reports from the backend the run
+        trained on; a problem called directly with a state that registers no
+        backend reports from the numpy reference interpreter. The backend is
+        never silently substituted: an unsupported one raises from ``evoxc``.
+
         Args:
-            state: Host container with configuration.
+            state: Host container with configuration, including the run's
+                backend selection.
             key: One evoxc key; unused, the problem is deterministic.
             act_fn: Callable mapping a batch to a batch of predictions.
             transformed: A batch-first schedule, normally holding a single
@@ -295,7 +309,7 @@ class FuncFit(BaseProblem):
             pop_size = static_batch_size(schedule)
             return self._predict_and_loss(act_fn, pop_size)
 
-        pred, loss = evoxc.evaluate(kernel, *leaves)
+        pred, loss = evoxc.evaluate(kernel, *leaves, **build_options(state))
         pred = to_numpy(pred)
         loss = to_numpy(loss)
         inputs = np.asarray(self.inputs, dtype=np.float32)

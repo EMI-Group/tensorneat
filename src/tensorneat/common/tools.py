@@ -48,11 +48,15 @@ Sentinel contract (shared with :mod:`~tensorneat.common.tensorization`):
 * ``NaN`` in a **float** array means "absent row" (``isnan(x[:, 0])``) or
   "not computed yet".
 
-Mutation scope: :func:`mutate_float` and :func:`mutate_int` are the standalone
-public mutation kernels of this module (exported by ``common.__init__``).
-The genome attribute-mutation path is
-:func:`tensorneat.genome.gene.blocks.mutate_attrs`, which owns its own
-per-spec draws and does not call either of them.
+Public surface without a production caller: :func:`hash_rows`,
+:func:`fetch_random`, :func:`mutate_float` and :func:`mutate_int` are exported
+by ``common.__init__`` for tests and legacy parity only — nothing in ``src/``
+calls them. The genome path has its own primitives: attribute mutation is
+:func:`tensorneat.genome.gene.blocks.mutate_attrs` (its own per-spec draws,
+not :func:`mutate_float`/:func:`mutate_int`), the ``(row, hit)`` pair in
+``genome/operations/mutation/arrays.py`` replaces :func:`fetch_random`, and
+gene hashing is the in-graph ``hash_int32`` (``genome/gene/base.py``), whose
+host-only twin is :func:`hash_rows`. Each docstring states this individually.
 """
 
 import numpy as np
@@ -583,6 +587,10 @@ def fetch_random(key, mask, default=I_INF):
         (``evoxc.random.uniform``), set masked-out positions to ``-inf`` and
         take the ``argmax`` — the maximiser of i.i.d. draws restricted to a set
         is uniform over that set.
+
+        **No production caller**: the genome's ``(row, hit)`` primitive in
+        ``genome/operations/mutation/arrays.py`` is the cheaper replacement
+        production uses; this helper is exported for tests and legacy parity.
     """
     if default is None:  # "unset" -> the documented I_INF sentinel
         default = I_INF
@@ -687,9 +695,10 @@ def mutate_float(key, val, init_mean, init_std, mutate_power, mutate_rate, repla
     Notes:
         Branching is ``evoxc.select``, never ``where``/Python ``if``; the
         legacy ``jnp.where`` nests map one-to-one onto two nested selects.
-        Standalone public kernel: the genome attribute-mutation path is
+        Standalone public kernel with **no production caller**: the genome
+        attribute-mutation path is
         :func:`tensorneat.genome.gene.blocks.mutate_attrs`, which does not call
-        this helper.
+        this helper; it is exported for tests and legacy parity.
     """
     mutate_rate = _rate("mutate_rate", mutate_rate, allow_one=True)
     replace_rate = _rate("replace_rate", replace_rate)
@@ -740,9 +749,10 @@ def mutate_int(key, val, options, replace_rate):
     Notes:
         ``options`` must be non-empty and static; an empty option list is a
         configuration bug, not a runtime condition.
-        Standalone public kernel: the genome attribute-mutation path is
+        Standalone public kernel with **no production caller**: the genome
+        attribute-mutation path is
         :func:`tensorneat.genome.gene.blocks.mutate_attrs`, which does not call
-        this helper.
+        this helper; it is exported for tests and legacy parity.
     """
     replace_rate = _rate("replace_rate", replace_rate, allow_one=True)
     count = int(options.shape[0])
@@ -768,8 +778,9 @@ def hash_rows(rows):
 
     Returns:
         ``(N,)`` ``numpy.uint32`` array; equal rows give equal hashes, unequal
-        rows almost certainly different ones. Used by ``Genome.hash()`` for
-        legacy-compatible debugging/inspection only.
+        rows almost certainly different ones. This is the host-only twin of the
+        in-graph ``hash_int32`` (:mod:`tensorneat.genome.gene.base`), with
+        **no production caller** — it is exported for tests and legacy parity.
 
     Raises:
         ValueError: If ``rows`` is not 2-D.
@@ -777,10 +788,11 @@ def hash_rows(rows):
     Notes:
         Must **never** be called inside an ``@evoxc.defn`` graph: it needs
         numpy bit-viewing (``view(np.uint32)``) and evoxc has no ``bitcast``
-        op. In-graph gene identity therefore compares the key columns with
-        ``evoxc.equal`` (crossover matching), never a row hash. Fold order is
-        left-to-right with the legacy ``0x9E3779B9`` constant so the numbers
-        stay comparable with the pre-rewrite library.
+        op. ``Genome.hash()`` is the in-graph ``hash_int32`` and does not call
+        this function; in-graph gene identity therefore compares the key
+        columns with ``evoxc.equal`` (crossover matching), never a row hash.
+        Fold order is left-to-right with the legacy ``0x9E3779B9`` constant so
+        the numbers stay comparable with the pre-rewrite library.
     """
     array = np.ascontiguousarray(rows)
     if array.ndim != 2:

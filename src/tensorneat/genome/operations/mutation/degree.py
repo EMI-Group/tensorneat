@@ -1,4 +1,4 @@
-"""Diagnostic in-degree audit of a post-write gene payload.
+"""Public in-degree audit of a post-write gene payload.
 
 The mutation stage keeps its capacity invariants with cheap per-plan guards (an added
 connection is refused when its destination is already saturated, a split is refused when
@@ -7,12 +7,27 @@ is their *audit*: a small, standalone kernel that measures the in-degree a paylo
 actually has, so a caller (a soak harness, a regression test, an interactive debugging
 session) can assert the invariant on the payload the pipeline is about to evaluate.
 
-It is **diagnostic only**:
+This module is kept as **public API**, and its status is stated here so a reader does not
+have to derive it:
 
-- :meth:`~.base.BaseMutation.mutate_structure` never calls it, and it must stay out of the
-  hot path — its ``(P, N, E)`` equality intermediate is much larger than any op the
-  operators emit, so wiring it into a generation would cost real time for a quantity the
-  guards already bound.
+- **No in-library caller.**  The three functions are re-exported by
+  :mod:`tensorneat.genome.operations.mutation`'s ``__all__`` and documented by their own
+  autodoc stub, but nothing in ``src/`` calls them:
+  :meth:`~.base.BaseMutation.mutate_structure` enforces the same ceiling inline at the
+  written payload state (``EditContext.in_degree_limit`` compared against each
+  destination's present row count), and no example or benchmark reaches this module.
+- **Not in the generation path.**  Its ``(P, N, E)`` equality intermediate is much larger
+  than any op the operators emit, so wiring it into a generation would cost real time for a
+  quantity the guards already bound.  The kernels are small — ``in_degree`` traces 15 ops,
+  ``max_in_degree`` 16 and ``violation`` 20 on a ``(P, N)``/``(P, E, 2)`` payload — which is
+  a diagnostic budget, not a generation one.
+- **Untested.**  No test in ``test/`` imports this module:
+  ``test/unit/genome/test_mutation.py::test_in_degree_never_exceeds_the_genome_window``
+  re-derives the in-degree with its own host NumPy helper instead.  This module is
+  therefore the one exported unit of this node with no coverage; a test that closed the gap
+  would run an evolved payload through ``execute_mutation`` and assert
+  ``violation(...) == 0`` on the payload before and after, beside the same payload's host
+  re-count.
 - The count is key-based, so **duplicate node keys make it a union**: two node rows sharing
   a key both report every edge that targets that key.  That is the honest reading of a
   payload (the execution schedule folds duplicate keys onto one slot) and it is exactly the
@@ -57,6 +72,12 @@ def in_degree(
     Returns:
         ``(P, N) int32`` in-degree per node row; padded node rows and node keys no edge
         targets report ``0``.
+
+    Notes:
+        A public **audit** helper: no kernel in ``src/`` calls it — ``execute_mutation``
+        enforces the same ceiling inline at the written payload state — and no test imports
+        it (the module docstring states that test gap).  ``15`` traced ops, every one of
+        them over the ``(P, N, E)`` equality block the docstring above describes.
     """
     pop_size, node_count = node_keys.shape
     edge_count = conn_keys.shape[1]
@@ -77,7 +98,7 @@ def max_in_degree(
 ) -> evoxc.SymbolicTensor:
     """Report each individual's largest :func:`in_degree`.
 
-    The genome compares this against ``genome.max_in_degree`` (its static window width ``K``)
+    A caller compares this against ``genome.max_in_degree`` (the static window width ``K``)
     to answer "did any node receive more edges than the schedule can hold?" without a host
     pass over the payload.
 
@@ -88,6 +109,12 @@ def max_in_degree(
     Returns:
         ``(P,) int32`` maximum in-degree per individual (``0`` for an individual with no
         present connection row).
+
+    Notes:
+        A public **audit** helper with no caller in ``src/`` and no test in ``test/``: the
+        operators compare each destination's present row count against ``max_in_degree``
+        inline instead.  ``16`` traced ops in all — :func:`in_degree`'s table plus one
+        axis-1 ``reduce_max``.
     """
     return evoxc.reduce_max(in_degree(node_keys, conn_keys), axes=1)
 
@@ -112,6 +139,13 @@ def violation(
     Returns:
         ``(P,) int32`` number of node rows whose in-degree is strictly greater than
         ``limit``.
+
+    Notes:
+        A public **audit** helper with no caller in ``src/`` and no test in ``test/``; the
+        assertion it exists for is "this payload is clean": ``violation(node_keys,
+        conn_keys, genome.max_in_degree) == 0`` on the payload ``execute_mutation``
+        returned.  ``20`` traced ops in all — :func:`in_degree`'s table, the threshold
+        constant, one ``greater``, the boolean cast and the axis-1 ``reduce_sum``.
     """
     counts = in_degree(node_keys, conn_keys)
     threshold = limit if isinstance(limit, evoxc.SymbolicTensor) else _int32(int(limit))

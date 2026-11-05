@@ -22,8 +22,16 @@ from typing import TYPE_CHECKING
 
 import evoxc
 import evoxc.numpy as enp
+import numpy as np
 
-from ....common import ConfigError, I_INF, State, StatefulBaseClass
+from ....common import (
+    ConfigError,
+    I_INF,
+    State,
+    StatefulBaseClass,
+    TensorNEATError,
+    to_numpy,
+)
 from . import dense as _dense
 from . import digest as _digest
 from .consts import ConstantPool
@@ -41,6 +49,10 @@ _PAYLOAD_FIELDS = ("node_keys", "node_attrs", "conn_keys", "conn_attrs")
 #: ``(P, M, A)``.
 _KEY_RANKS = (2, 3)
 _ATTR_RANK = 3
+
+#: How many individual indices / counts an out-of-range-key error message lists before
+#: summarising the rest, so a pop-1000 failure names the offenders without printing them all.
+_MESSAGE_LIMIT = 8
 
 
 class BaseDistance(StatefulBaseClass):
@@ -263,16 +275,42 @@ class BaseDistance(StatefulBaseClass):
         Raises:
             ConfigError: If the centre's static shapes are invalid, if its batch is neither
                 ``1`` nor the digest's, or if the digest's gene axes do not match the centre's.
+            TensorNEATError: If a batch-1 centre takes the dense route (i.e.
+                :meth:`_single_centre_enabled` holds) and **host-resident** data breaks that
+                route's ``[0, genome.key_span)`` key precondition — a population gene counted
+                in the digest's ``node_oor``/``conn_oor``, or a present key of the centre
+                itself that is negative or ``>= key_span``.  The digest's counts exist only as
+                tensor values inside a trace, so the check covers host data and is skipped
+                silently for a traced leaf; see the notes.
 
         Notes:
             A plain traced helper (see :meth:`prepare`).  A batch-1 centre is broadcast to the
             digest's batch up front, so the per-family kernels are batch-first throughout.
+            The dense single-centre route (:meth:`_measure_single_centre`) addresses a gene by
+            its key, so it is exact only while every present key lies inside
+            ``[0, genome.key_span)``; the row-wise merge matches any key exactly.
+            The precondition is therefore validated when the route's **static** gate holds
+            (:meth:`_single_centre_enabled`, the same host predicate the hook checks before it
+            emits an op), by reading each leaf that is not an :class:`evoxc.SymbolicTensor`
+            with :func:`~tensorneat.common.tools.to_numpy` and raising
+            :class:`~tensorneat.common.errors.TensorNEATError` with the family, the offending
+            individuals or centre rows, ``genome.key_span`` and the two remedies.  Reading
+            before the hook is what lets a host call answer a contract error: a host-resident
+            array or ``evoxc.Tensor`` can never be a graph operand (``evoxc`` has no eager
+            mode), so such a call cannot produce a valid trace and would otherwise fail inside
+            the route's first op.  On a trace every leaf is a ``SymbolicTensor``, the check
+            reads nothing and emits no op, and a value-dependent raise stays impossible; the
+            guard is therefore a host-call guarantee, and ``Pipeline`` never selects this route
+            at all because ``algorithm/neat/_kernels.py::single_payload`` tiles every species
+            centre to ``pop_size`` rows before measuring.
         """
         payload = (node_keys, node_attrs, conn_keys, conn_attrs)
         _validate_single(type(self).__name__, "measure", payload)
         batch = _validate_digest(type(self).__name__, payload, digest)
         pool = consts if consts is not None else ConstantPool()
         if int(node_keys.shape[0]) == 1:
+            if self._single_centre_enabled(genome):
+                _validate_dense_keys(type(self).__name__, genome, payload, digest)
             fast = self._measure_single_centre(pool, state, genome, payload, digest)
             if fast is not None:
                 return fast
@@ -335,6 +373,27 @@ class BaseDistance(StatefulBaseClass):
         """
         return None
 
+    def _single_centre_enabled(self, genome: "BaseGenome") -> bool:
+        """Host-side counterpart of the single-centre hook's static gate.
+
+        Args:
+            genome ("BaseGenome"): Genome owning the gene families' geometry and ``key_span``.
+
+        Returns:
+            bool: ``True`` when :meth:`_measure_single_centre` would answer with a route for
+            a batch-1 centre, ``False`` when it answers ``None`` (the row-wise merge).
+
+        Notes:
+            Pure host arithmetic — it reads gene geometry and ``key_span`` only and emits no
+            traced op — so :meth:`measure` can decide whether the dense route's
+            ``[0, genome.key_span)`` precondition has to be validated *before* the hook emits
+            its first op, which is what lets a host call answer a contract error instead of a
+            backend TypeError.  It must mirror the hook: the base contract has no
+            single-centre route, so it answers ``False``, and a subclass that adds one
+            overrides both together.
+        """
+        return False
+
     def gene_measure(
         self,
         state: State,
@@ -379,6 +438,10 @@ class BaseDistance(StatefulBaseClass):
             :func:`~.digest.prepare_family` (i.e. the digest-time scaffolding of
             :meth:`prepare`), which is why the in-graph call sites go through :meth:`measure`,
             where one pool and the two families' statics are shared.
+            This is a public per-family entry point with **no in-library caller today**:
+            wrapping :meth:`_measure_family` costs a private :class:`~.consts.ConstantPool`
+            per call, so the live path is ``measure`` → ``_measure_family`` and a caller that
+            already threads a pool should use that one.
         """
         return self._measure_family(
             ConstantPool(),
@@ -662,6 +725,159 @@ def _validate_digest(name: str, payload: tuple, digest: DistanceDigest) -> int:
             f"{batch} genomes; pass one centre (batch 1) or a digest-row per centre"
         )
     return batch
+
+
+def _host_array(value):
+    """The NumPy view of a host-resident tensor leaf, or ``None`` for a traced one.
+
+    Args:
+        value: One digest leaf or one centre payload array — an ``evoxc.Tensor``, a
+            ``numpy.ndarray``, or an :class:`evoxc.SymbolicTensor` while a graph is being
+            traced.
+
+    Returns:
+        ``numpy.ndarray | None`` — the array when ``value`` is host data, ``None`` when it is
+        a traced ``SymbolicTensor`` (a value that cannot be inspected on the host) or anything
+        else that is not a host tensor.
+
+    Notes:
+        This is the "is it host data?" predicate of the dense route's validation: a
+        ``SymbolicTensor`` has no value yet, so a check that read it would have to trace an op
+        (or raise inside the graph), and both are forbidden on the compute path.
+    """
+    if isinstance(value, evoxc.SymbolicTensor):
+        return None
+    if isinstance(value, np.ndarray) or callable(getattr(value, "numpy", None)):
+        return np.asarray(to_numpy(value))
+    return None
+
+
+def _index_summary(values) -> str:
+    """Comma-separated first :data:`_MESSAGE_LIMIT` entries of a small integer array.
+
+    Args:
+        values: One-dimensional integer array (individual indices or per-individual counts).
+
+    Returns:
+        str: The listed entries, plus ``", ... (N more)"`` when the array is longer than
+        :data:`_MESSAGE_LIMIT`.
+    """
+    listed = ", ".join(str(int(value)) for value in values[:_MESSAGE_LIMIT])
+    if values.size > _MESSAGE_LIMIT:
+        listed += f", ... ({values.size - _MESSAGE_LIMIT} more)"
+    return listed
+
+
+def _reject_population_keys(name: str, family: str, key_span: int, counts) -> None:
+    """Raise when the digest counts population genes the dense table cannot address.
+
+    Args:
+        name: Operator class name, used in the error message.
+        family: ``"node"`` or ``"conn"``, naming the ``node_oor``/``conn_oor`` leaf.
+        key_span (int): Static key bound ``S`` of ``genome.key_span``.
+        counts: ``(P,) int64`` per-individual out-of-range gene counts of one family.
+
+    Raises:
+        TensorNEATError: If any individual carries at least one such gene.
+    """
+    offenders = np.flatnonzero(counts > 0)
+    if offenders.size == 0:
+        return
+    raise TensorNEATError(
+        f"{name}.measure: the dense single-centre route cannot address "
+        f"{int(counts.sum())} present {family} gene(s) of the population digest whose key "
+        f"lies outside [0, genome.key_span) = [0, {key_span}): individuals "
+        f"{_index_summary(offenders)} carry {_index_summary(counts[offenders])} such "
+        f"gene(s) ({family}_oor). The dense key table treats an unaddressable key as "
+        f"absent, while the row-wise merge matches it exactly, so this call would "
+        f"under-count that family's disjoint/excess genes. Keep every allocated structural "
+        f"key inside [0, {key_span}) (or raise key_span in the shape signature), or "
+        f"construct DefaultDistance(dense_single_centre=False) when the payload "
+        f"legitimately holds keys outside that window."
+    )
+
+
+def _reject_centre_keys(name: str, family: str, key_span: int, gene, keys) -> None:
+    """Raise when the batch-1 centre itself holds a key the dense table cannot address.
+
+    Args:
+        name: Operator class name, used in the error message.
+        family: ``"node"`` or ``"conn"``, naming the gene family.
+        key_span (int): Static key bound ``S`` of ``genome.key_span``.
+        gene: The family's gene, supplying ``key_width``.
+        keys: The centre's key array, ``(1, M)`` or ``(1, M, K) int32``, ``I_INF`` padded.
+
+    Raises:
+        TensorNEATError: If a present row carries a key outside ``[0, key_span)``.  No-op
+            unless ``keys`` is host data.
+    """
+    table = _host_array(keys)
+    if table is None:
+        return
+    # A rank-2 key array is one column per row (``GenomeTensors``' spelling for a node key);
+    # a rank-3 one carries the key columns on its last axis.
+    columns = table.reshape(-1, 1) if table.ndim == 2 else table.reshape(
+        -1, table.shape[-1]
+    )
+    slot_width = min(int(gene.key_width), columns.shape[1])
+    if slot_width == 0:
+        return
+    present = columns[:, 0] != I_INF
+    slot = columns[:, :slot_width]
+    outside = np.logical_or(slot < 0, slot >= key_span)
+    bad = np.logical_and(present, outside.any(axis=1))
+    rows = np.flatnonzero(bad)
+    if rows.size == 0:
+        return
+    offending = slot[np.logical_and(outside, present[:, None])]
+    raise TensorNEATError(
+        f"{name}.measure: the dense single-centre route cannot address the centre's "
+        f"present {family} gene row(s) {_index_summary(rows)}: their key value(s) span "
+        f"{int(offending.min())}..{int(offending.max())}, outside "
+        f"[0, genome.key_span) = [0, {key_span}). The dense key table treats an "
+        f"unaddressable key as absent, while the row-wise merge matches it exactly, so "
+        f"this call would under-count that family's disjoint/excess genes. Keep every "
+        f"allocated structural key inside [0, {key_span}) (or raise key_span in the shape "
+        f"signature), or construct DefaultDistance(dense_single_centre=False) when the "
+        f"payload legitimately holds keys outside that window."
+    )
+
+
+def _validate_dense_keys(name: str, genome, payload: tuple, digest) -> None:
+    """Validate the dense single-centre route's ``[0, key_span)`` key precondition.
+
+    Args:
+        name: Operator class name, used in the error message.
+        genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene``/``key_span``.
+        payload (tuple): The four centre arrays, batch ``1``.
+        digest (DistanceDigest): Population digest from :meth:`BaseDistance.prepare`.
+
+    Raises:
+        TensorNEATError: If the digest's per-individual out-of-range counts are non-zero, or if
+            a present centre key is negative or not below ``genome.key_span``.
+
+    Notes:
+        **Host data only.**  Each leaf is inspected with :func:`_host_array`, which answers
+        ``None`` for an :class:`evoxc.SymbolicTensor`, so a traced digest or a traced centre is
+        skipped silently and this function emits no traced op (the ``measure`` op budget is
+        unchanged).  That makes the check a guarantee of a host call such as
+        ``genome.measure_distance``, never of an in-graph one — inside a trace the offending
+        count exists only as a tensor value, and branching on (or raising from) one is exactly
+        what this node forbids.
+        Both remedies are named in the message: keep every allocated structural key inside
+        ``[0, key_span)`` (or raise ``key_span`` in the shape signature), or construct
+        ``DefaultDistance(dense_single_centre=False)``, whose row-wise merge matches an
+        out-of-range key exactly.
+    """
+    key_span = int(genome.key_span)
+    for family, oor, gene, keys in (
+        ("node", digest.node_oor, genome.node_gene, payload[0]),
+        ("conn", digest.conn_oor, genome.conn_gene, payload[2]),
+    ):
+        counts = _host_array(oor)
+        if counts is not None:
+            _reject_population_keys(name, family, key_span, counts)
+        _reject_centre_keys(name, family, key_span, gene, keys)
 
 
 def _broadcast_payload(payload: tuple, batch: int) -> tuple:
