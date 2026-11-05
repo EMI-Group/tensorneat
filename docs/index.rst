@@ -53,6 +53,12 @@ that shape.  ``Pipeline.auto_run`` evolves until
 ``fitness_target`` or ``generation_limit`` is reached and returns the best genome
 as a one-individual, batch-first payload.
 
+Exact gradients through an evolved topology are host-side as well:
+``genome.DefaultGenome`` and ``genome.RecurrentGenome`` inherit
+``BaseGenomeHost.grad_from_payload`` (``tensorneat.genome.host``), which derives
+the schedule on the host and returns ``(node_attr_grads, conn_attr_grads)`` for
+one batch-first payload.
+
 API reference
 -------------
 
