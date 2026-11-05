@@ -89,7 +89,7 @@ The remaining reported symptoms trace to code outside this node: `algorithm/neat
 The families themselves need no behavioural change; their `crossover` is whole-gene, their `mutate`/`distance`/`forward` are the inherited and unit-tested ones.
 
 ## Unread and untested surface
-`BaseConn.get_historical_marker` (abstract raise in `conn/base.py` plus `OriginConn`'s override) and `BaseGene.length` have no caller in `src/`, `test/` or `examples/`.
+`BaseConn.get_historical_marker` (abstract raise in `conn/base.py` plus `OriginConn`'s override) and `BaseGene.length` have no caller in `src/`, `test/` or `examples/`; both survive only in docstrings (`algorithm/neat/neat.py`'s static-surface note names `node_gene.length`/`conn_gene.length`, `conn/origin.py`'s class docstring names the marker hook), so a grep hit is not a use site.
 `ConnOperands.zero` is stored by `BaseConn.prepare` and read nowhere; `NodeOperands.aggregation_ids`/`activation_ids` are stored by `BaseNode.prepare` and read nowhere (only the derived `*_masks` are consumed); `BaseNode.repr`/`to_dict` are pure `super()` pass-throughs.
 `common.tools.hash_rows` is the host-only twin of `hash_int32` and is now caller-free in `src/` — production hashes through `gene.hash` (`genome/host.py::_row_hashes`), so the two folds are cross-checked only by tests.
 `attr_width == 0` (the section above) is unreachable in this tree: no shipped family declares `attr_specs = ()` and `test/support/payloads.py` rejects a zero width, so every width-0 branch is untested as well as unused.
