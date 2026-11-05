@@ -3,7 +3,7 @@
 A gene row is split into integer *key columns* (``fixed_attrs``) and float32
 *attribute columns* (``attr_specs``); every gene operation is batch-first with the
 population on axis 0 and shapes that are static at trace time.
-This module owns the table (specifications, widths, row hash), the generic genetic
+This module owns the table (specifications, widths), the generic genetic
 operators (initialisation / mutation / crossover / distance) and the split-payload
 assembly helpers: it must never import ``jax``/``torch``, never run eager NumPy on
 the compute path, and never implement node/connection semantics (those live in
@@ -22,13 +22,6 @@ from ...common import State, StatefulBaseClass
 from ...common.errors import ConfigError
 from ...common.tools import to_numpy
 from .blocks import crossover_attrs, init_attrs, mutate_attrs, static_row
-
-#: Fold constants of the key-row hash; identical to
-#: :func:`tensorneat.common.tools.hash_rows` so an in-graph hash and the host-side
-#: legacy hash agree on the same key rows.
-HASH_GOLDEN: int = 0x9E3779B9
-HASH_SHIFT_LEFT: int = 6
-HASH_SHIFT_RIGHT: int = 2
 
 
 def _column_view(tensor: evoxc.SymbolicTensor, index: int) -> evoxc.SymbolicTensor:
@@ -141,42 +134,6 @@ def select_cascade(
     return out
 
 
-def hash_int32(keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
-    """Reduce the integer key columns of a gene row to one xor-mixed row hash.
-
-    No bitcast between float and int exists in evoxc, so the hash is taken over the
-    ``int32`` key columns only; float attributes are never hashed by bit pattern.
-    The fold is the legacy one (``hash ^= word + 0x9E3779B9 + (hash << 6) + (hash >> 2)``,
-    left to right) evaluated in ``uint32``, so the in-graph value equals
-    :func:`tensorneat.common.tools.hash_rows` on the same key rows and equal key rows
-    hash equal across runs.
-
-    Args:
-        keys: Key columns of one gene family, ``(*shape, key_width)`` int32.
-
-    Returns:
-        ``(*shape,)`` uint32 row hashes, one per gene row.
-    """
-    hashes = enp.zeros(tuple(keys.shape[:-1]), dtype=evoxc.uint32)
-    width = int(keys.shape[-1])
-    if width == 0:  # the empty fold: no word is mixed in
-        return hashes
-    golden = enp.full((), HASH_GOLDEN, dtype=evoxc.uint32)
-    shift_left = enp.full((), HASH_SHIFT_LEFT, dtype=evoxc.uint32)
-    shift_right = enp.full((), HASH_SHIFT_RIGHT, dtype=evoxc.uint32)
-    for index in range(width):
-        word = evoxc.cast(column(keys, index), evoxc.uint32)
-        mixed = evoxc.add(
-            evoxc.add(word, golden),
-            evoxc.add(
-                evoxc.bitwise_left_shift(hashes, shift_left),
-                evoxc.bitwise_right_shift(hashes, shift_right),
-            ),
-        )
-        hashes = evoxc.bitwise_xor(hashes, mixed)
-    return hashes
-
-
 @dataclass(frozen=True)
 class GeneAttr:
     """Declaration of one attribute column of a gene.
@@ -268,11 +225,17 @@ class BaseGene(StatefulBaseClass):
 
     @property
     def length(self) -> int:
-        """Total column count of a gene, key columns first (display only).
+        """Total column count of a gene row, key columns first.
+
+        A display/benchmark convenience: ``key_width + attr_width``, i.e. the width a
+        single packed row would have. The compute path never reads it -- keys and
+        attributes travel as separate tensors with separate dtypes (``int32`` /
+        ``float32``) and are never concatenated, so there is no packed row to size.
+        Its only caller today is ``benchmarks/spikes/forward_micro.py``, which sizes
+        byte counts from it.
 
         Returns:
-            ``key_width + attr_width``; the compute path never uses this, keys and
-            attributes are separate tensors with separate dtypes.
+            ``key_width + attr_width``.
         """
         return self.key_width + self.attr_width
 
@@ -792,20 +755,6 @@ class BaseGene(StatefulBaseClass):
                     term = evoxc.cast(term, evoxc.float32)
             total = term if total is None else evoxc.add(total, term)
         return evoxc.reshape(total, shape)
-
-    def hash(self, keys: evoxc.SymbolicTensor) -> evoxc.SymbolicTensor:
-        """Hash gene key rows for fast key alignment in crossover/distance.
-
-        Delegates to :func:`hash_int32`, an xor-mix over the ``int32`` key columns;
-        float attributes are compared only after the keys align.
-
-        Args:
-            keys: Key columns of one gene family, ``(*shape, key_width)`` int32.
-
-        Returns:
-            ``(*shape,)`` uint32 row hashes.
-        """
-        return hash_int32(keys)
 
     # ------------------------------------------------------------------ #
     # host-only presentation

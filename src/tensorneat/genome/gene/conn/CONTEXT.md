@@ -33,7 +33,7 @@ The message stays a pure elementwise function of `(attrs, source_values)`: no cr
 Shape disagreements, an unknown marker, a wrong column count or an unusable attribute width raise `common.errors.ConfigError`.
 
 ## Genetic operators
-`mutate`, `distance` and `hash` are inherited from `BaseGene` and act on the float attribute rows only; NaN padding rows stay NaN.
+`mutate` and `distance` are inherited from `BaseGene` and act on the float attribute rows only; NaN padding rows stay NaN.
 `BaseGene.crossover` (per-column 50/50 pick) is the `DefaultConn` behaviour.
 `OriginConn.crossover` draws one normal per gene row (`(*shape, 1)`) and `select`s that whole attribute row from one parent, so columns of two parents never mix.
 
