@@ -170,6 +170,7 @@ At pipeline level the rollout is only 6–18 % of the CartPole evaluate share (t
 - On numpy, keep `max_step` small for every RL environment (cost is linear in the horizon, ≈0.35 ms per step per 100 individuals for CartPole, ≈0.23 for Pendulum and ≈0.30 for MountainCar) and expect a generation to be genome-forward-bound, not rollout-bound; on iree the rollout *component* alone is 3.4–10.0× cheaper (`./rl/CONTEXT.md` holds the per-cell component table), while a full pipelined iree leg is far slower per generation than numpy on llvm-cpu (`benchmarks/BACKENDS.md`).
 - `./rl/CONTEXT.md` holds the recommended demo configurations: Pendulum needs a 6-node hidden layer to reach ≈`-271` at generation 5, and MountainCarContinuous converges to the idle policy, so aim at `-0.5` for a demo that terminates.
 - Re-measure with the dev harness pattern (`problem.evaluate` traced alone with a trivial `act_fn` for this node's own cost; a `step` with `evaluate` monkeypatched to zeros for the evaluate share), never with a single-shot pipeline run: build (0.5–1.2 s) dominates one generation at small budgets.
+  For dispatch counts, wrap `evoxc.backends.numpy.interpreter.Interpreter._run_block`, key each block by `id(block)` and accumulate `(executions, len(block.ops))`: the second `Pipeline.step` of a process then yields the executed-op total and the per-timestep body widths directly (clear the table between the build step and the measured one), and a `forward_prepared` monkeypatch returning zeros isolates the environment share.
 
 ## Routing Table
 | Path | Responsibility |
