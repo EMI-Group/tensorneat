@@ -260,7 +260,7 @@ This node is additionally verified by driving `Pipeline` end-to-end on the numpy
 ## Constraints
 No `jax`/`torch`/`numpy.random` import; `import tensorneat` must stay free of them (release gate). `numpy` appears only as `numpy.finfo(dtype).max` in `_finite_bound`, a host-side scalar read.
 No branching, `bool()`, `len()` or host reads on traced values — static Python `if`/`for` over constructor configuration is fine and unrolls at trace time.
-No `.at[]`, no `cumsum` on the compute path (prefix sums are triangular `dot`), no `tril`/`triu`/`flip`/`iota`, no rank>=3 `scatter` (use `scatter_row` or a static constant — see `## StableHLO Export Rules`), no `where=`/`initial=`/`any`/`all`/`take`/`searchsorted`/`repeat`, no `vmap` over anything region-bearing, no `fori_loop`/`switch`.
+No `.at[]`, no `cumsum` on the compute path (prefix sums are triangular `dot`), no `tril`/`triu`/`flip`/`iota`, no rank>=3 `scatter` (flatten to a rank-2 row write or bake a static constant — see `## StableHLO Export Rules`), no `where=`/`initial=`/`any`/`all`/`take`/`searchsorted`/`repeat`, no `vmap` over anything region-bearing, no `fori_loop`/`switch`.
 Shapes are static: `P`, `S`, `max_nodes`, `max_conns` are fixed at build time; a change forces a rebuild by the pipeline.
 Errors: configuration validation raises `common.errors.TensorNEATError` with a named message; trace/shape/backend errors propagate unchanged and are never re-wrapped or silently fallen back.
 State keys touched: `randkey`, `pop_size`, `pop`, `generation`, `species`, plus the genome/problem keys documented above — nothing else.
