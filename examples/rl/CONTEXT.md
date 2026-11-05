@@ -29,7 +29,8 @@ The `init_hidden_layers=(6,)` layer is load-bearing: the same budget without it 
 Per-generation cost is 0.23–0.40 s at pop 100 / `max_step=200` with the hidden layer, plus a 0.28–0.30 s one-off build; the hidden layer roughly doubles the genome forward, which is the dominant term.
 ### MountainCarContinuous
 Two inputs `(position, velocity)`, one output logit; the problem owns the squashing, `a = tanh(logit)`, so `output_transform` must stay unset.
-Cost is linear in the horizon: 0.63–1.24 s per generation at pop 100 / `max_step=999` (≈10.4 s for the ten generations, which is why the budget is 10), plus a 0.28 s build; the same population at 200 steps costs ~0.15 s per generation.This environment's reward has an idle optimum — `a = 0` returns exactly `0.0` while any action costs `0.1*a**2` per step — so evolution at pop 100 converges to idleness instead of solving.
+Cost is linear in the horizon: 0.63–1.24 s per generation at pop 100 / `max_step=999` (≈10.4 s for the ten generations, which is why the budget is 10), plus a 0.28 s build; the same population at 200 steps costs ~0.15 s per generation.
+This environment's reward has an idle optimum — `a = 0` returns exactly `0.0` while any action costs `0.1*a**2` per step — so evolution at pop 100 converges to idleness instead of solving.
 Measured references for the script docstring: a hand-written `a = sign(velocity)` bang-bang policy returns `90.8` (min 89.1 over 8 episodes) at `max_step` 200 and 999, "always push right" returns exactly `-20` at 200 and `-99.9` at 999, and a solving episode nets about `+89` because the penalty accrues over the whole climb.
 The script therefore demonstrates the integration (environment + one-logit policy shape + pipeline), not a solved control task, and its docstring says so.
 
@@ -65,7 +66,7 @@ Construction-level configuration only; there is no eager compute mode, so a scri
 Never set `output_transform` on these three problems: each one owns its action mapping (argmax ordering) or squashing (`tanh`).
 Host-only introspection (`network_dict`, `repr`, `sympy_func`, `visualize`) never feeds back into a graph, and needs a one-individual (`P == 1`) payload.
 `max_in_degree` is a genome static: a recurrent genome accumulates many incoming edges per node (the `func_fit` recurrent example sizes the window at 16); too small a window aborts the run with "the execution schedule dropped N connection(s)".
-No argparse, no helper packages, no unused imports; a script stays ≲ 110 lines and is a single readable top-level run (`cartpole.py` 71, `pendulum.py` 81, `mountaincar.py` 87 lines).
+No argparse, no helper packages, no unused imports; a script stays ≲ 110 lines and is a single readable top-level run (`cartpole.py` 71, `pendulum.py` 82, `mountaincar.py` 88 lines).
 Keep the whole-repo rule that nothing here imports `jax`, `torch`, `brax`, `gymnax` or `mujoco`.
 
 ## Test Strategy
