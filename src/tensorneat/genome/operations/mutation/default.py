@@ -421,7 +421,12 @@ class DefaultMutation(BaseMutation):
                 allowed,
                 evoxc.logical_not(
                     closes_cycle(
-                        node_keys, conn_keys, in_keys, out_keys, genome.key_span
+                        state,
+                        node_keys,
+                        conn_keys,
+                        in_keys,
+                        out_keys,
+                        genome.key_span,
                     )
                 ),
             )

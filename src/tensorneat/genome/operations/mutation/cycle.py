@@ -60,6 +60,16 @@ payloads), while adding a quadratic ``(P, N*N + 1)`` float32 buffer (5 MB at pop
 ``max_nodes`` 50, 160 MB at pop 1000 / ``max_nodes`` 200) that no static ceiling in this file
 bounds.  The scatter hop stays.
 
+The shipped formulation is selected by ``state.kernel_mode`` (:mod:`~.cycle_accelerator`): the
+default ``"host"`` is the scatter hop above, and ``"accelerator"`` is the scatter-free hop that
+carries a ``(P, N)`` reached set and marks destinations with a broadcast reduction and one
+reduce over the edge axis, because a compiled backend lowers ``scatter`` to one workgroup of
+one thread (about 17-21 ns per *update* element, i.e. 1.05 ms per hop for the 50 000 update
+cells of the ``xor_p500`` case at pop 500) while a reduction spreads over its workgroups.
+Both spellings reuse this module's dense key table and resolution, so they answer the same
+boolean for the same payload, and the switch is a static read of a plain string on the
+configuration ``State`` — never a traced value — so a graph contains exactly one of them.
+
 IREE constraint (release gate): the frontier is seeded with a one-hot ``equal`` over the flat
 ``(P, width)`` index, **never** with a boolean ``scatter``.  A ``scatter`` whose result is the
 ``while_loop`` init makes ``iree-compile`` (IREE 3.11, llvm-cpu) SIGSEGV on the generation
@@ -232,48 +242,32 @@ def _rows_of(
     )
 
 
-def closes_cycle(
+def _closes_cycle_host(
     node_keys: evoxc.SymbolicTensor,
     conn_keys: evoxc.SymbolicTensor,
     src_keys: evoxc.SymbolicTensor,
     dst_keys: evoxc.SymbolicTensor,
     key_span: int,
 ) -> evoxc.SymbolicTensor:
-    """Ask whether adding one edge per individual would close a cycle.
-
-    A cycle is closed exactly when ``src`` is reachable from ``dst`` in the graph that
-    already exists, so the predicate seeds a frontier at ``dst`` and grows it along the
-    existing edges until it stops growing; a self-loop on an existing node answers ``True``.
+    """The shipped scatter hop — :func:`closes_cycle`'s default formulation.
 
     Args:
         node_keys: ``(P, N) int32`` node key rows, ``I_INF`` padded.
-        conn_keys: ``(P, E, CK) int32`` connection key rows — columns ``0``/``1`` are the
-            source and destination node keys; absent rows are ``I_INF``.
+        conn_keys: ``(P, E, CK) int32`` connection key rows.
         src_keys: ``(P,) int32`` candidate edge source node key.
         dst_keys: ``(P,) int32`` candidate edge destination node key.
-        key_span (int): ``S``, ``genome.key_span`` — the static addressable key window of the
-            dense table, the same one the execution schedule uses.  It cannot be derived from
-            any operand shape, so the caller passes it.
+        key_span (int): ``S``, the static addressable key window.
 
     Returns:
-        ``(P,) bool`` True where the candidate edge would close a cycle.  A degenerate
-        candidate (either endpoint absent from the genome, ``I_INF``, or outside
-        ``[0, key_span)``) answers ``False``: the mutation is refused for another reason,
-        never this one.
+        ``(P,) bool``, the answer :func:`closes_cycle` documents.
 
     Raises:
         evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
-        ConfigError: when ``key_span`` does not describe the table it builds (a host-side
-            configuration error, never a traced branch).
+        ConfigError: when ``key_span`` does not describe the table it builds.
 
     Notes:
-        Both endpoints of every existing edge plus both endpoints of the candidate edge are
-        resolved in one :func:`_rows_of` gather, so the whole predicate pays that lookup once.
-        One ``while_loop`` then carries the flat frontier and the "still growing" flag; its
-        body is three ``O(P*E)`` ops (gather, ``select``, ``scatter``) plus the one-op growth
-        test, and it runs once per real hop.  The absent-endpoint term is folded into the
-        gather's index once, outside the region, instead of into a per-hop ``logical_and``.
-        The batch axis is written explicitly — no ``vmap`` over the region.
+        Split out of :func:`closes_cycle` unchanged, so the formulation switch is one host
+        branch and the shipped graph keeps its exact op order and constants.
     """
     pop_size, node_count = node_keys.shape
     edge_count = conn_keys.shape[1]
@@ -366,3 +360,63 @@ def closes_cycle(
     return enp.reshape(
         evoxc.logical_and(evoxc.logical_and(reached, src_hit), dst_hit), (pop_size,)
     )
+
+
+def closes_cycle(
+    state,
+    node_keys: evoxc.SymbolicTensor,
+    conn_keys: evoxc.SymbolicTensor,
+    src_keys: evoxc.SymbolicTensor,
+    dst_keys: evoxc.SymbolicTensor,
+    key_span: int,
+) -> evoxc.SymbolicTensor:
+    """Ask whether adding one edge per individual would close a cycle.
+
+    A cycle is closed exactly when ``src`` is reachable from ``dst`` in the graph that
+    already exists, so the predicate seeds a frontier at ``dst`` and grows it along the
+    existing edges until it stops growing; a self-loop on an existing node answers ``True``.
+
+    Args:
+        state (Any): The trace-time configuration ``State``; its
+            :data:`~.cycle_accelerator.KERNEL_MODE_KEY` entry selects the formulation.
+        node_keys: ``(P, N) int32`` node key rows, ``I_INF`` padded.
+        conn_keys: ``(P, E, CK) int32`` connection key rows — columns ``0``/``1`` are the
+            source and destination node keys; absent rows are ``I_INF``.
+        src_keys: ``(P,) int32`` candidate edge source node key.
+        dst_keys: ``(P,) int32`` candidate edge destination node key.
+        key_span (int): ``S``, ``genome.key_span`` — the static addressable key window of the
+            dense table, the same one the execution schedule uses.  It cannot be derived from
+            any operand shape, so the caller passes it.
+
+    Returns:
+        ``(P,) bool`` True where the candidate edge would close a cycle.  A degenerate
+        candidate (either endpoint absent from the genome, ``I_INF``, or outside
+        ``[0, key_span)``) answers ``False``: the mutation is refused for another reason,
+        never this one.
+
+    Raises:
+        TensorNEATError: If the state's kernel-mode entry is not one of the documented
+            formulations.
+        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
+        ConfigError: when ``key_span`` does not describe the table it builds (a host-side
+            configuration error, never a traced branch).
+
+    Notes:
+        Both formulations resolve keys through the same dense table and answer the same
+        boolean, so the caller's decision never depends on the switch: the default
+        ``"host"`` is :func:`_closes_cycle_host`, whose frontier is a flat ``(P, N + 1)``
+        vector written with one ``scatter`` per hop, and ``"accelerator"`` is
+        :func:`~.cycle_accelerator.closes_cycle_accelerator`, which carries a ``(P, N)``
+        reached set and marks destinations with a broadcast reduction instead of a write
+        because a compiled backend serialises ``scatter`` (see that module's note).
+        The branch is a static host read — the entry is a plain string on the configuration
+        ``State`` — so a graph contains exactly one of the two spellings and no traced value
+        ever drives it.  The batch axis is written explicitly — no ``vmap`` over the region.
+    """
+    from . import cycle_accelerator
+
+    if cycle_accelerator.selected(state):
+        return cycle_accelerator.closes_cycle_accelerator(
+            node_keys, conn_keys, src_keys, dst_keys, key_span
+        )
+    return _closes_cycle_host(node_keys, conn_keys, src_keys, dst_keys, key_span)
