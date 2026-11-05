@@ -25,7 +25,7 @@ Post-fix quality holds the tolerance on three of the four measured cases: `xor3d
 `xor3d_p100` still fails the quality tolerance: new median -0.2500 against the -0.0983 threshold (old -0.0894, tolerance 0.0089), because only seed 42 escapes the constant-0.5 plateau (-0.0143, first generation above -0.24 is 55) while seeds 43 and 44 stay at -0.2500.
 That record's timing rows are FAIL and pre-tiling (0.56x/0.55x/0.62x on xor3d, 0.10x on pagie with the new-side pagie leg at 4.53 s/gen) because it predates the evaluate tiling; timing is not what that artifact establishes.
 ## Layout
-- `run_benchmark.py` — CLI: plans the case matrix, spawns the worker subprocesses, aggregates, regenerates `RESULTS.md`.
+- `run_benchmark.py` — CLI: plans the case matrix, spawns the worker subprocesses, aggregates, regenerates `RESULTS.md`; `--list`/`--dry-run` are numpy-free, `--render-from-json` re-renders without a measurement, and `--persist-note` (with `--render-from-json` + `--report-note`) writes a note into a record's `meta` only.
 - `cases.py` — the case matrix: the logical workload (problem, genome, NEAT config, pop/gen budget, target) declared as data and shared by both implementations.
 - `harness/` — protocol (schema, aggregation, verdict rules), per-implementation adapters, worker entry point, report writer plus its presentation helpers (`report_format.py`) and data-derived sections (`report_sections.py`).
 - `spikes/` — measured formulation evidence behind the depth-parallel design (`FORMULATION.md` + runnable micro-benchmark).
