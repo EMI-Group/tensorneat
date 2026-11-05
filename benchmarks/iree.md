@@ -1,7 +1,7 @@
 # TensorNEAT benchmark — IREE backend attempt (llvm-cpu)
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from `benchmarks/results/iree.json` at 2026-11-02T07:29:26+00:00.
-> Re-rendered from that same JSON at 2026-11-04T19:39:35+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-05T04:05:55+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > It must not be hand-edited: rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *Historical pre-fix record, superseded by `BACKENDS.md` — the current measured `iree` evidence, where the backend lowers, compiles and runs every shipped case. Every case below errored in `Pipeline.setup` before generation 0, so no row here is current. The measured CPU contract is `RESULTS.md` (numpy reference backend).*
@@ -220,7 +220,7 @@ python benchmarks/run_benchmark.py --list
 python benchmarks/run_benchmark.py --dry-run
 ```
 
-Interpreter used: /tmp/genesis/task_d7be275380ce6fc0/iree-venv/bin/python
+Interpreter used: python
 
 Cases: xor_p100, xor_p500, xor_p1000, xor3d_p100, xor3d_p500, xor3d_p1000, custom_pagie_p500, cartpole_p100. Timed generations: 2, warmup generations (untimed): 1, repeats: 1 (seeds 42), threads: runtime defaults (`--threads 0`). Backend(s) of the new side: iree; no old-side row is recorded in this document, so every case here is new-side only. `--out` defaults to `benchmarks/RESULTS.md` and `--json` to `benchmarks/results/latest.json` (scratch, git-ignored); the record this report was rendered from (`iree.json`) is committed at `benchmarks/results/iree.json` beside that default, so every table cell is traceable. A thread-bound sensitivity run of the XOR family (`--threads 1`, same CLI) is recorded in `benchmarks/THREADS.md` next to this report.
 

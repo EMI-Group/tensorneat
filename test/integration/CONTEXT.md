@@ -2,7 +2,7 @@
 
 ## Intent
 Prove the *assembled* library rather than its kernels: a `Pipeline` built from the documented public API evolves XOR, reproduces itself from `(seed, config, shapes)`, survives a shape-signature change, and leaves a loadable checkpoint.
-Twenty-one tests across five modules drive the real `Pipeline` (`setup` → `step` / `auto_run`) on the numpy reference interpreter and assert on what the pipeline returns, prints or writes, never on an intermediate kernel.
+Twenty-three tests across seven modules drive the real `Pipeline` (`setup` → `step` / `auto_run`) on the numpy reference interpreter and assert on what the pipeline returns, prints or writes, never on an intermediate kernel.
 No `jax`/`torch`, no network, no GPU, no wall-clock assertions: a run is judged by generations, fitness, payload shapes and compile counts.
 Every module carries `pytestmark = [pytest.mark.slow]`; `pytest -m slow` selects the directory, the default gate leaves it out.
 

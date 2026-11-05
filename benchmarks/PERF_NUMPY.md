@@ -5,22 +5,22 @@
 > the tiled func-fit evaluate plus the RL rollout hoist (`ce5bb88` → `90d97b4`); each pass keeps its
 > own measured pair, its own commits and its own protocol below.
 > `RESULTS.md` remains the *generated* old-vs-new harness report (rendered from
-> `results/authoritative.json`); its new-side rows **predate both passes** and are stale until the
-> harness is re-run. This file is not a re-verdict: it holds the measured before/after pair of each
-> pass — pass 1 with both cells taken in one session, alternating trees so drift cancels, pass 2 with
-> an interleaved same-session no-regression control beside a cross-session `before` column that is
-> labelled indicative.
+> `results/authoritative.json`); its new-side rows **carry pass 1 and predate pass 2**, so they are
+> stale until the harness is re-run. This file is not a re-verdict: it holds the measured before/after
+> pair of each pass — pass 1 with both cells taken in one session, alternating trees so drift cancels,
+> pass 2 with an interleaved same-session no-regression control beside a cross-session `before`
+> column that is labelled indicative.
 
 ## Which tree each record belongs to
 
 No committed artifact measures the merged tree, and each record in this directory speaks only for the
 tree and session it names — the table in `CONTEXT.md` ("Provenance") is the canonical map.
 The three trees this file depends on: `results/authoritative.json` (and therefore `RESULTS.md`) was
-measured at `ebeaf1f8` on 2026-11-04T19:01Z, before both passes and before the search-quality fixes;
-pass 2's `after` record `results/fix_after.json` was measured at `90d97b4` on 2026-11-04T21:51Z, after
-both passes and before the search-quality fixes; `results/xor3d_quality_2026-11-04.json` was measured
-at `58657f6` on 2026-11-05T00:57Z on a branch that carries the search-quality fixes but not pass 2, so
-it is post-quality and pre-tiling.
+measured at `ebeaf1f8` on 2026-11-04T19:01Z, after pass 1 and before pass 2 and before the
+search-quality fixes; pass 2's `after` record `results/fix_after.json` was measured at `90d97b4` on
+2026-11-04T21:51Z, after both passes and before the search-quality fixes;
+`results/xor3d_quality_2026-11-04.json` was measured at `58657f6` on 2026-11-05T00:57Z on a branch
+that carries the search-quality fixes but not pass 2, so it is post-quality and pre-tiling.
 So the only post-pass-2 timing numbers in this node are the case-scoped rows in pass 2 below, and they
 describe `90d97b4`, not the merged tree: the search-quality fixes change the mutation and speciation
 paths that the timings include, and no committed record re-measures that cost.
@@ -165,9 +165,9 @@ seed ⇒ same evolution), so that verdict is unchanged by this pass.
   the two trees, and the median is the load-bearing statistic (the pop-1000 mean is skewed by one slow
   generation and is reported for completeness).
 - The contract verdict is still owned by the generated report; this file states the before/after pair
-  of the pass, not a re-verdict. The committed `RESULTS.md`/`authoritative.json` pair predates the pass
-  (measured at `ebeaf1f8`, 2026-11-04T18:20Z), so its new-side rows are the pre-pass cost and must not
-  be read as this pass's `after` column.
+  of the pass, not a re-verdict. The committed `RESULTS.md`/`authoritative.json` pair postdates this
+  pass and predates pass 2 (measured at `ebeaf1f8`, 2026-11-04T19:01Z), so its new-side rows are the
+  post-pass-1 / pre-pass-2 cost and must not be read as this pass's `after` column.
 - Build time is one-off per shape signature and improved on every cell, but a `T=50`-step build now
   traces the distance kernel inside a scan body instead of 20 times, which is why it fell.
 

@@ -116,4 +116,4 @@ Files stay under ~1000 lines.
 | `./test_grad.py` | `grad` parity against `jax.grad` of the same loss, single-option ACT/AGG (5). |
 | `../unit` | numpy-backend kernel tests (the correctness oracle for the rewrite when no legacy oracle exists). |
 | `../support` | `runner` (the only `evoxc` entry point), `payloads` (hand-built genomes), `lazy.require`. |
-| `../benchmarks/legacy_jax` | The frozen legacy implementation — read-only oracle for this directory. |
+| `../../benchmarks/legacy_jax` | The frozen legacy implementation (sibling node) — read-only oracle for this directory; a change there is escalated to the parent. |

@@ -107,7 +107,7 @@ Pendulum rollout component, same protocol: 45.8 ms numpy / 5.4 ms iree at pop 10
 MountainCar rollout component, same protocol: 59.6 / 6.0 ms at pop 100 and `max_step=200`, 299.2 / 29.9 at `max_step=999`, with a 0.013–0.019 s numpy build versus 0.68–0.69 s on iree — so iree is 3.4–10.0× cheaper per generation once built.
 Cost is linear in `max_step` on both backends and nearly flat in `pop` (10× the population costs ≈1.07–1.09×), because the interpreter's fixed per-op cost sets the time for the two continuous environments (32 real ops per Pendulum step, 37 per MountainCar step, against CartPole's 60); no crossover was measured.
 At pipeline level the rollout is only 6–18 % of the CartPole evaluate share (the genome forward is the rest): a Pendulum generation with a 6-node hidden layer is 492.0 ms with an evaluate share of 465 ms and a rollout share of 9.9 %, and a MountainCar generation is 377.8 ms / 342 ms / 17.5 %, so a continuous-control generation is genome-forward-bound too (pre-hoist hand rows, tabulated in `./rl/CONTEXT.md`).
-`Pipeline` cannot build on iree today for reasons owned by `algorithm`/`genome`/`common`, so the shipped default stays `numpy` and the iree figures above are component measurements.
+`Pipeline` builds and runs end to end on `backend="iree"` (`test/backends/test_iree_pipeline.py` is the gate), so the shipped default stays `numpy` for speed: the iree figures above are component measurements and a compiled pipeline is far slower per generation on llvm-cpu (`benchmarks/BACKENDS.md`).
 `./rl/CONTEXT.md` is the authoritative table for the three environments (per-cell numpy/iree milliseconds, build seconds, numeric agreement between backends); the rows here are the compact subset.
 
 ## Constraints
@@ -135,8 +135,8 @@ At pipeline level the rollout is only 6–18 % of the CartPole evaluate share (t
 ## Known Issues
 - `Pipeline.show` on **HyperNEAT** still fails before it ever reaches this node: `HyperNEAT._query_substrate` takes `pop_size = self.pop_size` instead of the payload's leading dimension, so the pipeline's one-individual schedule derivation raises `evoxc.core.errors.ShapeError: concatenate: dims must agree, got P*Q vs 1`.
   `problem.FuncFit.show` itself handles the nested `SubstrateSchedule` (verified at `P=1` and `P>1`); the algorithm node has to derive `P` from the payload it is handed.
-- The RL environments control-flow on purpose, so they run on numpy / iree-llvm-cpu / xla only: TVM rejects `if`/`while`/gather/scatter, and a full `Pipeline` cannot build on iree today either — `algorithm/neat/species.py` scatters a rank-3 operand along axis 0, `genome/gene/base.py` emits a `uint32` constant, and `common/tensorization.py::derive_schedule`'s `flat_scatter` fails iree-compile legalisation.
-  Both must keep failing loudly, never fall back.
+- The RL environments control-flow on purpose, so they run on numpy / iree-llvm-cpu / xla only: TVM rejects `if`/`while`/gather/scatter, and an unsupported backend or an unlowerable kernel raises (`evoxc.BackendError`), never falls back.
+  A full `Pipeline` — these rollouts included — builds and runs on iree end to end (`test/backends/test_iree_pipeline.py`), at far lower speed per generation than numpy on llvm-cpu (`benchmarks/BACKENDS.md`).
 - Cross-backend RL fitness is not bitwise reproducible (numpy and iree round float32 differently, so a sensitive policy can differ by ±1 step); agreement is float32 rounding (`max_rel ≈1e-6`), and no test may assert cross-backend trajectory equality.
 - `MountainCarContinuous`'s standard reward has an idle optimum of exactly `0.0` — an action near zero pays neither the `100` bonus nor the `0.1*a**2` penalty — so a tabula-rasa evolutionary run converges there instead of to a solving policy.
   Measured: a `sign(velocity)` bang-bang policy nets ≈`90.8`, while NEAT at pop 100 ends at `-0.007 … -0.0` across horizons and hidden-layer settings.
@@ -148,8 +148,8 @@ At pipeline level the rollout is only 6–18 % of the CartPole evaluate share (t
   - `common/tensorization.py` bakes 104 population-scaled constants (3.43 MB at P=200, 8.56 MB at P=500, e.g. `(P, max_conns+1)` twice per window table).
   - `problem/base.py::finalize_fitness` costs 3 ops where `evoxc.nan_to_num(x, nan=-inf)` would cost 1; not taken (inf semantics differ from numpy's).
   - `rl/_common.to_numpy` duplicates `common/tools.to_numpy` (the latter duck-types `.numpy()` and returns an `ndarray` unchanged, the former checks `isinstance(evoxc.Tensor)`); it is the accessor all three RL `show` paths use, while `func_fit.py` imports `common.to_numpy`, so the two copies are still both live and consolidating them is a sibling-node decision.
-- On numpy, keep `max_step` small for every RL environment (cost is linear in the horizon, ≈0.35 ms per step per 100 individuals for CartPole, ≈0.23 for Pendulum and ≈0.30 for MountainCar) and expect a generation to be genome-forward-bound, not rollout-bound; on iree the rollouts are 3.4–10.0× cheaper but no end-to-end iree run is possible today.
-- `./rl/CONTEXT.md` holds the recommended demo configurations: Pendulum needs a 6-node hidden layer to reach ≈`-239` in 8 generations, and MountainCarContinuous converges to the idle policy, so aim at `-0.5` for a demo that terminates.
+- On numpy, keep `max_step` small for every RL environment (cost is linear in the horizon, ≈0.35 ms per step per 100 individuals for CartPole, ≈0.23 for Pendulum and ≈0.30 for MountainCar) and expect a generation to be genome-forward-bound, not rollout-bound; on iree the rollout *component* alone is 3.4–10.0× cheaper (`./rl/CONTEXT.md` holds the per-cell component table), while a full pipelined iree leg is far slower per generation than numpy on llvm-cpu (`benchmarks/BACKENDS.md`).
+- `./rl/CONTEXT.md` holds the recommended demo configurations: Pendulum needs a 6-node hidden layer to reach ≈`-271` at generation 5, and MountainCarContinuous converges to the idle policy, so aim at `-0.5` for a demo that terminates.
 - Re-measure with the dev harness pattern (`problem.evaluate` traced alone with a trivial `act_fn` for this node's own cost; a `step` with `evaluate` monkeypatched to zeros for the evaluate share), never with a single-shot pipeline run: build (0.5–1.2 s) dominates one generation at small budgets.
 
 ## Routing Table
@@ -160,4 +160,4 @@ At pipeline level the rollout is only 6–18 % of the CartPole evaluate share (t
 | `./rl` | Three batched evoxc environments — `CartPole` (discrete), `Pendulum` (continuous torque), `MountainCarContinuous` (continuous force with a one-time goal bonus) — each a `while_loop` over timesteps, plus `_common.py` host helpers, the measured cost table and the recipe for user-defined evoxc environments. |
 | `../common/errors.py` | `TensorNEATError`, the single config-validation exception (sibling — read-only, escalate writes to parent). |
 | `../genome/base.py` | Produces the batch-first `transformed` schedule this node consumes and the `forward` kernel used as `act_fn` (sibling — read-only). |
-| `../../test/unit/problem` | Unit suites for this node (sibling — read-only, escalate writes to parent). |
+| `../../../test/unit/problem` | Unit suites for this node (sibling — read-only, escalate writes to parent). |

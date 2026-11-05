@@ -76,7 +76,7 @@ Shapes stay small (`pop <= 8`, `S <= 8`; horizons `max_step <= 50` for CartPole/
 ## Constraints
 A test may not edit `../../../src`, `../../../benchmarks` or `pyproject.toml`; a defect or a doc conflict found here goes into the report to the parent.
 A src defect is never hidden: keep the real assertion and mark the test `@pytest.mark.xfail(strict=True, reason="src defect: …")`. No such xfail exists today.
-Files stay under ~1000 lines: `test_func_fit.py` 811, `test_cartpole.py` 835, `test_pendulum.py` 599, `test_mountaincar.py` 599, `test_problem_api.py` 482, `test_prepared_rollout.py` 204, `conftest.py` 335.
+Files stay under ~1000 lines: `test_func_fit.py` 811, `test_cartpole.py` 835, `test_pendulum.py` 599, `test_mountaincar.py` 599, `test_problem_api.py` 482, `test_prepared_rollout.py` 203, `conftest.py` 335.
 Suite output must be deterministic — CartPole randomness is driven by explicit integer `key_seed`s and `CustomFuncFit` by explicit `seed`s, never by the global numpy state; Pendulum and MountainCar likewise only ever pass an integer `key_seed` (never a literal drawn state) so a re-run reproduces every number.
 `pytest.mark.slow` and `pytest.mark.parity` are not used here: every case is a batched `while_loop` over at most a few hundred float32 steps on populations of at most eight individuals (~5 s for the whole directory).
 
