@@ -111,6 +111,7 @@ Rejected variants, each reverted:
 - Files <= ~1000 lines (`cartpole.py` 693, `mountaincar.py` 833, `pendulum.py` 715, `_common.py` 214).
 - Per-timestep IREE dispatch inventory at the reference geometry (`L = 3`): `CartPole` `^bb5` 3 + 4·L + `^bb8` 12 = **27**, `Pendulum` 4 + 4·L + 3 = **23**, `MountainCarContinuous` 3 + 4·L + 4 = **19**, against 27 / 24 / 22 before the diets.
   `^bb5` (the genome's per-query prelude) and `^bb7` (its level loop) are the sibling genome node's, so this node's whole remaining budget is `^bb8` 12 / 3 / 4.
+  `L` is a **runtime** value — the population's own depth, the level `while`'s trip count — so the totals shift by 4 per `L`: instrumenting `Interpreter._run_block` over 20 `CartPole` generations at the reference geometry (the level body block executes `max_step × L` times) reads `L` 2 at the generation after setup, 3 at the median and 4 at the deepest, and the static sites of the dumps are 532 / 525 / 523 against 532 / 529 / 528 before.
 
 ## Measured cost
 Rollout component only (`evaluate` traced alone, no genome forward, toy policy — `1.5*sin(theta) + 0.5*theta_dot` for Pendulum, `3*position + 2*velocity + 1` for MountainCarContinuous, `(tanh(theta) - x, 2*theta + 3*theta_dot)` for CartPole), one `evoxc.build` then 7 `evoxc.run`, build excluded, **best median of 3 fresh processes**; evoxc 0.1.0, numpy 2.5.4, iree-base-compiler 3.11 (llvm-cpu), one 20-core box — the Pendulum/MountainCar rows on CPython 3.12, the CartPole rows on CPython 3.14 (an earlier session; the same box on 3.12 reads ≈7 % lower).
