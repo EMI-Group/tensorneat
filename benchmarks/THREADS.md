@@ -1,20 +1,20 @@
 # TensorNEAT benchmark — thread-bound sensitivity (XOR family, --threads 1)
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from `benchmarks/results/threads1.json` at 2026-11-02T06:31:32+00:00.
-> Re-rendered from that same JSON at 2026-11-05T04:05:58+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-05T04:54:29+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > It must not be hand-edited: rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *This is the thread-bound sensitivity run (`--threads 1`, the declared-contract condition) of the XOR family; the authoritative default-thread matrix is `RESULTS.md`.*
 
 ## Headline: old vs new
 
-| Case | Pop | Backend | Old ms/gen | New ms/gen | Speed-up | Speed-up range (best–worst) | Quality overlap | Old compile (s) | New compile (s) | Old peak RSS (MiB) | New peak RSS (MiB) | Old final best | New final best | Gens to target (old) | Gens to target (new) | Timing | Quality |
+| Case | Pop | Backend | Old ms/gen | New ms/gen | Speed-up | Speed-up range (worst–best) | Quality overlap | Old compile (s) | New compile (s) | Old peak RSS (MiB) | New peak RSS (MiB) | Old final best | New final best | Gens to target (old) | Gens to target (new) | Timing | Quality |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | xor_p100 | 100 | `numpy` | 35.79 | 53.92 | 0.66x | 0.56x–0.77x | inside | 2.816 | 0.539 | 578.4 | 145.3 | -0.0099 | -0.0303 | 78 | 98 | FAIL | FAIL |
 | xor_p500 | 500 | `numpy` | 127.71 | 360.12 | 0.35x | 0.28x–0.43x | new better | 2.713 | 1.469 | 615.9 | 1049.6 | -0.0000 | -0.0000 | 39 | 31 | FAIL | PASS |
 | xor_p1000 | 1000 | `numpy` | 252.06 | 665.46 | 0.38x | 0.37x–0.39x | inside | 2.689 | 2.163 | 627.5 | 1991.6 | -0.0000 | -0.0000 | 32 | 29 | FAIL | PASS |
 
-One row per case and new-side backend (the old side always runs on JAX). Speed-up is `old / new` per generation: above 1.00x the new side is faster. Speed-up range is `old_min/new_max` … `old_max/new_min` over the per-repeat medians, i.e. the best and worst case over the repeats. Quality overlap states where the new side's per-repeat final-best range sits against the old side's: `inside` when the ranges intersect (every new repeat inside the old range, or the ranges partially overlap), `new worse` when every new repeat is below the old range, `new better` when every new repeat is above it — an observation, never a replacement for the verdict. Timing PASS means new ms/generation is at or below the old one; quality PASS means the new final best stays within `max(10% × |old|, 0.001)` of the old one. Every cell comes from the aggregated JSON records of this run; `n/a (reason)` marks a cell that could not be reached (not run, skipped, error, or not recorded).
+One row per case and new-side backend (the old side always runs on JAX). Speed-up is `old / new` per generation: above 1.00x the new side is faster. Speed-up range is `old_min/new_max` … `old_max/new_min` over the per-repeat medians, printed worst first: the left value is the pessimistic bound for the new side and the right one the optimistic bound. Quality overlap states where the new side's per-repeat final-best range sits against the old side's: `inside` when the ranges intersect (every new repeat inside the old range, or the ranges partially overlap), `new worse` when every new repeat is below the old range, `new better` when every new repeat is above it — an observation, never a replacement for the verdict. Timing PASS means new ms/generation is at or below the old one; quality PASS means the new final best stays within `max(10% × |old|, 0.001)` of the old one. `Gens to target` is the median generation of the repeats that reached the case's fitness target, annotated `(reached/total)` when only part of them did — `78 (2/3)` — or when none did — `>152 (0/3)`, and rendered `n/a (no informative target)` for a case measured without a fitness target at all. Every cell comes from the aggregated JSON records of this run; `n/a (reason)` marks a cell that could not be reached (not run, skipped, error, or not recorded).
 
 ## Environment
 
@@ -177,7 +177,7 @@ The declared contract (51/109/157 ms/gen at pop 100/500/1000) is the recorded re
 | `new` tensorneat (evoxc) | `numpy` | 43 | -0.2500 | -0.2391 | -0.0047 | -0.0000 | -0.0000 | -0.0000 | 27 |
 | `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43 | -0.2500 | -0.2403 | -0.0219 | -0.0000 | -0.0000 | -0.0000 | 29 |
 
-Percent columns are generation `round(fraction × N)` of the N recorded generations (warmup + timed — the budget `generations_to_target` is indexed against), and `>N` means the case's fitness target was not reached within those N recorded generations. Each repeat (seed) has its own row, and the `— aggregate` row is the element-wise median of those repeats: a bimodal case (one seed at the target, one not) shows up as two different `Final` values rather than one average.
+Percent columns are generation `round(fraction × N)` of the N recorded generations (warmup + timed — the budget `generations_to_target` is indexed against). `>N` means the case's fitness target was not reached within those N recorded generations, and a `(reached/total)` suffix counts how many repeats of the group reached it: `78 (2/3)` is a median of 78 over two of three repeats, `>152 (0/3)` nothing reached it, and `n/a (no informative target)` marks a run measured without a fitness target at all. Each repeat (seed) has its own row, and the `— aggregate` row is the element-wise median of those repeats: a bimodal case (one seed at the target, one not) shows up as two different `Final` values rather than one average.
 
 ## Reference numbers (declared baseline)
 

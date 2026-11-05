@@ -1,25 +1,25 @@
 # TensorNEAT benchmark — evoxc rewrite vs frozen JAX baseline
 
 > **GENERATED FILE.** Produced by `python benchmarks/run_benchmark.py`, rendered from `benchmarks/results/authoritative.json` at 2026-11-04T19:01:27+00:00.
-> Re-rendered from that same JSON at 2026-11-05T04:48:30+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
+> Re-rendered from that same JSON at 2026-11-05T04:52:08+00:00 with `--render-from-json` (no worker was re-run; the dirty state is re-probed on this tree).
 > It must not be hand-edited: rerun the CLI instead, or the numbers below stop matching the recorded evidence.
 
 *Pre-fix record, not a description of the merged tree: measured at `ebeaf1f8` on 2026-11-04, before the tiled-evaluate / RL-rollout-hoist performance pass (`90d97b4`) and before the search-quality fixes, so the new-side rows below are the pre-fix cost (pagie 3156.73 ms/gen and 4577.1 MiB) and the pre-fix convergence — `PERF_NUMPY.md` carries the post-fix case-scoped numbers and `results/xor3d_quality_2026-11-04.md` the post-fix quality record.*
 
 ## Headline: old vs new
 
-| Case | Pop | Backend | Old ms/gen | New ms/gen | Speed-up | Speed-up range (best–worst) | Quality overlap | Old compile (s) | New compile (s) | Old peak RSS (MiB) | New peak RSS (MiB) | Old final best | New final best | Gens to target (old) | Gens to target (new) | Timing | Quality |
+| Case | Pop | Backend | Old ms/gen | New ms/gen | Speed-up | Speed-up range (worst–best) | Quality overlap | Old compile (s) | New compile (s) | Old peak RSS (MiB) | New peak RSS (MiB) | Old final best | New final best | Gens to target (old) | Gens to target (new) | Timing | Quality |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| xor_p100 | 100 | `numpy` | 38.99 | 36.44 | 1.07x | 0.59x–1.37x | inside | 2.941 | 0.297 | 676.7 | 114.9 | -0.0034 | -0.0000 | 78 | 56 | PASS | PASS |
+| xor_p100 | 100 | `numpy` | 38.99 | 36.44 | 1.07x | 0.59x–1.37x | inside | 2.941 | 0.297 | 676.7 | 114.9 | -0.0034 | -0.0000 | 78 (2/3) | 56 | PASS | PASS |
 | xor_p500 | 500 | `numpy` | 295.33 | 161.73 | 1.83x | 1.49x–2.33x | inside | 2.926 | 0.527 | 720.7 | 241.3 | -0.0000 | -0.0000 | 42 | 35 | PASS | PASS |
 | xor_p1000 | 1000 | `numpy` | 807.30 | 279.92 | 2.88x | 2.72x–3.00x | inside | 2.956 | 0.801 | 705.1 | 392.2 | -0.0000 | -0.0000 | 35 | 28 | PASS | PASS |
-| xor3d_p100 | 100 | `numpy` | 24.53 | 39.12 | 0.63x | 0.59x–1.12x | new worse | 2.982 | 0.308 | 681.5 | 120.0 | -0.0894 | -0.2500 | 149 | >152 | FAIL | FAIL |
-| xor3d_p500 | 500 | `numpy` | 107.59 | 171.16 | 0.63x | 0.53x–0.79x | inside | 2.998 | 0.536 | 749.1 | 265.5 | -0.1789 | -0.2500 | 87 | 95 | FAIL | FAIL |
+| xor3d_p100 | 100 | `numpy` | 24.53 | 39.12 | 0.63x | 0.59x–1.12x | new worse | 2.982 | 0.308 | 681.5 | 120.0 | -0.0894 | -0.2500 | 149 (1/3) | >152 (0/3) | FAIL | FAIL |
+| xor3d_p500 | 500 | `numpy` | 107.59 | 171.16 | 0.63x | 0.53x–0.79x | inside | 2.998 | 0.536 | 749.1 | 265.5 | -0.1789 | -0.2500 | 87 (1/3) | 95 (1/3) | FAIL | FAIL |
 | xor3d_p1000 | 1000 | `numpy` | 255.41 | 300.17 | 0.85x | 0.56x–1.27x | inside | 3.050 | 0.800 | 732.3 | 441.0 | -0.0000 | -0.0001 | 73 | 90 | FAIL | PASS |
-| custom_pagie_p500 | 500 | `numpy` | 496.45 | 3156.73 | 0.16x | 0.15x–0.19x | new worse | 2.927 | 2.256 | 853.3 | 4577.1 | -0.0064 | -0.0219 | 121 | >152 | FAIL | FAIL |
+| custom_pagie_p500 | 500 | `numpy` | 496.45 | 3156.73 | 0.16x | 0.15x–0.19x | new worse | 2.927 | 2.256 | 853.3 | 4577.1 | -0.0064 | -0.0219 | 121 (2/3) | >152 (0/3) | FAIL | FAIL |
 | cartpole_p100 | 100 | `numpy` | n/a (no old-side equivalent) | 381.73 | n/a (needs both sides) | n/a (needs both sides) | n/a (needs both sides) | n/a (no old-side equivalent) | 0.549 | n/a (no old-side equivalent) | 110.6 | n/a (no old-side equivalent) | 200.0000 | n/a (no old-side equivalent) | 1 | n/a | n/a |
 
-One row per case and new-side backend (the old side always runs on JAX). Speed-up is `old / new` per generation: above 1.00x the new side is faster. Speed-up range is `old_min/new_max` … `old_max/new_min` over the per-repeat medians, i.e. the best and worst case over the repeats. Quality overlap states where the new side's per-repeat final-best range sits against the old side's: `inside` when the ranges intersect (every new repeat inside the old range, or the ranges partially overlap), `new worse` when every new repeat is below the old range, `new better` when every new repeat is above it — an observation, never a replacement for the verdict. Timing PASS means new ms/generation is at or below the old one; quality PASS means the new final best stays within `max(10% × |old|, 0.001)` of the old one. Every cell comes from the aggregated JSON records of this run; `n/a (reason)` marks a cell that could not be reached (not run, skipped, error, or not recorded).
+One row per case and new-side backend (the old side always runs on JAX). Speed-up is `old / new` per generation: above 1.00x the new side is faster. Speed-up range is `old_min/new_max` … `old_max/new_min` over the per-repeat medians, printed worst first: the left value is the pessimistic bound for the new side and the right one the optimistic bound. Quality overlap states where the new side's per-repeat final-best range sits against the old side's: `inside` when the ranges intersect (every new repeat inside the old range, or the ranges partially overlap), `new worse` when every new repeat is below the old range, `new better` when every new repeat is above it — an observation, never a replacement for the verdict. Timing PASS means new ms/generation is at or below the old one; quality PASS means the new final best stays within `max(10% × |old|, 0.001)` of the old one. `Gens to target` is the median generation of the repeats that reached the case's fitness target, annotated `(reached/total)` when only part of them did — `78 (2/3)` — or when none did — `>152 (0/3)`, and rendered `n/a (no informative target)` for a case measured without a fitness target at all. Every cell comes from the aggregated JSON records of this run; `n/a (reason)` marks a cell that could not be reached (not run, skipped, error, or not recorded).
 
 ## Environment
 
@@ -78,7 +78,7 @@ A thread-bound sensitivity run (`--threads 1`, XOR family, same CLI) is recorded
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.941 | 38.99 | 25.65 | 676.7 | -0.0034 | 78 | 3 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.941 | 38.99 | 25.65 | 676.7 | -0.0034 | 78 (2/3) | 3 |
 | `new` tensorneat (evoxc) | `numpy` | 0.297 | 36.44 | 27.45 | 114.9 | -0.0000 | 56 | 3 |
 
 ### xor_p500
@@ -99,15 +99,15 @@ A thread-bound sensitivity run (`--threads 1`, XOR family, same CLI) is recorded
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.982 | 24.53 | 40.76 | 681.5 | -0.0894 | 149 | 3 |
-| `new` tensorneat (evoxc) | `numpy` | 0.308 | 39.12 | 25.56 | 120.0 | -0.2500 | >152 | 3 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.982 | 24.53 | 40.76 | 681.5 | -0.0894 | 149 (1/3) | 3 |
+| `new` tensorneat (evoxc) | `numpy` | 0.308 | 39.12 | 25.56 | 120.0 | -0.2500 | >152 (0/3) | 3 |
 
 ### xor3d_p500
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.998 | 107.59 | 9.29 | 749.1 | -0.1789 | 87 | 3 |
-| `new` tensorneat (evoxc) | `numpy` | 0.536 | 171.16 | 5.84 | 265.5 | -0.2500 | 95 | 3 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.998 | 107.59 | 9.29 | 749.1 | -0.1789 | 87 (1/3) | 3 |
+| `new` tensorneat (evoxc) | `numpy` | 0.536 | 171.16 | 5.84 | 265.5 | -0.2500 | 95 (1/3) | 3 |
 
 ### xor3d_p1000
 
@@ -120,8 +120,8 @@ A thread-bound sensitivity run (`--threads 1`, XOR family, same CLI) is recorded
 
 | Implementation | Backend | Compile (s) | ms/generation | generations/s | peak RSS (MiB) | Final best | Gens to target | Repeats |
 |---|---|---|---|---|---|---|---|---|
-| `old` tensorneat-legacy (JAX) | `jax` | 2.927 | 496.45 | 2.01 | 853.3 | -0.0064 | 121 | 3 |
-| `new` tensorneat (evoxc) | `numpy` | 2.256 | 3156.73 | 0.32 | 4577.1 | -0.0219 | >152 | 3 |
+| `old` tensorneat-legacy (JAX) | `jax` | 2.927 | 496.45 | 2.01 | 853.3 | -0.0064 | 121 (2/3) | 3 |
+| `new` tensorneat (evoxc) | `numpy` | 2.256 | 3156.73 | 0.32 | 4577.1 | -0.0219 | >152 (0/3) | 3 |
 
 ### cartpole_p100
 
@@ -213,7 +213,7 @@ The declared contract (51/109/157 ms/gen at pop 100/500/1000) is the recorded re
 | `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.2507 | -0.2500 | -0.1929 | -0.0542 | -0.0000 | -0.0000 | 62 |
 | `old` tensorneat-legacy (JAX) | `jax` | 43 | -0.2519 | -0.2500 | -0.2364 | -0.1515 | -0.0034 | -0.0034 | 93 |
 | `old` tensorneat-legacy (JAX) | `jax` | 44 | -0.2549 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | >153 |
-| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43, 44 | -0.2519 | -0.2500 | -0.2364 | -0.1515 | -0.0034 | -0.0034 | 78 |
+| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43, 44 | -0.2519 | -0.2500 | -0.2364 | -0.1515 | -0.0034 | -0.0034 | 78 (2/3) |
 | `new` tensorneat (evoxc) | `numpy` | 42 | -0.2508 | -0.2482 | -0.0428 | -0.0000 | -0.0000 | -0.0000 | 33 |
 | `new` tensorneat (evoxc) | `numpy` | 43 | -0.2503 | -0.2500 | -0.2500 | -0.0596 | -0.0189 | -0.0189 | 68 |
 | `new` tensorneat (evoxc) | `numpy` | 44 | -0.2501 | -0.2500 | -0.2111 | -0.0177 | -0.0000 | -0.0000 | 56 |
@@ -252,11 +252,11 @@ The declared contract (51/109/157 ms/gen at pop 100/500/1000) is the recorded re
 | `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.2524 | -0.2500 | -0.2500 | -0.2447 | -0.0278 | -0.0278 | 149 |
 | `old` tensorneat-legacy (JAX) | `jax` | 43 | -0.2547 | -0.2500 | -0.2500 | -0.2500 | -0.1224 | -0.1224 | >153 |
 | `old` tensorneat-legacy (JAX) | `jax` | 44 | -0.2530 | -0.2500 | -0.2500 | -0.2496 | -0.0894 | -0.0894 | >153 |
-| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43, 44 | -0.2530 | -0.2500 | -0.2500 | -0.2496 | -0.0894 | -0.0894 | 149 |
+| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43, 44 | -0.2530 | -0.2500 | -0.2500 | -0.2496 | -0.0894 | -0.0894 | 149 (1/3) |
 | `new` tensorneat (evoxc) | `numpy` | 42 | -0.2516 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | >152 |
 | `new` tensorneat (evoxc) | `numpy` | 43 | -0.2503 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | >152 |
 | `new` tensorneat (evoxc) | `numpy` | 44 | -0.2530 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | >152 |
-| `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43, 44 | -0.2516 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | >152 |
+| `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43, 44 | -0.2516 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | >152 (0/3) |
 
 ### xor3d_p500
 
@@ -265,11 +265,11 @@ The declared contract (51/109/157 ms/gen at pop 100/500/1000) is the recorded re
 | `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.2524 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | >153 |
 | `old` tensorneat-legacy (JAX) | `jax` | 43 | -0.2507 | -0.2500 | -0.2500 | -0.2500 | -0.1789 | -0.1789 | >153 |
 | `old` tensorneat-legacy (JAX) | `jax` | 44 | -0.2530 | -0.2500 | -0.2449 | -0.1325 | -0.0000 | -0.0000 | 87 |
-| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43, 44 | -0.2524 | -0.2500 | -0.2500 | -0.2500 | -0.1789 | -0.1789 | 87 |
+| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43, 44 | -0.2524 | -0.2500 | -0.2500 | -0.2500 | -0.1789 | -0.1789 | 87 (1/3) |
 | `new` tensorneat (evoxc) | `numpy` | 42 | -0.2502 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | >152 |
 | `new` tensorneat (evoxc) | `numpy` | 43 | -0.2503 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | >152 |
 | `new` tensorneat (evoxc) | `numpy` | 44 | -0.2501 | -0.2500 | -0.2493 | -0.0677 | -0.0179 | -0.0179 | 95 |
-| `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43, 44 | -0.2502 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | 95 |
+| `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43, 44 | -0.2502 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | -0.2500 | 95 (1/3) |
 
 ### xor3d_p1000
 
@@ -291,11 +291,11 @@ The declared contract (51/109/157 ms/gen at pop 100/500/1000) is the recorded re
 | `old` tensorneat-legacy (JAX) | `jax` | 42 | -0.0490 | -0.0473 | -0.0347 | -0.0233 | -0.0064 | -0.0064 | 125 |
 | `old` tensorneat-legacy (JAX) | `jax` | 43 | -0.0493 | -0.0477 | -0.0243 | -0.0221 | -0.0040 | -0.0040 | 117 |
 | `old` tensorneat-legacy (JAX) | `jax` | 44 | -0.0489 | -0.0474 | -0.0322 | -0.0232 | -0.0140 | -0.0140 | >153 |
-| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43, 44 | -0.0490 | -0.0474 | -0.0322 | -0.0232 | -0.0064 | -0.0064 | 121 |
+| `old` tensorneat-legacy (JAX) — aggregate | `jax` | 42, 43, 44 | -0.0490 | -0.0474 | -0.0322 | -0.0232 | -0.0064 | -0.0064 | 121 (2/3) |
 | `new` tensorneat (evoxc) | `numpy` | 42 | -0.0461 | -0.0460 | -0.0240 | -0.0221 | -0.0219 | -0.0219 | >152 |
 | `new` tensorneat (evoxc) | `numpy` | 43 | -0.0461 | -0.0460 | -0.0236 | -0.0220 | -0.0218 | -0.0218 | >152 |
 | `new` tensorneat (evoxc) | `numpy` | 44 | -0.0461 | -0.0461 | -0.0460 | -0.0262 | -0.0248 | -0.0248 | >152 |
-| `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43, 44 | -0.0461 | -0.0460 | -0.0240 | -0.0221 | -0.0219 | -0.0219 | >152 |
+| `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43, 44 | -0.0461 | -0.0460 | -0.0240 | -0.0221 | -0.0219 | -0.0219 | >152 (0/3) |
 
 ### cartpole_p100
 
@@ -306,7 +306,7 @@ The declared contract (51/109/157 ms/gen at pop 100/500/1000) is the recorded re
 | `new` tensorneat (evoxc) | `numpy` | 44 | 200.0000 | 200.0000 | 200.0000 | 200.0000 | 200.0000 | 200.0000 | 1 |
 | `new` tensorneat (evoxc) — aggregate | `numpy` | 42, 43, 44 | 200.0000 | 200.0000 | 200.0000 | 200.0000 | 200.0000 | 200.0000 | 1 |
 
-Percent columns are generation `round(fraction × N)` of the N recorded generations (warmup + timed — the budget `generations_to_target` is indexed against), and `>N` means the case's fitness target was not reached within those N recorded generations. Each repeat (seed) has its own row, and the `— aggregate` row is the element-wise median of those repeats: a bimodal case (one seed at the target, one not) shows up as two different `Final` values rather than one average.
+Percent columns are generation `round(fraction × N)` of the N recorded generations (warmup + timed — the budget `generations_to_target` is indexed against). `>N` means the case's fitness target was not reached within those N recorded generations, and a `(reached/total)` suffix counts how many repeats of the group reached it: `78 (2/3)` is a median of 78 over two of three repeats, `>152 (0/3)` nothing reached it, and `n/a (no informative target)` marks a run measured without a fitness target at all. Each repeat (seed) has its own row, and the `— aggregate` row is the element-wise median of those repeats: a bimodal case (one seed at the target, one not) shows up as two different `Final` values rather than one average.
 
 ## Reference numbers (declared baseline)
 
