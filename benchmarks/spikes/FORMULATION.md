@@ -27,7 +27,7 @@ Nothing below is a prediction of, or an argument about, that end-to-end timing v
 ## Conditions shared by every measured number
 
 When: measured 2026-11-02, 06:17–06:19 UTC, with the `uptime` 1-minute load average between 1.4 and 2.9 around the runs.
-Box: Linux 6.8.0-146 x86_64 on a shared 20-core QEMU/KVM guest (`INTEL(R) XEON(R) PLATINUM 8568Y+`, 241611 MiB RAM), `sys.executable` = `/tmp/tn-venv/bin/python`, Python 3.12.3, numpy 2.5.4, jax 0.12.0.1 (`cpu` backend for the legacy rows); `evoxc` 0.1.0 is installed but the micro-benchmark never imports it.
+Box: Linux 6.8.0-146 x86_64 on a shared 20-core QEMU/KVM guest (`INTEL(R) XEON(R) PLATINUM 8568Y+`, 241611 MiB RAM), `sys.executable` = `…/tn-venv/bin/python` (a virtualenv outside the checkout, so the path is redacted to its environment name), Python 3.12.3, numpy 2.5.4, jax 0.12.0.1 (`cpu` backend for the legacy rows); `evoxc` 0.1.0 is installed but the micro-benchmark never imports it.
 Load: co-tenant jobs share those 20 cores, so the load average is part of the conditions and the spread line below — never a single median — is the uncertainty measure.
 Threads: `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `NUMEXPR_NUM_THREADS` and `XLA_FLAGS` unset, i.e. runtime defaults — this is the `--threads 0` condition, not the `--threads 1` condition of `../THREADS.md` and not the recorded reference baseline.
 Population: P = 1000 synthetic individuals, `max_nodes` = 50 padded node slots, 150 real connections per individual (144 at depth 4, where the level skeleton has no room for the last 6).
