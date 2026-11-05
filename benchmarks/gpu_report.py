@@ -583,17 +583,21 @@ def _environment_section(document: dict[str, Any]) -> list[str]:
 
 
 def cross_summary(record: dict[str, Any]) -> str:
-    """One-line cross-check verdict of a row record."""
+    """Rendered cross-check verdict: generation 1 is the equality gate, later states are not.
+    Generation 1 is a hard equality comparison (one seed, one graph, one PRNG); a
+    later-generation difference is only a search-trajectory observation, so a stored
+    ``fail`` with a passing generation 1 renders ``gen 1 pass; final-state drift
+    (<field>)``; one without keeps the unsoftened ``FAIL (gen 1: <field>)``.
+    """
     cross = record.get("cross_check") or {}
     status = cross.get("status")
     if status == "pass":
-        return "pass"
+        return "pass (gen 1)"
     if status == "fail":
-        first = (cross.get("generation_1") or {}).get("first_failing_field")
-        final_first = (cross.get("final_state") or {}).get("first_failing_field")
-        if first:
-            return f"fail (generation 1: {first})"
-        return f"fail (final state: {final_first or 'unknown field'})"
+        passed = (cross.get("generation_1") or {}).get("status") == "pass"
+        state = cross.get("final_state" if passed else "generation_1") or {}
+        name = state.get("first_failing_field") or "unknown field"
+        return f"gen 1 pass; final-state drift ({name})" if passed else f"FAIL (gen 1: {name})"
     if status == "skipped":
         return f"skipped ({cross.get('reason') or 'n/a'})"
     if status == "error":
@@ -730,7 +734,9 @@ def _cross_check_section(document: dict[str, Any]) -> list[str]:
         f"to rtol {FLOAT_RTOL:g} / atol {FLOAT_ATOL:g} over finite entries with an "
         "identical NaN mask. The final state is a search-trajectory observation, not a "
         "pass/fail gate on its own: beyond generation 1 a float-reassociation "
-        "difference can reorder a near-tied selection and legitimately diverge the keys.",
+        "difference can reorder a near-tied selection and legitimately diverge the keys. "
+        "The table's `cross-check` column summarises both snapshots: generation 1 is the "
+        "equality gate; a final-state-only difference renders `gen 1 pass; final-state drift (…)`.",
         "",
     ] + _table(
         ["Case", "Target", "Generation 1", "Keys (gen 1)", "Attr max abs diff (gen 1)",
