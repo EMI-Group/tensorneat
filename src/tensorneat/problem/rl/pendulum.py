@@ -212,10 +212,12 @@ class Pendulum(BaseProblem):
            The key is not threaded through the loop and ``np.random`` is never
            used.
         3. One ``evoxc.while_loop`` over ``max_step`` timesteps, carry
-           ``(obs (B, 2), total (B,), step ())``: the return accumulator rides in
-           the carry instead of being gathered from a scan output stack, which
-           is what keeps the per-timestep cost free of any ``B * max_step``
-           array traffic.
+           ``(theta (B, 1), theta_dot (B, 1), total (B, 1), step ())``: the
+           return accumulator rides in the carry instead of being gathered from
+           a scan output stack, which is what keeps the per-timestep cost free of
+           any ``B * max_step`` array traffic, and the two state variables ride
+           as separate rank-2 leaves so the step never re-splits an observation
+           row it just built (see :meth:`_rollout`).
         4. Step body, following Gym's ``Pendulum-v1`` order and evaluating every
            term on the **pre-transition** state::
 
@@ -346,10 +348,20 @@ class Pendulum(BaseProblem):
 
         Must be called inside the active trace: it draws the initial states with
         ``evoxc.random.uniform`` and runs one ``evoxc.while_loop`` over
-        ``max_step`` timesteps, carry ``(obs (B, 2), total (B,), step ())`` with
+        ``max_step`` timesteps, carry
+        ``(theta (B, 1), theta_dot (B, 1), total (B, 1), step ())`` with
         ``B = pop_size * repeat_times`` in individual-major order.
         The policy query is prepared once for the whole rollout, so the per-pass
         operands are not re-derived per timestep.
+
+        The two state variables are carried as separate ``(B, 1)`` leaves rather
+        than as one ``(B, 2)`` observation row, which saves the two ``slice`` ops
+        a per-step ``enp.split`` costs: the row is only built where it is
+        actually consumed (the policy query), with one ``enp.concatenate`` per
+        step -- the same concatenate the step already paid to store the next
+        observation. The accumulator is carried at the same ``(B, 1)`` rank as
+        the cost, so the step needs no ``reshape`` either; it is flattened to
+        ``(B,)`` once here, after the loop.
 
         Args:
             keys: One rank-0 evoxc key for the single reset draw.
@@ -368,17 +380,22 @@ class Pendulum(BaseProblem):
         batch = pop_size * self.repeat_times
         query = prepared_query(act_fn, batch)
         obs0 = self._reset(keys, consts, batch)
+        theta0, theta_dot0 = enp.split(obs0, _OBS_DIM, axis=1)
         init = (
-            obs0,
-            enp.zeros((batch,), dtype=evoxc.float32),
+            theta0,
+            theta_dot0,
+            enp.zeros((batch, 1), dtype=evoxc.float32),
             enp.zeros((), dtype=evoxc.int32),
         )
-        obs, total, _ = evoxc.while_loop(
+        theta, theta_dot, total, _ = evoxc.while_loop(
             self._loop_cond(consts),
             self._loop_body(query, consts),
             init,
         )
-        return total, obs
+        return (
+            enp.reshape(total, (batch,)),
+            enp.concatenate((theta, theta_dot), axis=1),
+        )
 
     def _reset(
         self,
@@ -436,12 +453,12 @@ class Pendulum(BaseProblem):
             """Test the loop counter against the static horizon.
 
             Args:
-                carry: ``(obs, total, step)``.
+                carry: ``(theta, theta_dot, total, step)``.
 
             Returns:
                 The rank-0 boolean ``step < max_step``.
             """
-            return enp.less(carry[2], consts.horizon)
+            return enp.less(carry[3], consts.horizon)
 
         return cond
 
@@ -462,6 +479,11 @@ class Pendulum(BaseProblem):
         into. There is no alive mask: Pendulum has no terminal state, so every
         episode is scored over the full horizon.
 
+        The state rides as two ``(B, 1)`` leaves instead of one ``(B, 2)``
+        observation row (see :meth:`_rollout`): the row is built for the policy
+        query and nowhere else, and the accumulator is carried at the cost's own
+        rank.
+
         Args:
             query: The policy query, prepared once for the whole rollout by
                 :func:`._common.prepared_query` so the per-pass operands are not
@@ -470,23 +492,33 @@ class Pendulum(BaseProblem):
             consts: The bundle from :meth:`_constants`.
 
         Returns:
-            ``step(carry) -> (obs, total, step)`` -- the next carry.
+            ``step(carry) -> (theta, theta_dot, total, step)`` -- the next carry.
         """
 
         def step(carry):
             """Advance every episode by one timestep.
 
+            The policy is the only consumer of the ``(B, 2)`` observation row, so
+            that row is built here, once, and handed straight to the query; the
+            transition works on the two ``(B, 1)`` state leaves
+            (:meth:`_advance_rows`) and returns the next pair, so no step ever
+            splits a row it just concatenated.
+
             Args:
-                carry: ``(obs (B, 2), total (B,), step ())``.
+                carry: ``(theta (B, 1), theta_dot (B, 1), total (B, 1),
+                    step ())``.
 
             Returns:
                 The next carry, same tree and leaf types.
             """
-            obs, total, index = carry
-            logit = query(obs)
-            next_obs, cost = self._advance(obs, logit, consts)
+            theta, theta_dot, total, index = carry
+            obs = enp.concatenate((theta, theta_dot), axis=1)
+            next_theta, next_theta_dot, cost = self._advance_rows(
+                theta, theta_dot, query(obs), consts
+            )
             return (
-                next_obs,
+                next_theta,
+                next_theta_dot,
                 total - cost,
                 index + consts.one_step,
             )
@@ -537,15 +569,16 @@ class Pendulum(BaseProblem):
     ) -> tuple[Any, Any]:
         """Advance the ``(B, 2)`` observations by one Euler step and score them.
 
-        With ``u = max_torque * tanh(logit)``, ``theta``/``theta_dot`` split out
-        of the observation row and ``angle_normalize`` as in
-        :meth:`_angle_normalize`, the step is exactly Gym's ordering: the cost is
-        evaluated on the **pre-transition** state, the velocity is integrated and
-        clipped, and only then is the angle integrated with the clipped velocity.
+        The row-shaped face of :meth:`_advance_rows`: it splits the observation
+        row into its two state variables, runs the algebra, and re-joins the
+        result, so it costs the three ops (two ``slice``, one ``concatenate``)
+        that a caller holding an observation row necessarily pays.
 
-        The clip is ``enp.clip``, i.e. ``minimum(maximum(x, -max_speed),
-        max_speed)``, and both bounds are symbolic graph scalars like every other
-        constant in the trace.
+        The rollout loop never calls it -- its carry holds the two state
+        variables separately, so it calls :meth:`_advance_rows` directly and
+        concatenates the row only for the policy query -- but the ``(B, 2)``
+        spelling is the environment's documented one-step contract (``obs``,
+        ``logit`` in; next ``obs``, cost out) and is exercised as such.
 
         Args:
             obs: Current observations of shape ``(B, 2)``.
@@ -554,11 +587,56 @@ class Pendulum(BaseProblem):
 
         Returns:
             ``(next_obs (B, 2), cost (B,))`` -- the transitioned observations and
-            the (non-negative) cost of the state they came from, reshaped to
-            rank 1 so it can be subtracted from the rank-1 return accumulator
+            the (non-negative) cost of the state they came from, flattened to
+            rank 1 so it can be subtracted from a rank-1 return accumulator
             (``(B,) - (B, 1)`` would broadcast into a ``(B, B)`` matrix).
         """
         theta, theta_dot = enp.split(obs, _OBS_DIM, axis=1)
+        next_theta, next_theta_dot, cost = self._advance_rows(
+            theta, theta_dot, logit, consts
+        )
+        return (
+            enp.concatenate((next_theta, next_theta_dot), axis=1),
+            enp.reshape(cost, (obs.shape[0],)),
+        )
+
+    def _advance_rows(
+        self,
+        theta: Any,
+        theta_dot: Any,
+        logit: Any,
+        consts: _PendulumConstants,
+    ) -> tuple[Any, Any, Any]:
+        """Advance the two ``(B, 1)`` state leaves by one Euler step and score them.
+
+        The whole algebra of the environment, in Gym's order: with
+        ``u = max_torque * tanh(logit)``, ``angle`` as in
+        :meth:`_angle_normalize`, the step is exactly
+
+        - ``cost = angle**2 + 0.1 * theta_dot**2 + 0.001 * u**2``, evaluated on
+          the **pre-transition** state;
+        - ``theta_dot' = clip(theta_dot + (gravity_term * sin(theta)
+          + torque_term * u) * dt, -max_speed, max_speed)``: the velocity is
+          integrated and clipped **before** the angle integrates;
+        - ``theta' = theta + theta_dot' * dt``.
+
+        The clip is ``enp.clip``, i.e. ``minimum``/``maximum`` against
+        ``max_speed``/``neg_max_speed``, and both bounds are symbolic graph
+        scalars like every other constant in the trace.
+
+        The cost keeps the rank of the states it is computed from (``(B, 1)``),
+        which is what lets a caller accumulating at that rank subtract it with
+        one op; :meth:`_advance` flattens it for the row-shaped contract.
+
+        Args:
+            theta: Pendulum angle in radians, ``(B, 1)``.
+            theta_dot: Angular velocity, ``(B, 1)``.
+            logit: Policy output of shape ``(B, 1)``.
+            consts: The bundle from :meth:`_constants`.
+
+        Returns:
+            ``(next_theta (B, 1), next_theta_dot (B, 1), cost (B, 1))``.
+        """
         torque = consts.max_torque * enp.tanh(logit)
         angle = self._angle_normalize(theta, consts)
         cost = (
@@ -571,8 +649,7 @@ class Pendulum(BaseProblem):
         ) * consts.dt
         next_speed = enp.clip(next_speed, consts.neg_max_speed, consts.max_speed)
         next_theta = theta + next_speed * consts.dt
-        next_obs = enp.concatenate((next_theta, next_speed), axis=1)
-        return next_obs, enp.reshape(cost, (obs.shape[0],))
+        return next_theta, next_speed, cost
 
     def _angle_normalize(self, x: Any, consts: _PendulumConstants) -> Any:
         """Wrap an angle in radians into ``[-pi, pi)``.

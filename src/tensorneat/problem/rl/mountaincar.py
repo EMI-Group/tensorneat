@@ -91,6 +91,8 @@ class _MountainCarConstants(NamedTuple):
         zero: A float32 ``0``.
         one: A float32 ``1``, the upper action clip bound.
         neg_one: A float32 ``-1``, the lower action clip bound.
+        false: A bool ``False``, the value the alive mask is reset to once the
+            goal has been reached.
         reset_center: Centre of the reset draw, ``-0.5``.
         reset_half_width: Half-width of the reset draw, ``0.1``.
         one_step: The int32 ``1`` the loop counter advances by.
@@ -111,6 +113,7 @@ class _MountainCarConstants(NamedTuple):
     zero: Any
     one: Any
     neg_one: Any
+    false: Any
     reset_center: Any
     reset_half_width: Any
     one_step: Any
@@ -551,6 +554,15 @@ class MountainCarContinuous(BaseProblem):
         operand ever meets the ``(B,)`` accumulator (numpy-style broadcasting
         would silently produce a ``(B, B)`` total).
 
+        The alive mask is retired with one ``enp.where(done, consts.false,
+        alive)`` -- the single op that says "an episode that just reached the
+        goal is no longer live" -- instead of a ``logical_not`` feeding a
+        ``logical_and`` (two ops for the same value). ``consts.false`` is the
+        in-trace rank-0 bool ``False`` from :meth:`_constants`; a Python
+        ``False`` or a numpy bool scalar is a concrete value rather than a graph
+        operand, and ``enp.where`` would promote the result away from ``bool``
+        instead of returning the mask at its own dtype.
+
         Args:
             query: The policy query, prepared once for the whole rollout by
                 :func:`._common.prepared_query` so the per-pass operands are not
@@ -581,7 +593,7 @@ class MountainCarContinuous(BaseProblem):
             )
             reward = bonus - penalty
             total = total + enp.where(alive, reward, consts.zero)
-            alive = enp.logical_and(alive, enp.logical_not(done))
+            alive = enp.where(done, consts.false, alive)
             obs = enp.where(enp.expand_dims(alive, 1), next_obs, obs)
             return (obs, alive, total, index + consts.one_step)
 
@@ -596,8 +608,8 @@ class MountainCarContinuous(BaseProblem):
 
         The caller builds this bundle **once per rollout**, outside the timestep
         loop, so the constants the loop needs every step (``power``, ``three``,
-        ``penalty``, ``goal_reward``, ``zero``, the clip bounds) cost one
-        Constant op per run rather than one per timestep.
+        ``penalty``, ``goal_reward``, ``zero``, ``false``, the clip bounds) cost
+        one Constant op per run rather than one per timestep.
 
         ``reset_center`` and ``reset_half_width`` are derived from the module
         literals ``_RESET_LOW``/``_RESET_HIGH`` so the reset draw cannot drift
@@ -609,9 +621,10 @@ class MountainCarContinuous(BaseProblem):
             ``max_speed``, ``neg_max_speed``, ``goal_position``,
             ``goal_velocity``, ``power``, ``gravity``, ``three``, ``penalty``,
             ``goal_reward``, ``zero``, ``one``, ``neg_one``, ``reset_center``,
-            ``reset_half_width`` (all float32), plus the int32 loop scalars
-            ``one_step`` and ``horizon`` -- so neither the reset draw nor the
-            trip condition ever sees an f64 constant.
+            ``reset_half_width`` (all float32), the bool ``false`` the alive mask
+            is reset to, plus the int32 loop scalars ``one_step`` and ``horizon``
+            -- so neither the reset draw nor the trip condition ever sees an f64
+            constant.
         """
         return _MountainCarConstants(
             min_position=enp.full((), self.min_position),
@@ -628,6 +641,7 @@ class MountainCarContinuous(BaseProblem):
             zero=enp.full((), 0.0),
             one=enp.full((), 1.0),
             neg_one=enp.full((), -1.0),
+            false=enp.zeros((), dtype=evoxc.bool_),
             reset_center=enp.full((), 0.5 * (_RESET_LOW + _RESET_HIGH)),
             reset_half_width=enp.full((), 0.5 * (_RESET_HIGH - _RESET_LOW)),
             one_step=enp.full((), 1, dtype=evoxc.int32),
