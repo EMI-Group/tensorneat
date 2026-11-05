@@ -43,7 +43,7 @@ Each leak is reported once and forgotten, so one bad import does not turn every 
 Not covered: a dynamic `importlib.import_module` of an already-loaded framework, and anything a subprocess does — that is `../release_gate_no_jax.py`'s job, which checks the package itself in a clean interpreter.
 
 ## Known items
-`./genome/test_mutation.py` is at the ~1000-line concern threshold; split it by operation family (add-node / add-conn / mutate-weight / toggle / delete) if it grows further.
+`./genome/test_mutation.py` is 1007 lines, just over the ~1000-line concern threshold it is declared as in `./genome/CONTEXT.md`; split it by operation family (add-node / add-conn / mutate-weight / toggle / delete) if it grows further.
 No test in this node is xfailed or skipped.
 
 ## Conventions

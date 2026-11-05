@@ -43,7 +43,7 @@ The suite imports `tensorneat` without `jax`: `src/tensorneat/pipeline.py` is ev
 A `generation` value registered as a host 0-d numpy constant cannot be consumed by `_kernels.scalar_f32` inside a trace; send it as a positional graph input instead.
 `evoxc.Tensor` has no `__array__`, so `np.asarray` on a kernel result silently yields a 0-d object array — unwrap with `support.runner.to_numpy` (or `.numpy()`).
 Shapes stay small (`pop ≤ 8`, `max_nodes ≤ 8`) except where a test exists specifically to trip a static bound; `test_neat_tell.py` shares one `NEAT.setup` per test, which is the slowest thing in the directory (~0.5 s).
-Files stay under ~1000 lines (`test_neat_tell.py` sits at 987, `test_speciation.py` at 1000); one module per `SpeciesController`/`NEAT` responsibility, not one per source file.
+Files stay under ~1000 lines (`test_neat_tell.py` sits at 993, `test_speciation.py` at 1000); one module per `SpeciesController`/`NEAT` responsibility, not one per source file.
 
 ## Known documentation drift in `src/` (reported upward, not asserted here)
 `_kernels.pair_parents` caps the survivor count as `max(min(member_count, pop_size), 1)`, which differs from the documented `min(member_count, pop_size)` only for a live species with `member_count == 0`; such a table never receives a block, so the case is unreachable through the public path.
