@@ -175,19 +175,9 @@ def test_node_key_blocks_concatenates_hidden_layers_in_layer_order():
     np.testing.assert_array_equal(input_keys, np.array([0, 1], dtype=np.int32))
     np.testing.assert_array_equal(output_keys, np.array([2], dtype=np.int32))
     # 2 + 3 hidden neurons -> five keys starting right after the output block.
-    np.testing.assert_array_equal(
-        hidden_keys, np.array([3, 4, 5, 6, 7], dtype=np.int32)
-    )
-    assert (input_keys.dtype, output_keys.dtype, hidden_keys.dtype) == (
-        np.int32,
-        np.int32,
-        np.int32,
-    )
-    assert (input_keys.shape, output_keys.shape, hidden_keys.shape) == (
-        (2,),
-        (1,),
-        (5,),
-    )
+    np.testing.assert_array_equal(hidden_keys, np.array([3, 4, 5, 6, 7], np.int32))
+    assert {input_keys.dtype, output_keys.dtype, hidden_keys.dtype} == {np.dtype(np.int32)}
+    assert (input_keys.shape, output_keys.shape, hidden_keys.shape) == ((2,), (1,), (5,))
     # Documented slice rule: layer 0 owns hidden_keys[0:2], layer 1 [2:5] —
     # concatenation, not interleaving.
     assert np.cumsum((2, 3))[:-1].tolist() == [2]
@@ -406,25 +396,42 @@ def test_default_substrate_repr_summarises_without_the_arrays():
 
     assert text.startswith("DefaultSubstrate(")
     assert "connection_type='recurrent'" in text
-    assert all(
-        f"{field}={value}" in text
-        for field, value in (
-            ("num_inputs", 2),
-            ("num_outputs", 1),
-            ("nodes_cnt", 4),
-            ("conns_cnt", 2),
-        )
-    )
+    counts = (("num_inputs", 2), ("num_outputs", 1), ("nodes_cnt", 4), ("conns_cnt", 2))
+    assert all(f"{field}={value}" in text for field, value in counts)
     assert "\n" not in text
     assert "[" not in text and "array(" not in text  # no list/array repr
 
 
-def test_default_substrate_validate_rechecks_replaced_fields():
-    """``validate`` is public so a subclass may re-run it after rewriting storage."""
-    substrate = DefaultSubstrate(**_default_kwargs())
+@pytest.mark.parametrize(
+    ("field", "replacement", "match"),
+    [
+        pytest.param("_nodes", np.array([0, 0, 2, 3], np.int32),
+                     "nodes must hold unique keys", id="duplicate-key"),
+        pytest.param("_query_coors", np.zeros(4, np.float32),
+                     "query_coors must be a 2-D", id="query-1d"),
+        pytest.param("_query_coors", np.zeros((0, 4), np.float32),
+                     "query_coors must hold at least one connection row", id="query-empty"),
+        pytest.param("_query_coors", np.zeros((2, 3), np.float32),
+                     "even, non-zero trailing width", id="query-odd-width"),
+        pytest.param("_nodes", np.zeros((4, 2), np.int32),
+                     "nodes must be a 1-D", id="nodes-2d"),
+        pytest.param("_nodes", np.zeros(0, np.int32),
+                     "nodes must hold at least one node key", id="nodes-empty"),
+        pytest.param("_conn_index", np.zeros(2, np.int32),
+                     r"conn_index must be an \(conns_cnt, 2\)", id="conn-1d"),
+        pytest.param("_conn_index", np.zeros((0, 2), np.int32),
+                     "conn_index must hold at least one connection row", id="conn-empty"),
+    ],
+)
+def test_default_substrate_validate_rechecks_replaced_fields(field, replacement, match):
+    """``validate`` is public, so a subclass that rewrites storage can re-run it.
 
-    substrate._nodes = np.array([0, 0, 2, 3], dtype=np.int32)
-    with pytest.raises(TensorNEATError, match="nodes must hold unique keys"):
+    Every case replaces one *private* array **after** construction, so ``validate`` — not
+    the ``__init__`` normaliser, whose own wording differs — is the code that rejects it."""
+    substrate = DefaultSubstrate(**_default_kwargs())
+    setattr(substrate, field, replacement)
+
+    with pytest.raises(TensorNEATError, match=match):
         substrate.validate()
 
 
@@ -607,14 +614,8 @@ def test_mlp_substrate_coordinates_follow_the_layer_formula():
 
     # Key -> coordinate per neuron: inputs 0/1/2 on layer 0, output 3 on layer -1,
     # hidden 4/5 on the interpolated layer 1.
-    assert key_coors == {
-        0: (0.0, 0.0),
-        1: (1.0, 0.0),
-        2: (2.0, 0.0),
-        3: (1.0, 1.0),
-        4: (0.0, 0.5),
-        5: (2.0, 0.5),
-    }
+    assert key_coors == {0: (0.0, 0.0), 1: (1.0, 0.0), 2: (2.0, 0.0),
+                         3: (1.0, 1.0), 4: (0.0, 0.5), 5: (2.0, 0.5)}
     np.testing.assert_array_equal(
         substrate.query_coors, _endpoint_rows(MLP_CONN_INDEX, key_coors)
     )
@@ -781,6 +782,8 @@ def test_default_substrate_rejects_bad_query_coors(query_coors, match):
     [
         pytest.param(np.array([], np.int32), "at least one node key", id="empty"),
         pytest.param(np.zeros((4, 2), np.int32), "nodes must be a 1-D", id="two-columns"),
+        pytest.param(np.array(["0", "1", "2", "3"]), "nodes must be numeric, got dtype <U1",
+            id="non-numeric"),
         pytest.param(np.array([0.0, 1.0, 2.0, 3.5]), "must hold integer keys", id="fractional"),
         pytest.param(np.array([0, 0, 2, 3], np.int32), "nodes must hold unique keys",
             id="duplicate"),
@@ -804,6 +807,8 @@ def test_default_substrate_rejects_bad_nodes(nodes, match):
         pytest.param(np.zeros((2, 3), np.int32), "conn_index must be an", id="three-columns"),
         pytest.param(np.array([0, 3], np.int32), "conn_index must be an", id="one-dim"),
         pytest.param(np.zeros((0, 2), np.int32), "at least one connection row", id="empty"),
+        pytest.param(np.array([["0", "3"], ["3", "2"]]), "conn_index must be numeric",
+            id="non-numeric"),
         pytest.param(np.array([[0.0, 3.5], [3.0, 2.0]]), "must hold integer keys",
             id="fractional"),
     ],

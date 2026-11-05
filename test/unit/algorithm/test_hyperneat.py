@@ -102,8 +102,7 @@ HIDDEN_WEIGHTS = np.array([0.5, -1.0, 0.25, 2.0], dtype=np.float32)
 
 
 def _sigmoid(values):
-    """``ACT.sigmoid`` as a float64 closed form.
-    ``ACT.sigmoid`` as a float64 closed form."""
+    """``ACT.sigmoid`` as a float64 closed form."""
     return 1.0 / (1.0 + np.exp(-np.asarray(values, dtype=np.float64)))
 
 
@@ -132,8 +131,7 @@ def _flat_tick_values(inputs, weights, ticks: int):
 
 
 def _flat_expected_rows(inputs, weights, samples: int, ticks: int):
-    """``forward``'s documented ``(B, 1)`` output; row ``p*samples + j`` is individual p.
-    ``forward``'s documented ``(B, 1)`` output; row ``p*samples + j`` is individual p."""
+    """``forward``'s documented ``(B, 1)`` output; row ``p*samples + j`` is individual p."""
     out = np.empty((inputs.shape[0], 1), dtype=np.float64)
     for row in range(inputs.shape[0]):
         value = _flat_tick_values(inputs[row, 0], weights[row // samples], ticks)
@@ -196,8 +194,7 @@ def _run_prepared_pair(algorithm, state, decoded: SubstrateSchedule, inputs, sam
 
 
 def _flat_substrate() -> DefaultSubstrate:
-    """The no-hidden substrate of the ``forward`` tests (see ``FLAT_*``).
-    The no-hidden substrate of the ``forward`` tests (see ``FLAT_*``)."""
+    """The no-hidden substrate of the ``forward`` tests (see ``FLAT_*``)."""
     return DefaultSubstrate(2, 1, FLAT_QUERY, FLAT_NODES, FLAT_CONN_INDEX)
 
 
@@ -237,43 +234,37 @@ def _tampered_substrate(**overrides) -> DefaultSubstrate:
 
 @pytest.fixture(scope="module")
 def hyper() -> HyperNEAT:
-    """The shared decoder over the harness geometry (2 inputs, 1 hidden, 1 output).
-    The shared decoder over the harness geometry (2 inputs, 1 hidden, 1 output)."""
+    """The shared decoder over the harness geometry (2 inputs, 1 hidden, 1 output)."""
     return make_hyper()
 
 
 @pytest.fixture(scope="module")
 def state(hyper):
-    """Generation-0 state of ``hyper``.
-    Generation-0 state of ``hyper``."""
+    """Generation-0 state of ``hyper``."""
     return make_state(hyper, seed=0)
 
 
 @pytest.fixture(scope="module")
 def decoded(hyper, state) -> SubstrateSchedule:
-    """One full-population decode (``P = 4``).
-    One full-population decode (``P = 4``)."""
+    """One full-population decode (``P = 4``)."""
     return run_method(hyper, "transform", cppn_payload(state), state=state)
 
 
 @pytest.fixture(scope="module")
 def flat() -> HyperNEAT:
-    """A decoder whose read-out rows *are* its output neurons (no hidden block).
-    A decoder whose read-out rows *are* its output neurons (no hidden block)."""
+    """A decoder whose read-out rows *are* its output neurons (no hidden block)."""
     return make_hyper(substrate=_flat_substrate())
 
 
 @pytest.fixture(scope="module")
 def flat_state(flat):
-    """Generation-0 state of ``flat``.
-    Generation-0 state of ``flat``."""
+    """Generation-0 state of ``flat``."""
     return make_state(flat, seed=1)
 
 
 @pytest.fixture(scope="module")
 def flat_decoded(flat, flat_state) -> SubstrateSchedule:
-    """One full-population decode of the flat substrate.
-    One full-population decode of the flat substrate."""
+    """One full-population decode of the flat substrate."""
     return run_method(flat, "transform", cppn_payload(flat_state), state=flat_state)
 
 
@@ -572,22 +563,19 @@ def test_make_hyper_genome_mirrors_the_substrate_and_the_configured_genes():
 
 
 def test_validate_accepts_the_untampered_geometry():
-    """Control: the table the tampering helper starts from is accepted.
-    Control: the table the tampering helper starts from is accepted."""
+    """Control: the table the tampering helper starts from is accepted."""
     assert HyperNEAT(_tampered_substrate(), make_neat()).substrate.nodes_cnt == NODES_CNT
 
 
 def test_validate_rejects_a_cppn_query_width_mismatch():
-    """The CPPN input width must equal ``query_coors.shape[1]`` (the legacy wording).
-    The CPPN input width must equal ``query_coors.shape[1]`` (the legacy wording)."""
+    """The CPPN input width must equal ``query_coors.shape[1]`` (the legacy wording)."""
     with pytest.raises(TensorNEATError, match="Query coors of Substrate should be equal to NEAT input size"):
         HyperNEAT(_tampered_substrate(), make_neat(genome=make_cppn_genome(num_inputs=QUERY_WIDTH - 1)))
 
 
 @pytest.mark.parametrize("threshold", [-0.1, 1.0, 2.5])
 def test_validate_rejects_a_weight_threshold_outside_the_unit_interval(threshold):
-    """``0 <= weight_threshold < 1``: the weight map divides by ``1 - weight_threshold``.
-    ``0 <= weight_threshold < 1``: the weight map divides by ``1 - weight_threshold``."""
+    """``0 <= weight_threshold < 1``: the weight map divides by ``1 - weight_threshold``."""
     with pytest.raises(TensorNEATError, match="weight_threshold must be in"):
         HyperNEAT(_tampered_substrate(), make_neat(), weight_threshold=threshold)
 
@@ -598,16 +586,14 @@ def test_validate_rejects_a_weight_threshold_outside_the_unit_interval(threshold
     + [{"max_weight": True}, {"max_weight": "5.0"}],
 )
 def test_validate_rejects_a_non_real_threshold_or_weight(kwargs):
-    """A ``bool`` (an ``int`` subclass), a string or ``None`` fails the real-number check.
-    A ``bool`` (an ``int`` subclass), a string or ``None`` fails the real-number check."""
+    """A ``bool`` (an ``int`` subclass), a string or ``None`` fails the real-number check."""
     with pytest.raises(TensorNEATError, match="must be a real number"):
         HyperNEAT(_tampered_substrate(), make_neat(), **kwargs)
 
 
 @pytest.mark.parametrize("max_weight", [0.0, -2.0])
 def test_validate_rejects_a_non_positive_max_weight(max_weight):
-    """``max_weight`` is a saturating magnitude, so it must be strictly positive.
-    ``max_weight`` is a saturating magnitude, so it must be strictly positive."""
+    """``max_weight`` is a saturating magnitude, so it must be strictly positive."""
     with pytest.raises(TensorNEATError, match="max_weight must be > 0"):
         HyperNEAT(_tampered_substrate(), make_neat(), max_weight=max_weight)
 
@@ -625,16 +611,14 @@ def test_validate_rejects_a_substrate_without_a_bias_input():
 
 @pytest.mark.parametrize("kwargs", [{"activate_time": 0}, {"activate_time": -3}])
 def test_validate_rejects_a_non_positive_activate_time(kwargs):
-    """``activate_time >= 1``: zero ticks would read out the ``NaN`` seed.
-    ``activate_time >= 1``: zero ticks would read out the ``NaN`` seed."""
+    """``activate_time >= 1``: zero ticks would read out the ``NaN`` seed."""
     with pytest.raises(TensorNEATError, match="activate_time must be >= 1"):
         HyperNEAT(_tampered_substrate(), make_neat(), **kwargs)
 
 
 @pytest.mark.parametrize("activate_time", [True, "3"])
 def test_validate_rejects_a_non_integer_activate_time(activate_time):
-    """A ``bool`` or a string fails ``_require_real`` ("a real number").
-    A ``bool`` or a string fails ``_require_real`` ("a real number")."""
+    """A ``bool`` or a string fails ``_require_real`` ("a real number")."""
     with pytest.raises(TensorNEATError, match="activate_time must be a real number"):
         HyperNEAT(_tampered_substrate(), make_neat(), activate_time=activate_time)
 
@@ -649,8 +633,7 @@ def test_validate_rejects_a_fractional_activate_time():
 
 
 def test_validate_rejects_a_multi_output_cppn():
-    """A CPPN has exactly one output -- the connection weight.
-    A CPPN has exactly one output -- the connection weight."""
+    """A CPPN has exactly one output -- the connection weight."""
     with pytest.raises(TensorNEATError, match="a HyperNEAT CPPN must have exactly one output"):
         HyperNEAT(_tampered_substrate(), make_neat(genome=make_cppn_genome(num_outputs=2)))
 
@@ -665,8 +648,7 @@ def test_validate_rejects_a_multi_output_cppn():
     ],
 )
 def test_validate_rejects_inconsistent_substrate_tables(tampering, match):
-    """Each case tampers with one table, so the failure names that table.
-    Each case tampers with one table, so the failure names that table."""
+    """Each case tampers with one table, so the failure names that table."""
     with pytest.raises(TensorNEATError, match=match):
         HyperNEAT(_tampered_substrate(**tampering), make_neat())
 
@@ -698,8 +680,7 @@ def test_validate_rejects_a_substrate_of_the_wrong_connection_type():
 
 
 def test_protocol_arities_come_from_the_substrate(hyper):
-    """``num_inputs = I - 1`` (bias removed), ``num_outputs = O``, ``pop_size`` a property.
-    ``num_inputs = I - 1`` (bias removed), ``num_outputs = O``, ``pop_size`` a property."""
+    """``num_inputs = I - 1`` (bias removed), ``num_outputs = O``, ``pop_size`` a property."""
     assert hyper.num_inputs == hyper.substrate.num_inputs - 1 == 1, f"{hyper.num_inputs}"
     assert hyper.num_outputs == hyper.substrate.num_outputs == 1, f"{hyper.num_outputs}"
     assert hyper.pop_size == hyper.neat.pop_size == POP_SIZE, f"{hyper.pop_size}"
@@ -709,8 +690,7 @@ def test_protocol_arities_come_from_the_substrate(hyper):
 
 
 def test_ask_returns_the_cppn_population_unchanged(hyper, state):
-    """``ask`` is a zero-op delegation: the very same payload object comes back.
-    ``ask`` is a zero-op delegation: the very same payload object comes back."""
+    """``ask`` is a zero-op delegation: the very same payload object comes back."""
     asked = hyper.ask(state)
     assert asked is state.pop, f"ask must return the state's payload, got a new {type(asked).__name__}"
     assert hyper.neat.ask(state) is asked, "ask must be a pure delegation to neat.ask"
@@ -744,6 +724,35 @@ def test_setup_returns_a_state_identical_to_the_cppn_setup(hyper):
     npt.assert_array_equal(to_numpy(first.randkey), to_numpy(cppn_only.randkey))
 
 
+def test_setup_without_a_state_starts_from_an_empty_state(hyper, monkeypatch):
+    """``setup(None)`` builds a fresh empty ``State`` and chains it, like ``setup(State())``.
+
+    Oracle: the explicit spelling.  ``neat.setup`` is wrapped only to record what it receives
+    and to seed the ``randkey`` its own guard requires (the pipeline owns that key), so the
+    recorded argument is this branch's product — a ``State`` with no entries, never the
+    ``None`` an absent branch would forward — and both spellings return equal entries."""
+    seen, cppn_setup = [], hyper.neat.setup
+
+    def seeding_setup(current=None):
+        seen.append(current)
+        if "randkey" not in current.registered_keys():
+            current = current.register(randkey=evoxc.random.key(0))
+        return cppn_setup(current)
+
+    monkeypatch.setattr(hyper.neat, "setup", seeding_setup)
+    implicit = hyper.setup()
+    explicit = hyper.setup(State(randkey=evoxc.random.key(0)))
+
+    assert isinstance(seen[0], State), f"setup(None) must build a State, got {seen[0]!r}"
+    assert tuple(seen[0].registered_keys()) == (), "the built State must start empty"
+    assert list(implicit.registered_keys()) == list(explicit.registered_keys())
+    assert implicit.pop_size == explicit.pop_size == POP_SIZE
+    for name in GenomeTensors._fields:
+        implicit_shape = np.shape(to_numpy(getattr(implicit.pop, name)))
+        assert implicit_shape == np.shape(to_numpy(getattr(explicit.pop, name))), name
+    assert np.shape(to_numpy(implicit.generation)) == np.shape(to_numpy(explicit.generation))
+
+
 def test_tell_delegates_to_the_cppn_algorithm(hyper, state, monkeypatch):
     """``tell`` forwards ``(state, fitness)`` to ``neat.tell`` and returns its result unchanged.
 
@@ -763,8 +772,7 @@ def test_tell_delegates_to_the_cppn_algorithm(hyper, state, monkeypatch):
 
 
 def test_show_details_delegates_to_the_cppn_algorithm(hyper, state, monkeypatch):
-    """``show_details`` forwards to ``neat.show_details``: the CPPN owns the report.
-    ``show_details`` forwards to ``neat.show_details``: the CPPN owns the report."""
+    """``show_details`` forwards to ``neat.show_details``: the CPPN owns the report."""
     seen = {}
 
     def fake_show(current, fitness):
