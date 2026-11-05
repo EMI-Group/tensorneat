@@ -239,6 +239,7 @@ def _pack(
     keys: evoxc.SymbolicTensor,
     sentinel: evoxc.SymbolicTensor,
     key_base: evoxc.SymbolicTensor,
+    scale: evoxc.SymbolicTensor | None = None,
 ) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
     """Fold the first key columns of one gene family into injective ``int64`` composites.
 
@@ -246,6 +247,9 @@ def _pack(
         keys: ``(P, M)`` or ``(P, M, K) int32`` key array, ``I_INF`` padded.
         sentinel (evoxc.SymbolicTensor): rank-0 ``int32`` ``I_INF`` — the padding value.
         key_base (evoxc.SymbolicTensor): rank-0 ``int64`` ``2**31``, the fold radix.
+        scale (evoxc.SymbolicTensor | None): rank-0 ``int64`` side-tag scale
+            (``1 << _TAG_BITS``) for a single-key centre family, or ``None`` to fold without
+            it.
 
     Returns:
         ``(pack (P, M) int64, valid (P, M) bool)`` — the folded key value and the row's
@@ -273,9 +277,18 @@ def _pack(
         reads them off the family's :class:`~.layout.MeasureStatics` instead of tracing one
         ``constant`` each — ``evoxc`` never deduplicates constants, and ``prepare`` already
         pooled the same two values.
+        The optional ``scale`` fuses the side-tag multiply into the same op for a single-key
+        family, saving one traced op per ``measure`` call: ``evoxc.multiply`` promotes the
+        mixed ``int32 x int64`` pair to ``int64`` and the StableHLO writer inserts the
+        ``convert``, so the result is bit-identical to ``cast`` followed by ``multiply``, and
+        it is exact because the largest legal ``|key * 2|`` is below ``2**63``.
+        The digest side (:func:`prepare_family`) passes no ``scale`` and keeps today's
+        spelling, as does a rank-3 table, whose centre fold is :func:`_pack_centre`'s ``dot``.
     """
     if len(keys.shape) == 2:
         valid = evoxc.not_equal(keys, sentinel)
+        if scale is not None:
+            return evoxc.multiply(keys, scale), valid
         return evoxc.cast(keys, evoxc.int64), valid
     leading = _column(keys, 0)
     valid = evoxc.not_equal(leading, sentinel)
@@ -339,7 +352,7 @@ def _tagged(
     valid: evoxc.SymbolicTensor,
     tag: int,
     padding: evoxc.SymbolicTensor,
-    scale: evoxc.SymbolicTensor,
+    scale: evoxc.SymbolicTensor | None,
     one: evoxc.SymbolicTensor,
 ) -> evoxc.SymbolicTensor:
     """Attach the side tag to a folded composite, or the side's padding sentinel.
@@ -349,7 +362,10 @@ def _tagged(
         valid: ``(P, M) bool`` real-gene mask.
         tag: ``_TAG_CENTRE`` or ``_TAG_POPULATION``.
         padding (evoxc.SymbolicTensor): rank-0 ``int64`` sentinel of this side for absent rows.
-        scale (evoxc.SymbolicTensor): rank-0 ``int64`` ``2`` (``_TAG_BITS == 1``).
+        scale (evoxc.SymbolicTensor | None): rank-0 ``int64`` ``2`` (``_TAG_BITS == 1``), or
+            ``None`` when ``pack`` already carries the scale (:func:`_pack`'s fused ``multiply``
+            for a single-key centre family), in which case the ``multiply`` is skipped — one
+            traced op saved per ``measure`` call.
         one (evoxc.SymbolicTensor): rank-0 ``int64`` ``1`` — the population tag, i.e. the value
             the ``add`` below uses when ``tag`` is truthy.
 
@@ -359,11 +375,13 @@ def _tagged(
     Notes:
         ``pack * 2 + tag`` keeps ``_TAG_BITS`` low bits for the side, and the multiplication
         cannot overflow: ``pack < 2**62`` and ``tag < 2`` keep the result below ``2**63``.
+        A ``scale`` of ``None`` means the caller fused that multiplication into the fold, so
+        ``pack`` is already the scaled composite and only the tag ``add`` remains.
         The centre's tag is ``0``, so its tagged value is exactly ``pack * 2`` and the ``add``
         is skipped — the centre is tagged once per family per ``measure`` call and that
         addition would be dead arithmetic.
     """
-    scaled = evoxc.multiply(pack, scale)
+    scaled = pack if scale is None else evoxc.multiply(pack, scale)
     if tag:
         scaled = evoxc.add(scaled, one)
     return evoxc.select(valid, scaled, padding)
@@ -668,13 +686,15 @@ def measure_alignment(
         # already lands on the centre padding sentinel where the row is absent.
         composite, valid = _pack_centre(keys, statics)
     else:
-        pack, valid = _pack(keys, statics.iinf_i32, statics.key_base_i64)
+        pack, valid = _pack(
+            keys, statics.iinf_i32, statics.key_base_i64, scale=statics.tag_scale_i64
+        )
         composite = _tagged(
             pack,
             valid,
             _TAG_CENTRE,
             statics.pad_centre_i64,
-            statics.tag_scale_i64,
+            None,
             statics.one_i64,
         )
     # The merged block carries the digest half, the centre half and one trailing column whose
