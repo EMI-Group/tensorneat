@@ -5,7 +5,7 @@ contains a real ``while_loop``/``scan`` region aborts or segfaults), so this scr
 measures the **un-looped** building blocks at the exact shapes the generation graph
 uses and leaves the extrapolation to ``ROCM_FINDINGS.md``.
 
-    timeout 900 uv run --no-sync python src/tensorneat/_rocm_spikes/rocm_c_kernels.py \
+    timeout 900 uv run --no-sync python benchmarks/spikes/rocm/rocm_c_kernels.py \
         --kernel level_step --case xor_p500 --backend rocm --repeats 10
 
 Kernels

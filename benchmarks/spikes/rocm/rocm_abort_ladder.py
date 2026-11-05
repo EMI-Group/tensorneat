@@ -3,7 +3,7 @@
 One probe per process (a failed HIP device is poisoned for the rest of the
 process and the interpreter often hangs at teardown):
 
-    timeout 600 uv run --no-sync python src/tensorneat/_rocm_spikes/rocm_abort_ladder.py --probe p1
+    timeout 600 uv run --no-sync python benchmarks/spikes/rocm/rocm_abort_ladder.py --probe p1
 """
 
 from __future__ import annotations

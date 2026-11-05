@@ -2,7 +2,7 @@
 # Drive every ROCm spike probe: ONE graph per subprocess, each under `timeout 900`,
 # because a failed HIP device is poisoned for the rest of the process.
 #
-#   bash src/tensorneat/_rocm_spikes/rocm_run_all.sh [LOG_DIR]
+#   bash benchmarks/spikes/rocm/rocm_run_all.sh [LOG_DIR]
 #
 # Everything is printed as `PROBE <name> <OK|FAIL> <detail>`; grep `^PROBE .* OK`
 # for the measured table. Requires the local evoxc checkout:
@@ -10,10 +10,10 @@
 set -u
 export PATH="$HOME/.local/bin:$PATH"
 cd "$(dirname "$0")/../../.." || exit 1
-LOG_DIR="${1:-$PWD/src/tensorneat/_rocm_spikes/logs}"
+LOG_DIR="${1:-$PWD/benchmarks/spikes/rocm/logs}"
 mkdir -p "$LOG_DIR"
 PY="uv run --no-sync python"
-SPIKES="src/tensorneat/_rocm_spikes"
+SPIKES="benchmarks/spikes/rocm"
 
 run() {  # run <label> <cmd...>
   local label="$1"; shift

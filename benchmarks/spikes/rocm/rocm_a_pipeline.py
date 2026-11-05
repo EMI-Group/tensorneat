@@ -3,7 +3,7 @@
 One case per process (a failed HIP device is poisoned, and the interpreter can hang
 at teardown), each driven from ``rocm_run_all.sh`` with ``timeout 900``:
 
-    timeout 900 uv run --no-sync python src/tensorneat/_rocm_spikes/rocm_a_pipeline.py --case a1
+    timeout 900 uv run --no-sync python benchmarks/spikes/rocm/rocm_a_pipeline.py --case a1
 
 Cases:
   a1        the objective's literal spelling -- ``backend="iree"``, ``device="rocm"``,

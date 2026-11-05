@@ -9,7 +9,7 @@ by the earlier ones, so the first case that aborts names the stage:
 
 One case per process (a failed HIP device is poisoned):
 
-    timeout 900 uv run --no-sync python src/tensorneat/_rocm_spikes/rocm_b_stages.py --case b_forward
+    timeout 900 uv run --no-sync python benchmarks/spikes/rocm/rocm_b_stages.py --case b_forward
 
 The stage bodies call the real kernels (``NEAT.setup`` itself, ``algorithm.transform``,
 ``algorithm.forward``, ``SpeciesController.update_species``, ``NEAT.tell``); nothing in

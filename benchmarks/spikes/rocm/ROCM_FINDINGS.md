@@ -12,7 +12,7 @@ Reproduce everything:
 export PATH=$HOME/.local/bin:$PATH
 uv sync --all-extras
 uv pip install -e /root/evoxc --no-deps
-bash src/tensorneat/_rocm_spikes/rocm_run_all.sh        # logs/ next to the scripts
+bash benchmarks/spikes/rocm/rocm_run_all.sh        # logs/ next to the scripts
 ```
 
 Every probe is ONE graph in its own subprocess under `timeout 900` (a failed HIP
@@ -34,6 +34,8 @@ below is a stage decomposition plus an explicitly flagged extrapolation.
 ---
 
 ## A. Device placement on the real GPU path
+The `a1` / `a1_infer` rows are the **pre-fix** observations (both defects are fixed now --
+see the status block above; the post-fix run is recorded there).
 
 `Pipeline(..., backend="iree", device="rocm")` at xor_p500
 (`NEAT(pop_size=500, species_size=20, survival_threshold=0.01)`,
