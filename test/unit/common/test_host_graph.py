@@ -42,6 +42,7 @@ Backend-independent (no ``evoxc`` op is called); no ``jax``/``torch``, no networ
 from __future__ import annotations
 
 import importlib
+import re
 
 import numpy as np
 import pytest
@@ -636,11 +637,16 @@ def test_node_depth_raises_graph_error_on_a_cycle_or_an_unreachable_node(
         host_graph.node_depth(unreachable_nodes, {(1, 2)}, [0])
     assert "1" in str(excinfo.value)
 
-    # Neither ``1`` nor ``2`` is fed; the call still raises rather than returning
-    # a hole, and the node it names is one of the two unreachable ones.
+    # Neither ``1`` nor ``2`` is fed, so ``2`` is the only node the walk cannot
+    # pin (``0`` and ``1`` are the inputs) and the message must name it. A bare
+    # membership test over ``("1", "2")`` would pass on the input list
+    # ``… input nodes [0, 1]`` whatever node was reported.
     with pytest.raises(errors.GraphError) as excinfo:
         host_graph.node_depth({0, 1, 2}, set(), [0, 1])
-    assert any(key in str(excinfo.value) for key in ("1", "2"))
+    message = str(excinfo.value)
+    named = re.match(r"node (\d+) is not reachable", message)
+    assert named is not None, message
+    assert named.group(1) == "2", message
 
     # A whole disconnected component is unreachable for the same reason.
     with pytest.raises(errors.GraphError) as excinfo:
