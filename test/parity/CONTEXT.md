@@ -105,6 +105,7 @@ RNG, `initialize`, mutation and crossover are never compared, at any tolerance.
 `pytestmark = [pytest.mark.parity]` at module scope in every module here, so `-m parity` selects the directory and `-m "not parity"` excludes it.
 The four oracle modules call `pytest.importorskip("jax", reason=...)` at module scope immediately after `pytestmark`; `jax` is otherwise imported only inside fixture/test bodies, always after that guard.
 Every test here is a real assertion: no `pytest.skip` body remains, and a module that unexpectedly skips is a defect in the module.
+The only skips are the four module-scope `importorskip` guards and the two `jax`-dependent guards of `./test_oracle_integrity.py`, all with a reason naming what is not collected.
 Docstrings state invariant / oracle / assertion for each test and are kept free of history wording.
 No network, no GPU, `backend="numpy"` everywhere (`support.runner`'s default).
 Shapes stay small (`max_nodes == 8`, `max_conns == 16`, `pop <= 8`).
