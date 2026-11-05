@@ -201,8 +201,7 @@ The kernel is strictly row-independent, so any legal batch width returns the sam
 
 ## Measured Cost (numpy backend, real `DefaultGenome(max_nodes=50, max_conns=100)`, XOR, `species_size=20`, seed 42)
 The committed record is `benchmarks/PERF_NUMPY.md`: pass 1 is the op-count pass (`a697531` → its pass-1 tree) and pass 2 the tiled func-fit evaluate plus RL rollout hoist (`ce5bb88` → `90d97b4`); each holds its own protocol and before/after pair, and pass 2 holds the current 150-generation numbers (`xor_p500` 178.24 ms/generation · 228.6 MiB · 0.55 s build, `xor3d_p500` 183.22 · 237.2 MiB · 0.54 s).
-The table below is the same-session A/B that produced the in-scan table and is recorded only in this file, so read its columns as the commits they name, not as current cost, and expect session drift against the record's own cells.
-Its protocol: one configuration per fresh process, `benchmarks/backend_measure.py --backend numpy --pop P --generations 20 --warmup 3` (that harness's numbers are `Pipeline.step`), rounds run one at a time and interleaved between trees so box drift cancels; the harness reports the process's lifetime peak RSS.
+The table below is the same-session A/B that produced the in-scan table and is recorded only in this file: read its columns as the commits they name and expect session drift; the protocol is one configuration per fresh process, `benchmarks/backend_measure.py --backend numpy --pop P --generations 20 --warmup 3`, rounds interleaved between trees so box drift cancels.
 `base` is commit a697531 (before the digest-backed `matrix`), `prev` is dff1643 (the table measured as `S` top-level calls), `pass-1 tree` is the tree carrying `benchmarks/PERF_NUMPY.md` pass 1 (the table measured inside one `evoxc.scan`):
 
 | P | base `step` mean (median) | prev `step` mean (median) | pass-1 tree `step` mean (median) | base / prev / pass-1 tree peak RSS | base / prev / pass-1 tree build |
