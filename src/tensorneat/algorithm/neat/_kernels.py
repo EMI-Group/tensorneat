@@ -872,14 +872,17 @@ def speciate(
     # earlier iteration can rewrite it (every ``scatter`` in ``reserve`` writes
     # index ``slot``, and each slot is visited exactly once), so the dense path
     # measures that whole table before the scan -- inside ``matrix``'s own
-    # fixed-length ``scan``, the region that scopes one centre's transients -- and
-    # each iteration gathers its own row, keeping the compatibility kernel out of
-    # the reservation ``while`` body.
+    # fixed-length ``scan``, the region that scopes one centre's transients --
+    # keeping the compatibility kernel out of the reservation ``while`` body.
     rows1 = None if gate else distance_fn.matrix(state, centre_table)
 
     if accelerator:
         # The accelerator formulation (:mod:`._scan_accelerator`) carries no
-        # per-slot table: each step returns its record as the scan's ``y``.
+        # per-slot table -- each step returns its record as the scan's ``y`` --
+        # and hands scan 1 the dense path's pre-measured table (``None`` when
+        # gated) so it reduces every row at once: row ``slot`` of that block is
+        # the row its per-iteration gather would have produced.
+        live_slots = evoxc.logical_not(evoxc.isnan(species_state.species_keys))
         operands = _scan_accelerator.ScanOperands(
             keys=species_state.species_keys,
             pop_index=pop_index,
@@ -890,8 +893,8 @@ def speciate(
             one_f32=const(1.0),
             threshold=threshold,
             gated=gate,
+            block=rows1,
         )
-        live_slots = evoxc.logical_not(evoxc.isnan(species_state.species_keys))
         carry, closest_table = evoxc.scan(
             _scan_accelerator.reserve_step(operands, reserve_row),
             _scan_accelerator.reserve_carry(pop_size, gate),

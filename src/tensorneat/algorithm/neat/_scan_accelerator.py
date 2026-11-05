@@ -51,6 +51,36 @@ The host form has three avoidable costs, one formulation per item below:
    created rows are rebuilt once after the scan with a prefix sum over the
    created mask (the exact sequence the two scatters wrote).
 
+Two further removals, both about *what shape* the remaining dispatches have.
+A ``(P,)``-axis-0 elementwise op or reduction is one workgroup of one thread on
+ROCm, so a body of ~13 such dispatches is a serial chain no matter how few ops
+it is; the levers below turn them into multi-workgroup work or delete them.
+
+4. **Scan 1's two reductions are row-wise over the whole table.**  On the dense
+   path (``gate`` false) the ``(S, P)`` table ``rows1`` is already materialised
+   before the scan, and row ``i`` of it *is* the ``(P,)`` row slot ``i`` would
+   have gathered, so the body's two ``(P,)``-reducing steps generalise to one
+   row-wise pass: mask the whole block with the iteration's ``pending``, take a
+   per-row ``reduce_min``, and recover the per-row minimal index with the same
+   two plain reductions (:func:`_block_min_index`).  Each step then launches two
+   ``S``-workgroup reductions instead of two serial ones, and the per-slot
+   ``gather`` of its row disappears (the block is closed over).  The gated path
+   has no table to close over -- its row is a lazily built ``cond`` -- so it
+   keeps the per-slot form.
+5. **Scan 2's seed reduction is gated on a loop-invariant liveness scalar.**
+   ``seed`` is only *used* by a dead slot (``create = not live and the
+   population still has an unassigned genome``), and a species key never
+   changes inside the scan, so "some slot is dead" is a top-level scalar read
+   off the pre-scan ``species_keys``.  When no slot is dead the body's
+   ``(P,)``-axis-0 index reduction is computed and discarded on every one of the
+   ``species_size`` iterations; :func:`_seed` wraps it in one ``evoxc.cond``
+   whose predicate is that scalar, so the all-live case launches no reduction at
+   all.  Both branches are built statically and the predicate is a **top-level
+   rank-0** value -- never a population-shaped reduce used as a scan ``cond``
+   predicate, which is the shape that crashes ``iree-compile`` (item 1).
+   ``absent``/``create`` stay exact because the false branch returns the
+   ``I_INF`` sentinel, which is a dead slot's "nothing to seed from".
+
 Bit identity
 ------------
 Every value is the same number, not merely close:
@@ -81,6 +111,20 @@ Every value is the same number, not merely close:
 * Scan 2's created keys are ``next_species_key + k`` for the ``k``-th create in
   slot order, exactly what the carried counter accumulated -- state keys are
   integral ``float32`` values below ``2**24``, where ``+1.0`` is exact.
+* The row-wise form of scan 1 answers the row form's question *per row*: row
+  ``i`` of the block is slot ``i``'s row, ``reduce_min`` along the gene axis is
+  an exact min (no rounding, order-free), the match mask is the same
+  ``pending and score == min`` predicate, and the index reduction is the same
+  min over the same ``pop_index`` vector restricted to the same attaining
+  positions.  ``gather(closest_all, slot)`` then reads the answer the row form
+  would have computed for that slot in that iteration.  Only the iteration's own
+  row is read; the other rows' values are discarded, which is why the algebra is
+  shared and only the reduction axis differs.
+* The all-live scan 2 pass is bit-identical, not merely equivalent: the false
+  branch returns the ``I_INF`` sentinel, so ``absent`` is ``True``, ``create``
+  is ``False`` on every slot (a live slot can never create), and the raw record
+  the step stacks is never read -- ``created`` is ``~live & (record != I_INF)``
+  against pre-scan liveness, which is empty when nothing is dead.
 
 Correctness envelope
 --------------------
@@ -137,6 +181,10 @@ class ScanOperands:
         gated (bool): ``True`` when the row is computed lazily behind one
             ``evoxc.cond`` (``species_size * pop_size <= GATED_ROWS``); scan 1
             then carries the unassigned counter its predicate reads.
+        block: ``(S, P) float32`` the dense path's pre-measured scan-1 distance
+            table (row ``i`` is slot ``i``'s row), or ``None`` on the gated path,
+            where no such table exists.  When it is present scan 1 reduces it
+            row-wise instead of reducing one gathered row per iteration.
     """
 
     keys: Any
@@ -148,6 +196,92 @@ class ScanOperands:
     one_f32: Any
     threshold: Any
     gated: bool
+    block: Any = None
+
+
+def _row_min_index(distances: Any, pending: Any, operands: ScanOperands) -> Any:
+    """The minimal ``pop_index`` among the pending genomes attaining the minimum.
+
+    This is the row form: one ``(P,)`` masked minimum plus one ``(P,)`` index
+    minimum.  ``pending`` that attain nothing leave the masked scores at
+    ``+inf``, so no index attains them and the reduction returns ``iinf`` --
+    exactly ``argmin_with_mask``'s "no candidate" sentinel.
+    """
+    masked = evoxc.select(pending, distances, operands.inf_f32)
+    best = evoxc.reduce_min(masked, axes=0)
+    match = evoxc.logical_and(pending, evoxc.equal(distances, best))
+    return evoxc.reduce_min(
+        evoxc.select(match, operands.pop_index, operands.iinf), axes=0
+    )
+
+
+def _block_min_index(
+    block: Any, pending: Any, slot: Any, operands: ScanOperands
+) -> Any:
+    """``_row_min_index`` for every row of the ``(S, P)`` table at once.
+
+    Row ``i`` of ``block`` is the row slot ``i`` would have gathered, and every
+    step of the dense path asks the same question of its own row, so the two
+    reductions run with ``axes=1`` over the whole block and the step reads its
+    own answer back with one ``gather``.  The values are the row form's, bit for
+    bit: a min is exact and order-free, and the index reduction minimises the
+    same ``pop_index`` vector over the same attaining positions.
+
+    The gain is the launch, not the arithmetic: a per-row reduction over ``P``
+    is one workgroup of one thread on a compiled backend, whereas this shape is
+    one workgroup per row.
+    """
+    row_pending = enp.expand_dims(pending, 0)
+    masked = evoxc.select(row_pending, block, operands.inf_f32)
+    best = enp.expand_dims(evoxc.reduce_min(masked, axes=1), 1)
+    match = evoxc.logical_and(row_pending, evoxc.equal(block, best))
+    closest = evoxc.reduce_min(
+        evoxc.select(match, enp.expand_dims(operands.pop_index, 0), operands.iinf),
+        axes=1,
+    )
+    return evoxc.gather(closest, slot, axis=0)
+
+
+def _first_unassigned(unassigned: Any, operands: ScanOperands) -> Any:
+    """The first still-unassigned genome's index, ``iinf`` when there is none."""
+    return evoxc.reduce_min(
+        evoxc.select(unassigned, operands.pop_index, operands.iinf), axes=0
+    )
+
+
+def any_dead(operands: ScanOperands) -> Any:
+    """0-d ``bool``: at least one species slot is dead, i.e. could create one.
+
+    Read off the **pre-scan** ``species_keys``, which scan 2 never rewrites, so
+    it is loop-invariant and is built once at the top level instead of once per
+    iteration.  ``species_size`` elements, so the reduction is cheap whatever it
+    costs.
+    """
+    live = evoxc.logical_not(evoxc.isnan(operands.keys))
+    return evoxc.equal(
+        evoxc.reduce_min(evoxc.cast(live, evoxc.int32), axes=0), operands.zero_i32
+    )
+
+
+def _seed(unassigned: Any, operands: ScanOperands, creations_possible: Any) -> Any:
+    """Scan 2's seed, skipping its reduction when no slot could ever create.
+
+    ``create`` requires a dead slot (:func:`any_dead`), so with none the
+    reduction's answer is never read (``created`` is empty) and the false branch
+    returns the sentinel, launching no reduction at all.  The predicate is
+    rank-0 and built at the top level -- the population-shaped reduce that
+    crashes ``iree-compile`` as a scan predicate is a different shape and is not
+    recreated here.
+    """
+    def take(candidates: Any) -> Any:
+        """A dead slot exists: the first unassigned index, or the sentinel."""
+        return _first_unassigned(candidates, operands)
+
+    def skip(_candidates: Any) -> Any:
+        """No dead slot: nothing can create, so nothing addresses a row."""
+        return operands.iinf
+
+    return evoxc.cond(creations_possible, take, skip, unassigned)
 
 
 def reserve_carry(pop_size: int, gated: bool) -> tuple:
@@ -210,18 +344,18 @@ def reserve_step(operands: ScanOperands, row_for_slot: Callable) -> Callable:
         key_slot = evoxc.gather(operands.keys, slot, axis=0)
         live = evoxc.logical_not(evoxc.isnan(key_slot))
         pending = evoxc.isnan(assign)
-        active = live
-        if operands.gated:
-            active = evoxc.logical_and(
-                live, evoxc.greater(remaining, operands.zero_i32)
-            )
-        distances = row_for_slot(slot, active)
-        masked = evoxc.select(pending, distances, operands.inf_f32)
-        best = evoxc.reduce_min(masked, axes=0)
-        match = evoxc.logical_and(pending, evoxc.equal(distances, best))
-        closest = evoxc.reduce_min(
-            evoxc.select(match, operands.pop_index, operands.iinf), axes=0
-        )
+        if operands.block is not None:
+            # Dense path: the whole table is already measured, so every row's
+            # answer is one row-wise pass and this step reads its own row.
+            closest = _block_min_index(operands.block, pending, slot, operands)
+        else:
+            active = live
+            if operands.gated:
+                active = evoxc.logical_and(
+                    live, evoxc.greater(remaining, operands.zero_i32)
+                )
+            distances = row_for_slot(slot, active)
+            closest = _row_min_index(distances, pending, operands)
         claim = evoxc.logical_and(live, evoxc.not_equal(closest, operands.iinf))
         onehot = evoxc.logical_and(claim, evoxc.equal(operands.pop_index, closest))
         assign = evoxc.select(onehot, key_slot, assign)
@@ -264,7 +398,11 @@ def assign_step(
         rows are rebuilt once after the scan from the stacked ``y`` and the
         counter's final value.  The predicate ``live | create`` needs no
         population reduction, so the gated path keeps it as it stands.
+        ``creations_possible`` is :func:`any_dead`, built here -- at trace time,
+        outside the region -- so it costs one cheap population-*slot* reduction
+        per generation instead of one population-shaped reduction per iteration.
     """
+    creations_possible = any_dead(operands)
 
     def step(carry: tuple, slot: Any) -> tuple:
         """One scan-2 iteration."""
@@ -272,9 +410,7 @@ def assign_step(
         key_slot = evoxc.gather(operands.keys, slot, axis=0)
         live = evoxc.logical_not(evoxc.isnan(key_slot))
         unassigned = evoxc.isnan(assign)
-        seed = evoxc.reduce_min(
-            evoxc.select(unassigned, operands.pop_index, operands.iinf), axes=0
-        )
+        seed = _seed(unassigned, operands, creations_possible)
         absent = evoxc.equal(seed, operands.iinf)
         create = evoxc.logical_and(evoxc.logical_not(live), evoxc.logical_not(absent))
         # ``centre_for_slot`` gathers ``pop[seed]`` unconditionally, so the
