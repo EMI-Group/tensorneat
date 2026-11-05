@@ -38,11 +38,11 @@ class CustomFuncFit(FuncFit):
 
         Sampling modes:
 
-        - ``method="sample"`` draws ``num_samples`` points per axis from the box
-          ``[low_bounds, upper_bounds]`` using ``np.random.default_rng(seed)``.
-          The generator is host-side only: the legacy version mutated the global
-          ``np.random`` state, which made runs irreproducible without also
-          seeding the process globally.
+        - ``method="sample"`` draws ``num_samples`` rows in total, each of them a
+          uniform point of the box ``[low_bounds, upper_bounds]``, using
+          ``np.random.default_rng(seed)``. The generator is host-side only: the
+          legacy version mutated the global ``np.random`` state, which made runs
+          irreproducible without also seeding the process globally.
         - ``method="grid"`` builds the cartesian product of
           ``np.arange(low_bounds[i], upper_bounds[i], step_size[i])`` over every
           axis, so ``step_size`` must have the same shape as the bounds and be
@@ -53,7 +53,8 @@ class CustomFuncFit(FuncFit):
             low_bounds: Lower corner of the box, one entry per input.
             upper_bounds: Upper corner of the box, same shape as ``low_bounds``.
             method: ``"sample"`` or ``"grid"``.
-            num_samples: Number of samples per axis for ``method="sample"``.
+            num_samples: Number of sample rows drawn from the box for
+                ``method="sample"``; ignored by ``method="grid"``.
             step_size: Per-axis grid step for ``method="grid"``; ignored
                 otherwise.
             seed: Seed of the host-side ``np.random.default_rng`` for
@@ -65,7 +66,9 @@ class CustomFuncFit(FuncFit):
             TensorNEATError: If ``method`` is not ``"sample"``/``"grid"``, if
                 ``num_samples <= 0``, if ``step_size`` is missing, does not
                 match the bounds' shape or is not strictly positive, if
-                ``low_bounds.shape != upper_bounds.shape``, or if
+                ``low_bounds.shape != upper_bounds.shape``, if a bound is not
+                finite, if any axis is not a proper interval
+                (``low_bounds[i] < upper_bounds[i]``), or if
                 ``func(low_bounds)`` raises.
         """
         low = np.asarray(low_bounds, dtype=np.float32)
@@ -74,6 +77,23 @@ class CustomFuncFit(FuncFit):
             raise TensorNEATError(
                 f"low_bounds.shape {low.shape} must equal upper_bounds.shape "
                 f"{high.shape}"
+            )
+        not_finite = np.flatnonzero(~(np.isfinite(low) & np.isfinite(high)))
+        if not_finite.size:
+            axis = int(not_finite[0])
+            raise TensorNEATError(
+                f"bounds must be finite, but axis {axis} has low_bounds "
+                f"{low.ravel()[axis]} and upper_bounds {high.ravel()[axis]}; "
+                f"inf/nan cannot define a sampling box"
+            )
+        not_proper = np.flatnonzero(~(low < high))
+        if not_proper.size:
+            axis = int(not_proper[0])
+            raise TensorNEATError(
+                f"low_bounds must be strictly below upper_bounds on every axis, "
+                f"but axis {axis} has low_bounds {low.ravel()[axis]} and "
+                f"upper_bounds {high.ravel()[axis]}; a zero-width or reversed "
+                f"box yields an empty dataset (S = 0)"
             )
         try:
             func(low)
@@ -213,12 +233,16 @@ def cartesian_product(arr1: np.ndarray, arr2: np.ndarray) -> np.ndarray:
         ``(n1 * n2, 2)``.
 
     Raises:
-        AssertionError: If the inputs disagree in rank or exceed rank 2.
+        TensorNEATError: If the inputs disagree in rank or exceed rank 2.
     """
     arr1 = np.asarray(arr1)
     arr2 = np.asarray(arr2)
-    assert arr1.ndim == arr2.ndim, "arr1 and arr2 must have the same number of dimensions"
-    assert arr1.ndim <= 2, "arr1 and arr2 must have at most 2 dimensions"
+    if arr1.ndim != arr2.ndim:
+        raise TensorNEATError(
+            "arr1 and arr2 must have the same number of dimensions"
+        )
+    if arr1.ndim > 2:
+        raise TensorNEATError("arr1 and arr2 must have at most 2 dimensions")
     len1 = arr1.shape[0]
     len2 = arr2.shape[0]
     repeated_arr1 = np.repeat(arr1, len2, axis=0)
