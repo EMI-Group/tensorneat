@@ -24,6 +24,7 @@ __all__ = [
     "HEADINGS",
     "IMPL_LABELS",
     "IMPL_ORDER",
+    "TARGET_UNKNOWN",
     "by_case",
     "case_order",
     "cell",
@@ -44,6 +45,7 @@ __all__ = [
     "pct_index",
     "plain",
     "protocol_meta",
+    "reach",
     "recorded_lengths",
     "repo_relative",
     "run_flag",
@@ -456,3 +458,52 @@ def gens_to_target(value, length) -> str:
     if numeric is not None and not math.isinf(numeric):
         return str(int(math.floor(numeric + 0.5)))
     return f">{length}" if isinstance(length, int) and length > 0 else "n/a"
+
+
+TARGET_UNKNOWN = object()
+"""Sentinel for "this record carries no ``target`` key at all" — a record written before the
+aggregation recorded one, which must keep rendering exactly as it always did.
+
+It is deliberately distinct from ``None``: a record that stores ``"target": null`` *does*
+answer the question, and its answer is "measured with no fitness target", which renders as
+``n/a (no informative target)`` rather than as a ``>N`` bound nothing was compared against.
+"""
+
+
+def reach(value, all_values, length, target=TARGET_UNKNOWN) -> str:
+    """Generations-to-target cell that keeps how many repeats actually reached the target.
+
+    ``value`` is the aggregated median, ``all_values`` the record's per-repeat
+    ``gens_to_target_all`` (``None`` for a single repeat or a record that never stored one).
+    With no per-repeat spread the cell is :func:`gens_to_target` unchanged; when only some
+    repeats reached the target the median gains a ``(reached/total)`` annotation
+    (``78 (2/3)``), when none did the ``>N`` bound carries the count (``>152 (0/3)``), and a
+    group that reached it everywhere stays a plain number. A missing aggregate is rebuilt from
+    the per-repeat values, so the cell never degrades to ``>N`` while a repeat did reach.
+    ``target`` is the record's fitness target: ``TARGET_UNKNOWN`` (the default) means the key
+    is absent and the legacy rendering applies, while ``None`` means the case was measured
+    without a target at all and renders ``n/a (no informative target)`` — never ``>N``,
+    because nothing was attempted.
+    """
+    if target is not TARGET_UNKNOWN and target is None:
+        return "n/a (no informative target)"
+    values = list(all_values) if isinstance(all_values, (list, tuple)) else []
+    total = len(values)
+    reached = sum(1 for item in values if item is not None)
+    cell_value = gens_to_target(value, length)
+    if total <= 1 or reached == total:
+        return cell_value
+    if reached == 0:
+        return f"{cell_value} (0/{total})"
+    if number(value) is None:
+        reached_values = sorted(
+            item for item in (number(item) for item in values) if item is not None
+        )
+        if reached_values:
+            middle = len(reached_values) // 2
+            if len(reached_values) % 2:
+                median = reached_values[middle]
+            else:
+                median = (reached_values[middle - 1] + reached_values[middle]) / 2
+            cell_value = gens_to_target(median, length)
+    return f"{cell_value} ({reached}/{total})"

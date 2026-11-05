@@ -83,15 +83,21 @@ GIT_DIRTY_PATHS: tuple[str, ...] = (
     "benchmarks/legacy_jax",
     "benchmarks/cases.py",
     "benchmarks/run_benchmark.py",
+    "benchmarks/backend_measure.py",
     "test",
     "pyproject.toml",
+    "uv.lock",
+    ".python-version",
 )
 """The *code under test*: only a change here makes the fingerprint ``git_dirty``.
 
-``benchmarks/harness`` covers ``benchmarks/harness/worker.py`` and the rest of the harness.
-Everything else (report text, generated JSON, spikes) is measurement output, not an input of
-the measurement, so a harness that renders ``benchmarks/RESULTS.md`` while it samples its own
-fingerprint must not report itself as dirty — that was the false alarm this scope removes.
+``benchmarks/harness`` covers ``benchmarks/harness/worker.py`` and the rest of the harness;
+``benchmarks/backend_measure.py`` is the standalone protocol behind ``benchmarks/BACKENDS.md``;
+``pyproject.toml``, ``uv.lock`` and ``.python-version`` are the dependency and interpreter pins,
+so a lock-only change still measures a different environment. Everything else (report text,
+generated JSON, spikes) is measurement output, not an input of the measurement, so a harness
+that renders ``benchmarks/RESULTS.md`` while it samples its own fingerprint must not report
+itself as dirty — that was the false alarm this scope removes.
 """
 
 GIT_EVIDENCE_PATHS: tuple[str, ...] = (
@@ -613,14 +619,15 @@ def _grouped(runs: list[dict]) -> list[tuple[tuple[str, str, str], list[dict]]]:
 def _group_status(statuses: list[str]) -> str:
     """``ok`` when all runs are ok, ``error`` when any errored, else the majority status.
 
-    Majority ties resolve by severity (``error`` > ``skipped`` > ``ok``).
+    The error case returns before the vote, so the vote only ever chooses between ``skipped``
+    and ``ok``; a tie goes to ``skipped``, the cautious side of those two.
     """
     if not statuses or all(status == STATUS_OK for status in statuses):
         return STATUS_OK
     if STATUS_ERROR in statuses:
         return STATUS_ERROR
     counts = Counter(statuses)
-    priority = {STATUS_ERROR: 2, STATUS_SKIPPED: 1, STATUS_OK: 0}
+    priority = {STATUS_SKIPPED: 1, STATUS_OK: 0}
     return max(counts, key=lambda status: (counts[status], priority.get(status, 0)))
 
 
@@ -667,6 +674,8 @@ def aggregate(runs: list[dict]) -> list[dict]:
 
     Numeric medians use the ok runs only; error/skipped runs are excluded from the medians
     but still counted in ``n_errors`` and summarised in ``errors``, so a group never vanishes.
+    ``gens_to_target_all`` plus ``target``/``gens_to_target_reached``/``gens_to_target_repeats``
+    let the report say how many repeats reached the target, not only the median of those that did.
     """
     aggregated = []
     for (case, impl, backend), group in _grouped(runs):
@@ -677,28 +686,24 @@ def aggregate(runs: list[dict]) -> list[dict]:
         final_best = _quality_values(group, "final_best_fitness")
 
         ordered = sorted(
-            group,
-            key=lambda run: (
-                _seed_int(run) is None,
-                _seed_int(run) if _seed_int(run) is not None else 0,
-            ),
+            group, key=lambda run: (_seed_int(run) is None, _seed_int(run) or 0)
         )
         gens_to_target_all = []
+        target = None
         for run in ordered:
             quality = run.get("quality") or {}
+            if target is None and run.get("status", STATUS_OK) == STATUS_OK:
+                target = quality.get("target")
             value = _finite(quality.get("generations_to_target"))
             gens_to_target_all.append(int(value) if value is not None else None)
-        gens_to_target = _median(
-            _quality_values(group, "generations_to_target")
-        )
+        gens_to_target = _median(_quality_values(group, "generations_to_target"))
+        gens_reached = sum(1 for item in gens_to_target_all if item is not None)
 
-        errors = []
-        for run in group:
-            if run.get("status", STATUS_OK) == STATUS_OK:
-                continue
-            text = run.get("error")
-            if text:
-                errors.append(short_error(text))
+        errors = [
+            short_error(run.get("error"))
+            for run in group
+            if run.get("status", STATUS_OK) != STATUS_OK and run.get("error")
+        ]
 
         aggregated.append(
             {
@@ -706,18 +711,14 @@ def aggregate(runs: list[dict]) -> list[dict]:
                 "impl": impl,
                 "backend": backend,
                 "n_repeats": len(group),
-                "seeds": sorted(
-                    {seed for seed in (_seed_int(run) for run in group) if seed is not None}
-                ),
+                "seeds": sorted({s for s in (_seed_int(run) for run in group) if s is not None}),
                 "status": _group_status(statuses),
                 "ms_per_generation": median_ms,
                 "ms_per_generation_min": min(ms_values) if ms_values else None,
                 "ms_per_generation_max": max(ms_values) if ms_values else None,
-                "ms_per_generation_mean": _median(
-                    _values(group, "ms_per_generation_mean")
-                ),
+                "ms_per_generation_mean": _median(_values(group, "ms_per_generation_mean")),
                 "gens_per_second": (
-                    (1000.0 / median_ms) if median_ms is not None and median_ms > 0 else None
+                    1000.0 / median_ms if median_ms and median_ms > 0 else None
                 ),
                 "compile_time_s": _median(compile_times),
                 "compile_time_s_min": min(compile_times) if compile_times else None,
@@ -730,6 +731,9 @@ def aggregate(runs: list[dict]) -> list[dict]:
                 "final_best_fitness_max": max(final_best) if final_best else None,
                 "generations_to_target": gens_to_target,
                 "gens_to_target_all": gens_to_target_all,
+                "target": target,
+                "gens_to_target_reached": gens_reached,
+                "gens_to_target_repeats": len(gens_to_target_all),
                 "n_errors": sum(1 for status in statuses if status != STATUS_OK),
                 "errors": errors,
             }
@@ -752,10 +756,12 @@ def speedup(old_ms: float | None, new_ms: float | None) -> float | None:
 def speedup_bounds(old: dict, new: dict) -> dict:
     """Best and worst old/new speed-up over the repeats of one case.
 
-    ``best`` is the fastest old repeat over the slowest new repeat (``old_min/new_max``),
-    ``worst`` the slowest old over the fastest new (``old_max/new_min``), both taken from the
-    per-repeat medians the aggregation already recorded. Both are ``None`` when a side has no
-    timing spread, so the report can print the range only when the repeats support it.
+    ``best`` is the fastest old repeat over the slowest new repeat (``old_min/new_max``): the
+    best case *for the old side*, which is the pessimistic bound for the new side. ``worst`` is
+    the slowest old over the fastest new (``old_max/new_min``), the optimistic bound for the
+    new side. Both come from the per-repeat medians the aggregation already recorded and are
+    ``None`` when a side has no timing spread, so the report prints the range only when the
+    repeats support it — and it prints the new side's worst ratio first.
     """
     old_low = _finite((old or {}).get("ms_per_generation_min"))
     old_high = _finite((old or {}).get("ms_per_generation_max"))
@@ -813,9 +819,7 @@ def quality_overlap(old: dict, new: dict) -> str | None:
 
 def _pair(old: dict, new: dict) -> dict:
     """Compare one aggregated old record with one aggregated new record."""
-    both_ok = (
-        old.get("status") == STATUS_OK and new.get("status") == STATUS_OK
-    )
+    both_ok = old.get("status") == STATUS_OK and new.get("status") == STATUS_OK
     old_ms = _finite(old.get("ms_per_generation"))
     new_ms = _finite(new.get("ms_per_generation"))
     old_best = _finite(old.get("final_best_fitness"))
@@ -893,9 +897,7 @@ def verdict(aggregated: list[dict], runs: list[dict] | None = None) -> dict:
 
     reasons: list[str] = []
     incomplete = [
-        record
-        for record in records
-        if record.get("status", STATUS_OK) != STATUS_OK
+        record for record in records if record.get("status", STATUS_OK) != STATUS_OK
     ]
     for record in incomplete:
         error = record.get("error")

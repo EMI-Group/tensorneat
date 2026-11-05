@@ -26,6 +26,7 @@ from harness.report_format import (
     COMPANION_FILES,
     CURVE_HEADERS,
     IMPL_LABELS,
+    TARGET_UNKNOWN,
     by_case,
     case_order,
     cell,
@@ -34,7 +35,6 @@ from harness.report_format import (
     first_error,
     fitness,
     fitness_at,
-    gens_to_target,
     impl_label,
     json_path,
     meta,
@@ -46,6 +46,7 @@ from harness.report_format import (
     pct_index,
     plain,
     protocol_meta,
+    reach,
     recorded_lengths,
     run_flag,
     scrub_paths,
@@ -75,9 +76,10 @@ PARITY_TEST_COUNT = 53
 """Fallback collected parity-test count, measured 2026-11-04 with
 ``pytest test/parity --collect-only -q`` across the five files that collect (18 convert
 + 5 distance + 13 fitness + 12 forward + 5 grad).
-A record may override it with ``meta.parity_tests``; this constant is only the fallback and is
-documentation of a measured count, not a derived value — it is refreshed by hand whenever
-``test/parity`` changes, because a re-render must never spawn pytest."""
+A record may override it with ``meta.parity_tests``, but no code path writes that key, so this
+hand-maintained constant is the value every committed record renders. It is documentation of a
+measured count, not a derived value — it is refreshed by hand whenever ``test/parity`` changes,
+because a re-render must never spawn pytest."""
 
 
 
@@ -371,9 +373,9 @@ def _result_row(record: dict, recorded_generations) -> list:
 
     ``recorded_generations`` is the budget ``generations_to_target`` is indexed against:
     the length of the recorded best-fitness curve (warmup + timed), never just the timed
-    part, so this table and the quality-curves table print the same ``>N`` bound.
+    part, so this table and the quality-curves table print the same ``>N`` bound. The cell
+    also carries how many repeats reached the target, via :func:`report_format.reach`.
     """
-    targets = record.get("generations_to_target")
     return [
         impl_label(record.get("impl")),
         f"`{text(record.get('backend'))}`",
@@ -382,7 +384,12 @@ def _result_row(record: dict, recorded_generations) -> list:
         num(record.get("gens_per_second"), 2),
         mib(record.get("rss_final_mb")),
         fitness(record.get("final_best_fitness")),
-        gens_to_target(targets, recorded_generations),
+        reach(
+            record.get("generations_to_target"),
+            record.get("gens_to_target_all"),
+            recorded_generations,
+            target=record.get("target", TARGET_UNKNOWN),
+        ),
         plain(record.get("n_repeats")),
     ]
 
@@ -581,7 +588,8 @@ def _curves_section(doc: dict) -> str:
     One row per repeat is what makes the sampling visible: two seeds of the same case can land
     on opposite sides of the fitness target, and a single "first ok run" row would hide that.
     The aggregated row is the element-wise median of those repeats (``protocol.median_curve``),
-    with the median generations-to-target from the aggregated record.
+    with the generations-to-target cell of the aggregated record: the median over the repeats
+    that reached the target, annotated ``(reached/total)`` whenever only part of them did.
     """
     grouped_runs: dict[tuple[str, str, str], list[dict]] = {}
     for run in doc.get("runs") or []:
@@ -636,7 +644,8 @@ def _curves_section(doc: dict) -> str:
             )
             curves = []
             for run in runs:
-                curve = (run.get("quality") or {}).get("best_fitness")
+                quality = run.get("quality") or {}
+                curve = quality.get("best_fitness")
                 curves.append(curve)
                 rows.append(
                     _curve_row(
@@ -644,9 +653,11 @@ def _curves_section(doc: dict) -> str:
                         key[2],
                         plain(run.get("seed")),
                         curve,
-                        gens_to_target(
-                            (run.get("quality") or {}).get("generations_to_target"),
+                        reach(
+                            quality.get("generations_to_target"),
+                            None,
                             len(curve),
+                            target=quality.get("target", TARGET_UNKNOWN),
                         ),
                     )
                 )
@@ -661,15 +672,23 @@ def _curves_section(doc: dict) -> str:
                     key[2],
                     seeds,
                     aggregate,
-                    gens_to_target(record.get("generations_to_target"), len(aggregate)),
+                    reach(
+                        record.get("generations_to_target"),
+                        record.get("gens_to_target_all"),
+                        len(aggregate),
+                        target=record.get("target", TARGET_UNKNOWN),
+                    ),
                 )
             )
         parts.append(table(CURVE_HEADERS, rows))
         parts.append("")
     parts.append(
         "Percent columns are generation `round(fraction × N)` of the N recorded generations "
-        "(warmup + timed — the budget `generations_to_target` is indexed against), and `>N` means "
-        "the case's fitness target was not reached within those N recorded generations. "
+        "(warmup + timed — the budget `generations_to_target` is indexed against). `>N` means "
+        "the case's fitness target was not reached within those N recorded generations, and a "
+        "`(reached/total)` suffix counts how many repeats of the group reached it: `78 (2/3)` "
+        "is a median of 78 over two of three repeats, `>152 (0/3)` nothing reached it, and "
+        "`n/a (no informative target)` marks a run measured without a fitness target at all. "
         "Each repeat (seed) has its own row, and the `— aggregate` row is the element-wise "
         "median of those repeats: a bimodal case (one seed at the target, one not) shows up "
         "as two different `Final` values rather than one average."
@@ -746,7 +765,11 @@ def _reference_section(doc: dict) -> str:
 
 
 def _parity_count(doc: dict) -> int:
-    """Parity tests collected on this box (``meta.parity_tests`` overrides the constant)."""
+    """Parity tests collected on this box: the hand-maintained :data:`PARITY_TEST_COUNT`.
+
+    ``meta.parity_tests`` overrides it when a record carries that key, but no code path in
+    this harness writes one, so every committed record renders the constant.
+    """
     recorded = number(meta(doc).get("parity_tests"))
     return int(recorded) if recorded else PARITY_TEST_COUNT
 

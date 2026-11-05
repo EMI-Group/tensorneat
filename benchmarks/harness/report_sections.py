@@ -24,13 +24,13 @@ from harness.protocol import (
     speedup_bounds,
 )
 from harness.report_format import (
+    TARGET_UNKNOWN,
     case_order,
     cell,
     declared_length,
     display_path,
     first_error,
     fitness,
-    gens_to_target,
     json_path,
     meta,
     mib,
@@ -39,6 +39,7 @@ from harness.report_format import (
     number,
     plain,
     protocol_meta,
+    reach,
     recorded_lengths,
     repo_relative,
     seconds,
@@ -56,7 +57,7 @@ HEADLINE_HEADERS = [
     "Old ms/gen",
     "New ms/gen",
     "Speed-up",
-    "Speed-up range (best–worst)",
+    "Speed-up range (worst–best)",
     "Quality overlap",
     "Old compile (s)",
     "New compile (s)",
@@ -72,8 +73,9 @@ HEADLINE_HEADERS = [
 """The headline table: per case, the two sides side by side and the per-case verdicts.
 
 ``Speed-up`` is the median ratio; ``Speed-up range`` is ``old_min/new_max … old_max/new_min``
-over the per-repeat medians (best and worst case over the repeats), and ``Quality overlap``
-says whether the new side's per-repeat final-best range falls inside the old side's range.
+over the per-repeat medians, printed worst first, so its left value is the pessimistic bound
+for the new side; ``Quality overlap`` says whether the new side's per-repeat final-best range
+falls inside the old side's range.
 """
 
 
@@ -149,21 +151,32 @@ def _side_cell(record, key: str, formatter, missing: str = "n/a (not run)") -> s
 def _gens_cell(
     record, case: str, impl: str, backend: str, lengths, fallback, missing="n/a (not run)"
 ) -> str:
-    """Generations-to-target of one side, indexed against its recorded curve length."""
+    """Generations-to-target of one side, annotated with how many repeats reached it.
+
+    ``lengths``/``fallback`` give the recorded generation budget the ``>N`` bound is indexed
+    against; the per-repeat list and the fitness target come from the same aggregated record.
+    """
     if record is None:
         return missing
     status = text(record.get("status"), STATUS_OK)
     if status != STATUS_OK:
         return f"n/a ({status})"
     length = lengths.get((case, impl, backend)) or fallback
-    return gens_to_target(record.get("generations_to_target"), length)
+    return reach(
+        record.get("generations_to_target"),
+        record.get("gens_to_target_all"),
+        length,
+        target=record.get("target", TARGET_UNKNOWN),
+    )
 
 
 def _speedup_range_cell(pair, old, new) -> str:
-    """``best–worst`` speed-up over the repeats, or ``n/a`` without a two-sided timing.
+    """``worst–best`` speed-up over the repeats, or ``n/a`` without a two-sided timing.
 
-    Best is the fastest old repeat against the slowest new repeat, worst the opposite, so the
-    pair is the honest envelope around the median ``Speed-up`` and not a second median.
+    Worst is the slowest old repeat against the fastest new repeat (the pessimistic bound for
+    the new side) and best is the opposite (``old_min/new_max``, the best case *for the old
+    side*); printed worst first, the pair is the honest envelope around the median ``Speed-up``
+    and not a second median.
     """
     bounds = (pair or {}).get("speedup_range")
     if not isinstance(bounds, dict):
@@ -259,7 +272,8 @@ def headline_section(doc: dict) -> str:
         f"One row per case and new-side backend ({old_side_text}). "
         "Speed-up is `old / new` per generation: above 1.00x the new side is faster. "
         "Speed-up range is `old_min/new_max` … `old_max/new_min` over the per-repeat medians, "
-        "i.e. the best and worst case over the repeats. Quality overlap states where the new "
+        "printed worst first: the left value is the pessimistic bound for the new side and the "
+        "right one the optimistic bound. Quality overlap states where the new "
         "side's per-repeat final-best range sits against the old side's: `inside` when the "
         "ranges intersect (every new repeat inside the old range, or the ranges partially "
         "overlap), `new worse` when every new repeat is below the old range, `new better` when "
@@ -267,6 +281,10 @@ def headline_section(doc: dict) -> str:
         "Timing PASS means new ms/generation is at or below the old one; quality PASS means "
         "the new final best stays within "
         f"`max({QUALITY_TOLERANCE_REL:.0%} × |old|, {QUALITY_ABS_TOL:g})` of the old one. "
+        "`Gens to target` is the median generation of the repeats that reached the case's "
+        "fitness target, annotated `(reached/total)` when only part of them did — `78 (2/3)` — "
+        "or when none did — `>152 (0/3)`, and rendered `n/a (no informative target)` for a case "
+        "measured without a fitness target at all. "
         "Every cell comes from the aggregated JSON records of this run; `n/a (reason)` marks "
         "a cell that could not be reached (not run, skipped, error, or not recorded)."
     )
