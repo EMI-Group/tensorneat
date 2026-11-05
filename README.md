@@ -60,35 +60,35 @@ uv run python examples/func_fit/xor.py
 Real output from this checkout (first generation, one middle generation, and the report tail — the run prints one such block per generation):
 
 ```
-compile finished, cost time: 0.298339s
-Generation: 1, Cost time: 43.95ms
+compile finished, cost time: 0.285115s
+Generation: 1, Cost time: 41.80ms
  	fitness: valid cnt: 200, max: -0.2503, min: -0.4789, mean: -0.3197, std: 0.0536
 	node counts: max: 4, min: 3, mean: 3.06
- 	conn counts: max: 3, min: 1, mean: 1.90
+ 	conn counts: max: 4, min: 1, mean: 2.02
  	species: 1, [200]
 ...
-Generation: 40, Cost time: 61.40ms
- 	fitness: valid cnt: 192, max: -0.0895, min: -0.4992, mean: -0.2483, std: 0.1126
-	node counts: max: 7, min: 3, mean: 4.54
- 	conn counts: max: 7, min: 0, mean: 4.58
- 	species: 9, [51, 34, 30, 22, 21, 16, 12, 7, 7]
+Generation: 40, Cost time: 52.34ms
+ 	fitness: valid cnt: 200, max: -0.0434, min: -0.5115, mean: -0.2336, std: 0.1138
+	node counts: max: 7, min: 3, mean: 5.18
+ 	conn counts: max: 10, min: 1, mean: 6.95
+ 	species: 8, [53, 38, 29, 26, 22, 17, 11, 4]
 ...
-Generation: 75, Cost time: 52.27ms
- 	fitness: valid cnt: 195, max: -0.0009, min: -0.7297, mean: -0.2144, std: 0.1845
-	node counts: max: 7, min: 3, mean: 4.59
- 	conn counts: max: 8, min: 1, mean: 5.46
- 	species: 7, [56, 41, 35, 27, 21, 13, 7]
+Generation: 67, Cost time: 47.06ms
+ 	fitness: valid cnt: 200, max: -0.0009, min: -0.5536, mean: -0.2148, std: 0.1719
+	node counts: max: 7, min: 3, mean: 5.12
+ 	conn counts: max: 12, min: 2, mean: 7.80
+ 	species: 7, [56, 41, 35, 28, 20, 14, 6]
 Fitness limit reached!
-input: [0. 0.], target: [0.], predict: [0.04544412]
-input: [0. 1.], target: [1.], predict: [0.9785589]
-input: [1. 0.], target: [1.], predict: [0.9711594]
-input: [1. 1.], target: [0.], predict: [0.01849632]
-loss: 0.0009246956906281412
-final loss: 9.25e-04 after 75 generations
+input: [0. 0.], target: [0.], predict: [0.02215577]
+input: [0. 1.], target: [1.], predict: [0.9849813]
+input: [1. 0.], target: [1.], predict: [0.9658409]
+input: [1. 1.], target: [0.], predict: [0.03987563]
+loss: 0.0008683378109708428
+final loss: 8.68e-04 after 67 generations
 ```
 
-That is the whole quickstart: seed 42 converges at generation 75 in about 5 s on this box, so the demo budget is pop 200 with at most 150 generations and `fitness_target=-1e-3` (`fitness_target` is in fitness space and fitness is maximised, so "error below 1e-3" is `-1e-3`).
-The script itself is `examples/func_fit/xor.py`, 35 lines including comments; a real run raises `pop_size` into the thousands and the generation limit into the hundreds.
+That is the whole quickstart: seed 42 converges at generation 67 in about 4 s on this box, so the demo budget is pop 200 with at most 150 generations and `fitness_target=-1e-3` (`fitness_target` is in fitness space and fitness is maximised, so "error below 1e-3" is `-1e-3`).
+The script itself is `examples/func_fit/xor.py`, 41 lines including comments; a real run raises `pop_size` into the thousands and the generation limit into the hundreds.
 `compile finished` is the one-off evoxc build of the generation graph: `Pipeline.setup()` only prepares host state, the build happens inside the first `step` (that is, inside `auto_run`), and the resulting executable is then reused for every generation of that shape.
 
 After evolution the best individual is available host-side, with no graph involved (`pipeline` is the one built by `examples/func_fit/xor.py`):
@@ -293,18 +293,20 @@ All scripts use the public API only and print a per-generation log. Wall times b
 
 | script | what it demonstrates | command | verified |
 |---|---|---|---|
-| `examples/func_fit/xor.py` | 2-input XOR, `DefaultGenome(2 -> 1, max_nodes=12)`, pop 200, 150 gens, target `-1e-3` | `uv run python examples/func_fit/xor.py` | ran, 5.4 s; **converges** at generation 75, loss 9.25e-04 |
-| `examples/func_fit/xor3d.py` | 3-bit parity (`problem.XOR3d`), `max_nodes=16`, pop 400, 150 gens, target `-1e-4` | `uv run python examples/func_fit/xor3d.py` | ran, 16.1 s; **converges** at generation 93, loss 6.88e-05 |
-| `examples/func_fit/xor_origin.py` | `genome.OriginNode`/`OriginConn` (historical markers, whole-gene crossover), pop 300, 250 gens, target `-1e-6` | `uv run python examples/func_fit/xor_origin.py` | ran, 9.7 s; **converges** at generation 123, loss 7.48e-07 |
-| `examples/func_fit/xor_recurrent.py` | `RecurrentGenome(activate_time=10)` on XOR3d, pop 300, 200 gens, target `-1e-4` | `uv run python examples/func_fit/xor_recurrent.py` | ran, 17.5 s; **converges** at generation 110, loss 1.88e-05 |
-| `examples/func_fit/custom_func_fit.py` | Pagie polynomial via `problem.CustomFuncFit`, pop 200, 30 gens | `uv run python examples/func_fit/custom_func_fit.py` | ran, 6.8 s; demo budget, stops at the generation limit, loss 0.0435 -> 0.0258 |
-| `examples/func_fit/xor_hyperneat.py` | recurrent HyperNEAT over `FullSubstrate` (CPPN 4 coords -> 1 weight), pop 300, 40 gens | `uv run python examples/func_fit/xor_hyperneat.py` | ran, 6.6 s; demo budget, loss 0.25 -> 0.0463 |
-| `examples/func_fit/xor_hyperneat_feedforward.py` | `HyperNEATFeedForward` + `MLPSubstrate([4, 6, 6, 1])`, pop 300, 40 gens | `uv run python examples/func_fit/xor_hyperneat_feedforward.py` | ran, 9.9 s; demo budget, loss 0.223 -> 0.1502 |
-| `examples/rl/cartpole.py` | `problem.CartPole(max_step=200)`, two action logits, no `output_transform`, pop 200, 20 gens | `uv run python examples/rl/cartpole.py` | ran, 2.4 s; **converges** at generation 2, mean return 200/200 |
+| `examples/func_fit/xor.py` | 2-input XOR, `DefaultGenome(2 -> 1, max_nodes=12)`, pop 200, 150 gens, target `-1e-3` | `uv run python examples/func_fit/xor.py` | ran, 4.3 s; **converges** at generation 67, loss 8.68e-04 |
+| `examples/func_fit/xor3d.py` | 3-bit parity (`problem.XOR3d`), `max_nodes=16`, pop 400, 150 gens, target `-1e-3` | `uv run python examples/func_fit/xor3d.py` | ran, 20.4 s; **converges** at generation 144, loss 9.34e-04 |
+| `examples/func_fit/xor_origin.py` | `genome.OriginNode`/`OriginConn` (historical markers, whole-gene crossover), pop 300, 250 gens, target `-1e-6` | `uv run python examples/func_fit/xor_origin.py` | ran, 5.8 s; **converges** at generation 89, loss 8.86e-07 |
+| `examples/func_fit/xor_recurrent.py` | `RecurrentGenome(activate_time=10)` on XOR3d, pop 300, 200 gens, target `-1e-4` | `uv run python examples/func_fit/xor_recurrent.py` | ran, 10.7 s; **converges** at generation 72, loss 1.66e-10 |
+| `examples/func_fit/custom_func_fit.py` | Pagie polynomial via `problem.CustomFuncFit`, pop 200, 30 gens | `uv run python examples/func_fit/custom_func_fit.py` | ran, 5.6 s; demo budget, stops at the generation limit, loss 0.0435 -> 0.0300 |
+| `examples/func_fit/xor_hyperneat.py` | recurrent HyperNEAT over `FullSubstrate` (CPPN 4 coords -> 1 weight), pop 300, 40 gens | `uv run python examples/func_fit/xor_hyperneat.py` | ran, 5.8 s; demo budget, loss 0.25 -> 0.0165 |
+| `examples/func_fit/xor_hyperneat_feedforward.py` | `HyperNEATFeedForward` + `MLPSubstrate([4, 6, 6, 1])`, pop 300, 40 gens | `uv run python examples/func_fit/xor_hyperneat_feedforward.py` | ran, 9.3 s; demo budget, loss 0.223 -> 0.1876 |
+| `examples/rl/cartpole.py` | `problem.CartPole(max_step=200)`, two action logits, no `output_transform`, pop 200, 20 gens | `uv run python examples/rl/cartpole.py` | ran, 2.1 s; **converges** at generation 2, mean return 200/200 |
+| `examples/rl/pendulum.py` | `problem.Pendulum(max_step=200)`, `init_hidden_layers=(6,)`, pop 100, 20 gens, target `-300` | `uv run python examples/rl/pendulum.py` | ran, 3.8 s; **converges** at generation 5 (training max -271.30; `show` reports one episode at -595.12) |
+| `examples/rl/mountaincar.py` | `problem.MountainCarContinuous()`, 999-step default, pop 100, 10 gens, `fitness_target=float("inf")` | `uv run python examples/rl/mountaincar.py` | ran, 18.4 s; no fitness target (never stops early), demo return -0.00, goal not reached |
 | `examples/interpret_visualize/genome_sympy.py` | sympy formula + Python code + LaTeX of one genome (host only) | `uv run python examples/interpret_visualize/genome_sympy.py` | ran, 0.8 s |
 | `examples/interpret_visualize/visualize_genome.py` | draw one genome as SVG (host only) | `uv run python examples/interpret_visualize/visualize_genome.py` | ran, 0.9 s; writes an untracked `network.svg` next to the script |
 
-The eight pipeline scripts use demo budgets (`# Demo budget:` in the source: pop 200–400, 20–250 generations, numpy backend), and five of them reach their fitness target on seed 42 — `xor.py`, `xor3d.py`, `xor_origin.py`, `xor_recurrent.py`, `cartpole.py`; the other three (`custom_func_fit.py`, the two HyperNEAT scripts) stop at the generation limit with a visibly falling loss and claim no convergence. A real run raises `pop_size` into the thousands and the generation limit into the hundreds. The two `interpret_visualize` scripts are host-only (no `Pipeline`, under 1 s). Fitness is maximised everywhere, so a function-fitting `fitness_target` is a negative error bound. The Brax/Gymnax/mujoco examples of 0.1.x no longer exist.
+The ten pipeline scripts use demo budgets (`# Demo budget:` in the source: pop 100–400, 10–250 generations, numpy backend), and six of them reach their fitness target on seed 42 — `xor.py`, `xor3d.py`, `xor_origin.py`, `xor_recurrent.py`, `cartpole.py`, `pendulum.py`; three (`custom_func_fit.py`, the two HyperNEAT scripts) stop at the generation limit with a visibly falling loss and claim no convergence, and `mountaincar.py` sets `fitness_target=float("inf")`, so it has no target to cross. A real run raises `pop_size` into the thousands and the generation limit into the hundreds. The two `interpret_visualize` scripts are host-only (no `Pipeline`, under 1 s). Fitness is maximised everywhere, so a function-fitting `fitness_target` is a negative error bound. The Brax/Gymnax/mujoco examples of 0.1.x no longer exist.
 
 ## Tutorials
 

@@ -1,5 +1,10 @@
 """Solve the 3-input XOR3d problem (8 samples) with NEAT.
 
+Fitness is maximised, so the shipped target `-1e-3` is "error below 1e-3" -- the
+same convention as `xor.py`. A `-1e-4` bound is not reachable inside the demo
+budget: measured at seed 42, letting the full 150 generations run ends at loss
+`1.6e-04`, while the `-1e-3` target triggers at generation 144.
+
 Run: python examples/func_fit/xor3d.py
 """
 
@@ -7,9 +12,9 @@ from tensorneat import Pipeline, algorithm, genome, problem
 from tensorneat.common import ACT
 
 if __name__ == "__main__":
-    # Demo budget: pop 400 for at most 150 generations (it reaches the target
-    # around generation 93 in ~15 s); a real run uses pop_size in the thousands
-    # and more generations.
+    # Demo budget: pop 400 for at most 150 generations; seed 42 reaches the
+    # -1e-3 target at generation 144 in ~20 s. A real run uses pop_size in the
+    # thousands and more generations.
     pipeline = Pipeline(
         algorithm=algorithm.NEAT(
             pop_size=400,
@@ -25,8 +30,8 @@ if __name__ == "__main__":
         problem=problem.XOR3d(),
         seed=42,
         generation_limit=150,
-        # fitness is maximised: this target is "error below 1e-4"
-        fitness_target=-1e-4,
+        # fitness is maximised: this target is "error below 1e-3"
+        fitness_target=-1e-3,
     )
 
     # initialize the host state; the evoxc graphs are built on the first step

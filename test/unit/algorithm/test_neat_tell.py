@@ -518,8 +518,14 @@ def test_a_non_finite_fitness_can_never_become_a_parent(
     # Winner never worse than loser, and never a raw non-finite value.
     assert np.all(sanitized[winner] >= sanitized[loser])
     # The survivors of each species (survival_threshold * 4 floors to 1) are its
-    # single best member: the non-finite rows can never be drawn or elite-pinned.
-    assert np.all(winner[:4] == 2) and np.all(winner[4:] == 6)
+    # single best member, so only the elite pin can place anything else: species ``0``
+    # has one finite member (row ``2``) and species ``1`` four, whose ranking is
+    # ``[6, 4, 7, 5]``.  Elite slots 0/1 of block 1 therefore pin ranks 0 and 1
+    # (rows ``6`` and ``4``) -- an elite never reaches a non-finite row, because the
+    # clamp counts only finite members -- while every drawn slot repeats rank 0.
+    assert np.all(winner[:4] == 2)
+    assert winner[4] == 6 and winner[5] == 4
+    assert np.all(winner[6:] == 6)
     assert np.all(elite_mask == np.array([True, True, False, False] * 2))
 
 

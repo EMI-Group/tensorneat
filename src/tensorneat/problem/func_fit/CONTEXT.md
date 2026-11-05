@@ -31,6 +31,9 @@ Tile, don't loop: `tiled = evoxc.tile(inputs, (P, 1))` → `pred = act_fn(tiled)
 The `(S, O)` targets broadcast numpy-style against the `(P, S, O)` error tensor in both `enp.subtract` and `mape`'s `enp.divide`, so no `expand_dims` is needed anywhere in this node.
 The population size comes from `base.static_batch_size(transformed)` (the only thing read from the schedule); the dataset comes from `evoxc.constant(evoxc.from_numpy(...))` (genuinely static data, baked at trace time).
 `initial`-free reductions: `mse = mean(err**2)`, `rmse = sqrt(mse)`, `mae = mean(|err|)`, `mape = mean(|err / targets|)` (a zero target gives `inf`, a NaN prediction gives NaN → `-inf` fitness).
+Each reduction is a true mean over **both** the sample and output axes (`enp.mean(..., axis=(1, 2))`, `func_fit.py:445-454`), i.e. divided by `S*O`, so the normalization is by the element count, never by `S` alone.
+Concrete anchors on `XOR3d` (`S=8, O=1`, four targets equal to 1): a constant-0 predictor gives `mse = 4/8 = 0.5` → fitness `-0.5`; a constant-0.5 predictor gives `mse = 8*0.25/8 = 0.25` → fitness `-0.25` (the same `-0.25` the unit suite pins for XOR's constant-0.5 predictor, `test/unit/problem/test_func_fit.py:393`).
+Fitness is a pure negated loss, never an accuracy: the return for sigmoid-bounded outputs lies in `[-1, 0]` and has no `fitness_target` of its own (`XOR3d()` takes only `error_method`; the target lives on `Pipeline`, whose default of `1` is unreachable for this problem, so the run always goes to `generation_limit` unless the caller passes e.g. `-1e-4` as `examples/func_fit/xor3d.py:29` does).
 
 ## Constraints
 - **Amplification rule.** The problem hands `act_fn` a `(P*S, I)` batch, so every per-row tensor on the activation path — the tiled inputs, the predictions, the per-level window ops — is `S`× taller than the population; the dataset constants must therefore stay `(S, I)`/`(S, O)` and must never be pre-tiled or scaled with `P`.

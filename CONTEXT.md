@@ -28,12 +28,22 @@ The library keeps its research identity (GECCO 2024 Best Paper, arXiv 2404.01817
 `"xla"` requires a user-supplied PJRT C API plugin (unavailable on this box) and `"tvm"` is untested.
 A backend that cannot run a kernel raises; nothing ever silently falls back to another backend.
 ## Performance
-`benchmarks/RESULTS.md` is the generated old-vs-new report; its committed verdict is **FAIL** (timing and quality) and was rendered from a record that predates the tiled-evaluate and rollout-hoist fixes below, so only a harness re-run changes it.
+`benchmarks/RESULTS.md` is the generated full-matrix old-vs-new report; its committed verdict is **FAIL** (timing and quality) and was rendered from a record that predates the search-quality and performance fixes below, so only a full harness re-run changes it.
+Committed-record timings (3 repeats, seeds 42/43/44): the numpy interpreter beats the frozen JAX baseline on XOR (1.07×/1.83×/2.88× faster at pop 100/500/1000) and loses on XOR3d (0.63×/0.63×/0.85× of the old speed) and Pagie (0.16×), so node-for-node the numbers alone read as a portability/dependency trade with a mixed CPU-speed record.
+`benchmarks/results/xor3d_quality_2026-11-04.md` is the post-fix search-quality record.
 Measured on one box at the committed protocol (3 repeats, 150 generations, medians, `benchmarks/PERF_NUMPY.md`), the current tree is 1.96× the old speed on XOR at pop 500, 0.61× on XOR3d at pop 500, 0.65× on Pagie (833.8 vs 539.2 ms/gen) and 275 ms/gen on CartPole at pop 100; node-for-node the rewrite is a portability/dependency trade with a mixed CPU-speed record, not a uniform speed-up.
 Two structural defects were found and fixed, both bit-identical: a tiled func-fit evaluate fanned the schedule and payload to `P*S` rows and re-derived every per-pass static at `P*S` rows although all of it is sample-invariant (statics now derive at `P` rows and expand, and a batch wider than `EVAL_CHUNK_ROWS` is evaluated in row groups), and the RL rollout re-derived the genome-forward prelude on each of its `max_step` queries (a prepared-forward pair now derives it once per generation, cutting CartPole from 42 549 to 31 604 dispatches/generation).
 The rewrite's wins are real and recorded: no JAX/torch runtime dependency, one explicit persistent graph per shape, ~5× lower build latency, lower memory on the compiled leg, and numpy/iree/xla/tvm behind one `backend=` argument.
 `benchmarks/PERF_NUMPY.md` records both numpy performance passes with their before/after pairs and reproduce commands; those measured pairs are the reference for further work.
 Remaining levers, measured: the padded gene geometry (`max_nodes`/`max_conns` multiply every per-pair op — Pagie would gain 2.7× at 20/40, but that is a workload change, not a fix), `evoxc`'s interpreter per-op overhead (~58–63 % of a generation) together with its retention of every SSA result until the block returns (why peak RSS tracks the tiled batch width), and the speciation scans in `tell` (~9–11 % of a generation).
+
+## Search Quality
+`benchmarks/results/xor3d_quality_2026-11-04.md` is the post-fix quality measurement (numpy, both implementations, seeds 42/43/44, 150 generations each, one repeat per seed) and is the current search-quality evidence.
+It holds the `-0.05` XOR3d tolerance on `xor3d_p500` (median −2.9e−12 against the JAX side's −0.1789, 3/3 seeds to target) and on `xor3d_p1000` (−1.7e−11 against −1.4e−09), and the `-0.01` Pagie tolerance on `custom_pagie_p500` (−0.0066 against −0.0064, 3/3 seeds).
+`xor3d_p100` still misses the three-seed median (−0.2500 against −0.0894): at pop 100, leaving the constant-0.5 basin is a per-seed lottery in *both* implementations — the new side escapes on 13 of 20 seeds against the frozen oracle's 4 of 20 and seed 42 escapes at generation 55 against the oracle's 81, while seeds 43/44 do not escape inside the budget.
+Two search contracts, both matching the frozen implementation: parent pairing pins elite slot *k* to its species' *k*-th ranked member (never the champion cloned into every elite slot), and the four structural gates are independent per individual and compose sequentially add-node → delete-node → add-conn → delete-conn.
+`DefaultGenome` ships `conn_add=0.4`/`conn_delete=0.05` because the add gate is the one refused roughly half the time (duplicate/self/cycle refusals), which made equal declared probabilities thin the population; an explicitly constructed `DefaultMutation()` keeps NEAT-python's `0.2`/`0.2`.
+Every allocated node and connection key stays inside `key_span`: a key outside the schedule's window is dropped from the phenotype without an error.
 ## Constraints
 - `import tensorneat` must never import `jax`, `torch`, `brax`, `gymnax` or `mujoco` (a release-gate test enforces this); compiled backends are pulled in only by `evoxc.build(backend=...)`.
 - All computation lives inside `@evoxc.defn` graphs or helpers called during an active trace; there is no eager mode — host code only orchestrates build/run/log.
@@ -53,11 +63,11 @@ Remaining levers, measured: the padded gene geometry (`max_nodes`/`max_conns` mu
 |---|---|
 | `./src/tensorneat` | The package: pipeline (the single compile site), host payload helpers, genome/algorithm/problem/common subtrees. |
 | `./test` | Pytest suites: unit, parity vs the frozen legacy library, integration, compiled backends, release gates. |
-| `./benchmarks` | Old-vs-new harness + frozen JAX oracle; `RESULTS.md`/`THREADS.md`/`iree.md` are generated, `BACKENDS.md` is hand-written, `PERF_NUMPY.md` holds the hand-measured performance passes (op-count pass, tiled-evaluate and rollout-hoist pass). |
-| `./examples` | Runnable scripts per problem family; six of twelve cross their fitness target inside the shipped demo budget (all twelve exit 0). |
+| `./benchmarks` | Old-vs-new harness + frozen JAX oracle; `RESULTS.md`/`THREADS.md`/`iree.md` are generated, `BACKENDS.md` is hand-written, `PERF_NUMPY.md` records the hand-measured performance passes (op-count, tiled-evaluate, rollout-hoist), and `results/xor3d_quality_2026-11-04.md` is the post-fix search-quality record. |
+| `./examples` | Runnable scripts per problem family; six of the ten pipeline scripts cross their fitness target inside the shipped demo budget (`xor`, `xor3d`, `xor_origin`, `xor_recurrent`, `cartpole`, `pendulum`), three stop at the generation limit with a falling loss, `mountaincar` has no target by construction, and all twelve exit 0. |
 | `./docs` | Sphinx configuration, autodoc stubs (one per public module) and the built-site rules. |
 | `./tutorials` | `quickstart.ipynb` for the current API (`legacy_jax/` keeps the pre-rewrite notebooks, concepts only). |
-| `./imgs` | Static assets; only the two `evox_brand_*.svg` logos are referenced (README header) — the network/RL figures and GIFs are unreferenced pre-rewrite leftovers. |
+| `./imgs` | Static assets; holds only the two `evox_brand_*.svg` logos the README header uses. |
 | `./.github/workflows` | `ci.yaml` (uv sync + test + parity + import-hygiene + optional iree) and the PyPI release workflow. |
 | `pyproject.toml`, `uv.lock`, `.python-version` | Packaging metadata, the locked environment, the interpreter pin — a dependency change needs `uv lock`. |
 | `.readthedocs.yaml` | Read the Docs build (Python 3.12, uv-based install, sphinx-build). |

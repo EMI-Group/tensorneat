@@ -1,21 +1,26 @@
 """Host-side helpers over a gene payload: config rendering, batch chunking, arity checks.
 
 Everything here is host-only Python, but some of it runs *inside* an ``evoxc``
-trace: :func:`_jsonable` and friends render configuration values for ``config.txt``;
-the query helpers -- :class:`_NetworkActFn`, :func:`_prepared_query` and
-:func:`_slice_batch` -- are what the pipeline hands a problem as ``act_fn``, i.e.
-plain Python that emits ops into the trace that calls it and walks a batch-first
-payload only along the leaves a forward pass reads; :func:`_one_individual`
+trace: :func:`_jsonable` and friends render configuration values for ``config.txt`` --
+deterministically, so two identical runs write identical bytes and the file records the
+search law (:func:`_object_config`); the query helpers -- :class:`_NetworkActFn`,
+:func:`_prepared_query` and :func:`_slice_batch` -- are what the pipeline hands a problem
+as ``act_fn``, i.e. plain Python that emits ops into the trace that calls it and walks a
+batch-first payload only along the leaves a forward pass reads; :func:`_one_individual`
 normalises a payload to its four batch-first arrays.
 
 The tiled batch itself is *not* built here: a problem hands the network ``P * S`` rows
 while the schedule and the payload stay at ``P``, and the genome expands the difference
 internally (:func:`tensorneat.genome.window.by_samples`), because every operand a forward
 derives is sample-invariant.
+A batch wider than :data:`EVAL_CHUNK_ROWS` is walked in row groups so the interpreter's
+per-block live set stays bounded.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import inspect
 from typing import Any, Callable, Optional
 
 import evoxc
@@ -30,6 +35,7 @@ __all__ = [
     "_config_value",
     "_declared_shape",
     "_jsonable",
+    "_object_config",
     "_one_individual",
     "_prepared_query",
     "_schedule_overflow",
@@ -47,26 +53,149 @@ _PAYLOAD_NAMES: tuple[str, ...] = ("node_keys", "node_attrs", "conn_keys", "conn
 #: the XOR/RL cases stay under it and take the unchunked path unchanged.
 EVAL_CHUNK_ROWS = 12_500
 
+#: How deep :func:`_object_config` follows nested records before emitting the class path.
+_MAX_CONFIG_DEPTH = 6
+
+#: Sentinel meaning "this value is not configuration data" (see :func:`_attribute_config`).
+_OMIT = object()
+
+
+def _is_function_like(value: Any) -> bool:
+    """Whether ``value`` is a function/class (named) rather than a callable object.
+
+    The distinction matters: ``DefaultMutation`` and friends implement ``__call__``,
+    so a bare ``callable()`` test would render an operator's *whole configuration* as
+    one name string.  Only the things that genuinely have no state -- functions,
+    lambdas, builtins, methods, ufuncs and classes -- are rendered by name.
+    """
+    return (
+        isinstance(value, type)
+        or inspect.isroutine(value)
+        or isinstance(value, np.ufunc)
+    )
+
+
+def _qualified_name(value: Any) -> str:
+    """The ``module.qualname`` path of a callable, class or object -- never an address.
+
+    Plain functions, lambdas, ufuncs, bound methods and classes all render this way,
+    so the same configuration always spells the same name.  An object without a name
+    of its own (a ``functools.partial``, say) falls back to its type's path, which is
+    equally deterministic.
+    """
+    module = getattr(value, "__module__", None) or getattr(
+        type(value), "__module__", ""
+    )
+    qualname = getattr(value, "__qualname__", None) or getattr(value, "__name__", None)
+    if not qualname:
+        owner = type(value)
+        return f"{owner.__module__}.{owner.__qualname__}"
+    return f"{module}.{qualname}" if module else qualname
+
+
+def _public_fields(value: Any) -> dict[str, Any]:
+    """The public instance attributes of ``value`` as a name -> value mapping.
+
+    Instance state only (never the methods ``dir()`` would add), across both
+    ``__dict__`` and ``__slots__``, with private names dropped and the result sorted
+    so the rendering is byte-stable.
+    """
+    fields: dict[str, Any] = {}
+    for klass in type(value).__mro__:
+        slots = klass.__dict__.get("__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for name in slots:
+            if name.startswith("_"):
+                continue
+            try:
+                fields[name] = getattr(value, name)
+            except AttributeError:
+                continue
+    for name, item in getattr(value, "__dict__", {}).items():
+        if not name.startswith("_"):
+            fields[name] = item
+    return dict(sorted(fields.items()))
+
+
+def _object_config(value: Any, depth: int = 0) -> dict[str, Any]:
+    """Render one configuration object as a deterministic mapping.
+
+    The mapping is ``{"class": "module.qualname"}`` plus every public instance
+    attribute whose value is configuration data: a primitive, a NumPy scalar, a
+    container of those (recursively), a callable rendered by name, or a
+    ``dataclasses``-style record rendered by the same rules.  Anything else -- a
+    nested arbitrary object, an array, an ``evoxc`` tensor -- is omitted rather than
+    rendered as a ``repr``, so no memory address can reach ``config.txt``.
+
+    Args:
+        value (Any): The object to describe (a gene, an operator, a record).
+        depth (int): Current nesting depth; at :data:`_MAX_CONFIG_DEPTH` the class
+            path is emitted alone, which bounds a pathological object graph.
+
+    Returns:
+        dict: The class path, followed by the sorted (name, rendered value) pairs.
+    """
+    rendered: dict[str, Any] = {"class": _qualified_name(type(value))}
+    if depth >= _MAX_CONFIG_DEPTH:
+        return rendered
+    for name, attribute in _public_fields(value).items():
+        item = _attribute_config(attribute, depth + 1)
+        if item is not _OMIT:
+            rendered[name] = item
+    return rendered
+
+
+def _attribute_config(value: Any, depth: int) -> Any:
+    """Render one attribute value, or return ``_OMIT`` when it is not config data.
+
+    This is the recursion step shared by :func:`_jsonable` (depth 0) and
+    :func:`_object_config` (an object's public attributes), so an attribute and a
+    top-level value are rendered by exactly the same rules.
+    """
+    if isinstance(value, np.generic):
+        return value.item()
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if _is_function_like(value):
+        return _qualified_name(value)
+    if isinstance(value, dict):
+        rendered_dict: dict[str, Any] = {}
+        for key, item in value.items():
+            rendered_item = _attribute_config(item, depth + 1)
+            if rendered_item is not _OMIT:
+                rendered_dict[str(key)] = rendered_item
+        return rendered_dict
+    if isinstance(value, (list, tuple, set, frozenset)):
+        rendered_items: list[Any] = []
+        for item in value:
+            rendered_item = _attribute_config(item, depth + 1)
+            if rendered_item is not _OMIT:
+                rendered_items.append(rendered_item)
+        if isinstance(value, (set, frozenset)):
+            # Set iteration order is not reproducible across processes.
+            rendered_items.sort(key=repr)
+        return rendered_items
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return _object_config(value, depth)
+    return _OMIT
+
+
 
 def _jsonable(value: Any) -> Any:
     """Render one configuration value so ``json.dumps`` can always accept it.
 
-    Primitives pass through (NumPy scalars unwrapped with ``.item()``),
-    containers are rendered element-wise and anything else becomes
-    ``repr(value)``, so a compiled executable or a gene object shows up in
-    ``config.txt`` instead of aborting the checkpoint.
+    Primitives pass through (NumPy scalars unwrapped with ``.item()``), containers
+    are rendered element-wise, a callable becomes its ``module.qualname`` path and
+    any other object becomes the deterministic mapping :func:`_object_config`
+    builds.  Nothing is ever rendered as a ``repr``, so ``config.txt`` names the
+    gene laws, the gates and the transforms that produced the log, and two
+    identical runs write identical bytes.
     """
-    if value is None or isinstance(value, (bool, str)):
-        return value
-    if isinstance(value, (int, float)):
-        return value
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return [_jsonable(item) for item in value]
-    return repr(value)
+    rendered = _attribute_config(value, 0)
+    if rendered is _OMIT:
+        return _object_config(value, 0)
+    return rendered
 
 
 def _config_value(owner: Any, name: str) -> Any:

@@ -7,12 +7,24 @@ every gate is an elementwise mask — no Python loop over individuals, no ``vmap
 Structural keys are caller-allocated ``int32`` tensors, and the only randomness consumed
 here is one rank-0 ``evoxc`` key, so a ``(seed, config, shape)`` triple reproduces a run.
 
-The kernel is factored into two stages — :meth:`BaseMutation.mutate_structure` (at most
-one structural change per individual) and :meth:`BaseMutation.mutate_values` (attribute
-mutation of every existing gene).  Both are implemented here, because both are the same
-for every operator family; a subclass only supplies the per-operation helpers
-(``_mutate_add_node``, ``_mutate_delete_node``, ``_mutate_add_conn``, ``_mutate_delete_conn``)
-and the four probabilities they gate on (:attr:`BaseMutation.structural_probabilities`).
+The kernel is factored into two stages — :meth:`BaseMutation.mutate_structure` (the four
+structural operations, each with its own independent per-individual gate) and
+:meth:`BaseMutation.mutate_values` (attribute mutation of every existing gene).  Both are
+implemented here, because both are the same for every operator family; a subclass only
+supplies the per-operation plan helpers (``plan_add_node``, ``plan_delete_node``,
+``plan_add_conn``, ``plan_delete_conn``) and the four probabilities they gate on
+(:attr:`BaseMutation.structural_probabilities`).
+
+Composition rule (shared by every family): the four structural stages run **sequentially**
+in the fixed order add-node → delete-node → add-conn → delete-conn, so a single call may
+apply up to four structural changes to one individual.  Each stage plans against the
+payload the previous stage left behind, so delete-node may delete the node add-node just
+created, delete-conn may consume an edge add-node or add-conn just created, and add-conn's
+duplicate / in-degree / cycle tests all see the post-add-node and post-delete-node graph.
+Every refusal (duplicate edge, self-connection, cycle, capacity, ``max_in_degree``, a
+colliding caller allocation) is a bit-exact no-op for that individual and never a partially
+applied write; a probability of ``0`` still removes that operation's whole chain — the
+cycle predicate included — from the traced graph.
 """
 
 from typing import TYPE_CHECKING
@@ -23,7 +35,6 @@ import evoxc.numpy as enp
 
 from ....common import I_INF, ConfigError, State, StatefulBaseClass
 from ...utils import GenomeTensors
-from ...window import fill
 from .arrays import (
     column_base,
     first_row,
@@ -34,10 +45,6 @@ from .arrays import (
     uniform_bounds,
 )
 from .plan import (
-    AddConnPlan,
-    AddNodePlan,
-    DeleteConnPlan,
-    DeleteNodePlan,
     Edit,
     EditContext,
     apply,
@@ -46,10 +53,25 @@ from .plan import (
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps genome -> operations acyclic
     from ...base import BaseGenome
 
-#: Number of structural operations the shared gate draw decides between, in the order
-#: ``(node_add, node_delete, conn_add, conn_delete)``.  It doubles as the "no operation
-#: won" index, which is why it is one past the last row.
+#: Number of structural operations, in the order ``(node_add, node_delete, conn_add,
+#: conn_delete)``.  Every row of the shared ``(4, P)`` gate draw is an *independent*
+#: Bernoulli decision, and the four stages run one after another, so the constant is the
+#: number of gate rows and of stages — not an index past the last row.
 _OPERATION_COUNT = 4
+
+#: Per-stage static write flags ``(write_nodes, clear_conn)`` handed to
+#: :func:`~.plan.apply`, in stage order.  A stage that statically cannot need a payload
+#: array passes it through untouched instead of paying for a full-size ``select`` that
+#: would provably write nothing: add-node writes a node row *and* clears the consumed edge
+#: (slot 0); delete-node clears a node row and lets its detach mask do the connection
+#: clearing; add-conn touches no node row and no cleared row (its slot 0 is the "no write"
+#: row); delete-conn clears exactly one connection row and no node row.
+_STAGE_WRITES = (
+    (True, True),
+    (True, True),
+    (False, False),
+    (False, True),
+)
 
 
 def _broadcast_row(
@@ -294,15 +316,24 @@ class BaseMutation(StatefulBaseClass):
         new_node_keys: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
     ) -> GenomeTensors:
-        """Apply at most one structural change per individual.
+        """Apply the four structural operations in sequence, each independently gated.
 
         One batched ``evoxc.random.uniform(key, (4, P))`` draw is compared against the
-        four :attr:`structural_probabilities`; the *first* row that hit wins
-        (``argmax`` plus a hit test, so row ``4`` means "nothing"), which is what keeps
-        the change count at one per individual and per generation.  The four helpers then
-        run in the order add-node, delete-node, add-conn, delete-conn, each with its own
-        key (from one ``split_n``) and its own ``(P,)`` gate, so three of them are
-        batch-wide no-ops by construction.
+        four :attr:`structural_probabilities`, and **every** row is its own independent
+        Bernoulli decision — one individual may fire any subset of the four, so one call
+        can apply up to four structural changes to one genome (the frozen pre-rewrite
+        library behaved the same way).
+
+        The stages then run in the fixed order add-node → delete-node → add-conn →
+        delete-conn, each with its own key (from one ``split_n``) and its own ``(P,)``
+        gate, and each stage plans against the payload the previous stage produced.  The
+        consequences are deliberate: delete-node may delete the node add-node just
+        created, delete-conn may consume an edge add-node or add-conn just created, and
+        add-conn's duplicate / in-degree / cycle tests see the post-add-node and
+        post-delete-node graph.  A probability of ``0`` elides its stage completely (the
+        cycle predicate included); a stage that fires but whose candidate is refused
+        (duplicate edge, self-connection, cycle, capacity, ``max_in_degree``, a colliding
+        caller allocation) is a bit-exact no-op for that individual.
 
         Args:
             state (State): Immutable host configuration container.
@@ -319,11 +350,13 @@ class BaseMutation(StatefulBaseClass):
                 attributes, NaN padded.
             new_node_keys (evoxc.SymbolicTensor): ``(P,) int32`` allocated node keys.
             new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated connection
-                keys.
+                keys; column 0 is the add-node identity edge, column 1 the add-node copy
+                edge and column 2 the add-conn edge.
 
         Returns:
-            GenomeTensors: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` after the structural
-            stage; every individual whose gate is off is returned unchanged.
+            GenomeTensors: ``(node_keys, node_attrs, conn_keys, conn_attrs)`` after every
+            stage; an individual whose gates are all off — or whose candidates were all
+            refused — is returned unchanged.
 
         Raises:
             ConfigError: If ``genome.network_type`` is neither ``"feedforward"`` nor
@@ -338,57 +371,92 @@ class BaseMutation(StatefulBaseClass):
         pop_size = node_keys.shape[0]
         # Four operation keys plus the gate key, in the order the operations run.
         keys = evoxc.random.split_n(key, _OPERATION_COUNT + 1)
-        context = self._edit_context(
-            genome, node_keys, node_attrs, conn_keys, conn_attrs
-        )
-        stage = self._stage_context(context)
-        gates = self._structural_gates(
-            keys[_OPERATION_COUNT], pop_size, stage.uniform_bounds
-        )
-        plans = self._plan_operations(
-            state,
-            genome,
-            keys,
-            gates,
-            stage,
-            node_keys,
-            conn_keys,
-            conn_attrs,
-            new_node_keys,
-            new_conn_keys,
-            pop_size,
-            conn_attrs.shape[2],
-        )
-        edit = self._merge_plan(
-            state,
-            genome,
-            plans,
-            context,
-            new_node_keys,
-            new_conn_keys,
-            pop_size,
-            node_attrs.shape[2],
-            conn_keys.shape[2],
-            conn_attrs.shape[2],
-        )
-        return apply(edit, context, node_keys, node_attrs, conn_keys, conn_attrs)
+        # Both rank-0 bounds are hoisted once for the whole call and shared by every
+        # stage's draws; a Python float bound would embed one ``float64`` constant per
+        # draw.  ``0.0``/``1.0`` are exact in ``float32``, so the draws are bit-identical.
+        uniform = uniform_bounds()
+        gates = self._structural_gates(keys[_OPERATION_COUNT], pop_size, uniform)
+        probabilities = self.structural_probabilities
+        key_width = conn_keys.shape[2]
+        node_attr_width = node_attrs.shape[2]
+        conn_attr_width = conn_attrs.shape[2]
+        payload = (node_keys, node_attrs, conn_keys, conn_attrs)
+        # Static Python loop over the four stages: ``index`` is a Python int, so both the
+        # elision below and the plan/write dispatch inside the helpers are ordinary
+        # Python control flow, never a traced one.
+        for index in range(_OPERATION_COUNT):
+            if probabilities[index] == 0.0:
+                continue
+            node_keys, node_attrs, conn_keys, conn_attrs = payload
+            # Rebuilt per stage: every mask and index block describes the payload this
+            # stage is about to edit, not the one it started from.
+            context = self._edit_context(
+                genome, node_keys, node_attrs, conn_keys, conn_attrs
+            )
+            stage = self._stage_context(context, uniform)
+            plan = self._plan_operation(
+                index,
+                state,
+                genome,
+                keys[index],
+                gates[index],
+                stage,
+                node_keys,
+                conn_keys,
+                conn_attrs,
+                new_node_keys,
+                new_conn_keys,
+            )
+            edit = self._stage_edit(
+                index,
+                state,
+                genome,
+                plan,
+                context,
+                new_node_keys,
+                new_conn_keys,
+                pop_size,
+                node_attr_width,
+                key_width,
+                conn_attr_width,
+            )
+            write_nodes, clear_conn = _STAGE_WRITES[index]
+            payload = tuple(
+                apply(
+                    edit,
+                    context,
+                    node_keys,
+                    node_attrs,
+                    conn_keys,
+                    conn_attrs,
+                    write_nodes=write_nodes,
+                    clear_conn=clear_conn,
+                )
+            )
+        return GenomeTensors(*payload)
 
-    def _stage_context(self, context: EditContext) -> _StageContext:
-        """Wrap the stage's row bookkeeping together with its uniform-bound pair.
+    def _stage_context(
+        self,
+        context: EditContext,
+        uniform: tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor],
+    ) -> _StageContext:
+        """Wrap one stage's row bookkeeping together with the shared uniform bounds.
 
-        The two rank-0 ``float32`` bounds are built **once** here and shared by every
-        ``evoxc.random.uniform`` draw of the stage (:meth:`_structural_gates` and the
-        per-operation plans); a Python float bound would embed one ``float64``
-        ``constant`` *per draw* instead.  ``0.0``/``1.0`` are exact in ``float32``, so the
-        drawn values are bit-identical (see :func:`~.arrays.uniform_bounds`).
+        The two rank-0 ``float32`` bounds are built **once** per
+        :meth:`mutate_structure` call and shared by every stage's draws; a Python float
+        bound would embed one ``float64`` ``constant`` *per draw* instead.  ``0.0``/``1.0``
+        are exact in ``float32``, so the drawn values are bit-identical (see
+        :func:`~.arrays.uniform_bounds`).
 
         Args:
-            context (EditContext): The stage's masks, constants and flat index blocks.
+            context (EditContext): The stage's masks, constants and flat index blocks,
+                derived from the payload this stage starts from.
+            uniform (tuple): The call's shared ``(low, high)`` rank-0 ``float32`` pair.
 
         Returns:
             _StageContext: ``context`` plus the shared ``(low, high)`` bounds.
         """
-        low, high = uniform_bounds()
+        low, high = uniform
         return _StageContext(context, low, high)
 
     def mutate_values(
@@ -452,31 +520,31 @@ class BaseMutation(StatefulBaseClass):
         evoxc.SymbolicTensor,
         evoxc.SymbolicTensor,
     ]:
-        """Resolve which of the four structural operations each individual performs.
+        """Resolve the four independent per-individual structural gates.
 
-        The four probabilities are compared against one ``(4, P)`` uniform draw; the first
-        row that hit wins, and an individual for which no row hit gets no structural change
-        at all.  Both outcomes are ordinary elementwise results, so the kernel stays
-        branch-free (``cond`` is a region op and cannot be batched).
+        The four probabilities are compared against one ``(4, P)`` uniform draw and each
+        row is read as its own Bernoulli decision — ``gate[i][p] = drawn[i, p] <
+        probabilities[i]`` — so an individual may fire any subset of the four operations
+        (up to all four).  Both outcomes are ordinary elementwise results, so the kernel
+        stays branch-free (``cond`` is a region op and cannot be batched).
 
         Args:
             key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this draw.
             pop_size (int): Population size ``P`` (static).
-            uniform (tuple): The stage's shared ``(low, high)`` rank-0 ``float32`` bounds
+            uniform (tuple): The call's shared ``(low, high)`` rank-0 ``float32`` bounds
                 (:func:`~.arrays.uniform_bounds`); ``0.0``/``1.0`` as tensors cost two
-                constants per stage instead of two per draw, and draw bit-identically.
+                constants per call instead of two per draw, and draw bit-identically.
 
         Returns:
             tuple: four ``(P,)`` bool gates, in the order add-node, delete-node, add-conn,
-            delete-conn; at most one of them is true per individual.
+            delete-conn; each is independent of the other three.
 
         Notes:
             The comparison runs against a ``(4, 1)`` constant column of static thresholds,
             so a probability of ``0`` produces an all-``False`` row (the operation can never
-            win) and a probability of ``1`` an all-``True`` one, without a Python branch.
-            The four gates are recovered from the winning row index with four ``equal`` ops
-            rather than by slicing a one-hot block, which is cheaper under the reference
-            interpreter (one op per gate, no reshape).
+            fire) and a probability of ``1`` an all-``True`` one, without a Python branch.
+            Each gate is the static row selection ``hit[index]`` (one op: the axis-dropping
+            gather ``getitem`` lowers to), so the four gates cost four ops and no reshape.
         """
         low, high = uniform
         drawn = evoxc.random.uniform(
@@ -489,16 +557,7 @@ class BaseMutation(StatefulBaseClass):
             np.float32,
         )
         hit = evoxc.less(drawn, thresholds)
-        # First hitting row, or the "no operation" index when no row hit (`argmax` of an
-        # all-False column would otherwise name row 0, a real operation).
-        winner = evoxc.select(
-            evoxc.reduce_max(hit, axes=0),
-            evoxc.cast(evoxc.argmax(hit, axis=0), evoxc.int32),
-            _int32(_OPERATION_COUNT),
-        )
-        return tuple(
-            evoxc.equal(winner, _int32(index)) for index in range(_OPERATION_COUNT)
-        )
+        return tuple(hit[index] for index in range(_OPERATION_COUNT))
 
     def _edit_context(
         self,
@@ -508,12 +567,13 @@ class BaseMutation(StatefulBaseClass):
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
     ) -> EditContext:
-        """Build the row bookkeeping shared by the four operations of one stage.
+        """Build the row bookkeeping one structural stage needs from its input payload.
 
-        Every operation needs the same presence masks and the same flat index blocks; the
-        context builds each of them once, which is what keeps the stage's traced-op count
-        proportional to the number of *distinct* accesses rather than to the number of
-        operations that happen to read the same array.
+        Built once per stage — against the payload that stage is about to edit, because a
+        previous stage may have moved a row — so every operation of the stage shares one
+        set of presence masks and flat index blocks.  That is what keeps the stage's
+        traced-op count proportional to the number of *distinct* accesses rather than to
+        the number of operations that happen to read the same array.
 
         Args:
             genome ("BaseGenome"): Genome supplying the row ranges of the input and output
@@ -595,106 +655,82 @@ class BaseMutation(StatefulBaseClass):
             attr_width=_int32(attr_width),
         )
 
-    def _plan_operations(
+    def _plan_operation(
         self,
+        index: int,
         state: State,
         genome: "BaseGenome",
-        keys: evoxc.SymbolicTensor,
-        gates: tuple[evoxc.SymbolicTensor, ...],
-        context: EditContext,
+        key: evoxc.SymbolicTensor,
+        gate: evoxc.SymbolicTensor,
+        context: _StageContext,
         node_keys: evoxc.SymbolicTensor,
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
         new_node_keys: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
-        pop_size: int,
-        attr_width: int,
     ):
-        """Resolve the four operations' candidates, eliding those that cannot fire.
+        """Resolve the candidate of **one** structural stage.
 
-        A probability of ``0`` makes its gate row all-``False``, so the operation can never
-        apply; skipping its plan then keeps a whole operation's worth of traced ops (the
-        cycle predicate included) out of the graph instead of computing a result that the
-        merge immediately discards.
+        The dispatch on ``index`` is a static Python ``if`` chain over the four stage
+        numbers, so a stage traces only its own plan.  The elided "never" placeholder
+        plans the merged formulation carried for the three operations it was *not*
+        running are gone: a stage whose probability is ``0`` is skipped wholesale by
+        :meth:`mutate_structure` (keeping even the cycle predicate out of the graph) and a
+        stage that fires always plans for real, so there is nothing left to elide.
 
         Args:
+            index (int): Stage number in ``0..3``, in the order add-node, delete-node,
+                add-conn, delete-conn.
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome owning the genes and the static invariants.
-            keys (evoxc.SymbolicTensor): ``(5,)`` per-operation keys from one ``split_n``.
-            gates (tuple): four ``(P,)`` bool gates from :meth:`_structural_gates`.
-            context (_StageContext): Shared masks, flat index blocks and the stage's
+            key (evoxc.SymbolicTensor): Rank-0 ``evoxc`` key for this stage's draws.
+            gate (evoxc.SymbolicTensor): ``(P,) bool`` independent gate of this stage.
+            context (_StageContext): The stage's masks, constants and flat index blocks —
+                derived from the payload this stage *starts from* — plus the shared
                 ``(low, high)`` uniform bounds; the plans read it as an ``EditContext``
                 because every other attribute is delegated.
-            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys.
+            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node keys of this stage's
+                input payload.
             conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` connection keys.
-            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` connection attributes.
+            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` connection attributes
+                (the stage's flattened copy in ``context`` is what the add-node read
+                consumes).
             new_node_keys (evoxc.SymbolicTensor): ``(P,) int32`` allocated node keys.
             new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated connection keys.
-            pop_size (int): Population size ``P`` (static).
-            attr_width (int): ``CA``, used for the elided plan's placeholder value.
 
         Returns:
-            tuple: ``(add_node, delete_node, add_conn, delete_conn)`` plans.
+            AddNodePlan | DeleteNodePlan | AddConnPlan | DeleteConnPlan: the single plan of
+            stage ``index``.  The four ``plan_*`` methods keep their names and parameter
+            lists: they are the subclass extension points.
         """
-        # One element each, broadcast by the plans' ``select``s: a population-wide
-        # ``enp.full`` here is a graph constant proportional to ``P`` (see
-        # ``..window.fill``) for a value that has no per-individual content.
-        ghost = fill((pop_size,), I_INF, dtype=evoxc.int32)
-        never = fill((pop_size,), False, dtype=evoxc.bool_)
-        add_node = (
-            self.plan_add_node(
+        if index == 0:
+            return self.plan_add_node(
                 state,
                 genome,
-                keys[0],
+                key,
                 context,
                 node_keys,
                 conn_keys,
                 conn_attrs,
                 new_node_keys,
-                gates[0],
+                gate,
             )
-            if self.node_add > 0.0
-            else AddNodePlan(
-                never,
-                ghost,
-                ghost,
-                ghost,
-                ghost,
-                ghost,
-                ghost,
-                fill((pop_size, 1, attr_width), 0.0, dtype=evoxc.float32),
+        if index == 1:
+            return self.plan_delete_node(
+                state, genome, key, context, node_keys, conn_keys, gate
             )
-        )
-        delete_node = (
-            self.plan_delete_node(
-                state, genome, keys[1], context, node_keys, conn_keys, gates[1]
+        if index == 2:
+            return self.plan_add_conn(
+                state, genome, key, context, node_keys, conn_keys, new_conn_keys, gate
             )
-            if self.node_delete > 0.0
-            else DeleteNodePlan(
-                never,
-                ghost,
-                fill(tuple(context.present_conn.shape), False, dtype=evoxc.bool_),
-            )
-        )
-        add_conn = (
-            self.plan_add_conn(
-                state, genome, keys[2], context, node_keys, conn_keys, new_conn_keys, gates[2]
-            )
-            if self.conn_add > 0.0
-            else AddConnPlan(never, ghost, ghost, ghost)
-        )
-        delete_conn = (
-            self.plan_delete_conn(state, genome, keys[3], context, conn_keys, gates[3])
-            if self.conn_delete > 0.0
-            else DeleteConnPlan(never, ghost)
-        )
-        return add_node, delete_node, add_conn, delete_conn
+        return self.plan_delete_conn(state, genome, key, context, conn_keys, gate)
 
-    def _merge_plan(
+    def _stage_edit(
         self,
+        index: int,
         state: State,
         genome: "BaseGenome",
-        plans: tuple,
+        plan,
         context: EditContext,
         new_node_keys: evoxc.SymbolicTensor,
         new_conn_keys: evoxc.SymbolicTensor,
@@ -703,109 +739,136 @@ class BaseMutation(StatefulBaseClass):
         key_width: int,
         conn_attr_width: int,
     ) -> Edit:
-        """Merge the four mutually exclusive plans into one write per payload-array slot.
+        """Turn one stage's plan into the writes :func:`~.plan.apply` performs.
 
-        Each array slot is filled by a small ``select`` chain in the order the operations
-        run — node deletion after node split, delete-connection after add-connection — with
-        the array's own length as the "no write" row, which matches no row in
-        :func:`~.plan.apply`.  Because only one gate is true per individual, the chain is a
-        priority encoder, not a blend.
+        This is the single-operation form of the merged write plan: each stage names only
+        the rows it can actually write, and the array it cannot touch is left as ``None``
+        and skipped statically by the caller's
+        ``_STAGE_WRITES``-driven ``write_nodes`` / ``clear_conn`` flags.
 
-        A slot that only ever writes the "cleared" value (connection slot 0, whose row is the
-        consumed or the deleted connection) carries the shared rank-0 ``I_INF``/NaN constant
-        instead of a full-size block, and a slot whose row means "no write" whenever its
-        value is meaningless (connection slot 2) carries the block unguarded — the row
-        comparison already suppresses the write.
+        A slot whose every value is the "cleared" one carries the shared rank-0
+        ``I_INF``/NaN constant instead of a full-size block — the write's ``select``
+        broadcasts it — and a slot that names no row when its value is meaningless
+        carries the block unguarded, because the row comparison already suppresses the
+        write.
 
         Args:
+            index (int): Stage number in ``0..3``.
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome owning the gene attribute factories.
-            plans (tuple): the four plans from :meth:`_plan_operations`.
-            context (EditContext): Shared constants, masks and flat index blocks.
+            plan: The plan of this stage from :meth:`_plan_operation`.
+            context (EditContext): Shared constants, masks and flat index blocks of this
+                stage's input payload.
             new_node_keys (evoxc.SymbolicTensor): ``(P,) int32`` allocated node keys.
-            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated connection keys.
+            new_conn_keys (evoxc.SymbolicTensor): ``(P, 3) int32`` allocated connection
+                keys; column 0 is the add-node identity edge, column 1 the add-node copy
+                edge and column 2 the add-conn edge.
             pop_size (int): Population size ``P`` (static).
             node_attr_width (int): ``NA``.
             key_width (int): ``CK``, the connection gene's key width.
             conn_attr_width (int): ``CA``.
 
         Returns:
-            Edit: the plan to hand to :func:`~.plan.apply`.
+            Edit: the writes of this stage, to hand to :func:`~.plan.apply`.
         """
-        add_node, delete_node, add_conn, delete_conn = plans
-        if self.node_add > 0.0:
-            node_identity = _broadcast_row(
-                genome.node_gene.new_identity_attrs(state), pop_size, node_attr_width
-            )
-        else:
-            node_identity = fill(
-                (pop_size, node_attr_width), 0.0, dtype=evoxc.float32
-            )
-        node_rows = evoxc.select(
-            add_node.ok,
-            add_node.node_row,
-            evoxc.select(delete_node.ok, delete_node.node_row, context.node_row_limit),
-        )
-        node_key_values = evoxc.select(add_node.ok, new_node_keys, context.sentinel)
-        node_attr_values = evoxc.select(
-            enp.reshape(add_node.ok, (pop_size, 1)), node_identity, context.nan_fill
-        )
-        conn_rows = (
-            evoxc.select(
-                add_node.ok,
-                add_node.delete_row,
+        if index == 0:
+            # Add-node: one node row, the consumed connection row (slot 0) and the two new
+            # edge rows (slots 1 = identity, 2 = copy, which inherits the recorded
+            # attributes of the consumed edge).
+            return Edit(
+                evoxc.select(plan.ok, plan.node_row, context.node_row_limit),
+                evoxc.select(plan.ok, new_node_keys, context.sentinel),
                 evoxc.select(
-                    delete_conn.ok, delete_conn.conn_row, context.conn_row_limit
+                    enp.reshape(plan.ok, (pop_size, 1)),
+                    _broadcast_row(
+                        genome.node_gene.new_identity_attrs(state),
+                        pop_size,
+                        node_attr_width,
+                    ),
+                    context.nan_fill,
                 ),
-            ),
-            evoxc.select(
-                add_node.ok,
-                add_node.identity_row,
-                evoxc.select(
-                    add_conn.ok, add_conn.conn_row, context.conn_row_limit
+                (
+                    evoxc.select(plan.ok, plan.delete_row, context.conn_row_limit),
+                    evoxc.select(plan.ok, plan.identity_row, context.conn_row_limit),
+                    evoxc.select(plan.ok, plan.copy_row, context.conn_row_limit),
                 ),
-            ),
-            evoxc.select(add_node.ok, add_node.copy_row, context.conn_row_limit),
-        )
-        add_node_column = enp.reshape(add_node.ok, (pop_size, 1, 1))
-        identity_keys = _edge_key_row(
-            add_node.in_key, new_node_keys, new_conn_keys, 0, key_width, genome
-        )
-        copy_keys = _edge_key_row(
-            new_node_keys, add_node.out_key, new_conn_keys, 1, key_width, genome
-        )
-        add_keys = _edge_key_row(
-            add_conn.in_key, add_conn.out_key, new_conn_keys, 2, key_width, genome
-        )
-        if self.node_add > 0.0:
-            conn_identity = _broadcast_row(
-                genome.conn_gene.new_identity_attrs(state), pop_size, conn_attr_width
+                (
+                    context.sentinel,
+                    _edge_key_row(
+                        plan.in_key, new_node_keys, new_conn_keys, 0, key_width, genome
+                    ),
+                    _edge_key_row(
+                        new_node_keys, plan.out_key, new_conn_keys, 1, key_width, genome
+                    ),
+                ),
+                (
+                    context.nan_fill,
+                    enp.reshape(
+                        _broadcast_row(
+                            genome.conn_gene.new_identity_attrs(state),
+                            pop_size,
+                            conn_attr_width,
+                        ),
+                        (pop_size, 1, conn_attr_width),
+                    ),
+                    plan.copy_attrs,
+                ),
+                None,
             )
-        else:
-            conn_identity = fill(
-                (pop_size, conn_attr_width), 0.0, dtype=evoxc.float32
+        if index == 1:
+            # Delete-node: clear the node row; every connection row touching the deleted
+            # key detaches through ``drop`` in apply's single clearing pass, so slot 0
+            # names no row of its own and the scatter writes nothing.
+            return Edit(
+                evoxc.select(plan.ok, plan.node_row, context.node_row_limit),
+                context.sentinel,
+                context.nan_fill,
+                (context.conn_row_limit,),
+                (context.sentinel,),
+                (context.nan_fill,),
+                plan.drop,
             )
-        if self.conn_add > 0.0:
-            conn_zero = _broadcast_row(
-                genome.conn_gene.new_zero_attrs(state), pop_size, conn_attr_width
+        if index == 2:
+            # Add-conn: apply skips the clearing pass altogether (``clear_conn=False``), so
+            # slot 0 exists only to keep the slot numbering and slot 1 is the one write.
+            return Edit(
+                None,
+                None,
+                None,
+                (
+                    context.conn_row_limit,
+                    evoxc.select(plan.ok, plan.conn_row, context.conn_row_limit),
+                ),
+                (
+                    context.sentinel,
+                    _edge_key_row(
+                        plan.in_key, plan.out_key, new_conn_keys, 2, key_width, genome
+                    ),
+                ),
+                (
+                    context.nan_fill,
+                    enp.reshape(
+                        _broadcast_row(
+                            genome.conn_gene.new_zero_attrs(state),
+                            pop_size,
+                            conn_attr_width,
+                        ),
+                        (pop_size, 1, conn_attr_width),
+                    ),
+                ),
+                None,
             )
-        else:
-            conn_zero = fill(
-                (pop_size, conn_attr_width), 0.0, dtype=evoxc.float32
-            )
-        conn_attr_slot_1 = evoxc.select(
-            add_node_column,
-            enp.reshape(conn_identity, (pop_size, 1, conn_attr_width)),
-            enp.reshape(conn_zero, (pop_size, 1, conn_attr_width)),
-        )
+        # Delete-conn: exactly one cleared connection row, no node write.
         return Edit(
-            node_rows,
-            node_key_values,
-            node_attr_values,
-            conn_rows,
-            (context.sentinel, evoxc.select(add_node_column, identity_keys, add_keys), copy_keys),
-            (context.nan_fill, conn_attr_slot_1, add_node.copy_attrs),
-            delete_node.drop,
+            None,
+            None,
+            None,
+            (evoxc.select(plan.ok, plan.conn_row, context.conn_row_limit),),
+            (context.sentinel,),
+            (context.nan_fill,),
+            None,
         )
+
+
 
 __all__ = ["BaseMutation"]

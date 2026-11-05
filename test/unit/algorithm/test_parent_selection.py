@@ -439,7 +439,7 @@ def test_parents_come_only_from_the_survivor_prefix(
     species, controller, species_state, species_kernel, evoxc_key,
     survival_threshold, members, expected,
 ):
-    """Invariant: both parents of a slot rank below ``clamp(floor(threshold * members), 1, members)``.
+    """Invariant: a **drawn** parent ranks below ``clamp(floor(threshold * members), 1, members)``.
 
     Oracle: :func:`survivor_count` and :func:`species_ranking`; the drawn rows are
     mapped back to their rank inside the species and asserted ``< expected``.  The
@@ -449,6 +449,13 @@ def test_parents_come_only_from_the_survivor_prefix(
     owns ``members`` rows and species ``1`` the rest, so the bound is checked against
     both species: the population-axis ranking is ``(S, P)`` wide and a stale
     survivor count could just as well read past *another* block.
+
+    Elite slots are exempt by contract: they are *pinned* to their block's
+    ``idx_in_block``-th ranked member (the legacy elementwise pin), which is outside
+    the survivor prefix as soon as ``genome_elitism`` exceeds the survivor count —
+    the whole point of elitism.  Their pin is asserted here against the same ranking
+    so the exemption cannot hide a wrong rank, and the drawn slots are asserted
+    below it.
 
     A threshold above ``1`` is not a pairing case any more: ``SpeciesController``
     validates ``survival_threshold`` as a ``(0, 1]`` unit interval and raises
@@ -476,17 +483,24 @@ def test_parents_come_only_from_the_survivor_prefix(
     assert_parent_indices(winner, loser)
     assert elite.shape == (POP_SIZE,)
 
-    loc, _idx_in_block = expected_block_layout(spawn)
+    loc, idx_in_block = expected_block_layout(spawn)
+    elite_width = controller(survival_threshold=survival_threshold).genome_elitism
     for slot in range(POP_SIZE):
         block = int(loc[slot])
         key = float(bookkeeping.species_keys[block])
         survivors = survivor_count(survival_threshold, int(counts[block]))
         for parent in (int(winner[slot]), int(loser[slot])):
             rank = rank_in_species(parent, FITNESS, bookkeeping.idx2species, key)
-            assert rank < survivors, (
-                f"slot {slot} drew population row {parent} at rank {rank} of species "
-                f"{key}, but only the best {survivors} members are parents"
-            )
+            if idx_in_block[slot] < elite_width:
+                assert rank == min(int(idx_in_block[slot]), int(counts[block]) - 1), (
+                    f"elite slot {slot} drew population row {parent} at rank {rank} of "
+                    f"species {key}, but an elite pins its own rank"
+                )
+            else:
+                assert rank < survivors, (
+                    f"slot {slot} drew population row {parent} at rank {rank} of species "
+                    f"{key}, but only the best {survivors} members are parents"
+                )
 
 
 def test_a_one_member_species_yields_two_identical_parents(
@@ -537,17 +551,20 @@ def test_a_one_member_species_yields_two_identical_parents(
 
 
 @pytest.mark.parametrize("genome_elitism", [1, 2, 3])
-def test_elite_slots_are_pinned_to_the_species_best_member(
+def test_elite_slots_are_pinned_to_the_species_top_members(
     species, controller, species_state, species_kernel, evoxc_key, genome_elitism
 ):
-    """Invariant: for an elite slot, both parents are the best member of its own species.
+    """Invariant: elite slot ``k`` pins both parents to its species' ``k``-th ranked member.
 
     Oracle: :func:`expected_block_layout` gives ``loc``/``idx_in_block``; every slot
     with ``idx_in_block < genome_elitism`` must satisfy ``winner == loser ==
-    species_ranking(...)[0]`` for its own block.  With the fixture table that is row
-    ``1`` for the elite slots of block ``0`` and row ``6`` for those of block ``1``,
-    so a mis-sliced block or a wrong elite width shows up as an exact row mismatch
-    rather than a fuzzy set difference.  The widths cover a partial first block
+    species_ranking(...)[min(k, live_members - 1)]`` for its own block, which is the
+    legacy elementwise pin (the frozen implementation's ``jnp.where`` at
+    ``species.py:363-365`` replaces the whole parent row with the whole ranking row).
+    On the fixture table block ``0`` ranks rows ``1, 3, 2, 4, 0`` and block ``1``
+    ranks ``6, 7, 5``, so widths ``2``/``3`` must produce *distinct* members
+    (``1, 3`` and ``1, 3, 2``) -- exactly what separates this contract from "clone
+    the champion into every elite slot".  The widths cover a partial first block
     (``1``), the suite default (``2``) and a width that swallows a whole three-slot
     block (``3``).  Non-elite slots are still members of their own species, so the
     pin cannot be "achieved" by drawing garbage elsewhere.
@@ -556,7 +573,7 @@ def test_elite_slots_are_pinned_to_the_species_best_member(
     default of ``0.1`` every live species has a survivor count of one, so the plain
     draw would hand back the species best member anyway and *removing* the elite
     pinning would go unnoticed.  At ``1.0`` the survivor set is the whole species and
-    only the pin can put the best member in both parent slots.
+    only the pin can place the ranked member in both parent slots.
     """
     bookkeeping = species_state()
     winner, loser, elite = pair(
@@ -575,14 +592,16 @@ def test_elite_slots_are_pinned_to_the_species_best_member(
     assert elite_slots.size, "the parametrised width must select at least one slot"
     for slot in elite_slots:
         key = float(keys[int(loc[slot])])
-        best = int(species_ranking(FITNESS, idx2species, key)[0])
-        assert int(winner[slot]) == best, (
+        ranking = species_ranking(FITNESS, idx2species, key)
+        rank = min(int(idx_in_block[slot]), ranking.size - 1)
+        expected = int(ranking[rank])
+        assert int(winner[slot]) == expected, (
             f"elite slot {slot} of species {key} drew winner {int(winner[slot])}, "
-            f"expected the species best member {best}"
+            f"expected the species rank-{rank} member {expected}"
         )
-        assert int(loser[slot]) == best, (
+        assert int(loser[slot]) == expected, (
             f"elite slot {slot} of species {key} drew loser {int(loser[slot])}, "
-            f"expected the species best member {best}"
+            f"expected the species rank-{rank} member {expected}"
         )
     # Membership only: an out-of-species parent fails inside ``rank_in_species``.
     for slot in range(POP_SIZE):

@@ -328,9 +328,13 @@ class Pipeline(StatefulBaseClass):
 
         Returns:
             dict: ``{"pipeline": ..., "algorithm": ..., "problem": ...}`` with
-            plain Python values (anything exotic is rendered as its ``repr``), so
-            ``json.dumps(pipeline.show_config(), indent=4)`` always succeeds and
-            the checkpoint header is readable.
+            plain Python values (a gene, an operator or a transform is rendered by
+            ``host_payload._object_config`` as its class path plus its public
+            primitive attributes, callables by their qualified name, so no memory
+            address ever reaches the file), so
+            ``json.dumps(pipeline.show_config(), indent=4)`` always succeeds, two
+            identical runs write identical bytes, and the checkpoint header names
+            the search law that produced ``log.txt``.
 
         Notes:
             Host-only, and read defensively: a genome that does not expose a
@@ -359,6 +363,7 @@ class Pipeline(StatefulBaseClass):
                         "num_inputs", "num_outputs", "max_nodes", "max_conns",
                         "max_in_degree", "max_depth", "key_span", "node_gene",
                         "conn_gene", "mutation", "crossover", "distance",
+                        "input_transform", "output_transform",
                     )
                 },
             }
