@@ -82,8 +82,7 @@ Only `activation="sigmoid"` / `aggregation="sum"` are ever configured (`./confte
 `_assert_matches` compares values only where both sides are finite (`./test_forward.py:81-82`) and the five random-DAG cases never assert finiteness (`./test_forward.py:258`), so a case whose output row is unreachable compares NaN patterns only.
 Never parity-compared at all: `initialize`, mutation, crossover, `NEAT.tell`/speciation, the `Pipeline`, `RecurrentGenome`, HyperNEAT, the three RL problems, `network_dict`/`sympy_func`/`visualize`; `execute_distance` is the only genetic-operator kernel with an oracle.
 Parity runs on the numpy interpreter only (`../../support/runner.py` `DEFAULT_BACKEND`); a compiled backend's agreement with the oracle is inferred from its agreement with numpy (`../backends`).
-Without `jax` or `benchmarks/legacy_jax` the four oracle modules skip at module scope (`./test_forward.py:50`, `./test_distance.py:57`, `./test_fitness.py:49`, `./test_grad.py:58`, `./conftest.py:141-145`) and `pytest -m parity` exits 0 with `18 passed` — nothing asserts that 53 tests ran.
-`./test_convert.py:275-301`'s docstring claims `new_genome.get_output_idx() == legacy_genome.get_output_idx()`, but no test in this directory calls `get_output_idx`; the layout rule is only validated indirectly through forward values.
+The four oracle modules still skip at module scope when `jax` is absent (`./test_forward.py:50`, `./test_distance.py:57`, `./test_fitness.py:49`, `./test_grad.py:58`), so that environment compares no kernel; `./test_oracle_integrity.py` makes that state explicit (a skip reason naming the four uncollected modules) instead of silent, and fails when a module skips although `jax` is installed.
 
 ## Tolerances
 `forward` values — `np.allclose(rtol=1e-5, atol=1e-6)` on `float32`, **plus** `np.isnan(new) == np.isnan(old)` elementwise: `NaN` is data here, so a matching `NaN` is as binding as a matching number.
