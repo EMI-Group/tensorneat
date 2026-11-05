@@ -36,6 +36,7 @@ from . import dense as _dense
 from . import digest as _digest
 from .consts import ConstantPool
 from .digest import DistanceDigest
+from .grouped import GroupedDigest, validate_centre, validate_family
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps genome -> operations acyclic
     from ...base import BaseGenome
@@ -251,32 +252,34 @@ class BaseDistance(StatefulBaseClass):
         node_attrs: evoxc.SymbolicTensor,
         conn_keys: evoxc.SymbolicTensor,
         conn_attrs: evoxc.SymbolicTensor,
-        digest: DistanceDigest,
+        digest: DistanceDigest | GroupedDigest,
         *,
         consts=None,
     ) -> evoxc.SymbolicTensor:
-        """Distance of one centre genome against every genome of a prepared digest.
+        """Distance of one or more centre genomes against every genome of a prepared digest.
 
         Args:
             state (State): Immutable host configuration container.
             genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene``.
-            node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` centre node keys — batch ``P``
-                matching the digest, or batch ``1`` (one centre) which is broadcast.
-            node_attrs (evoxc.SymbolicTensor): ``(P, N, NA) float32`` centre node attrs.
-            conn_keys (evoxc.SymbolicTensor): ``(P, E, CK) int32`` centre conn keys.
-            conn_attrs (evoxc.SymbolicTensor): ``(P, E, CA) float32`` centre conn attrs.
-            digest (DistanceDigest): Population digest from :meth:`prepare`.
+            node_keys (evoxc.SymbolicTensor): ``(R, N) int32`` centre node keys, ``I_INF``
+                padded.
+            node_attrs (evoxc.SymbolicTensor): ``(R, N, NA) float32`` centre node attrs.
+            conn_keys (evoxc.SymbolicTensor): ``(R, E, CK) int32`` centre conn keys.
+            conn_attrs (evoxc.SymbolicTensor): ``(R, E, CA) float32`` centre conn attrs.
+            digest (DistanceDigest | GroupedDigest): Population digest from :meth:`prepare`,
+                or the tiled one from :func:`~.grouped.group_digest`.
             consts (ConstantPool | None): Pool for the rank-0 constants of this trace; pass
                 one pool to every kernel of a generation so each constant costs a single op.
                 ``None`` starts a private one.
 
         Returns:
-            evoxc.SymbolicTensor: ``(P,) float32`` compatibility distances, ``0`` for an empty
+            evoxc.SymbolicTensor: ``(R,) float32`` compatibility distances, ``0`` for an empty
             pair — bit-identical to :meth:`__call__` on the same payloads.
 
         Raises:
-            ConfigError: If the centre's static shapes are invalid, if its batch is neither
-                ``1`` nor the digest's, or if the digest's gene axes do not match the centre's.
+            ConfigError: If the centre's static shapes are invalid, if its batch is not one the
+                digest accepts, if a grouped centre's batch is not exactly ``group * pop_size``,
+                or if the digest's gene axes do not match the centre's.
             TensorNEATError: If a batch-1 centre takes the dense route (i.e.
                 :meth:`_single_centre_enabled` holds) and **host-resident** data breaks that
                 route's ``[0, genome.key_span)`` key precondition — a population gene counted
@@ -286,8 +289,20 @@ class BaseDistance(StatefulBaseClass):
                 silently for a traced leaf; see the notes.
 
         Notes:
-            A plain traced helper (see :meth:`prepare`).  A batch-1 centre is broadcast to the
-            digest's batch up front, so the per-family kernels are batch-first throughout.
+            A plain traced helper (see :meth:`prepare`).  The centre batch a call accepts
+            depends on the digest:
+
+            * a plain :class:`~.digest.DistanceDigest` takes batch ``1`` (broadcast to the
+              digest's batch up front, the dense single-centre route when the operator has one)
+              or exactly its population batch ``P`` (row-local pairing, row ``p`` against
+              individual ``p``);
+            * a :class:`~.grouped.GroupedDigest` takes exactly ``group * P`` rows and pairs row
+              ``j * P + p`` with individual ``p``, returning ``(group * P,)`` — bit-identical to
+              ``group`` separate ``P``-row calls against the plain digest, because every op of
+              both routes is row-local.  That route is the row-wise merge only: it has no dense
+              single-centre fast path (the tiled digest carries no dense table) and no
+              broadcast.
+
             The dense single-centre route (:meth:`_measure_single_centre`) addresses a gene by
             its key, so it is exact only while every present key lies inside
             ``[0, genome.key_span)``; the row-wise merge matches any key exactly.
@@ -308,8 +323,11 @@ class BaseDistance(StatefulBaseClass):
         """
         payload = (node_keys, node_attrs, conn_keys, conn_attrs)
         _validate_single(type(self).__name__, "measure", payload)
-        batch = _validate_digest(type(self).__name__, payload, digest)
         pool = consts if consts is not None else ConstantPool()
+        if isinstance(digest, GroupedDigest):
+            validate_centre(type(self).__name__, payload, digest)
+            return self._merge_both(pool, state, genome, payload, digest)
+        batch = _validate_digest(type(self).__name__, payload, digest)
         if int(node_keys.shape[0]) == 1:
             if self._single_centre_enabled(genome):
                 _validate_dense_keys(type(self).__name__, genome, payload, digest)
@@ -318,13 +336,41 @@ class BaseDistance(StatefulBaseClass):
                 return fast
         if int(node_keys.shape[0]) != batch:
             payload = _broadcast_payload(payload, batch)
-            node_keys, node_attrs, conn_keys, conn_attrs = payload
+        return self._merge_both(pool, state, genome, payload, digest)
+
+    def _merge_both(
+        self,
+        pool: ConstantPool,
+        state: State,
+        genome: "BaseGenome",
+        payload: tuple,
+        digest: DistanceDigest | GroupedDigest,
+    ) -> evoxc.SymbolicTensor:
+        """Row-wise merge of both gene families against a digest's own batch.
+
+        Args:
+            pool (ConstantPool): Per-trace rank-0 constant pool.
+            state (State): Immutable host configuration container.
+            genome ("BaseGenome"): Genome owning ``node_gene``/``conn_gene``.
+            payload (tuple): The four centre arrays, already at the digest's row count.
+            digest (DistanceDigest | GroupedDigest): The population digest, plain or grouped.
+
+        Returns:
+            evoxc.SymbolicTensor: ``(R,) float32`` node distance plus connection distance.
+
+        Notes:
+            The one spelling of the row-wise route: a plain digest and a grouped one expose the
+            same eight block names and the same two statics bundles, so the caller only chooses
+            which digest to hand over and this body exists once.  A grouped digest's leaves are
+            the plain ones tiled and its statics sit at the tiled row count, so the merge pairs
+            row ``j * P + p`` with individual ``p`` exactly as ``group`` separate calls do.
+        """
         node_distance = self._measure_family(
             pool,
             state,
             genome.node_gene,
-            node_keys,
-            node_attrs,
+            payload[0],
+            payload[1],
             digest.node_keys,
             digest.node_attrs,
             digest.node_count,
@@ -335,8 +381,8 @@ class BaseDistance(StatefulBaseClass):
             pool,
             state,
             genome.conn_gene,
-            conn_keys,
-            conn_attrs,
+            payload[2],
+            payload[3],
             digest.conn_keys,
             digest.conn_attrs,
             digest.conn_count,
@@ -684,30 +730,18 @@ def _validate_digest(name: str, payload: tuple, digest: DistanceDigest) -> int:
             digest.conn_real,
         ),
     ):
-        if int(digest_keys.shape[1]) != int(centre_keys.shape[1]):
-            raise ConfigError(
-                f"{name}.measure: the {family} digest holds {int(digest_keys.shape[1])} "
-                f"gene rows but the centre's key array is {tuple(centre_keys.shape)}"
-            )
-        if tuple(int(size) for size in digest_attrs.shape[1:]) != tuple(
-            int(size) for size in centre_attrs.shape[1:]
-        ):
-            raise ConfigError(
-                f"{name}.measure: the {family} digest attributes are "
-                f"{(int(digest_attrs.shape[1]), int(digest_attrs.shape[2]))} (M, A) but the "
-                f"centre's are {(int(centre_attrs.shape[1]), int(centre_attrs.shape[2]))}"
-            )
-        if len(digest_count.shape) != 1:
-            raise ConfigError(
-                f"{name}.measure: the {family} digest count must be (P,), got "
-                f"{tuple(digest_count.shape)}"
-            )
-        if int(digest_key_cols.shape[1]) != int(centre_keys.shape[1]):
-            raise ConfigError(
-                f"{name}.measure: the {family} digest key columns hold "
-                f"{int(digest_key_cols.shape[1])} gene rows but the centre's key array is "
-                f"{tuple(centre_keys.shape)}"
-            )
+        # The four gene-geometry checks are shared with the grouped route, so the two digest
+        # types cannot drift apart in what they accept or in how they say it.
+        validate_family(
+            name,
+            family,
+            centre_keys,
+            centre_attrs,
+            digest_keys,
+            digest_attrs,
+            digest_count,
+            digest_key_cols,
+        )
         for field, block in (("dense slot", digest_dense), ("real-gene mask", digest_real)):
             if tuple(int(size) for size in block.shape) != (
                 batch,
