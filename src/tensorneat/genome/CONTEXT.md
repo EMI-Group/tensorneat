@@ -12,7 +12,8 @@ Two arrays per gene type, batch-first, static shapes, no NaN in integers:
 `fixed_attrs` (key columns) are integers and stay integers; `custom_attrs` are floats and stay floats.
 There is **no bitcast** float↔int in evoxc, so a single mixed-dtype row is impossible: the payload is split into a key array and an attr array, which is why genetic operators twiddle integer `*_keys` while only `*_attrs` does float arithmetic.
 `attr_width == 0` is a supported configuration (HyperNEAT/CPPN): every attr-table helper is width-aware (`gene/base.py::has_attr`, `column_of(..., default)`, `blocks.*` early-return), a `(P, E, 0)` array flows through `execute_mutation`/`execute_crossover` unchanged, and the distance kernels return the structural term with an attribute distance of 0.
-Key/row invariant: `initialize` writes nodes in key order, so input keys are rows `0..num_inputs-1` and output keys are rows `max_nodes-num_outputs..max_nodes-1`, rows that are never deleted or moved, which is why `get_input_idx()`/`get_output_idx()` are usable as *row indices*.
+Key/row invariant: `initialize` writes nodes in key order, so input keys are rows `0..num_inputs-1` and output keys are rows `max_nodes-num_outputs..max_nodes-1`, rows that are never deleted or moved.
+That layout is this genome's *template*, never the read-out rule: the schedule resolves the output keys to slots (`Transformed.output_slot`) and the forward reads those, so a payload ordered inputs, outputs, hidden (a substrate executor) is read correctly, while `get_input_idx()`/`get_output_idx()` describe only the template rows.
 Hidden node keys are arbitrary and may move rows; always compare keys (`node_keys`), never row positions, for graph identity.
 Padding sentinels never mix: `I_INF` (`int32` max) for "no index", float NaN for "no value" and for "unconnected node value".
 ## Genome API (batch-first, population on axis 0)
