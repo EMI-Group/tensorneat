@@ -233,7 +233,8 @@ The mandatory `select(mask, z, 0.0)` on `(P, N, K)` is the single most expensive
 ## API Surface
 ### `state.py`
 `State(**kwargs)` — immutable host container over a dict; `register/update/remove` return new `State`s (raise on duplicate/missing keys); `__getattr__` raises `KeyError` for a missing key; `save(file_name)`/`load(file_name)` pickle it; `tree_flatten`/`tree_unflatten` + `evoxc.register_pytree_node` registration so it can cross a graph boundary.
-`StatefulBaseClass` in `stateful_class.py` — `setup(state) -> State`, `show_config(registered_objects=None) -> dict` for pipeline logging (host-only).
+`StatefulBaseClass` in `stateful_class.py` — `setup(state) -> State`, plus `show_config(registered_objects=None) -> dict` (generic `__dict__` walk, `str(value)` per leaf) whose *only* caller is the test suite: `Pipeline.show_config` renders the run header through `host_payload._object_config` and never calls it.
+`State.__getattr__` raises `KeyError` (deliberate, so `hasattr` cannot swallow a typo), which also means `copy.copy`/`copy.deepcopy` fail on a `State`: both probe `getattr(x, "__copy__"/"__deepcopy__", None)` and a non-`AttributeError` escapes, so a caller that wants a copy rebuilds through `register`/`update` or pickles it.
 
 ### `errors.py`
 `TensorNEATError(Exception)` root; subclasses `ConfigError`, `ShapeBoundError` (a static schedule bound was exceeded: `max_in_degree`, `key_span`, `max_conns`), `GraphError` (cycle where feedforward is required, missing input/output node). Backend/shape errors from evoxc are **never** re-wrapped; only validation raises these.
