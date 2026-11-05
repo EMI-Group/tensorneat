@@ -160,8 +160,9 @@ What is *not* hoistable is anything derived from the centre payload: `_pack`, th
 | `prepare` (both families: dense fields, `oor`, both statics bundles) | 163 | 2.63 | 4.13 |
 | `prepare` + `measure` (P-row centre, merge) | 256 | 5.19 | 8.56 |
 | `measure` marginal, merge route (the tiled centre the pipeline sends) | 93 | 2.56–2.62 | 4.33–4.43 |
-| `measure` marginal, batch-1 centre (dense route) | 106 | 1.38 | 2.03 |
+| `measure` marginal, batch-1 centre (dense route) | 108 | 1.39–1.44 | 2.03–2.09 |
 | `execute_distance` (pair-wise, unchanged contract) | 225 | | |
+The dense row is post-merged-table: the owner scatter and the attribute scatter collapsed into one (+0), the owner gather and the attribute gather collapsed into one (−1), the owner column read + its `float32 → int32` cast (+2), the attribute `reshape` + update `concatenate` (+2), the attribute block now read as a `slice` of the gathered table (+1), and the marker table's scatter + gather replaced by one `concatenate` + one gather (net 0, and only for a key width past `_FOLDED_KEYS`) — 102 → 108 traced ops on the evolved pop-500 payload, still far under `MEASURE_OP_CEILING = 120`, with the merge's 93 untouched and `prepare` unchanged at 163.
 The op counts are independent of `P` (identical at pop 100 / 500 / 1000), counted recursively over `module.functions[*].entry_block` and every `op.regions` body with terminators included.
 The op-nodes-only convention `test/unit/genome/test_distance_digest.py` asserts on reads 163 / 256 / 93 / 224, and its ceilings are `PREPARE_OP_CEILING = 210` / `MEASURE_OP_CEILING = 120`.
 Per-call milliseconds are medians of 7 timed `evoxc.run` of a `prepare`-once + 6×`measure` body, per-call taken as `(total − prepare)/6`; the merge cell is the range over the harness's two routes, because the box drifts ±30 % between sessions — the ratio to `prepare` and to the dense route is the load-bearing number, never the absolute.
