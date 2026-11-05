@@ -148,6 +148,7 @@ The reproduce block names the record the report was rendered from: a record that
 - Harness-internal quirks (unused `n_errors`/`meta.impls`, `OldAdapter.display`/`Adapter.display` read by nothing, bare `harness.*` imports, the hand-maintained `PARITY_TEST_COUNT`, the `inf`-to-`null` asymmetry) are recorded in `./harness/CONTEXT.md` `## Known Issues`.
 ## Constraints
 - Python >= 3.11; harness dependencies are stdlib + `numpy` (plus `jax` on the old side only, via the `bench` extra).
+- The compiled legs need `uv sync --extra iree`, which resolves IREE 3.13.0 (IREE 3.10/3.11 aborted in the HIP HAL on any while/scan loop, which is why an older session had no rocm row); `O2`/`O3` SIGSEGV inside `iree-compile` on this graph, so every shipped compiled record is the default opt level, `O0` or `O1`.
 - Never edit `legacy_jax/` — a moving baseline makes every number meaningless.
 - Never hand-edit a generated report or a committed record; a document that needs a scope line gets it from `--report-title`/`--report-note` at render time, and `--persist-note` stores it in the record so later renders keep it.
 - Quote no number without the tree or session it came from: `RESULTS.md`, `THREADS.md`, `iree.md`, `BACKENDS.md`, `GPU.md` and `PERF_NUMPY.md` each describe a different tree, and only a fresh harness run may be described as HEAD.
