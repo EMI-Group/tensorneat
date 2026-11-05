@@ -70,7 +70,7 @@ Exactly one `evoxc.random.split` happens at the pipeline boundary per generation
 ## Checkpoint Layout (`is_save=True`, written by `setup`/`auto_run`)
 `config.txt` — `json.dumps(show_config(), indent=4)`, a deterministic description of the run: `host_payload._object_config` names each gene/operator by its class path plus its public primitive attributes (the mutation gates `conn_add`/`conn_delete`/`node_add`/`node_delete`, the gene attribute laws, the crossover/distance classes) and renders callables such as `input_transform`/`output_transform` by their qualified name, so two identical runs write identical bytes and no memory address ever reaches the file.
 `log.txt` — header `Generation,Max,Min,Mean,Std,Cost Time`, then one row per generation.
-`genomes/<generation>.npz` and `genomes/best_genome.npz` — `node_keys`, `node_attrs`, `conn_keys`, `conn_attrs` and `fitness`, one individual per file: the batch-first payload flattened (no population axis), so `np.load` round-trips to a payload `show` accepts and re-scores to its recorded fitness.
+`genomes/<generation>.npz` and `genomes/best_genome.npz` — `node_keys`, `node_attrs`, `conn_keys`, `conn_attrs` and `fitness`, one individual per file: the batch-first payload flattened (no population axis). The four arrays round-trip to a payload `show`/`network_dict` accept (bare rows) and re-score to the recorded fitness; the `fitness` entry must be dropped first, because `_one_individual` requires exactly four fields (`dict(np.load(path))` has five and is rejected).
 `best_genome.npz` is omitted when no generation produced a finite fitness; a bare `step` loop writes no files (`auto_run`/`_analyse` is the writer).
 
 ## Measured Cost
