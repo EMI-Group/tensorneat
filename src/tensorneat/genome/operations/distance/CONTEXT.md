@@ -100,7 +100,7 @@ The two routes therefore agree on every payload whose keys respect the bound and
 The population side is checked through `node_oor`/`conn_oor` (a non-zero count lists the individuals and their counts), the centre side through its own present keys, each with `genome.key_span` and the two remedies — keep every allocated structural key inside `[0, key_span)`, or construct `DefaultDistance(dense_single_centre=False)`, whose merge matches any key exactly.
 The validation is pure NumPy, adds **zero** traced ops, and runs before the hook emits an op, which is what lets a host call answer `TensorNEATError` instead of a backend `TypeError`.
 Inside a trace a value-dependent raise is impossible, so the guard is a host-call guarantee only.
-The durable fix belongs to `algorithm/`: keep structurally allocated keys below `genome.key_span`.
+The live allocator already satisfies it: `algorithm/neat/_keys.py::node_keys_for_split` wraps every allocated key into `[max_nodes, key_span)`, and the digest's own counters measure `node_oor == conn_oor == 0` at **every generation 0-39** of eight cells (XOR `p500` seeds 0/1/42/43/44, `p100` seed 0, `p1000` seed 0, XOR3d `p500` seed 42) with the worst present node and connection key **149** against `key_span = 150`, so no live payload reaches this guard.
 
 ## Digest fields (batch-first, static shapes)
 `node_keys (P, N) int64` / `conn_keys (P, E) int64` — **injective** packed composite per gene row, ascending with the padding sentinel last.
