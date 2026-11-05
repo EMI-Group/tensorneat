@@ -726,7 +726,9 @@ def test_the_bake_time_check_rejects_an_oversized_dataset(
 # --------------------------------------------------------------------------- #
 
 
-def test_show_prints_one_block_per_individual(problem, state, enp, evoxc_key, fake_schedule, capsys):
+def test_show_prints_one_block_per_individual(
+    problem, state, enp, evoxc_key, fake_schedule, capsys
+):
     """Invariant: ``show`` accepts any static ``P`` and labels each individual's block.
 
     Oracle: the documented report -- "one row per sample plus the loss ... the

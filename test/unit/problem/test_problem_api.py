@@ -495,7 +495,7 @@ def test_build_options_reads_the_registered_selection(problem, common):
     build_options = problem.base.build_options
 
     assert build_options(common.State()) == {"backend": "numpy"}
-    assert build_options(common.State(backend="irep")) == {"backend": "irep"}
+    assert build_options(common.State(backend="iree")) == {"backend": "iree"}
     # A registered ``device=None`` is dropped rather than forwarded.
     assert build_options(common.State(backend="numpy", device=None)) == {
         "backend": "numpy"
@@ -510,8 +510,8 @@ def test_build_options_reads_the_registered_selection(problem, common):
         "foo": 1,
     }
     assert build_options(
-        common.State(backend="irep", device="cpu", compile_options={"bar": 2})
-    ) == {"backend": "irep", "device": "cpu", "bar": 2}
+        common.State(backend="iree", device="cpu", compile_options={"bar": 2})
+    ) == {"backend": "iree", "device": "cpu", "bar": 2}
 
 
 @pytest.mark.parametrize(
