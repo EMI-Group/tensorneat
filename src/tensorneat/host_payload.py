@@ -35,6 +35,8 @@ __all__ = [
     "_NetworkActFn",
     "_config_value",
     "_declared_shape",
+    "_formulation_signature",
+    "_formulation_statics",
     "_jsonable",
     "_object_config",
     "_one_individual",
@@ -327,6 +329,89 @@ def _finite_fitness(fitnesses: Any) -> np.ndarray:
     """
     values = np.asarray(fitnesses)
     return np.where(np.isfinite(values), values, -np.inf)
+
+
+#: Device kinds whose kernels take the GPU-friendly formulation: the GPU admits
+#: wide batches far better than it admits the merge/sort expansion of the
+#: compatibility distance, so these kinds ask for an index-free kernel over the
+#: population-shaped centre batch.
+_GPU_DEVICE_KINDS: tuple[str, ...] = ("rocm", "hip", "hips", "cuda", "vulkan", "gpu")
+
+#: ``(distance_centre, distance_formulation)`` a GPU-class kind registers.
+_GPU_FORMULATION: tuple[str, str] = ("tiled", "index_free")
+
+#: The pair every other kind registers -- the host leg where the merge kernel is
+#: the measured winner and one centre per call keeps element volume down.
+_HOST_FORMULATION: tuple[str, str] = ("single", "merge")
+
+#: What a *missing* formulation static means: the kernels themselves fall back to
+#: this pair, so a hand-built ``State`` (one no ``Pipeline.setup`` produced) keeps
+#: the legacy contract.
+_DEFAULT_DISTANCE_CENTRE = "tiled"
+_DEFAULT_DISTANCE_FORMULATION = "merge"
+
+
+def _device_kind(device: Any) -> Optional[str]:
+    """The resolved *kind* of ``device``, spelled the way ``evoxc`` resolves it.
+
+    ``Pipeline._placement_device`` maps ``None`` to "no device", a kind string to
+    ``evoxc.Device(kind)`` and an ``evoxc.Device`` to itself; the kind is
+    therefore the string itself or the device's ``kind`` field.  A value carrying
+    no string kind is reported as ``None`` (the non-GPU default) instead of
+    raising: the placement itself hands such a value to ``evoxc``'s own
+    ``Tensor.to``, whose ``TypeError`` names the real problem.
+    """
+    if device is None:
+        return None
+    if isinstance(device, str):
+        return device
+    kind = getattr(device, "kind", None)
+    return kind if isinstance(kind, str) else None
+
+
+def _formulation_statics(device: Any) -> tuple[str, str]:
+    """The ``(distance_centre, distance_formulation)`` statics ``device`` selects.
+
+    These are trace-time kernel selections, not tensors: they are registered on the
+    state as plain strings and baked into the generation graph by the pipeline's
+    static-config pass.  A GPU-class kind (:data:`_GPU_DEVICE_KINDS`) asks for the
+    index-free formulation over the population-shaped centre batch
+    (:data:`_GPU_FORMULATION`); every other kind -- including ``None`` -- keeps the
+    host pair (:data:`_HOST_FORMULATION`).  The comparison is case-insensitive
+    because ``evoxc`` stores a kind string verbatim.
+
+    Args:
+        device (Any): The pipeline's device selection: ``None``, a kind string or
+            an ``evoxc.Device``.
+
+    Returns:
+        tuple: ``("tiled" | "single", "index_free" | "merge")``.
+    """
+    kind = _device_kind(device)
+    if isinstance(kind, str) and kind.lower() in _GPU_DEVICE_KINDS:
+        return _GPU_FORMULATION
+    return _HOST_FORMULATION
+
+
+def _formulation_signature(state: Any) -> tuple[str, str]:
+    """The formulation statics of ``state``, defaulted to the legacy contract.
+
+    Part of the executable-cache key: the pair changes which kernels the graph
+    formulates, so reusing an executable across a device/mode change would run the
+    wrong formulation.  A state no ``Pipeline.setup`` produced falls back to the
+    same pair the kernels themselves fall back to
+    (:data:`_DEFAULT_DISTANCE_CENTRE` / :data:`_DEFAULT_DISTANCE_FORMULATION`).
+
+    Args:
+        state (Any): A state carrying the statics, or any object without them.
+
+    Returns:
+        tuple: ``(distance_centre, distance_formulation)``.
+    """
+    return (
+        getattr(state, "distance_centre", _DEFAULT_DISTANCE_CENTRE),
+        getattr(state, "distance_formulation", _DEFAULT_DISTANCE_FORMULATION),
+    )
 
 
 def _substrate_signature(algorithm: Any) -> tuple[Any, ...]:
