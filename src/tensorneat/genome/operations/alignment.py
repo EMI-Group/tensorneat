@@ -492,6 +492,17 @@ def find_homologous(
     ``historical_marker`` when the gene declares one), so the answer is independent of the
     row a gene happens to occupy — parent 2's rows may be in any order.
 
+    Role: this is the module's exported **reference form** of the homologue table — the
+    readable ``I_INF``-marked row index, an ``__all__`` name and the form the tests pin
+    against a pure-Python ``{key tuple: row}`` oracle.  Its in-library callers are the
+    pair-wise distance route (:meth:`~.distance.default.DefaultDistance.gene_distance`,
+    reached through :meth:`~tensorneat.genome.base.BaseGenome.execute_distance`) and
+    :meth:`~.crossover.default.DefaultCrossover.find_homologous` (which only
+    ``test/unit/genome/test_crossover.py`` drives); the generation hot path is crossover,
+    and it calls :func:`homologous_pair` — the same merge, the same table, returned as
+    ``(rows, present)`` without the ``I_INF`` ``select`` and without the redirect — so a new
+    compute caller wants that one and this stays the reference read-out.
+
     Args:
         keys1 (evoxc.SymbolicTensor): ``(P, M, K)`` ``int32`` key columns of parent 1,
             ``I_INF`` padded.
