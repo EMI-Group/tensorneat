@@ -622,7 +622,9 @@ def dense_slot(
 
     Notes:
         The documented two-value spelling of :func:`dense_rows`, kept for callers that want the
-        slot and the in-range mask without the presence mask.
+        slot and the in-range mask without the presence mask.  Public with **no in-library
+        caller today**: the live fast path calls :func:`dense_rows` directly, because it also
+        needs the presence mask that starts the gene count.
     """
     slot, real, _ = dense_rows(gene, key_span, keys, pool)
     return slot, real
