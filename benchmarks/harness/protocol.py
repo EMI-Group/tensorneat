@@ -84,6 +84,7 @@ GIT_DIRTY_PATHS: tuple[str, ...] = (
     "benchmarks/cases.py",
     "benchmarks/run_benchmark.py",
     "benchmarks/backend_measure.py",
+    "benchmarks/gpu_measure.py",
     "test",
     "pyproject.toml",
     "uv.lock",
@@ -92,7 +93,8 @@ GIT_DIRTY_PATHS: tuple[str, ...] = (
 """The *code under test*: only a change here makes the fingerprint ``git_dirty``.
 
 ``benchmarks/harness`` covers ``benchmarks/harness/worker.py`` and the rest of the harness;
-``benchmarks/backend_measure.py`` is the standalone protocol behind ``benchmarks/BACKENDS.md``;
+``benchmarks/backend_measure.py`` is the standalone protocol behind ``benchmarks/BACKENDS.md``,
+and ``benchmarks/gpu_measure.py`` the accelerator protocol behind ``benchmarks/GPU.md``;
 ``pyproject.toml``, ``uv.lock`` and ``.python-version`` are the dependency and interpreter pins,
 so a lock-only change still measures a different environment. Everything else (report text,
 generated JSON, spikes) is measurement output, not an input of the measurement, so a harness
@@ -106,9 +108,14 @@ GIT_EVIDENCE_PATHS: tuple[str, ...] = (
     "benchmarks/iree.md",
     "benchmarks/results",
     "benchmarks/BACKENDS.md",
+    "benchmarks/GPU.md",
     "benchmarks/spikes",
 )
-"""Generated evidence, explicitly outside :data:`GIT_DIRTY_PATHS` even if a scope ever widens."""
+"""Generated evidence, explicitly outside :data:`GIT_DIRTY_PATHS` even if a scope ever widens.
+
+``benchmarks/GPU.md`` is hand-written but carries the block ``benchmarks/gpu_measure.py``
+renders, so it is evidence, never an input of the measurement.
+"""
 
 GIT_DIRTY_PATH_LIMIT = 5
 """How many offending paths the report names before it says ``+N more``."""

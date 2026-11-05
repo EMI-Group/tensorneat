@@ -1,0 +1,2489 @@
+{
+  "schema": "tensorneat-gpu/1",
+  "meta": {
+    "command": "/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/bin/python benchmarks/gpu_measure.py matrix --cases xor_p100,xor_p500,xor3d_p500 --targets numpy,iree-llvm-cpu,iree-rocm --warmup 3 --generations 10 --trace 14 --seed 42 --json benchmarks/results/gpu_2026-11-05.json --out benchmarks/GPU.md",
+    "report_title": "TensorNEAT accelerator measurement \u2014 numpy / iree llvm-cpu / iree rocm",
+    "report_note": null,
+    "created_utc": "2026-11-05T11:14:24+00:00",
+    "session_utc": {
+      "start": "2026-11-05T11:14:24+00:00",
+      "end": "2026-11-05T11:30:03+00:00"
+    },
+    "protocol": {
+      "one_configuration_per_process": true,
+      "rows_strictly_sequential": true,
+      "warmup_generations": 3,
+      "timed_generations": 10,
+      "seed": 42,
+      "compile_measured_separately": true,
+      "build_charged_to_a_generation": false,
+      "timing_clock": "time.perf_counter() wall clock around each step() call, including host materialisation of the result",
+      "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark",
+      "logging_in_timed_region": false,
+      "cross_check_enabled": true,
+      "cross_check_reference": "numpy",
+      "trajectory_generations": 14,
+      "float_rtol": 1e-05,
+      "float_atol": 1e-06,
+      "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+    },
+    "cases": [
+      "xor_p100",
+      "xor_p500",
+      "xor3d_p500"
+    ],
+    "targets": [
+      "numpy",
+      "iree-llvm-cpu",
+      "iree-rocm"
+    ],
+    "env": {
+      "python": "3.12.3",
+      "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+      "machine": "x86_64",
+      "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+      "cpu_count": 20,
+      "memory_mb": 241611,
+      "numpy": "2.5.4",
+      "jax": null,
+      "evoxc": "0.1.0",
+      "tensorneat": "0.2.0",
+      "threads": null,
+      "thread_env": {
+        "OMP_NUM_THREADS": null,
+        "MKL_NUM_THREADS": null,
+        "OPENBLAS_NUM_THREADS": null,
+        "NUMEXPR_NUM_THREADS": null,
+        "XLA_FLAGS": null
+      },
+      "loadavg": [
+        1.81,
+        2.31,
+        2.44
+      ],
+      "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
+      "git_dirty": false,
+      "git_dirty_paths": [],
+      "probe_error": null,
+      "iree": {
+        "compiler": "3.11.0",
+        "runtime": "3.11.0",
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "gpu": {
+        "rocm_version": "7.1.0",
+        "rocm_smi": {
+          "gpu_model": "AMD Instinct MI300X VF",
+          "gfx_version": "gfx942",
+          "driver_version": "6.16.6"
+        },
+        "rocm_smi_error": null
+      }
+    }
+  },
+  "records": [
+    {
+      "case": "xor_p100",
+      "target": "numpy",
+      "backend": "numpy",
+      "device": null,
+      "device_index": null,
+      "compile_options": null,
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 10,
+      "protocol": {
+        "one_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_generations": 3,
+        "timed_generations": 10,
+        "seed": 42,
+        "compile_measured_separately": true,
+        "build_charged_to_a_generation": false,
+        "timing_clock": "time.perf_counter() wall clock around each step() call, including host materialisation of the result",
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark",
+        "logging_in_timed_region": false,
+        "cross_check_enabled": true,
+        "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-05T11:14:24+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": null,
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          4.02,
+          3.19,
+          2.53
+        ],
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.11.0",
+          "runtime": "3.11.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "numpy",
+        "backend": "numpy",
+        "device": null,
+        "device_index": null,
+        "compile_options": null,
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 0.015081,
+      "first_step_s": 0.334931,
+      "build_s": 0.284492,
+      "peak_rss_mib": 161.68,
+      "ms_per_generation": {
+        "mean": 43.6986,
+        "median": 41.646,
+        "min": 40.368,
+        "max": 48.5054,
+        "samples": [
+          40.445,
+          40.568,
+          40.368,
+          40.818,
+          40.9064,
+          42.3856,
+          46.8737,
+          47.9985,
+          48.1171,
+          48.5054
+        ]
+      },
+      "generations_per_second": 22.884,
+      "final_generation": 14,
+      "final_max_fitness": -0.23382315039634705,
+      "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      }
+    },
+    {
+      "case": "xor_p100",
+      "target": "iree-llvm-cpu",
+      "backend": "iree",
+      "device": null,
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "llvm-cpu"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 10,
+      "protocol": {
+        "one_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_generations": 3,
+        "timed_generations": 10,
+        "seed": 42,
+        "compile_measured_separately": true,
+        "build_charged_to_a_generation": false,
+        "timing_clock": "time.perf_counter() wall clock around each step() call, including host materialisation of the result",
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark",
+        "logging_in_timed_region": false,
+        "cross_check_enabled": true,
+        "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-05T11:14:26+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": null,
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          4.02,
+          3.19,
+          2.53
+        ],
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.11.0",
+          "runtime": "3.11.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-llvm-cpu",
+        "backend": "iree",
+        "device": null,
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "llvm-cpu"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 0.974089,
+      "first_step_s": 8.723703,
+      "build_s": 8.506463,
+      "peak_rss_mib": 150.35,
+      "ms_per_generation": {
+        "mean": 608.4558,
+        "median": 428.8114,
+        "min": 363.0508,
+        "max": 1026.009,
+        "samples": [
+          368.5902,
+          376.0781,
+          363.0508,
+          382.3213,
+          392.5784,
+          465.0444,
+          773.9097,
+          957.5983,
+          979.3775,
+          1026.009
+        ]
+      },
+      "generations_per_second": 1.6435,
+      "final_generation": 14,
+      "final_max_fitness": -0.23382315039634705,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "pass",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.384185791015625e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.384185791015625e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 5.960464477539063e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.384185791015625e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.384185791015625e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.9802322387695312e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "reference_build_s": 0.332871
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "ok",
+        "generations": [
+          {
+            "generation": 1,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 2.384185791015625e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25321489572525024,
+            "max_fitness_accelerated": -0.25321489572525024,
+            "species_count_numpy": 1,
+            "species_count_accelerated": 1
+          },
+          {
+            "generation": 2,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25079455971717834,
+            "max_fitness_accelerated": -0.25079455971717834,
+            "species_count_numpy": 1,
+            "species_count_accelerated": 1
+          },
+          {
+            "generation": 3,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 6.705522537231445e-08,
+            "conn_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25010108947753906,
+            "max_fitness_accelerated": -0.25010108947753906,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 4,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.086162567138672e-07,
+            "conn_attrs_max_abs_diff": 1.341104507446289e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 2.9802322387695312e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2500501871109009,
+            "max_fitness_accelerated": -0.2500501871109009,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 5,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24991881847381592,
+            "max_fitness_accelerated": -0.2499188482761383,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 6,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24962933361530304,
+            "max_fitness_accelerated": -0.24962931871414185,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 7,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.7881393432617188e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2487148940563202,
+            "max_fitness_accelerated": -0.2487148940563202,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 8,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 2.384185791015625e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24767453968524933,
+            "max_fitness_accelerated": -0.24767453968524933,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 9,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24659186601638794,
+            "max_fitness_accelerated": -0.24659189581871033,
+            "species_count_numpy": 2,
+            "species_count_accelerated": 2
+          },
+          {
+            "generation": 10,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.7881393432617188e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24552729725837708,
+            "max_fitness_accelerated": -0.24552729725837708,
+            "species_count_numpy": 3,
+            "species_count_accelerated": 3
+          },
+          {
+            "generation": 11,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 2.384185791015625e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24367329478263855,
+            "max_fitness_accelerated": -0.24367330968379974,
+            "species_count_numpy": 6,
+            "species_count_accelerated": 6
+          },
+          {
+            "generation": 12,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.7881393432617188e-07,
+            "conn_attrs_max_abs_diff": 3.5762786865234375e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2412681132555008,
+            "max_fitness_accelerated": -0.2412681132555008,
+            "species_count_numpy": 6,
+            "species_count_accelerated": 6
+          },
+          {
+            "generation": 13,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 1.7881393432617188e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.23712937533855438,
+            "max_fitness_accelerated": -0.23712937533855438,
+            "species_count_numpy": 6,
+            "species_count_accelerated": 6
+          },
+          {
+            "generation": 14,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 2.384185791015625e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 2.9802322387695312e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.23382315039634705,
+            "max_fitness_accelerated": -0.23382315039634705,
+            "species_count_numpy": 6,
+            "species_count_accelerated": 6
+          }
+        ],
+        "first_key_divergence": null,
+        "first_float_exceedance": null,
+        "trace_s": 17.666685
+      }
+    },
+    {
+      "case": "xor_p100",
+      "target": "iree-rocm",
+      "backend": "iree",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "rocm"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 10,
+      "protocol": {
+        "one_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_generations": 3,
+        "timed_generations": 10,
+        "seed": 42,
+        "compile_measured_separately": true,
+        "build_charged_to_a_generation": false,
+        "timing_clock": "time.perf_counter() wall clock around each step() call, including host materialisation of the result",
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark",
+        "logging_in_timed_region": false,
+        "cross_check_enabled": true,
+        "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 580, in measure_row\n    _measure(_tensorneat(), case, plan, args, record)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 496, in _measure\n    state = pipeline.setup()\n            ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/pipeline.py\", line 417, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/algorithm/neat/neat.py\", line 365, in setup\n    payload, next_key, generation, species_state = evoxc.run(\n                                                   ^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1467, in run\n    flat_tensors = _prepare_flat_inputs(\n                   ^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1286, in _prepare_flat_inputs\n    _check_run_device(tensor, expected_device, path)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1110, in _check_run_device\n    raise core.DeviceError(\nevoxc.core.errors.DeviceError: input at path [0] is on device Device(kind='cpu', index=0), but the executable runs on device Device(kind='rocm', index=0): no implicit device-to-host or host-to-device transfer happens at the run boundary \u2014 move the tensor to the executable's device explicitly via t.to(Device(kind='rocm', index=0))\n",
+      "timestamp_utc": "2026-11-05T11:15:02+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": null,
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          3.06,
+          3.04,
+          2.51
+        ],
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.11.0",
+          "runtime": "3.11.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-rocm",
+        "backend": "iree",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "rocm"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 1.257297,
+      "setup_failed": true
+    },
+    {
+      "case": "xor_p500",
+      "target": "numpy",
+      "backend": "numpy",
+      "device": null,
+      "device_index": null,
+      "compile_options": null,
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 10,
+      "protocol": {
+        "one_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_generations": 3,
+        "timed_generations": 10,
+        "seed": 42,
+        "compile_measured_separately": true,
+        "build_charged_to_a_generation": false,
+        "timing_clock": "time.perf_counter() wall clock around each step() call, including host materialisation of the result",
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark",
+        "logging_in_timed_region": false,
+        "cross_check_enabled": true,
+        "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-05T11:15:03+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": null,
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          3.06,
+          3.04,
+          2.51
+        ],
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.11.0",
+          "runtime": "3.11.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "numpy",
+        "backend": "numpy",
+        "device": null,
+        "device_index": null,
+        "compile_options": null,
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 0.015908,
+      "first_step_s": 0.545622,
+      "build_s": 0.342612,
+      "peak_rss_mib": 281.56,
+      "ms_per_generation": {
+        "mean": 182.0658,
+        "median": 184.2224,
+        "min": 174.3565,
+        "max": 187.1588,
+        "samples": [
+          174.9376,
+          184.3518,
+          185.3674,
+          174.3565,
+          184.093,
+          187.1031,
+          175.3892,
+          181.1065,
+          186.7943,
+          187.1588
+        ]
+      },
+      "generations_per_second": 5.4925,
+      "final_generation": 14,
+      "final_max_fitness": -0.22459709644317627,
+      "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      }
+    },
+    {
+      "case": "xor_p500",
+      "target": "iree-llvm-cpu",
+      "backend": "iree",
+      "device": null,
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "llvm-cpu"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 10,
+      "protocol": {
+        "one_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_generations": 3,
+        "timed_generations": 10,
+        "seed": 42,
+        "compile_measured_separately": true,
+        "build_charged_to_a_generation": false,
+        "timing_clock": "time.perf_counter() wall clock around each step() call, including host materialisation of the result",
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark",
+        "logging_in_timed_region": false,
+        "cross_check_enabled": true,
+        "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-05T11:15:07+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": null,
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          2.89,
+          3.0,
+          2.5
+        ],
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.11.0",
+          "runtime": "3.11.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-llvm-cpu",
+        "backend": "iree",
+        "device": null,
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "llvm-cpu"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 1.02051,
+      "first_step_s": 23.700224,
+      "build_s": 9.045476,
+      "peak_rss_mib": 194.95,
+      "ms_per_generation": {
+        "mean": 14925.7706,
+        "median": 14912.7989,
+        "min": 14656.6265,
+        "max": 15199.4292,
+        "samples": [
+          15094.6342,
+          15199.4292,
+          14972.5524,
+          15168.3053,
+          14774.7711,
+          14903.4193,
+          14827.72,
+          14922.1786,
+          14656.6265,
+          14738.0695
+        ]
+      },
+      "generations_per_second": 0.067,
+      "final_generation": 14,
+      "final_max_fitness": -0.22459709644317627,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 4.76837158203125e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.9383227229118347e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 5.960464477539063e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "node_keys",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 578,
+              "status": "fail"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 1858,
+              "status": "fail"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 1212,
+              "non_finite_mismatches": 1212,
+              "max_abs_diff": 2.506511688232422,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 528,
+              "non_finite_mismatches": 528,
+              "max_abs_diff": 4.956173896789551,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 9,
+              "non_finite_mismatches": 9,
+              "max_abs_diff": 0.09026885032653809,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.366957
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "ok",
+        "generations": [
+          {
+            "generation": 1,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 4.76837158203125e-07,
+            "conn_attrs_max_abs_diff": 2.9383227229118347e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2502514719963074,
+            "max_fitness_accelerated": -0.2502514719963074,
+            "species_count_numpy": 1,
+            "species_count_accelerated": 1
+          },
+          {
+            "generation": 2,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 1.1920928955078125e-07,
+            "conn_attrs_max_abs_diff": 2.384185791015625e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25001654028892517,
+            "max_fitness_accelerated": -0.2500165104866028,
+            "species_count_numpy": 6,
+            "species_count_accelerated": 6
+          },
+          {
+            "generation": 3,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 3.5762786865234375e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 8.940696716308594e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25000709295272827,
+            "max_fitness_accelerated": -0.25000709295272827,
+            "species_count_numpy": 16,
+            "species_count_accelerated": 16
+          },
+          {
+            "generation": 4,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.086162567138672e-07,
+            "conn_attrs_max_abs_diff": 1.601874828338623e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25000128149986267,
+            "max_fitness_accelerated": -0.25000128149986267,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 5,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 0.4029029607772827,
+            "conn_attrs_max_abs_diff": 0.0030840933322906494,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 0.004423260688781738,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24982260167598724,
+            "max_fitness_accelerated": -0.24982257187366486,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 6,
+            "node_keys_mismatches": 31,
+            "conn_keys_mismatches": 66,
+            "node_attrs_max_abs_diff": 0.5083773136138916,
+            "conn_attrs_max_abs_diff": 1.9760410785675049,
+            "attr_nan_mask_mismatches": 7,
+            "fitness_max_abs_diff": 0.005131155252456665,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2487347573041916,
+            "max_fitness_accelerated": -0.2487347573041916,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 7,
+            "node_keys_mismatches": 159,
+            "conn_keys_mismatches": 439,
+            "node_attrs_max_abs_diff": 1.2457993030548096,
+            "conn_attrs_max_abs_diff": 1.0144026279449463,
+            "attr_nan_mask_mismatches": 444,
+            "fitness_max_abs_diff": 0.014755278825759888,
+            "fitness_mask_mismatches": 1,
+            "max_fitness_numpy": -0.24746105074882507,
+            "max_fitness_accelerated": -0.24746108055114746,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 8,
+            "node_keys_mismatches": 237,
+            "conn_keys_mismatches": 845,
+            "node_attrs_max_abs_diff": 1.4949676990509033,
+            "conn_attrs_max_abs_diff": 4.65156364440918,
+            "attr_nan_mask_mismatches": 843,
+            "fitness_max_abs_diff": 0.08244466781616211,
+            "fitness_mask_mismatches": 4,
+            "max_fitness_numpy": -0.24391770362854004,
+            "max_fitness_accelerated": -0.24391768872737885,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 9,
+            "node_keys_mismatches": 425,
+            "conn_keys_mismatches": 1436,
+            "node_attrs_max_abs_diff": 1.5959917306900024,
+            "conn_attrs_max_abs_diff": 4.251160621643066,
+            "attr_nan_mask_mismatches": 1282,
+            "fitness_max_abs_diff": 0.10029491782188416,
+            "fitness_mask_mismatches": 10,
+            "max_fitness_numpy": -0.24132028222084045,
+            "max_fitness_accelerated": -0.24132028222084045,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 10,
+            "node_keys_mismatches": 411,
+            "conn_keys_mismatches": 1302,
+            "node_attrs_max_abs_diff": 1.7725266218185425,
+            "conn_attrs_max_abs_diff": 4.653420925140381,
+            "attr_nan_mask_mismatches": 1056,
+            "fitness_max_abs_diff": 0.033620208501815796,
+            "fitness_mask_mismatches": 8,
+            "max_fitness_numpy": -0.24065667390823364,
+            "max_fitness_accelerated": -0.24065667390823364,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 11,
+            "node_keys_mismatches": 547,
+            "conn_keys_mismatches": 1944,
+            "node_attrs_max_abs_diff": 2.092477321624756,
+            "conn_attrs_max_abs_diff": 4.572396278381348,
+            "attr_nan_mask_mismatches": 1585,
+            "fitness_max_abs_diff": 0.09689486026763916,
+            "fitness_mask_mismatches": 13,
+            "max_fitness_numpy": -0.23786675930023193,
+            "max_fitness_accelerated": -0.23786678910255432,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 12,
+            "node_keys_mismatches": 558,
+            "conn_keys_mismatches": 1945,
+            "node_attrs_max_abs_diff": 2.593549966812134,
+            "conn_attrs_max_abs_diff": 3.371931552886963,
+            "attr_nan_mask_mismatches": 1761,
+            "fitness_max_abs_diff": 0.10794708132743835,
+            "fitness_mask_mismatches": 15,
+            "max_fitness_numpy": -0.23363052308559418,
+            "max_fitness_accelerated": -0.23363052308559418,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 13,
+            "node_keys_mismatches": 533,
+            "conn_keys_mismatches": 1782,
+            "node_attrs_max_abs_diff": 4.043320178985596,
+            "conn_attrs_max_abs_diff": 4.658003807067871,
+            "attr_nan_mask_mismatches": 1340,
+            "fitness_max_abs_diff": 0.13059911131858826,
+            "fitness_mask_mismatches": 14,
+            "max_fitness_numpy": -0.22862720489501953,
+            "max_fitness_accelerated": -0.22862720489501953,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 14,
+            "node_keys_mismatches": 486,
+            "conn_keys_mismatches": 1850,
+            "node_attrs_max_abs_diff": 1.7246984243392944,
+            "conn_attrs_max_abs_diff": 4.736943244934082,
+            "attr_nan_mask_mismatches": 1340,
+            "fitness_max_abs_diff": 0.09026885032653809,
+            "fitness_mask_mismatches": 9,
+            "max_fitness_numpy": -0.22459709644317627,
+            "max_fitness_accelerated": -0.22459709644317627,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          }
+        ],
+        "first_key_divergence": 6,
+        "first_float_exceedance": 5,
+        "trace_s": 224.445933
+      }
+    },
+    {
+      "case": "xor_p500",
+      "target": "iree-rocm",
+      "backend": "iree",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "rocm"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 10,
+      "protocol": {
+        "one_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_generations": 3,
+        "timed_generations": 10,
+        "seed": 42,
+        "compile_measured_separately": true,
+        "build_charged_to_a_generation": false,
+        "timing_clock": "time.perf_counter() wall clock around each step() call, including host materialisation of the result",
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark",
+        "logging_in_timed_region": false,
+        "cross_check_enabled": true,
+        "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 580, in measure_row\n    _measure(_tensorneat(), case, plan, args, record)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 496, in _measure\n    state = pipeline.setup()\n            ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/pipeline.py\", line 417, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/algorithm/neat/neat.py\", line 365, in setup\n    payload, next_key, generation, species_state = evoxc.run(\n                                                   ^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1467, in run\n    flat_tensors = _prepare_flat_inputs(\n                   ^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1286, in _prepare_flat_inputs\n    _check_run_device(tensor, expected_device, path)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1110, in _check_run_device\n    raise core.DeviceError(\nevoxc.core.errors.DeviceError: input at path [0] is on device Device(kind='cpu', index=0), but the executable runs on device Device(kind='rocm', index=0): no implicit device-to-host or host-to-device transfer happens at the run boundary \u2014 move the tensor to the executable's device explicitly via t.to(Device(kind='rocm', index=0))\n",
+      "timestamp_utc": "2026-11-05T11:22:33+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": null,
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          4.08,
+          3.04,
+          2.57
+        ],
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.11.0",
+          "runtime": "3.11.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-rocm",
+        "backend": "iree",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "rocm"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 1.199439,
+      "setup_failed": true
+    },
+    {
+      "case": "xor3d_p500",
+      "target": "numpy",
+      "backend": "numpy",
+      "device": null,
+      "device_index": null,
+      "compile_options": null,
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 10,
+      "protocol": {
+        "one_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_generations": 3,
+        "timed_generations": 10,
+        "seed": 42,
+        "compile_measured_separately": true,
+        "build_charged_to_a_generation": false,
+        "timing_clock": "time.perf_counter() wall clock around each step() call, including host materialisation of the result",
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark",
+        "logging_in_timed_region": false,
+        "cross_check_enabled": true,
+        "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-05T11:22:35+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": null,
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          3.75,
+          2.99,
+          2.55
+        ],
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.11.0",
+          "runtime": "3.11.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "numpy",
+        "backend": "numpy",
+        "device": null,
+        "device_index": null,
+        "compile_options": null,
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor3d_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.05,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR3d",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 0.015443,
+      "first_step_s": 0.542153,
+      "build_s": 0.339243,
+      "peak_rss_mib": 289.64,
+      "ms_per_generation": {
+        "mean": 179.372,
+        "median": 180.0035,
+        "min": 164.2631,
+        "max": 187.2843,
+        "samples": [
+          164.2631,
+          172.4723,
+          186.368,
+          186.3097,
+          178.6067,
+          177.004,
+          179.6896,
+          180.3175,
+          181.4049,
+          187.2843
+        ]
+      },
+      "generations_per_second": 5.575,
+      "final_generation": 14,
+      "final_max_fitness": -0.24787002801895142,
+      "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      }
+    },
+    {
+      "case": "xor3d_p500",
+      "target": "iree-llvm-cpu",
+      "backend": "iree",
+      "device": null,
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "llvm-cpu"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 10,
+      "protocol": {
+        "one_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_generations": 3,
+        "timed_generations": 10,
+        "seed": 42,
+        "compile_measured_separately": true,
+        "build_charged_to_a_generation": false,
+        "timing_clock": "time.perf_counter() wall clock around each step() call, including host materialisation of the result",
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark",
+        "logging_in_timed_region": false,
+        "cross_check_enabled": true,
+        "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-05T11:22:39+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": null,
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          3.75,
+          2.99,
+          2.55
+        ],
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.11.0",
+          "runtime": "3.11.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-llvm-cpu",
+        "backend": "iree",
+        "device": null,
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "llvm-cpu"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor3d_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.05,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR3d",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 0.969538,
+      "first_step_s": 23.627886,
+      "build_s": 8.792136,
+      "peak_rss_mib": 197.15,
+      "ms_per_generation": {
+        "mean": 15022.0808,
+        "median": 15032.3699,
+        "min": 14637.2649,
+        "max": 15291.3366,
+        "samples": [
+          14807.791,
+          14637.2649,
+          15114.3064,
+          15220.665,
+          15291.3366,
+          15057.4576,
+          15007.2823,
+          15154.6806,
+          14934.1277,
+          14995.8963
+        ]
+      },
+      "generations_per_second": 0.0666,
+      "final_generation": 14,
+      "final_max_fitness": -0.24726730585098267,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 4.76837158203125e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.980232238769531e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 5.960464477539063e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "node_keys",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 850,
+              "status": "fail"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 3155,
+              "status": "fail"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 1936,
+              "non_finite_mismatches": 1936,
+              "max_abs_diff": 3.936978816986084,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 968,
+              "non_finite_mismatches": 968,
+              "max_abs_diff": 3.6745505332946777,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 18,
+              "non_finite_mismatches": 18,
+              "max_abs_diff": 0.060001105070114136,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.35099
+      },
+      "trajectory": {
+        "steps": 14,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "ok",
+        "generations": [
+          {
+            "generation": 1,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 4.76837158203125e-07,
+            "conn_attrs_max_abs_diff": 2.980232238769531e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2511712908744812,
+            "max_fitness_accelerated": -0.2511713206768036,
+            "species_count_numpy": 1,
+            "species_count_accelerated": 1
+          },
+          {
+            "generation": 2,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 3.5762786865234375e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25019359588623047,
+            "max_fitness_accelerated": -0.25019359588623047,
+            "species_count_numpy": 1,
+            "species_count_accelerated": 1
+          },
+          {
+            "generation": 3,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 3.5762786865234375e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2500112056732178,
+            "max_fitness_accelerated": -0.2500112056732178,
+            "species_count_numpy": 3,
+            "species_count_accelerated": 3
+          },
+          {
+            "generation": 4,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.086162567138672e-07,
+            "conn_attrs_max_abs_diff": 3.427267074584961e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 8.940696716308594e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.25000402331352234,
+            "max_fitness_accelerated": -0.25000402331352234,
+            "species_count_numpy": 3,
+            "species_count_accelerated": 3
+          },
+          {
+            "generation": 5,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 3.129243850708008e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2500014901161194,
+            "max_fitness_accelerated": -0.2500014901161194,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 6,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.384185791015625e-07,
+            "conn_attrs_max_abs_diff": 3.427267074584961e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 5.960464477539063e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2500004768371582,
+            "max_fitness_accelerated": -0.2500004470348358,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 7,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 2.5331974029541016e-07,
+            "conn_attrs_max_abs_diff": 3.2782554626464844e-07,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 2.9802322387695312e-08,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.2500002384185791,
+            "max_fitness_accelerated": -0.2500002086162567,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 8,
+            "node_keys_mismatches": 0,
+            "conn_keys_mismatches": 0,
+            "node_attrs_max_abs_diff": 0.27203139662742615,
+            "conn_attrs_max_abs_diff": 0.0576595664024353,
+            "attr_nan_mask_mismatches": 0,
+            "fitness_max_abs_diff": 0.0005397498607635498,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.249998539686203,
+            "max_fitness_accelerated": -0.24999850988388062,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 9,
+            "node_keys_mismatches": 85,
+            "conn_keys_mismatches": 250,
+            "node_attrs_max_abs_diff": 2.416074752807617,
+            "conn_attrs_max_abs_diff": 1.3782817125320435,
+            "attr_nan_mask_mismatches": 103,
+            "fitness_max_abs_diff": 0.0024650394916534424,
+            "fitness_mask_mismatches": 0,
+            "max_fitness_numpy": -0.24998027086257935,
+            "max_fitness_accelerated": -0.24998025596141815,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 10,
+            "node_keys_mismatches": 450,
+            "conn_keys_mismatches": 1679,
+            "node_attrs_max_abs_diff": 2.131389617919922,
+            "conn_attrs_max_abs_diff": 3.4452385902404785,
+            "attr_nan_mask_mismatches": 1607,
+            "fitness_max_abs_diff": 0.12881061434745789,
+            "fitness_mask_mismatches": 13,
+            "max_fitness_numpy": -0.24994337558746338,
+            "max_fitness_accelerated": -0.24994337558746338,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 11,
+            "node_keys_mismatches": 702,
+            "conn_keys_mismatches": 2619,
+            "node_attrs_max_abs_diff": 3.2134203910827637,
+            "conn_attrs_max_abs_diff": 3.4452385902404785,
+            "attr_nan_mask_mismatches": 2385,
+            "fitness_max_abs_diff": 0.08328017592430115,
+            "fitness_mask_mismatches": 22,
+            "max_fitness_numpy": -0.24983882904052734,
+            "max_fitness_accelerated": -0.24983884394168854,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 12,
+            "node_keys_mismatches": 788,
+            "conn_keys_mismatches": 2957,
+            "node_attrs_max_abs_diff": 3.9969482421875,
+            "conn_attrs_max_abs_diff": 3.178690195083618,
+            "attr_nan_mask_mismatches": 2214,
+            "fitness_max_abs_diff": 0.1122191846370697,
+            "fitness_mask_mismatches": 21,
+            "max_fitness_numpy": -0.24946224689483643,
+            "max_fitness_accelerated": -0.24946226179599762,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 13,
+            "node_keys_mismatches": 742,
+            "conn_keys_mismatches": 2850,
+            "node_attrs_max_abs_diff": 3.9969482421875,
+            "conn_attrs_max_abs_diff": 4.114693641662598,
+            "attr_nan_mask_mismatches": 2168,
+            "fitness_max_abs_diff": 0.09894931316375732,
+            "fitness_mask_mismatches": 29,
+            "max_fitness_numpy": -0.24900668859481812,
+            "max_fitness_accelerated": -0.24900668859481812,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          },
+          {
+            "generation": 14,
+            "node_keys_mismatches": 879,
+            "conn_keys_mismatches": 3273,
+            "node_attrs_max_abs_diff": 4.208442687988281,
+            "conn_attrs_max_abs_diff": 3.6498236656188965,
+            "attr_nan_mask_mismatches": 2422,
+            "fitness_max_abs_diff": 0.060001105070114136,
+            "fitness_mask_mismatches": 18,
+            "max_fitness_numpy": -0.24787002801895142,
+            "max_fitness_accelerated": -0.24726730585098267,
+            "species_count_numpy": 20,
+            "species_count_accelerated": 20
+          }
+        ],
+        "first_key_divergence": 9,
+        "first_float_exceedance": 8,
+        "trace_s": 219.992642
+      }
+    },
+    {
+      "case": "xor3d_p500",
+      "target": "iree-rocm",
+      "backend": "iree",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "rocm"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 10,
+      "protocol": {
+        "one_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_generations": 3,
+        "timed_generations": 10,
+        "seed": 42,
+        "compile_measured_separately": true,
+        "build_charged_to_a_generation": false,
+        "timing_clock": "time.perf_counter() wall clock around each step() call, including host materialisation of the result",
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark",
+        "logging_in_timed_region": false,
+        "cross_check_enabled": true,
+        "cross_check_reference": "numpy",
+        "trajectory_generations": 14,
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "error",
+      "error": "Traceback (most recent call last):\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 580, in measure_row\n    _measure(_tensorneat(), case, plan, args, record)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/benchmarks/gpu_measure.py\", line 496, in _measure\n    state = pipeline.setup()\n            ^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/pipeline.py\", line 417, in setup\n    state = self.algorithm.setup(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/src/tensorneat/algorithm/neat/neat.py\", line 365, in setup\n    payload, next_key, generation, species_state = evoxc.run(\n                                                   ^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1467, in run\n    flat_tensors = _prepare_flat_inputs(\n                   ^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1286, in _prepare_flat_inputs\n    _check_run_device(tensor, expected_device, path)\n  File \"/root/tensorneat/.genesis/workers/worker_T1_A2/.venv/lib/python3.12/site-packages/evoxc/pipeline.py\", line 1110, in _check_run_device\n    raise core.DeviceError(\nevoxc.core.errors.DeviceError: input at path [0] is on device Device(kind='cpu', index=0), but the executable runs on device Device(kind='rocm', index=0): no implicit device-to-host or host-to-device transfer happens at the run boundary \u2014 move the tensor to the executable's device explicitly via t.to(Device(kind='rocm', index=0))\n",
+      "timestamp_utc": "2026-11-05T11:30:01+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": null,
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          1.81,
+          2.31,
+          2.44
+        ],
+        "git_commit": "2d86a89ffd56fde27aa2fca66d1070b6df8813df",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.11.0",
+          "runtime": "3.11.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-rocm",
+        "backend": "iree",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "rocm"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor3d_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.05,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR3d",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 1.408647,
+      "setup_failed": true
+    }
+  ]
+}
