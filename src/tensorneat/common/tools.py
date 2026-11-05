@@ -839,10 +839,19 @@ def to_numpy(tensor):
         Kept deliberately shallow: a pytree of tensors is unwrapped by the
         caller (``evoxc.tree_map``) or by ``test/support/runner.to_numpy``; this
         helper converts one leaf.
+        This is the **single explicit device-to-host step** of the library: a
+        tensor whose ``.device.kind`` is not ``"cpu"`` is transferred with
+        ``Tensor.to(Device("cpu", 0))`` first, because ``Tensor.numpy()``
+        raises ``evoxc.DeviceError`` on device memory (evoxc never transfers
+        implicitly). The CPU path is unchanged -- a CPU tensor (or an ndarray)
+        is never copied here.
     """
     if isinstance(tensor, np.ndarray):
         return tensor
     numpy_method = getattr(tensor, "numpy", None)
     if callable(numpy_method):
-        return numpy_method()
+        device = getattr(tensor, "device", None)
+        if device is not None and getattr(device, "kind", "cpu") != "cpu":
+            tensor = tensor.to(evoxc.Device("cpu", 0))
+        return tensor.numpy()
     return np.asarray(tensor)

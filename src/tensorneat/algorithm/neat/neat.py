@@ -876,7 +876,12 @@ class NEAT(BaseAlgorithm):
             Host-side only: ``evoxc`` exposes no ``io_callback`` and
             ``runtime_call`` exists on the numpy backend only, so this is called
             by the pipeline *after* the compiled step returns.  All tensor reads
-            go through ``common.tools.to_numpy``; node/connection validity is
+            go through ``common.tools.to_numpy`` (the single explicit
+            device-to-host step, so a non-cpu payload is transferred to host
+            memory before it is read) -- the pipeline hands this hook a
+            ``device=None`` host view, so the counting graph is built and run on
+            CPU rather than recompiled for the evolution device; node/connection
+            validity is
             counted by the genome helpers (``node_exists``/``conn_exists``)
             inside a small graph cached per payload shape, never by re-testing
             the padding encoding here.
@@ -939,14 +944,21 @@ class NEAT(BaseAlgorithm):
             (``node_exists(node_key_rows)``, ``conn_exists(conn_key_rows)``);
             they take no ``state``, so nothing but the two traced arrays crosses
             into the graph.
+            The cache key is shape, dtype **and** the resolved
+            backend/device from :meth:`_build_options`, so a device change can
+            never reuse an executable loaded for another device (and vice
+            versa).
         """
         node_keys = payload.node_keys
         conn_keys = payload.conn_keys
+        options = self._build_options(state)
         shape_key = (
             tuple(node_keys.shape),
             tuple(conn_keys.shape),
             node_keys.dtype,
             conn_keys.dtype,
+            options.get("backend"),
+            options.get("device"),
         )
         if self._details_cache is not None and self._details_cache[0] == shape_key:
             return self._details_cache[1]
@@ -963,7 +975,7 @@ class NEAT(BaseAlgorithm):
             _count_kernel,
             evoxc.TensorSpec(tuple(node_keys.shape), node_keys.dtype),
             evoxc.TensorSpec(tuple(conn_keys.shape), conn_keys.dtype),
-            **self._build_options(state),
+            **options,
         )
         self._details_cache = (shape_key, executable)
         return executable

@@ -153,7 +153,11 @@ class Pipeline(StatefulBaseClass):
             ``"numpy"`` is the reference interpreter, ``"iree"``/``"tvm"``/
             ``"xla"`` are opt-in extras. Nothing falls back. Defaults to ``"numpy"``.
         device (Any, optional): Forwarded to ``evoxc.build`` only when not
-            ``None``. Defaults to ``None``.
+            ``None``; a kind string (``"cpu"``, ``"cuda"``, ``"rocm"``) or an
+            ``evoxc.Device``. The setup-time graphs stay on CPU and the runtime
+            tensors are placed on this device once, after ``setup``
+            (:meth:`setup` / :meth:`_place_state`), so every generation is
+            device-resident. Nothing falls back to CPU. Defaults to ``None``.
         compile_options (dict | None, optional): Expanded into ``evoxc.build``'s
             ``**options`` (each stage uses the keys it understands). Defaults to ``None``.
         is_save (bool, optional): Write ``config.txt``, ``log.txt`` and one
@@ -394,6 +398,15 @@ class Pipeline(StatefulBaseClass):
         state), then ``algorithm.setup`` (population, generation counter, species
         table; it advances ``randkey`` once), then ``problem.setup``.
 
+        Device placement: the setup-time graphs are built and run **on CPU**
+        (``device=None`` is registered for them), because their only run input
+        is the host ``randkey`` and ``evoxc.run`` never transfers across
+        devices. Only after ``problem.setup`` is the real ``device`` registered
+        and the runtime tensors placed on it (:meth:`_place_state`), so
+        generation 0 and every later :meth:`step` are fully device-resident.
+        With ``device=None`` nothing is registered differently and the state is
+        returned exactly as before.
+
         Args:
             state (State, optional): Base state to extend; ``None`` -- spelled
                 this way because a ``State()`` default argument would be
@@ -406,16 +419,26 @@ class Pipeline(StatefulBaseClass):
             TensorNEATError: Propagated from ``algorithm.setup`` /
                 ``problem.setup``; ``common.errors.ConfigError`` if the incoming
                 state already carries one of the registered keys.
+            evoxc.DeviceError: Propagated from :meth:`_place_state` when the
+                requested device cannot be reached (nothing falls back to CPU).
         """
         state = State() if state is None else state
         state = state.register(randkey=evoxc.random.key(self.seed))
         state = state.register(
             backend=self.backend,
-            device=self.device,
+            # Setup graphs stay on CPU: ``algorithm.setup`` runs its
+            # initialisation graph on ``randkey``, which is host memory.
+            device=None,
             compile_options=self.compile_options,
         )
         state = self.algorithm.setup(state)
         state = self.problem.setup(state)
+
+        # The real device is registered only now, then the runtime tensors are
+        # placed once: every later generation runs and stays on that device.
+        if self.device is not None:
+            state = state.update(device=self.device)
+            state = self._place_state(state)
 
         self.fitness_history = []
         self.best_fitness = float("-inf")
@@ -491,20 +514,95 @@ class Pipeline(StatefulBaseClass):
         )
         return payload_signature + _substrate_signature(self.algorithm)
 
-    def _build_options(self) -> dict:
+    def _build_options(self, state: Optional[State] = None) -> dict:
         """The ``evoxc.build`` keyword arguments this pipeline forwards.
 
         ``backend`` always, ``device`` only when it is not ``None``, and every
         ``compile_options`` entry expanded into ``**options``. Nothing is
         defaulted or rewritten: a backend that cannot compile a kernel raises its
         own error instead of falling back.
+
+        ``state`` selects *whose* device is forwarded: the generation graph
+        passes the real state (:attr:`device`), while a host-reporting call
+        passes :meth:`_host_view`'s state, whose ``device`` entry is ``None``,
+        so reports build and run on the CPU side-channel instead of paying a
+        fresh compile on the requested device.
         """
+        registered = state.registered_keys() if state is not None else ()
+        device = state.device if "device" in registered else self.device
         options: dict[str, Any] = {"backend": self.backend}
-        if self.device is not None:
-            options["device"] = self.device
+        if device is not None:
+            options["device"] = device
         if self.compile_options:
             options.update(dict(self.compile_options))
         return options
+
+    def _placement_device(self) -> Optional[Any]:
+        """The ``evoxc.Device`` the runtime tensors are placed on, or ``None``.
+
+        ``None`` means "leave everything where the backend put it" (the
+        default CPU path). A kind string is resolved to
+        ``evoxc.Device(kind)`` -- ``"cpu"`` maps to ``Device("cpu", 0)``, whose
+        ``Tensor.to`` is the identity -- and an ``evoxc.Device`` is returned
+        unchanged. Any other value is handed to ``Tensor.to`` as-is so
+        ``evoxc``'s own ``TypeError`` names the problem.
+        """
+        if self.device is None:
+            return None
+        if isinstance(self.device, str):
+            return evoxc.Device(self.device)
+        return self.device
+
+    def _place_state(self, state: State) -> State:
+        """Place every runtime tensor on :meth:`_placement_device`'s device.
+
+        Only the :data:`_RUNTIME_KEYS` entries are mapped -- the ``State`` also
+        holds configuration objects and the ``compile_options``/``device``
+        host values, which must never be walked -- and every non-tensor leaf is
+        left alone. ``Tensor.to`` returns ``self`` on the tensor's own device,
+        so the call is idempotent, a CPU placement copies nothing, and the
+        default ``device=None`` path returns the state untouched.
+        """
+        device = self._placement_device()
+        if device is None:
+            return state
+
+        def place(leaf: Any) -> Any:
+            """Move one tensor leaf to ``device``; leave host values alone."""
+            return leaf.to(device) if isinstance(leaf, evoxc.Tensor) else leaf
+
+        placed = {
+            name: evoxc.tree_map(place, getattr(state, name))
+            for name in _RUNTIME_KEYS
+            if name in state.registered_keys()
+        }
+        return state.update(**placed)
+
+    def _host_view(self, state: State) -> State:
+        """A CPU view of ``state`` for the host-reporting graphs.
+
+        Reporting graphs (``_schedule_of``, ``_constant_act_fn``, ``show`` and
+        the two ``show_details`` hooks) consume host data (``evoxc.from_numpy``
+        / ``evoxc.constant`` are CPU-only), so they keep building and running on
+        the CPU side-channel: this view registers ``device=None`` (its build
+        options carry no device) and moves the runtime tensors to
+        ``Device("cpu", 0)``. The result is never fed back into evolution.
+        The default ``device=None`` path returns ``state`` itself.
+        """
+        if self.device is None:
+            return state
+        cpu = evoxc.Device("cpu", 0)
+
+        def to_host(leaf: Any) -> Any:
+            """Move one tensor leaf to the host; leave host values alone."""
+            return leaf.to(cpu) if isinstance(leaf, evoxc.Tensor) else leaf
+
+        placed = {
+            name: evoxc.tree_map(to_host, getattr(state, name))
+            for name in _RUNTIME_KEYS
+            if name in state.registered_keys()
+        }
+        return state.update(device=None, **placed)
 
     def _static_config(self, state: State) -> State:
         """The tensor-free configuration ``State`` baked into the graph.
@@ -647,7 +745,7 @@ class Pipeline(StatefulBaseClass):
                 for leaf in evoxc.tree_leaves(state.species)
             ),
         ]
-        return evoxc.build(kernel, *specs, **self._build_options())
+        return evoxc.build(kernel, *specs, **self._build_options(state))
 
     def _executable_for(self, state: State) -> Any:
         """The cached executable for ``state``'s shape signature.
@@ -835,6 +933,16 @@ class Pipeline(StatefulBaseClass):
                     f"{generation},{max_f},{min_f},{mean_f},{std_f},{cost_time}\n"
                 )
 
+        # Reporting reads the CPU side-channel (:meth:`_host_view`): the hooks
+        # build their own graphs from host data, and a device-resident state
+        # would force a fresh compile on the requested device per generation.
+        # The view is built only when a hook will actually run.
+        report_state = (
+            self._host_view(state)
+            if self.is_detailed or self.show_problem_details
+            else state
+        )
+
         if self.is_detailed:
             print(
                 f"Generation: {generation}, Cost time: {cost_time * 1000:.2f}ms\n",
@@ -843,17 +951,17 @@ class Pipeline(StatefulBaseClass):
             )
             self._details(
                 "algorithm.show_details",
-                lambda: self.algorithm.show_details(state, fitnesses),
+                lambda: self.algorithm.show_details(report_state, fitnesses),
             )
 
         if self.show_problem_details:
             self._details(
                 "problem.show_details",
                 lambda: self.problem.show_details(
-                    state,
-                    state.randkey,
-                    self._constant_act_fn(state, previous_pop),
-                    self._schedule_of(state, previous_pop),
+                    report_state,
+                    report_state.randkey,
+                    self._constant_act_fn(report_state, previous_pop),
+                    self._schedule_of(report_state, previous_pop),
                 ),
             )
 
@@ -896,7 +1004,7 @@ class Pipeline(StatefulBaseClass):
         executable = evoxc.build(
             kernel,
             *(evoxc.TensorSpec(tuple(f.shape), f.dtype) for f in fields),
-            **self._build_options(),
+            **self._build_options(state),
         )
         return evoxc.run(
             executable, *(evoxc.from_numpy(np.ascontiguousarray(f)) for f in fields)
@@ -964,11 +1072,15 @@ class Pipeline(StatefulBaseClass):
             the problem rebuilds the same genome from ``evoxc.constant`` values.
         """
         payload = GenomeTensors(*_one_individual(best))
+        # Reports read the CPU side-channel: the problem's ``show`` graph bakes
+        # host constants (``evoxc.constant`` is CPU-only) and carries its own
+        # ``build_options``, so it must see ``device=None``.
+        report_state = self._host_view(state)
         return self.problem.show(
-            state,
-            state.randkey,
-            self._constant_act_fn(state, payload),
-            self._schedule_of(state, payload),
+            report_state,
+            report_state.randkey,
+            self._constant_act_fn(report_state, payload),
+            self._schedule_of(report_state, payload),
         )
 
     # --------------------------------------------------------- checkpointing
