@@ -163,5 +163,5 @@ Cross-backend fitness is therefore reproducible to float32 rounding but never bi
 |---|---|
 | `./cartpole.py` | Batched CartPole dynamics, fixed-horizon `while_loop` rollout with a carried return, survival-time fitness, NaN-poison accumulator, host-side report. |
 | `./pendulum.py` | Batched Pendulum swing-up dynamics (`u = max_torque*tanh(logit)`, floor-mod angle wrap), fixed-horizon rollout, negative-cumulative-cost fitness, host-side report. |
-| `./mountaincar.py` | Batched MountainCarContinuous dynamics in Gym order, goal-triggered termination with a one-time bonus masked by the pre-step alive flag, host-side report. |
-| `./_common.py` | Host-side helpers shared by all three environments: `to_numpy`, the three owner-prefixed validators, the traced `returns_of` layout helper and the traced `prepared_query` that prepares a rollout's policy pass once. |
+| `./mountaincar.py` | Batched MountainCarContinuous dynamics in Gym order, goal-triggered termination with a one-time bonus masked by the pre-step alive flag, the `ATTAINABLE_CEILING` `fitness_target` rejection, host-side report. |
+| `./_common.py` | Host-side helpers shared by all three environments: `to_numpy`, the four owner-prefixed validators (`require_positive_int`, `require_finite` and the two derived float ones), the traced `returns_of` layout helper and the traced `prepared_query` that prepares a rollout's policy pass once. |
