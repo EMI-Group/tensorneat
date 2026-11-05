@@ -33,9 +33,9 @@ Column order *is* the `*_attrs` column order, so `bias=0`, `response=1`, `aggreg
 `mutate`, the default per-column `crossover`, `distance`, `hash`, `from_attrs` and every width helper are inherited from `gene/base.BaseGene` unchanged.
 
 ## Op count
-`apply_aggregation` evaluates every configured option on the whole `(P, N, K)` window (one masked reduce each) plus one `select` per option, then one `has_valid` select; a single-option gene is 1 reduce + 1 select + a mask count + 1 select.
-`apply_activation` starts from `z` (the identity branch) and emits one `select` per configured option, so the default single-option configuration is exactly a 1-select cascade over `(P, N)`.
-Both dispatchers cast the gene column to `int32` first, and option ids are gene data rather than a static shape, so no static shortcut can reduce the cascade to the options a population happens to use.
+`aggregate` evaluates every configured option on the whole `(P, N, K)` window (one masked reduce each) plus one `select` per option, then the `has_valid` guard when a configured option is not self-neutral; a single-option gene is 1 reduce + 1 select.
+The activation cascade starts from `z` (the identity branch) and emits one `select` per configured option over `(P, N)`, so the default single-option configuration is a 1-select cascade.
+The per-**pass** cost is the attribute column reads, the two `int32` casts and one `equal` per option (all in `prepare`); per **level** only the reduce/select dispatch and `combine` remain, and option ids are gene data rather than a static shape, so no static shortcut can reduce the cascade to the options a population happens to use.
 A per-level node step therefore stays `O(max_nodes x K)` gathers plus a constant dispatch cost, never `max_nodes^2`.
 
 ## Host-only API (siblings may rely on it)
