@@ -78,7 +78,7 @@ uv run --extra iree python benchmarks/gpu_measure.py render \
 ```
 
 `matrix` exits 0 only when every planned row is `ok`, and 1 as soon as any row is `error` (it prints a `BLOCKED: …` line per blocked row) — with the ROCm rows blocked today, step 3 therefore exits 1 while still writing the record and refreshing the block, which is the intended loud failure and not a broken run.
-`render` and `matrix --out` replace only the text between `<!-- BEGIN MEASURED (gpu_measure.py) -->` and `<!-- END MEASURED (gpu_measure.py) -->` and exit 2 with a named error on a missing marker, an unreadable record, a wrong schema or a missing `records` list.
+`render` and `matrix --out` replace only the interior of this file's two markers (the pair above, exactly one of each in the file) and exit 2 with a named error on a missing marker, an unreadable record, a wrong schema or a missing `records` list.
 A single row is cheap on the CPU legs and pays the compile on the compiled ones: budget the iree legs at roughly the `iree-compile` cost of the shape plus the timed region, and run the matrix as a background job rather than under a short foreground timeout.
 The IREE runtime can print `nanobind: leaked …` lines to stderr when the interpreter exits; that is a binding teardown message emitted *after* the row is written, never a failure and never an `error` row.
 The Python-free paths are `--list`, `--help` and nothing else: `run` and `matrix` need `numpy` and `tensorneat`, and the `iree-*` targets need the `iree` extra.
