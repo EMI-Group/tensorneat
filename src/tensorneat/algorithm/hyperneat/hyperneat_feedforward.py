@@ -32,7 +32,8 @@ class HyperNEATFeedForward(HyperNEAT):
         hyper_genome (DefaultGenome): Dense fixed-topology feedforward executor with ``max_nodes ==
             substrate.nodes_cnt`` and ``max_conns == substrate.conns_cnt``.
         weight_threshold (float): Dead-zone half-width of the CPPN-to-weight map.
-        max_weight (float): Saturating magnitude of the mapped weight.
+        max_weight (float): Weight scale of the CPPN-to-weight map (``max_weight`` at ``|query| ==
+            1``, growing proportionally beyond; the map is not clipped).
         aggregation (Callable): Fixed substrate-node aggregation.
         activation (Callable): Fixed substrate-node activation.
         output_transform (Callable): Output activation of the substrate network.
@@ -42,7 +43,8 @@ class HyperNEATFeedForward(HyperNEAT):
         ``num_outputs`` and ``pop_size`` are inherited unchanged -- including
         ``transform``'s decode algebra (static ``(P, Q, C)`` query grid, ``C = neat.num_inputs``,
         query axis fused into the
-        population axis, weight map into ``[-max_weight, max_weight]``, gene payload assembled from
+        population axis, weight map scaled by ``max_weight / (1 - weight_threshold)`` and unclipped,
+        gene payload assembled from
         the substrate tables) and ``forward``'s trailing bias column.  Only the executor genome
         differs, so this file declares no kernels of its own.
     """
