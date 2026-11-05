@@ -243,7 +243,7 @@ A **galloping / `log2 M`-step binary search** of each centre composite in the di
 The **narrow per-step spelling** of it (`(P, M)` `lo`/`hi`, ~5–6 dependent ops per step): **211 ops / 4.241 ms against 94 / 2.449 ms** at pop 500, and not bit-identical — the gather at step `i+1` reads step `i`'s `select`, so ~65 dependent ops serialise at ~13 µs each, dearer than the ~0.35 ms the two inverse `argsort`s cost.
 **An exact key→row lookup instead of the per-call sort** is not representable for arbitrary `int32` keys, which is why the two `argsort`s are the *price of exactness*: a direct node table needs 16 GiB, a connection table `2**62` cells, and any bounded in-graph hash collides and would report two different genes as homologous.
 **Splitting the routes per family** (the node family's homologue test on its `int32` column): 5 ops / ~85 µs against 4 ops / 83 µs, and it would permute `node_key_cols` into the digest — behind on both counts.
-A **scatter-derived inverse permutation**: 7 vs 2 ops and 1.05 vs 0.29 ms.
+A **scatter-derived inverse permutation**: 7 vs 2 ops and 1.05 vs 0.29 ms in isolation, and still behind in the merged body — `_scatter` copies the whole `(P·L,)` base, measured **+8 ops and +0.36 ms per call (+15 %)** against `argsort(order)`.
 **`masked_flat_scatter` for the dense attribute reorder**: 18 ops of redirect against 7 for the raw flat scatter.
 **A `key_span`-derived composite radix**: aliases genes the moment `algorithm/` allocates a key outside the span.
 **Dropping the two `cast(argsort(...), int32)`**: saves 2 ops per family per call but makes three index blocks `int64`, measured ~10 % more milliseconds.
