@@ -27,6 +27,7 @@ from harness.report_format import (
     case_order,
     cell,
     declared_length,
+    display_path,
     first_error,
     fitness,
     gens_to_target,
@@ -736,7 +737,7 @@ def _reproduce_command(doc: dict) -> tuple[str, str]:
     tokens = _command_tokens(doc)
     if not tokens:
         return "python benchmarks/run_benchmark.py", "n/a"
-    interpreter = repo_relative(tokens[0]) or tokens[0]
+    interpreter = display_path(tokens[0], "n/a")
     arguments = [repo_relative(token) or token for token in tokens[1:]]
     if not arguments:
         arguments = ["benchmarks/run_benchmark.py"]
