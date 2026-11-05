@@ -8,6 +8,7 @@ Nothing here ships: the harness never imports both implementations in one proces
 `RESULTS.md` is generated evidence, never hand-edited.
 ## Provenance: which artifact measures which tree
 No committed artifact measures the merged tree; every number in this node belongs to the artifact, tree and session named below, and nothing here may be quoted as a statement about HEAD.
+
 | Artifact | Measured on | What it can speak for |
 |---|---|---|
 | `results/authoritative.json` → `RESULTS.md` | `ebeaf1f8`, stamp 2026-11-04T19:01Z, `jax 0.10.2` | the full 8-case matrix; predates both numpy performance passes and the search-quality fixes, so every new-side timing, memory and quality row in it is the pre-fix cost |
