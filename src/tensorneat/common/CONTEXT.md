@@ -1,7 +1,7 @@
 # tensorneat/common — host primitives, batched tensor tools, the tensorization (execution-schedule) engine, ACT/AGG registries, sympy codegen
 
 ## Intent
-Framework-wide foundation: the immutable `State` container, the error hierarchy, the batched gather/scatter/mutation helpers every kernel is built from, the **execution schedule** turning a ragged evolved topology into static-shape arrays, the ACT/AGG registries and host-side sympy code generation.
+Framework-wide foundation: the immutable `State` container, the error hierarchy, the batched gather/scatter/mutation helpers every kernel is built from, the **execution schedule** turning a ragged evolved topology into static-shape arrays (with a host and an accelerator formulation of each of its two writes, selected at trace time by `kernel_mode`), the ACT/AGG registries and host-side sympy code generation.
 Nothing here imports `genome`, `algorithm`, `problem`, or `pipeline` — this node is the bottom of the package dependency DAG.
 
 ## Dtype & sentinel contract (binding for genome / algorithm / problem)
