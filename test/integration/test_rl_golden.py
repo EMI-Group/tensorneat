@@ -8,6 +8,8 @@ per-generation fitness and a hash of every produced population for one fixed
 configuration, so a regression that changes even one bit of the rollout — a
 different ``while_loop`` carry, a different reset draw, a policy pass prepared
 with the wrong tiling factor — fails on a number instead of on a distribution.
+A deliberate change to a search contract also moves these numbers; re-derive
+them by rerunning the configuration rather than widening the comparison.
 
 The configuration is the shipped ``examples/rl/cartpole.py`` recipe cut down to
 ``pop_size=100``: ``DefaultGenome(4, 2)`` with a ``BiasNode(tanh, sum)`` gene, no
@@ -16,8 +18,10 @@ initial hidden layer, ``NEAT(species_size=10, survival_threshold=0.1)``,
 
 The oracle
 ----------
-The values were recorded on the tree *after* both performance fixes landed
-(commit ``97bbf6b``), by running this configuration and printing
+The values were recorded on the merged tree, after the prepared-forward and
+tiled-evaluate changes *and* after the search contracts that decide the offspring
+(the bounded ``key_span`` allocation and the four independent structural gates),
+by running this configuration and printing
 ``(best, mean, state.pop digest)`` after each ``pipeline.step``; the test then
 hard-codes what was observed. They are not copied from any log: re-deriving them
 means re-running the module and replacing the fixtures below if the explanation
@@ -60,9 +64,9 @@ POP_FIELDS = ("node_keys", "node_attrs", "conn_keys", "conn_attrs")
 
 #: ``(generation, best, mean, state.pop digest)`` observed on this tree.
 GOLDEN = (
-    (1, 56.0, 14.069999694824219, "4d7cddb2cfc09758"),
-    (2, 169.0, 38.36000061035156, "bf6009fc90aae264"),
-    (3, 200.0, 79.66999816894531, "d98d0d35f37bcced"),
+    (1, 56.0, 14.069999694824219, "2f2f53415501087a"),
+    (2, 176.0, 39.2400016784668, "5433039cd7a2e15e"),
+    (3, 200.0, 82.7699966430664, "e9c66574d1390795"),
 )
 
 
