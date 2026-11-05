@@ -15,30 +15,45 @@ algebra and observability, not arithmetic:
   ``update``/``remove`` a missing key — with
   :class:`tensorneat.common.errors.ConfigError`, so a typo cannot silently do
   nothing;
-* a missing *entry* raises ``KeyError`` (deliberately not ``AttributeError``:
-  ``hasattr`` would swallow that, and a missing entry is a configuration bug);
+* a missing *entry* is one exception with two bases: attribute access raises
+  ``common.state.StateKeyError``, which is both an ``AttributeError`` (so
+  ``getattr(state, name, default)``, ``hasattr`` and ``copy.deepcopy`` read the
+  miss as "absent") and a ``KeyError`` (so the legacy ``except KeyError`` sites
+  keep working), while ``state["missing"]`` raises the plain builtin
+  ``KeyError`` — the separation that keeps mapping code unchanged;
+* ``copy.copy``/``copy.deepcopy``/``pickle`` round-trip the container: a copy
+  keeps every entry in order, and a deep copy or an unpickle carries a fresh
+  mutable payload instead of sharing one (``copy.deepcopy``'s
+  ``getattr(x, "__deepcopy__", None)`` probe is the caller the dual base exists
+  for);
 * ``save``/``load`` round-trip through a real file in ``tmp_path``, and a broken
   file is reported, never absorbed into a default ``State``;
 * the ``evoxc`` pytree registration (``tree_flatten``/``tree_unflatten``) keeps
   entry names in *aux data* and values as leaves, so a ``State`` can cross a
   graph boundary as a container.
 
-Oracles: plain Python equality/identity, a literal expected ``repr``, the
-pre-call snapshot of the original container, the raw ``pickle`` payload read
-back through a recording stand-in class, and evoxc's own pytree utilities. There
-is no numerical oracle here because ``State`` stores values without interpreting
-them — that separation is itself the contract under test.
+Oracles: plain Python equality/identity, ``np.array_equal`` for the stored
+tensor payloads (``State`` defines no ``__eq__``, so a copy is compared
+structurally through :func:`_content`/:func:`_assert_same_content`, a literal expected
+``repr``, the pre-call snapshot of the original container, the raw ``pickle``
+payload read back through a recording stand-in class, and evoxc's own pytree
+utilities. There is no numerical oracle here because ``State`` stores values
+without interpreting them — that separation is itself the contract under test.
 
 ``tensorneat.common`` is reached through the ``common`` fixture (``./conftest.py``),
-which resolves the package lazily; ``evoxc`` is imported inside the one test that
-exercises the registration. No ``jax``/``torch``, no network.
+which resolves the package lazily; ``evoxc`` supplies the one ``evoxc`` RNG-key
+payload and the pytree utilities the registration test uses. No ``jax``/``torch``,
+no network, no GPU.
 """
 
 from __future__ import annotations
 
+import copy
 import io
 import pickle
 
+import evoxc
+import numpy as np
 import pytest
 
 
@@ -51,6 +66,87 @@ def state(common):
     tell a copied container from a shared one.
     """
     return common.State(a=1, b=[2, 3])
+
+
+@pytest.fixture
+def payload_state(common):
+    """A ``State`` carrying one value of each kind a real generation holds.
+
+    ``pop_size`` is an ordinary scalar, ``config`` a plain configuration dict,
+    ``randkey`` an ``evoxc`` RNG key (an ``evoxc.Tensor``) and ``arr`` a
+    ``(2, 3)`` float32 tensor. The four kinds are what the copy/deepcopy/pickle
+    tests need: only a mutable payload can show a copy that shares state, and
+    only a tensor payload shows that an unpickle really recreated it.
+    """
+    return common.State(
+        pop_size=4,
+        config={"activation": "tanh", "layers": [3, 4]},
+        randkey=evoxc.random.key(0),
+        arr=np.arange(6, dtype=np.float32).reshape(2, 3),
+    )
+
+
+def _content(state):
+    """Record a container's structural content: ``(key names, name -> value)``.
+
+    Args:
+        state (State): The container to record.
+
+    Returns:
+        tuple: ``(tuple(state.registered_keys()), {name: state[name]})`` — the
+        entry order and the stored values, reached through item access so the
+        record does not depend on the attribute spelling it is checking.
+
+    Notes:
+        ``State`` defines no ``__eq__``, so this pair (compared by
+        :func:`_assert_same_content`) is how "the same container" is asserted;
+        a bare ``==`` would fall back to identity and only ever pass for ``is``.
+    """
+    names = tuple(state.registered_keys())
+    return names, {name: state[name] for name in names}
+
+
+def _value_equal(left, right):
+    """Whether two stored values hold the same content without being the same object.
+
+    Oracle: ``np.array_equal`` on the numpy payloads (a plain array, or an
+    ``evoxc.Tensor`` RNG key read through its ``numpy()`` accessor, which is the
+    only way to compare a key — it has no ``__eq__`` returning a bool), and plain
+    ``==`` for the scalar and container kinds (a dict, a tuple, an int).
+    """
+    if isinstance(left, evoxc.Tensor) or isinstance(right, evoxc.Tensor):
+        if not (isinstance(left, evoxc.Tensor) and isinstance(right, evoxc.Tensor)):
+            return False
+        return np.array_equal(left.numpy(), right.numpy())
+    if isinstance(left, np.ndarray) or isinstance(right, np.ndarray):
+        return np.array_equal(np.asarray(left), np.asarray(right))
+    return left == right
+
+
+def _assert_same_content(actual, expected):
+    """Assert ``actual`` holds exactly ``expected``'s entries, in order, with equal values.
+
+    Args:
+        actual (State): The container produced by a copy/deepcopy/pickle.
+        expected (State): The container it was derived from.
+
+    Returns:
+        tuple: The ``(names, values)`` record of ``actual``, for further
+        assertions on identity.
+
+    Notes:
+        The oracle of every copying test: an entry dropped, reordered or
+        silently replaced fails here even when the returned object has the right
+        type, which is exactly the shape of a partial container.
+    """
+    assert type(actual) is type(expected)
+    expected_names, expected_values = _content(expected)
+    names, values = _content(actual)
+    assert names == expected_names
+    assert values.keys() == expected_values.keys()
+    for name, value in values.items():
+        assert _value_equal(value, expected_values[name]), f"entry {name!r} differs"
+    return names, values
 
 
 def _snapshot(state):
@@ -148,27 +244,48 @@ def test_attribute_access_reads_an_entry(common, state):
     assert state.b == [2, 3]
 
 
-def test_missing_entry_raises_key_error_and_escapes_hasattr(state):
-    """Invariant: an unknown name raises ``KeyError``, and ``hasattr`` propagates it.
+def test_missing_entry_is_an_attribute_error_and_a_key_error(common, state):
+    """Invariant: ``state.typo`` raises ``StateKeyError``: an ``AttributeError`` and a ``KeyError``.
 
-    Oracle: the documented error *type* — not ``AttributeError``, because
-    ``hasattr(state, "typo")`` swallowing the failure is exactly the silent bug
-    the choice of ``KeyError`` prevents. Asserted directly, through ``hasattr``
-    and through ``getattr``'s default (which also only catches ``AttributeError``).
+    Oracle: the documented dual base of ``common.state.StateKeyError`` and the
+    concrete class ``State.__getattr__`` raises — one exception object that
+    satisfies both bases, because ``getattr``/``hasattr``/``copy.deepcopy``
+    swallow the ``AttributeError`` half while the legacy ``except KeyError``
+    around ``state.pop_size`` catches the other. Item access is pinned as the
+    *plain* builtin ``KeyError`` so mapping code keeps its usual semantics.
     """
-    with pytest.raises(KeyError) as direct:
+    with pytest.raises(common.state.StateKeyError) as direct:
         state.typo  # the read itself is the assertion
-    assert "typo" in str(direct.value)
 
-    with pytest.raises(KeyError):
-        hasattr(state, "typo")
+    exc = direct.value
+    assert type(exc) is common.state.StateKeyError
+    assert isinstance(exc, AttributeError)
+    assert isinstance(exc, KeyError)
+    assert isinstance(exc, LookupError)  # KeyError's base, a free consequence
+    assert "typo" in str(exc)
 
-    with pytest.raises(KeyError):
-        getattr(state, "typo", None)
+    # The ``AttributeError`` half: the probing spellings now read the miss as
+    # "absent". ``hasattr`` is the documented cost of the dual base — a typo is
+    # silent there and loud only at a bare read or an explicit ``except``.
+    assert hasattr(state, "typo") is False
+    assert getattr(state, "typo", None) is None
 
-    # Real entries are reachable through both spellings, so the guard is narrow.
-    assert hasattr(state, "a")
+    # The other half deliberately does not leak into the mapping protocol:
+    # ``state[...]`` is always the plain builtin ``KeyError``, never
+    # ``StateKeyError`` and never an ``AttributeError``.
+    with pytest.raises(KeyError) as item:
+        state["typo"]
+    assert type(item.value) is KeyError
+    assert not isinstance(item.value, AttributeError)
+    assert not isinstance(item.value, common.state.StateKeyError)
+    assert "typo" in str(item.value)
+
+    # Real entries are reachable through every spelling, so the guard is narrow.
+    assert state.a == 1
+    assert state.b == [2, 3]
     assert getattr(state, "a") == 1
+    assert state["a"] == 1
+    assert hasattr(state, "a") is True
 
 
 def test_contains_tests_entry_names(state):
@@ -408,6 +525,118 @@ def test_load_propagates_a_missing_or_corrupt_file_error(common, tmp_path):
     truncated.write_bytes(complete.read_bytes()[:16])
     with pytest.raises(pickle.UnpicklingError):
         common.State.load(truncated)
+
+
+# --------------------------------------------------------------------------- #
+# copying: copy/copy.deepcopy (the AttributeError half's reason to exist)
+# --------------------------------------------------------------------------- #
+
+
+def test_copy_keeps_every_entry_and_shares_the_payload(common, payload_state):
+    """Invariant: ``copy.copy`` yields a distinct ``State`` with the same entries and shared values.
+
+    Oracle: :func:`_content` against the original, entry by entry, plus ``is``
+    identity on the mutable payload — a shallow copy sharing the stored objects
+    is what it is *for*, and the assertions that follow (the container is a new
+    object, the order is insertion order) keep it from being a no-op.
+    """
+    shallow = copy.copy(payload_state)
+
+    assert type(shallow) is common.State
+    assert shallow is not payload_state
+    names, values = _assert_same_content(shallow, payload_state)
+    assert names == ("pop_size", "config", "randkey", "arr")  # insertion order, not sorted
+
+    # A shallow copy shares the values it copied.
+    assert values["arr"] is payload_state.arr
+    assert values["randkey"] is payload_state.randkey
+    assert values["config"] is payload_state.config
+    assert values["pop_size"] == 4
+
+    # A shallow copy of an empty container stays empty; nothing invents an entry.
+    assert _content(copy.copy(common.State())) == ((), {})
+
+
+def test_deepcopy_keeps_every_entry_with_a_fresh_payload(common, payload_state):
+    """Invariant: ``copy.deepcopy`` reproduces all entries but shares no mutable payload.
+
+    Oracle: :func:`_content` field by field, ``is not`` on the numpy array and the
+    config dict, and a write into the copy's array that must not reach the
+    original — no shared mutable state. This is also the caller the
+    ``AttributeError`` half of ``StateKeyError`` exists for: ``copy.deepcopy``
+    probes ``getattr(x, "__deepcopy__", None)`` on the *instance*, so a bare
+    ``KeyError`` there aborted the copy instead of producing a container.
+    """
+    deep = copy.deepcopy(payload_state)
+
+    assert type(deep) is common.State
+    assert deep is not payload_state
+    names, values = _assert_same_content(deep, payload_state)
+    assert names == ("pop_size", "config", "randkey", "arr")  # nothing dropped
+
+    assert values["arr"] is not payload_state.arr
+    assert np.array_equal(values["arr"], payload_state.arr)
+    assert values["config"] is not payload_state.config
+    assert values["config"] == payload_state.config
+    assert values["randkey"] is not payload_state.randkey
+    assert np.array_equal(values["randkey"].numpy(), payload_state.randkey.numpy())
+    assert values["pop_size"] == 4
+
+    # No shared mutable state: editing the copy's array leaves the original alone,
+    # and editing the copy's dict does not reach the original's dict either.
+    deep.arr[0, 0] = -1.0
+    deep.config["layers"].append(5)
+    assert payload_state.arr[0, 0] == 0.0
+    assert payload_state.config == {"activation": "tanh", "layers": [3, 4]}
+
+    # The empty container has no payload to copy and must not gain one.
+    assert _content(copy.deepcopy(common.State())) == ((), {})
+
+
+def test_pickle_round_trip_restores_a_usable_state(common, payload_state, tmp_path):
+    """Invariant: ``pickle.loads(pickle.dumps(state))`` is a usable ``State`` with the same content.
+
+    Oracle: :func:`_content` field by field (arrays compared with
+    ``np.array_equal``, the RNG key through its ``numpy()`` payload), ``type(...)
+    is common.State``, a fresh tensor payload, reads through *both* accessors,
+    and a second round trip through :meth:`State.save`/:meth:`State.load` in
+    ``tmp_path`` — a container that answered only one spelling would be a broken
+    checkpoint.
+    """
+    restored = pickle.loads(pickle.dumps(payload_state))
+
+    assert type(restored) is common.State
+    assert restored is not payload_state
+    names, values = _assert_same_content(restored, payload_state)
+    assert names == ("pop_size", "config", "randkey", "arr")  # order survives
+    assert values["arr"] is not payload_state.arr  # unpickling copies the payload
+    assert np.array_equal(values["arr"], payload_state.arr)
+    assert type(values["randkey"]) is evoxc.Tensor
+    assert values["config"] == {"activation": "tanh", "layers": [3, 4]}
+
+    # Usable straight away: every entry reads through both spellings.
+    assert restored.pop_size == 4
+    assert restored["pop_size"] == 4
+    assert restored.config == {"activation": "tanh", "layers": [3, 4]}
+    assert restored["config"]["layers"] == [3, 4]
+    assert tuple(restored["arr"].shape) == (2, 3)
+    assert "arr" in restored
+    assert hasattr(restored, "randkey") is True
+    with pytest.raises(common.state.StateKeyError):
+        restored.typo
+
+    # Still a checkpointable State: save + load once more through a real file.
+    path = tmp_path / "payload.pkl"
+    restored.save(path)
+    reloaded = common.State.load(path)
+    assert type(reloaded) is common.State
+    _assert_same_content(reloaded, payload_state)
+
+    # And a real one: the mutators still work on the restored container.
+    extended = reloaded.register(extra=7)
+    assert extended.extra == 7
+    assert "extra" not in reloaded
+    assert tuple(reloaded.registered_keys()) == tuple(payload_state.registered_keys())
 
 
 # --------------------------------------------------------------------------- #
