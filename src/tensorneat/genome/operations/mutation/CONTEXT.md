@@ -124,7 +124,7 @@ Per-stage traced ops at pop 500 (each row = that probability `1.0`, the other th
 | delete-node only | 163 | +67 |
 | add-conn only (includes the 121-op cycle predicate) | 326 | +230 |
 | delete-conn only | 144 | +48 |
-| defaults `0.1/0.1/0.2/0.2` | **578** | = 96 + 137 + 67 + 230 + 48 exactly |
+| `(0.1, 0.1, 0.2, 0.2)` and the shipped `(0.1, 0.1, 0.4, 0.05)` | **578** | = 96 + 137 + 67 + 230 + 48 exactly; the count is independent of the probability values (all four stages stay traced unless a probability is `0`) |
 
 The increments are exactly additive, so the four stages cost their own ops and nothing is shared across them.
 The baseline's scaffold was 127 ops dearer (a plan for all four operations regardless of configuration) with far smaller per-stage increments (36 / 13 / 155 / 5), i.e. this kernel trades a shared merged plan for four independent contexts and writes.
