@@ -16,10 +16,19 @@ aligned-attribute row base and the ``(P * M, A)`` attribute row view) is rebuilt
 :func:`~.layout.build_grouped_statics`, which reuses every rank-0 scalar of the base digest.
 The module also owns :func:`validate_family`, the per-family geometry check both digest types
 run, so the plain and the grouped route refuse a mismatched centre with one wording.
-Nothing in the package calls :func:`group_digest`: ``algorithm/neat`` measures one
-population-shaped centre per ``measure_distance`` call, so the grouped route is a verified,
-unwired option — bit-identical to the ``k`` plain calls it replaces, but its wider
-intermediates cost numpy wall time and peak memory (``CONTEXT.md``, ``## Grouped route``).
+The route is the **accelerator leg's** shape and the host leg's rejected one: :func:`group_size`
+answers ``k = 1`` for a state whose ``kernel_mode`` is ``"host"``, so :func:`for_state` hands the
+numpy pipeline its plain digest unchanged and the CPU leg's dispatch count, wall time and peak
+RSS do not move, while a device leg groups at :data:`ACCELERATOR_GROUP` and halves the per-call
+launch count.
+The reason is the two legs' cost laws, not a preference: ``measure`` is *sort/bandwidth* bound on
+the reference interpreter, where the ``k``-times wider ``(k * P, 2M + 1)`` merge intermediates
+cost more than the dispatches they save (``CONTEXT.md``, ``## Grouped route``), and
+*launch* bound on a compiled backend, where every dispatch is charged the same floor however
+little work it does.
+Wiring is the caller's: it owns the static slot count, so it builds the digest once, groups it
+with :func:`for_state`, merges ``k`` centre payloads with :func:`centre_batch` per call and
+slices the ``k * P`` answer back per slot (``algorithm/neat/_distance.py``).
 """
 
 from typing import NamedTuple
@@ -27,6 +36,7 @@ from typing import NamedTuple
 import evoxc
 
 from ....common import ConfigError
+from ....common.schedule_accelerator import is_accelerator, kernel_mode
 from . import layout as _layout
 from .digest import DistanceDigest
 from .layout import MeasureStatics
@@ -190,6 +200,135 @@ def _repeat(block: evoxc.SymbolicTensor, group: int) -> evoxc.SymbolicTensor:
     if group == 1:
         return block
     return evoxc.concatenate((block,) * group, axis=0)
+
+
+#: Centre batches one grouped ``measure`` call covers on the accelerator leg: two halves the
+#: call count, and each launch then carries twice the rows, while the tiled digest grows only
+#: ``k`` times on the population axis — the trade a launch-bound device pays for and a
+#: bandwidth-bound one does not.
+ACCELERATOR_GROUP = 2
+#: Rows one grouped call may carry.  The grouping amortises a per-launch cost, never a per-element
+#: one, so a population wide enough that ``k`` batches would double the intermediates keeps
+#: today's dispatch count instead (:func:`group_size` then answers ``1``).
+GROUP_ROW_BUDGET = 4096
+
+
+def group_size(state, pop_size: int, species_size: int | None = None) -> int:
+    """Static number of centre batches one grouped ``measure`` call should cover.
+
+    Args:
+        state: The trace-time configuration ``State``; only its ``kernel_mode`` entry is read.
+        pop_size (int): Static population batch ``P`` of the digest, i.e. the centre batch one
+            plain ``measure`` call carries.
+        species_size (int | None): The caller's static slot count, when it has one.  More groups
+            than slots would measure nothing, so the answer is capped at it.
+
+    Returns:
+        int: ``1`` on the host leg (the plain route, unchanged), else at most
+        :data:`ACCELERATOR_GROUP` and at most ``GROUP_ROW_BUDGET // pop_size``.
+
+    Raises:
+        ConfigError: If ``pop_size`` is not a positive ``int``, or if ``species_size`` is neither
+            ``None`` nor a positive ``int``.
+        tensorneat.common.errors.ConfigError: If the state's ``kernel_mode`` entry is not one of
+            its documented values (raised by the shared reader, never defaulted here).
+
+    Notes:
+        Host-only and state-free on the compute path: it reads the same ``kernel_mode`` static
+        :func:`tensorneat.common.schedule_accelerator.kernel_mode` exposes, emits no traced op,
+        and is a pure function of statics, so a caller can hoist it above its scan.
+        ``k == 1`` is exactly today's route — :func:`for_state` then hands the caller the plain
+        digest, so no op and no byte is added on the host leg.
+        The cap is what keeps the trade honest on a wide population: at ``pop_size >=
+        GROUP_ROW_BUDGET`` the grouped form would double the per-launch element volume to save a
+        launch, which is the losing direction.
+    """
+    if isinstance(pop_size, bool) or not isinstance(pop_size, int) or pop_size <= 0:
+        raise ConfigError(
+            f"group_size: pop_size must be a positive int, got {pop_size!r}"
+        )
+    if species_size is not None and (
+        isinstance(species_size, bool) or not isinstance(species_size, int) or species_size <= 0
+    ):
+        raise ConfigError(
+            f"group_size: species_size must be None or a positive int, got {species_size!r}"
+        )
+    if not is_accelerator(kernel_mode(state)):
+        return 1
+    group = GROUP_ROW_BUDGET // pop_size
+    if species_size is not None:
+        group = min(group, species_size)
+    return max(1, min(ACCELERATOR_GROUP, group))
+
+
+def for_state(state, digest: DistanceDigest, *, species_size: int | None = None):
+    """Pair a prepared digest with the group size this state's leg wants.
+
+    Args:
+        state: The trace-time configuration ``State`` handed to ``measure``; only its
+            ``kernel_mode`` entry is read.
+        digest (DistanceDigest): The generation's population digest from
+            :meth:`~.base.BaseDistance.prepare`.
+        species_size (int | None): Optional static slot count, forwarded to :func:`group_size`.
+
+    Returns:
+        tuple: ``(digest, group)`` — the :class:`GroupedDigest` and the ``k`` it answers when
+        ``k > 1``, else the argument digest unchanged and ``1``.
+
+    Raises:
+        ConfigError: For the reasons :func:`group_size`/:func:`group_digest` raise.
+
+    Notes:
+        The whole seam is this function plus :func:`centre_batch`: a caller that owns ``k``
+        centre batches (a speciation scan over static slots) builds the digest once, groups at
+        ``k``, concatenates ``k`` centre payloads per call and slices the ``k * P`` answer back
+        into its slots.  Every step is a static decision on a host string and a host int, so the
+        grouped form never reaches a graph the host leg builds.
+        Grouping does not change the arithmetic: ``measure`` on the grouped digest is
+        bit-identical to ``k`` plain ``P``-row calls (``CONTEXT.md``, ``## Grouped route``), so a
+        caller may mix grouped and plain calls inside one generation without moving a value.
+    """
+    group = group_size(state, int(digest.node_count.shape[0]), species_size)
+    if group == 1:
+        return digest, 1
+    return group_digest(digest, group), group
+
+
+def centre_batch(centres) -> tuple:
+    """Concatenate ``k`` centre payloads into the ``k * P`` batch a grouped digest takes.
+
+    Args:
+        centres: The centre payloads to merge, each a four-tuple of ``(P, ...)`` tensors in
+            ``GenomeTensors`` order (``node_keys``, ``node_attrs``, ``conn_keys``,
+            ``conn_attrs``) — the shape one plain ``measure`` call takes.
+
+    Returns:
+        tuple: the four arrays concatenated on axis 0, i.e. ``(k * P, ...)`` per field, in the
+        same order — so group ``j`` occupies rows ``j * P .. (j + 1) * P - 1`` of every field and
+        of the ``(k * P,)`` distance vector that comes back.
+
+    Raises:
+        ConfigError: If ``centres`` is empty, or if a payload does not hold exactly four arrays.
+
+    Notes:
+        One ``concatenate`` per field and none at all for a single centre, and the row order is
+        the caller's: :meth:`~.base.BaseDistance.measure` answers row ``j * P + p`` for centre row
+        ``j * P + p``, so slicing the result per group with ``evoxc.slice`` in the same order
+        recovers the per-slot rows verbatim.
+    """
+    rows = [tuple(centre) for centre in centres]
+    if not rows:
+        raise ConfigError("centre_batch: at least one centre payload is required")
+    for row in rows:
+        if len(row) != 4:
+            raise ConfigError(
+                f"centre_batch: a centre payload must hold the four gene arrays, got {len(row)}"
+            )
+    if len(rows) == 1:
+        return rows[0]
+    return tuple(
+        evoxc.concatenate(tuple(row[field] for row in rows), axis=0) for field in range(4)
+    )
 
 
 def validate_centre(name: str, payload: tuple, digest: GroupedDigest) -> int:
@@ -370,4 +509,13 @@ def validate_family(
         )
 
 
-__all__ = ["GroupedDigest", "group_digest", "validate_centre"]
+__all__ = [
+    "ACCELERATOR_GROUP",
+    "GROUP_ROW_BUDGET",
+    "GroupedDigest",
+    "centre_batch",
+    "for_state",
+    "group_digest",
+    "group_size",
+    "validate_centre",
+]
