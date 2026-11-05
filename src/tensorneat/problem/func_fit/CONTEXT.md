@@ -23,8 +23,8 @@ The dataset is baked into the compiled artifact, so its size is paid on every bu
 - The reconstruction is structure-driven, so any batch-first pytree with tensors on its leaves works (flat `Transformed`, nested `SubstrateSchedule`) at any static `P`; the leaves must be concrete tensors, since `evoxc.evaluate` derives one `TensorSpec` per argument.
 - `xor.py: XOR(error_method="mse")` — literals for XOR over `{0,1}^2`: `input_shape=(2,)`, `output_shape=(1,)`, S=4, `dataset_nbytes == 48`.
 - `xor3d.py: XOR3d(error_method="mse")` — 3-bit parity: `input_shape=(3,)`, `output_shape=(1,)`, S=8, `dataset_nbytes == 128`.
-- `custom.py: CustomFuncFit(func, low_bounds, upper_bounds, method="sample", num_samples=100, step_size=None, seed=None, error_method="mse")` stores `func`, float32 `low_bounds`/`upper_bounds`, `method`, `num_samples`, `step_size`, `seed` and the generated `_inputs`/`_targets`.
-- `custom.py: cartesian_product(arr1, arr2)` — row-major column-wise product, first input slowest; rank-1 inputs are treated as single columns and produce `(n1*n2, 2)`.
+- `custom.py: CustomFuncFit(func, low_bounds, upper_bounds, method="sample", num_samples=100, step_size=None, seed=None, error_method="mse")` stores `func`, float32 `low_bounds`/`upper_bounds`, `method`, `num_samples`, `step_size`, `seed` and the generated `_inputs`/`_targets`; it validates the box before generating anything (shape equality, every bound finite, every axis a proper interval `low < high`), so a box that cannot produce a non-empty sample or grid fails as a `TensorNEATError` at construction.
+- `custom.py: cartesian_product(arr1, arr2)` — row-major column-wise product, first input slowest; rank-1 inputs are treated as single columns and produce `(n1*n2, 2)`; disagreeing ranks or a rank above 2 raise `TensorNEATError`.
 
 ## Algebra (the one thing to get right)
 Tile, don't loop: `tiled = evoxc.tile(inputs, (P, 1))` → `pred = act_fn(tiled)` → `reshape((P, S, O))` → `err = pred - targets` → mean over axes 1 and 2 (sample **and** output), negated, then `finalize_fitness`.
