@@ -689,9 +689,8 @@ def speciate(
     centre_payload = payload_like(population, *centre_fields)
     # Trace-time constants are built once here and closed over by the scan
     # bodies: a ``while`` body may reference enclosing SSA values, so one
-    # ``constant`` op at the top level replaces the one every body would
-    # otherwise re-emit on each of its ``species_size`` iterations.  The values
-    # and their dtypes are exactly what the bodies used to build in place.
+    # ``constant`` op at the top level instead of one re-emitted on each of the
+    # body's ``species_size`` iterations.
     iinf = int_const(I_INF)
     zero_i32 = int_const(0)
     zero_f32 = const(0.0)
