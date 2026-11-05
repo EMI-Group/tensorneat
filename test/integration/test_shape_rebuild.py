@@ -15,7 +15,7 @@ What is deliberately *not* asserted
 -----------------------------------
 Which attribute holds the cache, and that an off-shape population fed to a built pipeline raises: neither is observable from outside today, because the executable lives inside ``pipeline.py`` and a payload never reaches a cached executable without going through the pipeline's own entry points.
 Instead of a ``pytest.raises(Exception)`` that could only restate ``evoxc``'s internals, :func:`test_a_same_shape_rerun_leaves_the_pipeline_consistent` pins what the contract actually protects — a reused or rebuilt executable leaves a population that re-scores to a finite ``(P,)`` vector.
-The one remaining gap is documented, not hidden: if no compile call is visible at all, :func:`test_a_second_generation_of_the_same_shape_does_not_compile_again` skips and names the entry points the compile site has to go through.
+The one remaining gap is documented, not hidden: if no compile call is visible at all, :func:`test_a_second_generation_of_the_same_shape_does_not_compile_again` fails and names the entry points the compile site has to go through.
 Budget (measured, not asserted)
 -------------------------------
 Every run is ``generation_limit=1`` with ``fitness_target=1.0`` (XOR fitness is ``-mse <= 0``, so one generation is always consumed), except the last test which steps one extra generation at ``pop_size=8``.
@@ -23,7 +23,7 @@ Every run is ``generation_limit=1`` with ``fitness_target=1.0`` (XOR fitness is 
 Why nothing here is a module-scope ``tensorneat`` import
 -------------------------------------------------------
 ``tensorneat`` arrives through the ``tn`` fixture and the payload helpers through ``./conftest``, which resolves everything lazily with ``support.lazy.require``; a failed import names a skip instead of turning the module into a collection error.
-The directory-wide autouse probe ``require_evoxc_pipeline`` is the only guard: it requires every documented evoxc-pipeline feature and skips with the exact list of anything missing.
+The directory-wide autouse probe ``require_evoxc_pipeline`` is the only guard: it requires every documented evoxc-pipeline feature and fails with the exact list of anything missing.
 """
 from __future__ import annotations
 
@@ -293,11 +293,11 @@ def test_a_second_generation_of_the_same_shape_does_not_compile_again(
     (``n3 > n1``): a new shape signature is a new executable.
 
     Notes:
-        The skip is the one documented observability gap and is not a placeholder:
-        if the first step compiles nothing observable, the per-shape executable
-        cannot be seen from outside at all, and the skip text names the entry
-        points the compile site has to go through (``evoxc.build`` and friends) for
-        this contract to become checkable.
+        The failure is the one documented observability gap and is not a
+        placeholder: if the first step compiles nothing observable, the per-shape
+        executable cannot be seen from outside at all, and the failure message
+        names the entry points the compile site has to go through
+        (``evoxc.build`` and friends) for this contract to become checkable.
         ``setup()`` runs before the block so that an initialization kernel cannot
         be mistaken for the generation kernel; building the second pipeline's
         object also happens before the block, while its ``setup()`` and first step
@@ -318,11 +318,11 @@ def test_a_second_generation_of_the_same_shape_does_not_compile_again(
         state, fitness = step_once(first, state)
         n1 = len(calls)
         if n1 == 0:
-            pytest.skip(
+            pytest.fail(
                 "no evoxc.build/build_cached/lower/compile call was observed during "
                 "the first step, so the per-shape executable cannot be observed from "
-                "outside; pipeline.py's compile site needs to go through one of those "
-                "entry points"
+                "outside; this is a regression of pipeline.py's single compile site, "
+                "which must go through one of those entry points"
             )
         state, fitness = step_once(first, state)
         n2 = len(calls)

@@ -68,7 +68,7 @@ test).
 Why this file has no skip of its own
 ------------------------------------
 ``./conftest.py``'s autouse probe (:func:`~.conftest.require_evoxc_pipeline`)
-requires every documented evoxc-pipeline feature and skips with the exact list
+requires every documented evoxc-pipeline feature and fails with the exact list
 of anything missing.
 ``tensorneat`` is never imported at module scope: the package arrives through the
 ``tn``/``tiny_pipeline`` fixtures, exactly as in every other module of this
