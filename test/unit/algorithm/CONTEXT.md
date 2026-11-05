@@ -6,16 +6,18 @@ Every assertion is a structural invariant on a hand-written population — a con
 The oracles are formulas re-derived from the documentation (numpy loops and closed forms), never a second copy of the kernel's gather/mask data movement.
 The suite exists because these steps are the only ones rewritten from a data-dependent `evoxc.while_loop` into fixed-length `evoxc.scan`s: a mask that writes one slot too many, a sort tie-order or a residual correction changes every seeded run while the forward pass still looks correct.
 Comparison against the pre-rewrite operator is `../../parity`'s job, not this directory's.
-The package surface is pinned too: `test_exports.py` checks that every documented `tensorneat.algorithm.*` spelling resolves to the class its defining submodule exposes and is listed in `__all__`.
+The package surface is pinned too: `test_exports.py` checks that `__all__` is exactly the documented set, that every entry is a callable defined inside the package, and that each documented `tensorneat.algorithm.*` spelling resolves to the class its defining submodule exposes.
+The distance seam is pinned by `test_distance_dense.py`: the gated and dense `speciate` paths must produce one generation bit for bit, and the dense branch must be the branch a forced gate actually reaches.
 
 ## Layout and counts
 `test_spawn.py` (69) — both allocators and the two spawn building blocks.
 `test_speciation.py` (16) — the two speciation scans, dead-slot handling, the leftover and counter rules, the split-centre shape contract.
 `test_parent_selection.py` (22) — survivor prefix, elite pinning, father-wins-tie, per-block draws, `elite_mask`.
 `test_neat_tell.py` (37) — `_sanitize_fitness`, `tell` order/determinism/shape preservation, stagnation, `ask`/`transform`/`forward` wiring, `_batched` chunking, constructor validation.
-`test_exports.py` (4) — the `tensorneat.algorithm` public surface: each documented spelling resolves to the class its defining submodule exposes, appears in `__all__`, and every `__all__` entry resolves via `getattr`.
+`test_exports.py` (4) — the `tensorneat.algorithm` public surface: `__all__` is exactly the four documented spellings, every entry is a callable defined inside `tensorneat.algorithm`, and each spelling resolves to the class its defining submodule exposes.
+`test_distance_dense.py` (7) — the gated/dense seam of `speciate`: a whole `NEAT.tell` driven twice from one state with `GATED_ROWS` forced to `0` and `10**9` (plus a `DistanceRows.matrix` call-count spy), `_kernels.speciate` on two hand-written distance tables with `gate` passed explicitly, and `DistanceRows.matrix` against its own per-centre spelling.
 `conftest.py` — module fixtures, the `SpeciesState`/`State` table factories, and the two graph runners.
-Whole directory: 148 passed, 0 xfailed, 0 failed, 0 skipped in ~4 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
+Whole directory: 155 passed, 0 xfailed, 0 failed, 0 skipped in ~5 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
 
 ## Fixtures (`conftest.py`)
 Module fixtures return modules only: `species` (`tensorneat.algorithm.neat.species`), `neat_module` (`neat.py`), `common`, `errors`, `payloads` (`support.payloads`).
@@ -34,6 +36,7 @@ Module-scope imports of `tensorneat`, `numpy` and `support.*` are the convention
 `expected_block_layout` (a local copy lives in `test_parent_selection.py`) uses the implementation's authoritative rule: `loc(p)` is the **last** `i` with `spawn[i] > 0` and `E[i] <= p`, and `idx_in_block(p) = p - E[loc(p)]`; the *count* of qualifying blocks is wrong whenever a live zero-spawn species sits mid-table (`[3,0,5,0]` is the regression).
 The residual lands on the first **live** slot (slot `0` only after the descending sort), so fixtures keep slot `0` live; the residual may also be negative when the `min_species_size` floor overflows the budget.
 `assign_by_hand` re-derives both speciation scans with Python loops over a controlled `(P, P)` distance table keyed by each genome's identity, so the threshold/steal/`argmin` cases are testable without the real compatibility metric.
+`test_distance_dense.py`'s `SpeciationCase` writes the whole `(P + S, P)` distance table by hand, row `r` belonging to the genome tagged `r` (population rows `0..P-1`, initial centre rows `P..P+S-1`); a fake `distance_fn` serves it through `matrix` (the initial centre rows, for the dense scan 1) and through `__call__` (a gather by the centre's gene tag, for scan 2). The expected `idx2species`, keys, `member_count`, centre-row identity and created-slot bookkeeping are derived from the documented scan rules, so the oracle never runs a second kernel.
 `stagnation_reference` and `sanitize_reference` are the documented closed forms.
 The father-wins-tie rule is pinned by *reproducing* the draw: the test runs the documented `evoxc.random.randint(key, (S,2,P), 0, survive)` plus `flat_gather` in its own one-op graph, then asserts `winner` is the father and `loser` the mother on an all-tied table.
 
@@ -53,8 +56,8 @@ Files stay under ~1000 lines (`test_neat_tell.py` sits at 993, `test_speciation.
 
 ## Coverage gaps in this directory
 `../../../src/tensorneat/algorithm/hyperneat/**` has no behavioural test anywhere in the tree: `HyperNEAT`, `HyperNEATFeedForward`, `HyperNEATNode`, `HyperNEATConn`, `SubstrateSchedule` and the four substrate classes are touched only by `./test_exports.py` (identity and `__all__`) and by `../../release_gate_no_jax.py` (an attribute name), so their setup/transform/forward/tell and the substrate geometry are exercised only by `../../../examples/func_fit/xor_hyperneat.py` and `xor_hyperneat_feedforward.py`, which assert nothing.
-`_distance.DistanceRows` is never constructed here: `./test_speciation.py` hands `speciate` a fake table-reading `distance_fn`, so `matrix`, `population_shaped`, the batch-1 tiling, the digest/population checks and both `TensorNEATError` rejections are unverified except indirectly through the small `tell` runs of `./test_neat_tell.py` (which reach only the batch-`pop_size` route of `row`).
-The dense `speciate` branch is reachable from no test in the tree: `_kernels.GATED_ROWS` is `6000`, this directory tops out at `S * P = 32` and `../../integration` at `10 * 100`, so `distance_fn.matrix` and the "needs a digest-backed distance_fn" rejection at `_kernels.speciate` are untested although every real run at `pop 500`/`1000` takes that branch.
+`_distance.DistanceRows` is constructed by `test_distance_dense.py`: `matrix` is asserted against one `__call__` per centre row on four different genomes, and the batch-1 tiling of `__call__` runs there too. What stays unverified is `DistanceRows.__init__`'s two `TensorNEATError` rejections (digest population axis and payload batch) and `_check_population`'s shape rejection, plus `_kernels.speciate`'s "dense needs a digest-backed `distance_fn`" rejection (every forced-dense test hands it a table with `matrix`).
+The dense `speciate` branch is exercised by `test_distance_dense.py` with `GATED_ROWS` forced to `0` and with `gate` passed explicitly; the rest of the tree still tops out at `S * P = 32`, so nothing else reaches it.
 `_keys.node_keys_for_split`/`first_free_keys`/`validate_key_space` have no assertion anywhere: the allocator runs inside `NEAT.tell`, but no test checks that offspring node keys are unique, inside `[0, key_span)` or produced by the fallback.
 `SpeciesController.update_species` is exercised only through `tell`, and `_gather_species`'s reorder of `species_keys` and the four centre arrays is never asserted; both spawn allocators and the block layout depend on that sorted slot order.
 `_sort_desc_legacy` is never run directly (no test calls it through `raw_kernel`): its reverse-index tie order is only pinned indirectly, through `_pair_parents`' population-axis ranking in `./test_parent_selection.py`.
@@ -75,6 +78,7 @@ Deterministic and fast: no timing, no network, no GPU, no `tmp_path` persistence
 | `./test_speciation.py` | the two speciation scans, dead slots, leftover rule, counter advance, split-centre shape contract. |
 | `./test_parent_selection.py` | survivor prefix, one-member species, elite pinning and `elite_mask`, father-wins-tie, per-block draws, RNG hygiene. |
 | `./test_neat_tell.py` | `_sanitize_fitness`, `tell` order/shape/determinism, stagnation, `ask`/`transform`/`forward`, chunking, constructor validation. |
-| `./test_exports.py` | `tensorneat.algorithm.__all__` and the documented spellings (`BaseAlgorithm`, `NEAT`, `HyperNEAT`, `HyperNEATFeedForward`), including the identity with the defining submodule. |
+| `./test_exports.py` | `tensorneat.algorithm.__all__` is exactly the documented spellings, every entry is a callable defined inside the package, and each spelling is the class its defining submodule exposes. |
+| `./test_distance_dense.py` | the gated/dense seam: whole-`tell` equivalence under `GATED_ROWS = 0` vs `10**9` plus a `DistanceRows.matrix` call-count spy, direct `_kernels.speciate` on hand-written distance tables with `gate` explicit, and `DistanceRows.matrix` vs per-centre `__call__`. |
 | `./conftest.py` | module fixtures, table factories, `species_kernel`/`raw_kernel`. |
 | `../../../src/tensorneat/algorithm/neat` | code under test (`NEAT`, `SpeciesController`, `_kernels`, `_validation`) — read-only, escalate changes upward. |
