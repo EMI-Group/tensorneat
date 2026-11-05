@@ -5,8 +5,9 @@ Two kinds of fixture live here.
 **Inputs, resolved at fixture time.** ``tensorneat.genome``, ``tensorneat.common``,
 ``support.payloads``, ``support.oracle`` and ``support.runner`` are each resolved
 through :func:`support.lazy.require` inside the fixture body, never at module
-scope: a ``NotImplementedError`` raised during the import becomes a named skip
-while every other error surfaces unchanged.
+scope: every error — a ``NotImplementedError`` included — propagates unchanged,
+because ``require`` converts a pending implementation into a skip only under the
+explicit ``allow_pending=True`` keyword and no fixture here passes it.
 
 **Graph glue, one place.** ``support/runner.py`` is the only module allowed to
 call ``evoxc.build``/``run``/``lower``/``compile``/``load``
@@ -98,8 +99,9 @@ def genome():
         public surface listed in ``tensorneat/genome/__init__.py``.
 
     Notes:
-        The import is deferred (see the module docstring); ``require`` turns only
-        the pending-implementation ``NotImplementedError`` into a skip.
+        The import is deferred (see the module docstring); ``require`` propagates
+        every error by default, so a ``NotImplementedError`` raised by the library
+        under test surfaces here as a failure, not a skip.
     """
     from support.lazy import require
 
@@ -135,7 +137,8 @@ def payloads():
     Notes:
         Every topology here is written by hand, never drawn, so a test asserts a
         value it can print. ``support.payloads`` imports ``tensorneat.common.tools``
-        at module scope, so while ``src/`` is unfinished this fixture skips too.
+        at module scope, so an unfinished import there fails the fixture instead
+        of skipping it.
     """
     from support.lazy import require
 

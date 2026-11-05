@@ -1,6 +1,6 @@
 """Shared fixtures and helpers of the ``./integration`` suite: one tiny ``Pipeline`` plus the host-side drivers.
 Every test in this directory drives a whole ``tensorneat.Pipeline`` on the numpy backend, so the shared layer covers exactly the things a whole-pipeline test needs and nothing else.
-``tn``, ``payloads`` and ``runner`` are resolved through :func:`support.lazy.require`, which imports them at fixture time and reports a pending implementation as a named skip instead of turning the module into a collection error.
+``tn``, ``payloads`` and ``runner`` are resolved through :func:`support.lazy.require`, which imports them at fixture time so a failing import is attributed to the test that needed it, and which propagates every error — a ``NotImplementedError`` included — instead of turning the module into a collection error.
 :data:`TINY_CONFIG` is the single small XOR configuration every pipeline in this suite is built from; :func:`tiny_pipeline` spells it out and refuses unknown knobs instead of ignoring them.
 :func:`run_pipeline` is ``setup()`` plus ``auto_run()``; the per-generation trajectory comes from :func:`step_loop`, which drives the documented ``pipeline.step`` one generation at a time and never reads an internal history attribute.
 :func:`evaluate_population` re-scores any gene payload on the host through the documented kernel triple ``algorithm.transform`` → ``algorithm.prepare_forward``/``algorithm.forward_prepared`` → ``problem.evaluate``, so it serves both ``NEAT`` and ``HyperNEAT`` (whose ``SubstrateSchedule`` carries a nested schedule).
@@ -211,10 +211,12 @@ def tn():
         Surface" spells them.
 
     Notes:
-        The import happens at fixture time (module docstring): a
-        ``NotImplementedError`` raised during the import becomes a named skip,
-        while every other error surfaces. The module is imported once per module
-        scope, so a broken import is reported once per test module.
+        The import happens at fixture time (module docstring), and every error
+        propagates — a ``NotImplementedError`` included, because ``require``
+        converts a pending implementation into a skip only under the explicit
+        ``allow_pending=True`` keyword, which this fixture does not pass. The
+        module is imported once per module scope, so a broken import is reported
+        once per test module.
     """
     from support.lazy import require
 
@@ -233,8 +235,8 @@ def payloads():
 
     Notes:
         ``support.payloads`` imports ``tensorneat.common.tools`` at module scope,
-        so while ``src/`` is unfinished this fixture skips too, naming the payload
-        module in the reason.
+        so an import failure there — a ``NotImplementedError`` included — surfaces
+        as an error naming the payload module, never as a skip.
     """
     from support.lazy import require
 

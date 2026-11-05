@@ -25,7 +25,7 @@ The distance seam is pinned by `test_distance_dense.py`: the gated and dense `sp
 `test_hyperneat_e2e.py` (4) — pop-4 two-generation `Pipeline` runs of both variants over `CustomFuncFit`, determinism per seed, and a `network_dict`/`show` report on the best CPPN.
 `hyperneat_kernel.py` — the shared trace harness (not a test module, not collected): `make_hyper`, `make_state`, `cppn_payload`, `make_substrate`, `make_cppn_genome`, `make_neat`, `run_method`, and the small default geometry constants.
 `conftest.py` — module fixtures, the `SpeciesState`/`State` table factories, and the two graph runners.
-Whole directory: 372 passed, 1 xfailed, 0 failed, 0 skipped in ~11 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
+Whole directory: 373 collected — 372 passed, 1 xfailed, 0 failed, 0 skipped in ~11 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
 Coverage of `src/tensorneat/algorithm/hyperneat/` from this directory alone: 99 % (618/620 statements) — `genes.py`, `hyperneat_feedforward.py`, both `__init__.py`, `substrate/base.py`, `substrate/default.py`, `substrate/full.py` and `substrate/mlp.py` at 100 %, `hyperneat.py` missing only `_attr_columns`' two unreachable rejections (`hyperneat.py:842`, `:848`).
 
 ## Fixtures and the trace harness
@@ -59,7 +59,7 @@ The `test_hyperneat.py` forward oracle is a hand phenotype evaluation on hand-se
 A strict xfail `test_hyperneat.py::test_forward_reads_the_substrate_output_neurons` pins a real source defect: `HyperNEAT._validate` requires (and `_assemble_substrate` broadcasts) the node-key block order inputs, outputs, hidden, while the executor genome reads its outputs from the **last** `num_outputs` rows (`genome/base.py:236` `output_idx`, `genome/step.py:439` `_output_values`). With a hidden block the read-out row is therefore a hidden neuron and the real output neuron is activated but never read; the test asserts the documented value and both symptoms, and it is expected to XPASS once the source is fixed (then delete the xfail, never weaken it).
 The legacy `benchmarks/legacy_jax` substrate uses the same inputs/outputs/hidden node order, so this is inherited behaviour rather than a rewrite regression; it still contradicts the substrate contract ("the block order exists because `input_idx`/`output_idx` ranges depend on it").
 `src/` documentation drift reported upward: `_weights_from_query`'s docstring claims the weights land in `[-max_weight, max_weight]`, which only holds for `|w| <= 1` (an unbounded CPPN output scales past `max_weight`); `_kernels.pair_parents` caps the survivor count as `max(min(member_count, pop_size), 1)`, which differs from the documented `min(...)` only for an unreachable live species with `member_count == 0`; `_kernels.block_layout`'s `spawn > 0` mask term is redundant under the last-qualifying-block rule.
-`test/release_gate_no_jax.py`'s resolved-surface list names `tensorneat.algorithm.NEAT`/`HyperNEAT` only, while the package also re-exports `HyperNEATFeedForward` (pinned here by `./test_exports.py`); the list is test-owned and reported upward.
+`test/release_gate_no_jax.py`'s resolved-surface list names `tensorneat.algorithm.NEAT`/`HyperNEAT`/`HyperNEATFeedForward`, matching this directory's `__all__` pin in `./test_exports.py`.
 
 ## Gotchas for agents
 pytest **hangs** (no output, needs a kill) when a test lets an exception escape an evoxc graph under the default `--tb=auto`; use `--tb=short` while debugging a deliberately broken kernel.
@@ -82,7 +82,7 @@ Files stay under ~1000 lines (`test_speciation.py` and `test_hyperneat_feedforwa
 `_sort_desc_legacy` is never run directly (no test calls it through `raw_kernel`): its reverse-index tie order is only pinned indirectly, through `_pair_parents`' population-axis ranking in `./test_parent_selection.py`.
 `NEAT.prepare_forward`/`forward_prepared` are not called here (the genome-level `prepare_pass` split lives in `../genome`), and `NEAT.show_details` is unasserted.
 `_validation`'s four helpers and `SpeciesController.__init__`'s own rejections are reached only through `NEAT.__init__` in `./test_neat_tell.py`.
-No parity or integration case exercises HyperNEAT: `../../parity/algorithm/` does not exist, and the decode is pinned only against the documented algebra here.
+HyperNEAT is also exercised end to end outside this directory: `../../integration/test_hyperneat_integration.py` (3 cases) drives both variants through a whole `Pipeline` — config fallback, substrate rebuild, checkpoint and CPPN decode — alongside this directory's `./test_hyperneat_e2e.py`; `../../parity/algorithm/` still does not exist, so the decode is compared only against the documented algebra.
 
 ## Constraints
 Backend is `"numpy"`; the per-test guard in `../conftest.py` fails any test that leaves `jax`/`torch`/`brax`/`gymnax`/`mujoco` in `sys.modules`.
