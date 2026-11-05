@@ -25,7 +25,6 @@ Two modules pin a guard that a naive implementation would pass by accident: `tes
 `OriginNode.crossover` and `OriginConn.crossover`/`get_historical_marker` are never executed: `OriginConn` appears only as a three-column key layout, and every crossover assertion runs the per-attribute `DefaultNode`/`DefaultConn` path.
 `BiasNode`'s host hooks (`repr`, `to_dict`, `sympy_func`) and its `new_identity_attrs` are never called; its only use is the CartPole golden run, which asserts fitness/population hashes.
 `max_conn_marker`'s `uses_historical_marker` branch is dead in the suite: the algorithm tests build `DefaultConn`, so a marker-carrying genome inside `NEAT.tell` is untested.
-`BaseCrossover`'s differently-shaped-parent `ConfigError` is claimed by this suite's own `test_crossover.py` docstring but no test pins it.
 `window.any_slot`'s wide-window fallback (`width > _WINDOW_FOLD_LIMIT`) is untested — every genome here uses `max_in_degree <= 5`.
 `in_degree`/`max_in_degree`/`violation` (`operations/mutation/degree.py`, re-exported from `operations.mutation`) have no caller in `src/` and no test.
 `test_grad.py` never builds a non-default node gene: the `AGG.mean` divide (`grad.py:421`), the activation derivative and the output-row mask (`grad.py:429`) are unexercised, and none of `dense_grad_plan`'s refusals (`grad.py:186-249`) is asserted.
