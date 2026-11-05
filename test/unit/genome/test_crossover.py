@@ -311,6 +311,74 @@ def test_attributes_come_from_the_fitter_parent_where_keys_align(
     assert (child_conns == conns2).any()
 
 
+def test_attribute_columns_are_picked_independently(genome, runner, seed):
+    """Invariant: ``crossover_attrs`` recombines **per attribute column**, not per gene.
+
+    Oracle: the documented rule of ``gene/blocks.py::crossover_attrs`` -- one
+    ``U[0, 1)`` draw per block entry, ``< 0.5`` takes parent 1's cell -- applied to two
+    parents whose every cell is a distinct value.  Each child cell must then equal
+    *that cell* of one parent (never a mean, never another row's value), and because
+    the draws are independent per entry the child must contain rows that take column
+    ``0`` from one parent and column ``1`` from the other, **in both directions**, and
+    every column must take both parents somewhere.  A whole-gene pick (``OriginNode``
+    behaviour) or a single draw broadcast across a row produces only all-parent-1 /
+    all-parent-2 rows and fails.
+    The test runs the function directly (it has no other direct test) and sweeps
+    ``evoxc`` keys until one run exhibits the mixing it asserts, so the claim is not
+    left to a lucky draw; the executable is cached per shape, so extra keys are runs,
+    not builds.  ``DefaultNode`` declares the four attribute columns this block
+    models (asserted below, so a column-order change cannot silently pass).
+    """
+    assert len(genome.DefaultNode().attr_specs) == 4  # the block models DefaultNode
+    blocks = genome.gene.blocks
+    rows = 8
+    # Every cell distinct, including across rows: a neighbouring-row gather shows up
+    # as a value that is neither parent's value *at that cell*.
+    offsets = 100.0 * np.arange(rows, dtype=np.float32)[:, None]
+    columns = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+    parent1 = offsets + columns
+    parent2 = -(offsets + columns)
+
+    def crosses(key):
+        return runner.run_defn(blocks.crossover_attrs, key, parent1, parent2)
+
+    chosen = None
+    for offset in range(32):
+        import evoxc
+
+        key = evoxc.random.key(seed + offset)
+        child = crosses(key)
+        assert child.shape == parent1.shape
+        assert child.dtype == np.float32
+        # Every entry is exactly one parent's cell at that position: no blend and no
+        # value from another row (which is what makes ``first`` a complete record of
+        # the pick).
+        assert ((child == parent1) | (child == parent2)).all()
+        first = child == parent1
+        # Both mix directions: some row takes column 0 from parent 1 and column 1 from
+        # parent 2, and some row takes the opposite pair.
+        direction_a = bool((first[:, 0] & ~first[:, 1]).any())
+        direction_b = bool((~first[:, 0] & first[:, 1]).any())
+        per_column = all(bool(first[:, index].any() and (~first[:, index]).any())
+                         for index in range(4))
+        if direction_a and direction_b and per_column:
+            chosen = first
+            break
+    assert chosen is not None, (
+        "no evoxc key mixed the attribute columns in 32 runs: a per-gene or "
+        "row-broadcast pick cannot"
+    )
+    first = chosen
+    # Columns 0 and 1 disagree about which parent they came from, in both directions.
+    assert (first[:, 0] & ~first[:, 1]).any()
+    assert (~first[:, 0] & first[:, 1]).any()
+    # Every column is a real per-column draw (both parents occur).
+    for index in range(4):
+        assert first[:, index].any() and (~first[:, index]).any()
+    # And the pattern varies by row, so the draw is not one value broadcast down a row.
+    assert len({first[row].tobytes() for row in range(rows)}) > 1
+
+
 def test_genes_without_a_homologue_keep_parent_one_attributes(
     payloads, run_kernel, evoxc_key
 ):
