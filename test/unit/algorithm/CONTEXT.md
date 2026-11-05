@@ -14,8 +14,9 @@ The package surface is pinned too: `test_exports.py` checks that every documente
 `test_parent_selection.py` (22) — survivor prefix, elite pinning, father-wins-tie, per-block draws, `elite_mask`.
 `test_neat_tell.py` (37) — `_sanitize_fitness`, `tell` order/determinism/shape preservation, stagnation, `ask`/`transform`/`forward` wiring, `_batched` chunking, constructor validation.
 `test_exports.py` (4) — the `tensorneat.algorithm` public surface: each documented spelling resolves to the class its defining submodule exposes, appears in `__all__`, and every `__all__` entry resolves via `getattr`.
+`test_substrate.py` (114) — the HyperNEAT substrate geometry and its validation matrix, on plain host NumPy: no graph, no runner, no `State`.
 `conftest.py` — module fixtures, the `SpeciesState`/`State` table factories, and the two graph runners.
-Whole directory: 148 passed, 0 xfailed, 0 failed, 0 skipped in ~4 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
+Whole directory: 262 passed, 0 xfailed, 0 failed, 0 skipped in ~4 s (`pytest test/unit/algorithm`), inside the default gate `pytest -m "not parity and not slow"`.
 
 ## Fixtures (`conftest.py`)
 Module fixtures return modules only: `species` (`tensorneat.algorithm.neat.species`), `neat_module` (`neat.py`), `common`, `errors`, `payloads` (`support.payloads`).
