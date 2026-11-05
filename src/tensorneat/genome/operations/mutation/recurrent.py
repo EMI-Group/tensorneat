@@ -258,7 +258,9 @@ class RecurrentMutation(DefaultMutation):
         # `p_recur == 0` the add-connection degenerates to the plain draw, so the whole
         # region (and its ~106 traced ops) is skipped rather than traced and discarded.
         if genome.network_type == "feedforward" or self.p_recur > 0.0:
-            closes = closes_cycle(node_keys, conn_keys, in_key, out_key)
+            closes = closes_cycle(
+                node_keys, conn_keys, in_key, out_key, genome.key_span
+            )
         else:
             closes = None
         if genome.network_type == "feedforward":
