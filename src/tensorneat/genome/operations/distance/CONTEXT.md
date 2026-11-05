@@ -188,6 +188,20 @@ Merge: **55 exports / 34 unique base names**, of which the two measure sorts own
 Dense: **42 exports / 33 unique base names** — all 12 of those exports and the matvec **disappear outright** (not shrink), the only wide `(P, M, M)` reductions left are the two `prepare` argsorts (`reduction_500x50x50_i64`, `reduction_500x100x100_i64`, 3 exports each, paid once per generation instead of per call), and the per-call body becomes 6 **scatter** dispatches plus narrow `int32`/`f32` passes: `scatter_152xi32`, `scatter_152x4xf32`, `scatter_25500xf32`, `scatter_22502xi32`, `scatter_22502x1xf32`, `scatter_50500xf32` (all rank ≤ 2; the largest is a `(50500,) f32` tensor store).
 Against the modelled ≈220 µs (conn) + ≈58.5 µs (node) of argsort fan per call over ~40 calls per generation (≈11.1 ms) the dense route leaves **zero** argsort dispatches in `measure` and pays 40 × 6 = 240 narrow scatter dispatches instead.
 
+Per-dispatch evidence for that model — rocprofv3 kernel trace of ONE warm `xor_p500` generation (tree `fca9b8e`, MI300X gfx942, IREE 3.13): 2 861 kernels, **42.6 ms device**, **80 % of it `tell`**, 240 dispatches of this node's reduce/argsort family ≈ **20 ms (47 %)** at the per-instance means below (grid/wg from the same trace; every one of them is a count-mode-argsort composition, not a `reduce_sum`).
+| dispatch (per trace id) | mean µs | instances/gen | µs/gen |
+| --- | --- | --- | --- |
+| `319/320/321_reduction_500x201x201_i64` | 50.0 / 36.6 / 29.1 | 40 each | 4 628 |
+| `322_reduction_500x201x201_i32xi32xi64xi64xi64` | 50.9 | 40 | 2 036 |
+| `323_reduction_500x201x201_i32xi32xi64` | 31.4 | 40 | 1 256 |
+| `324_reduction_500x100x201_i64` | 21.9 | 40 | 876 |
+| `327/329_reduction_500x100_i64…` | 14.7 / 18.4 | 40 each | 1 324 |
+| `313_reduction_500x50_i64…` | 14.1 | 40 | 564 |
+| `304-308_reduction_500x101x101_*` | 7.2-12.3 | 40 each | ≈1 953 |
+| `309_reduction_500x50x101_i64` | 8.5 | 40 | 340 |
+The `*_500x201x201_*` / `*_500x100x201_i64` rows are the connection family's merged `(R, 2M+1)` sort, the `*_500x101x101_*` / `*_500x50x101_i64` rows the node family's; almost all run on grid `102912×64` or `51712×64` (≈1 608 workgroups) with `workgroup_size = [64,1,1]`, i.e. the reduction axis is tiled across a 64-thread workgroup, never serialised into one.
+The same trace leaves the six genuine per-call `reduce_sum`s (rank-2 `(500,50)` / `(500,100)`, `axes=(1,)`) at ≈47 µs per call ≈ **1.9 ms** per generation, so the sort is ~85 % of this node's device cost and the reduces are not worth a reformulation.
+
 ## Constraints
 - **No unsigned dtypes in a graph — `iree`'s declared dtype set has none** (`float16/float32/float64/int8/int16/int32/int64/bool`), so a `uint32`/`uint64` operand, result, constant or graph-boundary value makes that backend refuse the whole graph. Use **same-width signed carriers**: a range test is `logical_and(greater_equal(key, 0), less(key, S))` on `int32`, the same truth value for every `int32` while `0 <= S < 2**31` (guarded statically in `layout.dense_width`). The `>= 0` half is not decoration: a negative structural key must land in the dump slot exactly as `I_INF` does.
 - Trace-time kernels only: no `jax`/`torch`/`numpy.random`, no `vmap`/`scan`/`while_loop`/`cond`, no Python loop over individuals or over pairs, no eager NumPy. Nothing here is differentiable and nothing draws RNG, so repeated calls are bit-identical.
