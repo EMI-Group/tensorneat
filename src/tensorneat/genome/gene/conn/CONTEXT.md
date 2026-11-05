@@ -20,8 +20,9 @@ Both bounds given with `lower >= upper` raises `common.errors.ConfigError`; one-
 `OriginConn` inherits the weight column, both neutral rows and `sympy_func`.
 
 ## Forward contract
-`forward(state, attrs, source_values) -> (P, max_nodes, K)`: `sanitize(source) * sanitize(weight)`, where `sanitize(x) = select(isnan(x), 0, x)` and `weight = self.attr_column(attrs, "weight")` on `attrs (P, max_nodes, K, 1)`.
-Both operands are sanitized before the product, so dead slots carry exactly `0.0` and no `NaN * 0` cotangent can reach reverse mode.
+`forward(state, attrs, source_values) -> (P, max_nodes, K)`: `multiply(source_values, weight)`, where `weight = self.column_of(prepared, "weight", 1.0)` is read from the `ConnOperands` bundle `prepare` built (a bare `(P, N, K, attr_width)` block is prepared inline) and `attributes=None`/no `weight` column means the identity weight `1`.
+Only the **weight** is NaN-sanitised, once per pass in `BaseConn.prepare`; the *source* values are passed through uncleaned, so a dead or not-yet-computed slot carries `NaN` out of this kernel.
+Those `NaN` messages never reach a reduction — the node gene's aggregation replaces every dead slot with its option's neutral value *before* reducing — so no `isnan` + `select` on the source is emitted per unrolled level (`conn/default.py::forward` holds that rationale).
 The message stays a pure elementwise function of `(attrs, source_values)`: no cross-edge coupling, no reduction, no control flow.
 
 ## Split-payload assembly

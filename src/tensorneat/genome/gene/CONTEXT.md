@@ -8,14 +8,15 @@ Nothing here imports `jax`/`torch`, and no hook on the compute path runs eager N
 ## API Surface
 `BaseGene(StatefulBaseClass)`:
 - class data: `fixed_attrs: tuple[str, ...]` (int32 key columns), `attr_specs: tuple[GeneAttr, ...]` (float32 attribute columns in row order), `labels: dict[str, str]` (short render names; `repr`/`to_dict` fall back to the declared name).
-- `key_width` / `attr_width` (`len(fixed_attrs)` / `len(attr_specs)`), `length = key_width + attr_width` (display only).
-- `setup(state=None)` validates the table (`_validate_specs`: non-empty names, unique names, wide-enough int option lists, `init_std >= 0`, `lower <= upper`) and registers the gene; violations raise `common.errors.ConfigError`.
+- `key_width` / `attr_width` (`len(fixed_attrs)` / `len(attr_specs)`); `length = key_width + attr_width` is display-only and has no caller in `src/`, `test/` or `examples/`.
+- `setup(state=None)` validates the table (`_validate_specs`: unique names across keys and attrs, a `float` spec carrying no `options`, an `int` spec carrying the contiguous list `0..n-1`, a known `kind`, `lower <= upper`, `mutate_rate`/`replace_rate` in `[0, 1]`) and returns the incoming state unchanged (genes register nothing); violations raise `common.errors.ConfigError`.
+It does **not** reject an empty column name, a negative `init_std` or a negative `mutate_power` (`## Unread and untested surface`), and no test exercises any of its raise paths.
 - `attr_index(name)` / `key_index(name)` (host ints, `ConfigError` if unknown), `attr_column(attrs, name)` / `key_column(keys, name)` (trace-time column read through `column`), `has_attr(name)` (host bool, for the zero-width table).
 - `new_random_attrs(state, key, shape) -> (*shape, attr_width)` — one batched `evoxc.random` draw per spec, clipped into the spec bounds; `shape=()` is supported (draws `(1,)` then reshapes).
 - `new_identity_attrs(state)` — floats at their init mean, ints at their first option; `new_zero_attrs(state)` — zeros, ints at their first option. Both return `(attr_width,)` and are rebuilt inside the graph (`enp` constants, never eager `np`).
 - `mutate(state, key, attrs)` — batched over leading axes: floats `mutate_float` noise `mutate_rate` of the time and `replace_rate` re-init from the spec distribution, ints re-drawn uniformly over the option list with `replace_rate`.
 - `crossover(state, key, attrs1, attrs2)` — one `U[0, 1)` block draw and a per-entry 50/50 pick (`< 0.5` selects the first parent); `node/origin.py` / `conn/origin.py` override it with one draw per gene row, so a child gene copies one parent's whole attribute vector.
-- `distance(state, attrs1, attrs2)` — sum over the attribute axis of `|Δ|` for floats and `!=` (as 0/1) for ints, with NaN padding treated as "absent" (a NaN row contributes 0).
+- `distance(state, attrs1, attrs2)` — sum over the attribute axis of `|Δ|` for floats and `!=` (as 0/1) for ints; a NaN padding row yields NaN from the float columns and contributes **1** per `"int"` column (`not_equal(NaN, NaN)` is True), so absent-row masking is mandatory and belongs to the caller (`operations/distance/default.py::distance_from_alignment` does `select(homologous, pair_distance, 0)`).
 - `hash(keys)` — `hash_int32` over the int32 key columns (xor-mix: `h = h ^ (k + HASH_GOLDEN + (h << 6) + (h >> 2))`), bit-identical to `common.tools.hash_rows`.
 - `from_attrs(state, keys, attrs=None)` — split-payload assembly from pre-built columns; validation of a wrong column count / width raises `ConfigError`.
 - Host-only: `repr`/`to_dict` (label-driven, `-1` activation renders `"identity"`), plus each family's `sympy_func`.
@@ -29,8 +30,8 @@ A fully blocked form (block `subtract`/`abs`/indicator, static kind mask, one `s
 
 `GeneAttr` is a dataclass: `name`, `kind` (`"float"`/`"int"`), `init_mean`/`init_std` (floats) or `options` (ints), `mutate_power`, `mutate_rate`, `replace_rate`, optional `lower`/`upper`.
 
-Trace-time entry points of the families: `BaseNode.forward(state, attrs, messages, is_output_node, valid_mask) -> (P, N)` and `BaseConn.forward(state, attrs, source_values) -> (P, N, K)`.
-Family dispatch calls the authoritative `common.functions` signatures: `apply_aggregation(values, mask, agg_ids, agg_fns)` and `apply_activation(z, act_ids, act_fns)`.
+Trace-time entry points of the families: `BaseNode.prepare(state, attrs, is_output_rows) -> NodeOperands` plus `BaseNode.forward(state, operands, messages, is_output_node, valid_mask) -> (P, N)`, and `BaseConn.prepare(state, attrs) -> ConnOperands` plus `BaseConn.forward(state, operands, source_values) -> (P, N, K)`.
+Family dispatch builds its own `select` cascades (`option_masks`/`select_cascade`) instead of calling `common.functions.apply_aggregation`/`apply_activation`, because the per-level `equal`/cast hoists into `prepare`; the semantics (option `-1` = identity, one neutral-filling branch per aggregation option) are the same ones `common/functions` documents.
 
 ## Attribute column layout (binding for every consumer)
 `DefaultNode` / `OriginNode`: `bias, response, aggregation, activation` (`attr_width = 4`, ints in columns 2 and 3).
@@ -52,16 +53,17 @@ The neutral fallbacks are fixed and shared by the traced and host paths: aggrega
 - **The attribute term is strided-read bound at the shapes it runs on.** This node's own measurement on the reference numpy interpreter at `(500, 50, 4)`, per-op medians: a view `slice` ≈9 µs, a contiguous `(P, R)` pass ≈36 µs, `abs` of a width-1 view of the 4-wide block ≈54 µs, `not_equal` of two width-1 views ≈48 µs, `add` of two width-1 views ≈65 µs, one 4-wide `subtract` ≈133 µs — so trading an op for a wider pass loses, and the per-column formulation above is the cheapest of the six measured forms on the same block: 0.42 ms against 0.45 (one wide `subtract`, no casts), 0.51 (one wide `abs`), 0.59 / 0.78 (a same-kind run as one block) and 1.3 (fully blocked `select` + last-axis `reduce_sum`). The rule of thumb: narrow the operands first (`subtract` produces the contiguous column), never widen a pass to save a dispatch.
 - Attribute order in `attr_specs` *is* the column order of `*_attrs`; never reorder without changing every consumer, and consumers read `attr_specs`/`fixed_attrs`, never hardcoded indices.
 - One batched draw per spec with the full output shape: never a per-row Python loop and never per-row key splits (evoxc keys are rank-0).
-- Int attributes (option indices) live in the float32 attr array and are compared after an `int32` cast; `-1` activation identity is handled by `apply_activation`, not by an option-table index.
+- Int attributes (option indices) live in the float32 attr array and are compared after an `int32` cast; the `-1` activation identity is resolved by the option-dispatch cascade (`option_masks`/`select_cascade` in `node/base.py`, one op fewer per level than `common.functions.apply_activation`), not by an option-table index.
 - No `jax`/`torch`, no `numpy.random`, no eager NumPy on the compute path; option branches are `evoxc.select` cascades over NaN-free branches (each aggregation option neutral-fills dead slots before its reduce).
 - Keys are never floats, and padding sentinels never mix: `I_INF` in key arrays, NaN in attr arrays.
 - Errors: configuration violations raise `common.errors.TensorNEATError` subclasses (`ConfigError`); evoxc shape/backend errors propagate unchanged.
-- Files ≤ ~1000 lines; a new gene family adds declarations plus hooks, never a copy of the mutate/crossover/distance code.
+- Files ≤ ~1000 lines; a new gene family adds declarations plus hooks, never a copy of the mutate/crossover/distance code (`BiasNode.__init__` is the existing exception: it re-spells the whole response-free constructor and identity-row walk rather than parameterising `DefaultNode`'s).
 
 ## Hooks other nodes rely on
 `genome/base.py`: `initialize` uses `new_random_attrs`, `new_identity_attrs` (add-node), `new_zero_attrs`; the forward step calls `conn_gene.forward` then `node_gene.forward`; `grad` differentiates only the float attr arrays, which works because `attr_column` is differentiable.
 `genome/operations/**`: `mutate`, `crossover`, `distance`, `hash`, `attr_width`/`key_width`, `from_attrs`.
-`algorithm/**`: `from_attrs` (payload assembly), `uses_historical_marker`/`get_historical_marker`, `node_gene.from_attrs(keys)` + `conn_gene.from_attrs(in_keys, out_keys, weights)` for the HyperNEAT substrate.
+`algorithm/**`: `from_attrs` (payload assembly), `uses_historical_marker`, `node_gene.from_attrs(keys)` + `conn_gene.from_attrs(in_keys, out_keys, weights)` for the HyperNEAT substrate.
+`get_historical_marker` has **no caller**: `../step.py` reads `conn_gene.key_column(conn_keys, "historical_marker")` directly, so the abstract raise in `conn/base.py` and `OriginConn`'s override are unread surface (`## Unread and untested surface`).
 `BaseConn.from_attrs` accepts `attrs=None` (zeros), `(*shape,)` per-connection scalars broadcast over the attribute axis, or full `(*shape, attr_width)` rows.
 
 ## Origin families
@@ -85,6 +87,19 @@ One seed-46 `OriginNode` run raised the pre-existing `max_in_degree` overflow `T
 `OriginNode`-only is a strict no-op only while crossover is inert (pop 100); at pop 500 it diverges by design (whole-gene inheritance couples `bias/response/aggregation/activation`, which the default per-column pick does not), and `OriginConn`'s one-column whole-gene pick is distributionally identical to the default per-column pick, so its trajectory differences are pure RNG-stream differences.
 The remaining reported symptoms trace to code outside this node: `algorithm/neat/_kernels.py::pair_parents` (survivor floor of 1 kills crossover when no species reaches `2 / survival_threshold` members) and the per-individual marker allocator (homology, matters only once crossover is active: 3/3 seeds reach MSE < 0.01 with a population-wide marker id versus 2/3 without).
 The families themselves need no behavioural change; their `crossover` is whole-gene, their `mutate`/`distance`/`forward` are the inherited and unit-tested ones.
+
+## Unread and untested surface
+`BaseConn.get_historical_marker` (abstract raise in `conn/base.py` plus `OriginConn`'s override) and `BaseGene.length` have no caller in `src/`, `test/` or `examples/`; both survive only in docstrings (`algorithm/neat/neat.py`'s static-surface note names `node_gene.length`/`conn_gene.length`, `conn/origin.py`'s class docstring names the marker hook), so a grep hit is not a use site.
+`ConnOperands.zero` is stored by `BaseConn.prepare` and read nowhere; `NodeOperands.aggregation_ids`/`activation_ids` are stored by `BaseNode.prepare` and read nowhere (only the derived `*_masks` are consumed); `BaseNode.repr`/`to_dict` are pure `super()` pass-throughs.
+`common.tools.hash_rows` is the host-only twin of `hash_int32` and is now caller-free in `src/` — production hashes through `gene.hash` (`genome/host.py::_row_hashes`), so the two folds are cross-checked only by tests.
+`attr_width == 0` (the section above) is unreachable in this tree: no shipped family declares `attr_specs = ()` and `test/support/payloads.py` rejects a zero width, so every width-0 branch is untested as well as unused.
+`_validate_specs` never checks `init_std`/`mutate_power`: a negative `init_std` reaches `evoxc.random.normal` (an opaque backend error where the table implies a `ConfigError`) while the same value only flips a sign in the mutation path, and a negative `mutate_power` passes every check.
+`BaseNode.self_neutral_aggregations = (AGG.sum, AGG.mean)` duplicates `common/functions/agg.py`'s `zero_on_empty` set, which also marks `AGG.maxabs`; the gene's copy is the conservative one, so the divergence costs one `any_slot` + `select` per level when `maxabs` is configured.
+The class-level `attr_specs` of `DefaultNode`/`BiasNode`/`DefaultConn` is always shadowed by the instance table `__init__` builds and repeats every constructor default as a literal; only `HyperNEATConn` (algorithm/) reads a class-level table.
+`blocks.mutate_attrs`' static-drop claim is narrower than its docstring ("a column whose gate or candidate cannot be observed traces no draw"): `_perturbs` requires `mutate_power != 0` but `perturb_live` is only `cutoff > 0` (= `mutate_rate > 0`), so a float column with `mutate_power == 0` and `mutate_rate > 0` keeps the whole perturb cascade (`any(perturb_live)` + one block `select` of `attrs + 0`) alive for a value-identical result, and `_replaces` is only `replace_rate > 0`, so a single-option `"int"` column still draws a `randint` plus a `U[0, 1)` gate it can never act on (both are reachable only through a caller-supplied knob: no shipped column sets `mutate_power = 0`, and the shipped option columns declare more than one option).
+`replace_live` is a redundant re-derivation: for a float column it is `(rate + replace_rate) > 0 and (rate + replace_rate) > rate` and for an `"int"` column `replace_rate > -1`, i.e. exactly `_replaces(spec)` in both cases.
+`crossover_attrs` draws one **block-sized** `uniform` (`(*shape, attr_width)`) with unpooled Python-float `low`/`high`, the one place in `blocks.py` that breaks the module's own "every draw stays per column" rule and its constant pooling.
+`blocks.py`'s module docstring still describes per-column parameters (rates, bounds) as `(*batch_shape, attr_width)` static tables and `_cutoffs` says "both bounds are broadcast over the block", but the shipped `mutate_attrs` compares each column against a **rank-0** pooled scalar (`_mask_block`) and materialises a table only for clip bounds.
 
 ## Test Strategy
 Covered by `test/unit/genome/` (`test_payload.py`, `test_transform_validation.py`, `test_forward.py`, `test_recurrent.py`, `test_grad.py`, `test_mutation.py`, `test_crossover.py`, `test_distance.py`, `test_distance_digest.py`, `test_host_helpers.py`: payload layout, the forward against the host oracle `test/support/oracle.py`, mutate/crossover/distance/digest invariants) and the flat `test/parity/` suite (`test_forward.py`, `test_grad.py`, `test_distance.py`, `test_convert.py`, `test_fitness.py`: kernel parity against `benchmarks/legacy_jax`).
