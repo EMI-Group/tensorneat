@@ -1,7 +1,7 @@
 tensorneat.genome.operations.mutation
 =====================================
 
-Mutation operators: default, recurrent and degree-based.
+Mutation: the batch-first mutation contract and the four-stage structural write plan, the default and recurrent operators, the cycle predicate and in-graph row toolkit they build on, and a diagnostic in-degree audit.
 
 .. toctree::
    :maxdepth: 4
