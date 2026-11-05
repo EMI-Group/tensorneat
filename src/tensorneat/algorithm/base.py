@@ -56,10 +56,22 @@ class BaseAlgorithm:
             state: Current algorithm state.
 
         Returns:
-            A batch-first population pytree.  For NEAT it is
-            ``(pop_nodes, pop_conns)`` with shapes
-            ``(pop_size, max_nodes, node_len)`` and
-            ``(pop_size, max_conns, conn_len)``; ``ask`` costs zero ops.
+            A batch-first population pytree.  For NEAT it is the four-array split
+            gene payload (``genome.utils.GenomeTensors``): ``node_keys``
+            ``(P, max_nodes) int32``, ``node_attrs`` ``(P, max_nodes, A) float32``,
+            ``conn_keys`` ``(P, max_conns, key_width) int32`` and ``conn_attrs``
+            ``(P, max_conns, W) float32``, where absent rows are ``I_INF`` in the
+            key arrays and NaN in the attribute arrays; ``ask`` costs zero ops.
+
+        Notes:
+            ``Pipeline._generation_kernel`` calls ``algorithm.ask(current)``
+            *after* registering the state's payload on ``current`` and hands the
+            result to ``transform`` and to the problem's ``evaluate``, so an
+            override is honoured rather than bypassed.  A shipped ``ask`` returns
+            ``state.pop`` unchanged (zero ops) and ``tell`` still receives the
+            state's population, so an ``ask`` that returns a different population
+            must document that the evaluated phenotype is not the one reported or
+            checkpointed: ``previous_pop`` is ``state.pop``, not the asked payload.
         """
         raise NotImplementedError
 
