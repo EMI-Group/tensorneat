@@ -89,7 +89,8 @@ python benchmarks/run_benchmark.py --impl both --backend numpy --cases all --gen
 python benchmarks/run_benchmark.py --impl old --cases xor_p100 --generations 30 --repeats 1
 python benchmarks/run_benchmark.py --impl new --backend numpy --cases xor_p100,xor_p1000
 python benchmarks/run_benchmark.py --impl new --backend iree --cases xor_p500
-python benchmarks/run_benchmark.py --render-from-json benchmarks/results/authoritative.json --out benchmarks/RESULTS.md --report-note "<the committed pre-fix scope note>"   # without the note the re-render drops the committed attribution: authoritative.json stores no note
+python benchmarks/run_benchmark.py --render-from-json benchmarks/results/authoritative.json --out benchmarks/RESULTS.md   # reproduces the committed report: the record stores its own meta.report_note
+python benchmarks/run_benchmark.py --render-from-json benchmarks/results/authoritative.json --out benchmarks/RESULTS.md --report-note "<the committed pre-fix scope note>" --persist-note   # only when the note itself changes: writes it into the record's meta, then renders
 python benchmarks/run_benchmark.py --render-from-json benchmarks/results/authoritative.json --out $TMPDIR/re-render.md
 # self-describing companion report (its own H1 + the one-line note under the banner)
 python benchmarks/run_benchmark.py --impl both --backend numpy --cases xor_p100,xor_p500,xor_p1000 --generations 150 --warmup 3 --repeats 2 --threads 1 --report-title "TensorNEAT benchmark — thread-bound sensitivity (XOR family, --threads 1)" --report-note "This is the thread-bound sensitivity run (\`--threads 1\`, the declared-contract condition) of the XOR family; the authoritative default-thread matrix is \`RESULTS.md\`." --out benchmarks/THREADS.md --json benchmarks/results/threads1.json
