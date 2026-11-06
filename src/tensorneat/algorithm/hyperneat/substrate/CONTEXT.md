@@ -71,7 +71,7 @@ All emitted arrays are `float32` (`query_coors`) and `int32` (`nodes`, `conn_ind
 Returned arrays are read-only in intent: HyperNEAT may already have frozen them as graph constants, so no caller may mutate them in place.
 Construction must be cheap and side-effect-free, but it is allowed to be O(nodes × connections): the phenotype sizes are in the hundreds.
 No `setup` method may appear — a subclass that needs state is a design error, not a missing hook.
-Files stay near 500 lines and there is one reason to change per file: protocol + shared geometry + private validators (`base.py`, ~515 lines because the protocol docstrings are kept verbatim), storage + validation (`default.py`), recurrent mesh (`full.py`), feedforward grid (`mlp.py`).
+Files stay near 500 lines and there is one reason to change per file: protocol + shared geometry + private validators (`base.py` 515, the largest because the protocol docstrings are kept verbatim), storage + validation (`default.py` 347), recurrent mesh (`full.py` 191), feedforward grid (`mlp.py` 261).
 
 ## Divergences from the legacy JAX implementation (deliberate)
 `StatefulBaseClass`, `setup`, `make_nodes(query_res)` and `make_conns(query_res)` are gone: arrays are exposed directly and the weight packing moved into `../hyperneat.py::_assemble_substrate`, which builds the four-array payload itself because no genome-level payload builder exists.
