@@ -8,10 +8,10 @@ It is the shared operator layer between `genome/` (which forwards into it) and t
 
 ## Call contract (binding for `genome/base.py` and `algorithm/`)
 - `BaseMutation.__call__(state, genome, key, node_keys, node_attrs, conn_keys, conn_attrs, new_node_keys (P,), new_conn_keys (P, 3)) -> GenomeTensors` — validates the two key shapes (`ConfigError`), then splits the key per stage and runs the structural stages before the value stage.
-- `new_conn_keys` columns: `0` = add-node identity edge, `1` = add-node copy edge, `2` = plain add-connection edge; each becomes the `historical_marker` when the conn gene declares one.
+- `new_conn_keys` columns: `0` = add-node identity edge, `1` = add-node copy edge, `2` = plain add-connection edge.
 - `BaseCrossover.__call__(state, genome, key, node_keys1, node_attrs1, conn_keys1, conn_attrs1, node_keys2, node_attrs2, conn_keys2, conn_attrs2) -> GenomeTensors` — `genome1` is the fitter parent and keeps its keys; identical parent shapes are required (`ConfigError`).
 - `BaseDistance.__call__(state, genome, node_keys1 … conn_attrs1, node_keys2 … conn_attrs2) -> (P,) float32` — no key argument; the algorithm forms the pairs, distances are `0` for an empty pair and never NaN.
-- Key tables are node `(P, N)` (or `(P, N, 1)`, accepted and returned verbatim) and connection `(P, E, CK)`; `alignment.key_rows` normalises them and any other rank raises `ConfigError`.
+- Key tables are node `(P, N)` (or `(P, N, 1)`) and connection `(P, E, CK)`; `alignment.key_rows` normalises them and any other rank raises `ConfigError`.
 - `genome/base.py` forwards as `self.mutation(state, self, key, *payload, new_node_keys, new_conn_keys)`, `self.crossover(state, self, key, *genome1, *genome2)` and `self.distance(state, self, *genome1, *genome2)`; the trace-time `state` reaches every operator and is the only input that selects a formulation.
 - The mutation operator reads only host statics off `genome`: `num_inputs`, `num_outputs`, `max_in_degree`, `network_type`, `node_gene`, `conn_gene` (the payload shapes carry `max_nodes`/`max_conns`); the cycle decision is `cycle.closes_cycle(node_keys, conn_keys, src_keys, dst_keys, key_span, state)`, reached only through the statically gated `network_type`/`p_recur` branches.
 
