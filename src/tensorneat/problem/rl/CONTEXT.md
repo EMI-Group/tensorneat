@@ -116,7 +116,7 @@ Cross-backend fitness is therefore reproducible to float32 rounding but never bi
 - CartPole's `_loop_body` insertion order is load-bearing: `_nan_rows` selects the NaN into `total` **before** `alive` is updated, so a poison arriving on the step an episode dies still lands.
 - `_common.py` validators take the **owner name first** (`require_positive_int("Pendulum", "max_step", value)`) so the `<Owner>: <name> must be ...` text is uniform; a non-numeric or non-finite knob reports `must be a finite number`, a finite out-of-range one `must be positive`/`must be non-negative`.
 - The reference oracle for the two continuous environments is a float32 host transcription in `test/unit/problem/` (test-agent owned); ordering a test can break: Pendulum clips velocity before the angle update, MountainCar charges the penalty on the **pre-clip** action and resets velocity at the min position by exact float equality, and the bonus is masked by the pre-step alive flag.
-- `backend="iree"` runs a full `Pipeline` end to end (`test/backends/test_iree_pipeline.py` drives `Pipeline(backend="iree")` through `setup` plus two `step`s), so the measurements above are a component record, not a pipeline verdict (`benchmarks/BACKENDS.md` holds the llvm-cpu ratios and the per-shape `iree-compile` cost).
+- `backend="iree"` runs a full `Pipeline` end to end (`test/backends/test_iree_pipeline.py`), so the component measurements above are not a pipeline verdict; `benchmarks/BACKENDS.md` holds the llvm-cpu ratios and the per-shape `iree-compile` cost.
 
 ## Routing Table
 | Path | Responsibility |
