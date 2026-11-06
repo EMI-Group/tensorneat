@@ -82,7 +82,7 @@ The legacy `DefaultSubstrate(num_inputs, num_outputs, coors, nodes, conns)` argu
 `cal_coors` became `layer_coors` and moved next to `cartesian_product` in `base.py`, so `full.py` and `mlp.py` share one implementation of the coordinate math.
 Every legacy `assert` (and `DefaultSubstrate`'s total lack of shape checks) became an explicit `TensorNEATError`; a legacy configuration that silently produced a disconnected phenotype (`FullSubstrate` with empty `hidden_coors`, `total_conns == 0`) now raises.
 `query_coors` is `float32` at the source instead of `float64` NumPy arrays relying on `jnp.array` to downcast later.
-A multi-output CPPN still silently misaligns weights in the legacy `make_conns`; `../hyperneat.py` must therefore assert `neat.num_outputs == 1` — validation lives there because this node never sees the CPPN.
+A multi-output CPPN still silently misaligns weights in the legacy `make_conns` (its `self.conns.at[:, -1].set(query_res.flatten())` pours a multi-column result into one weight column); `../hyperneat.py` therefore raises unless `neat.num_outputs == 1`, because this node never sees the CPPN.
 
 ## Test Strategy
 Unit tests belong to the sibling `test/` tree (read-only from here), mirroring this subtree at `test/unit/algorithm/hyperneat/substrate/`, on plain NumPy with no optional dependency.
