@@ -71,7 +71,7 @@ Rejected levers (measured; do not re-derive): a halving tree, which matches nump
 
 ## Portability
 Every op this package emits is `v1` in `evoxc.backends.stablehlo.ops.status()` (elementwise ops, `slice`, `reshape`, `select`, `equal`, `greater`, `cast`, `argmax`, `gather`, and `reduce_*` on the wide-window fallback); `erf` / `gelu` are deferred in that table and no ACT option is either, and nothing here emits an unsigned dtype, a `scatter`, `cumsum`, `flip`, `tril`/`triu` or a `while`.
-That is the recorded rule from evoxc's op table, not a fresh export from this node; `test/backends` is the only proof of portability.
+Recorded rule from evoxc's op table rather than a fresh export from this node; `test/backends` is the only proof of portability.
 
 ## Sympy / interpretability contract (host-only)
 `ACT` / `AGG` pair every option with an `sp.Function` subclass in the same order, validated by class name at import; each class is a constructor-time rewriter (`SympySigmoid(z)` returns `1/(1+exp(-z))`), and `SympyClip` is the exception — no closed form, it defines `numerical_eval` for `sp.lambdify`.
