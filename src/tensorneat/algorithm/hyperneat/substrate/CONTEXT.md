@@ -3,7 +3,7 @@
 ## Intent
 A substrate is HyperNEAT **geometry**, not computation: it turns a neuron layout (one coordinate per neuron, in `cd` dimensions) into the fixed phenotype topology the CPPN is queried over — one CPPN query per phenotype connection.
 Everything here is plain host-side Python/NumPy executed once at construction time; a substrate never holds a `State`, never runs inside an `evoxc` trace, and owns no tensors at trace time.
-`../hyperneat.py` reads these arrays while tracing and freezes them as **graph constants**: `query_coors` becomes the CPPN's input batch, `nodes` and `conn_index` are packed into gene-payload rows by the genome's payload builder, and the CPPN output row `q` becomes the `weight` attribute of connection `q`.
+`../hyperneat.py` reads these arrays while tracing and freezes them as **graph constants**: `query_coors` becomes the CPPN's input batch, `nodes` and `conn_index` are packed into substrate gene-payload rows by `../hyperneat.py::_assemble_substrate` (no genome-level payload builder exists), and the CPPN output row `q` becomes the `weight` attribute of connection `q`.
 Only the CPPN evolves; the topology here is immutable for the whole run.
 Two usable implementations: `FullSubstrate` (recurrent full mesh) and `MLPSubstrate` (feedforward layered grid).
 
