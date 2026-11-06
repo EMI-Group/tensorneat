@@ -50,7 +50,8 @@ Fitness is a pure negated loss, never an accuracy: the return for sigmoid-bounde
 - Fitness semantics are pinned: the four reductions, NaN → `-inf` (`finalize_fitness`) and `mape`'s zero-target `inf` all match the frozen legacy implementation.
 
 ## Measured cost
-numpy reference backend, one config per fresh process, build excluded; the numbers come from a scratch harness (not shipped) that times `problem.evaluate` alone with a genome-free `act_fn`, so it is this node's tiling + reduction, not the genome forward (its `--problem-only` mode):
+numpy reference backend, one config per fresh process, build excluded; the numbers come from a scratch harness (not shipped) that times `problem.evaluate` alone with a genome-free `act_fn`, so it is this node's tiling + reduction, not the genome forward (its `--problem-only` mode).
+The harness records no tree, so read them as the order of magnitude — sub-millisecond — and never as a per-tree record:
 
 | case | cost | command |
 | --- | --- | --- |
