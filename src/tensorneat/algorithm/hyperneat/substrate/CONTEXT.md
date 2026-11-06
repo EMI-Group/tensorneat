@@ -76,6 +76,7 @@ Files stay near 500 lines and there is one reason to change per file: protocol +
 ## Divergences from the legacy JAX implementation (deliberate)
 `StatefulBaseClass`, `setup`, `make_nodes(query_res)` and `make_conns(query_res)` are gone: arrays are exposed directly and the weight packing moved into the genome's gene payload builder inside `../hyperneat.py`.
 `conns` (`(m, 3)` `float32` with a zero weight column) became `conn_index` (`(m, 2)` `int32`): the weight column was a lie this layer cannot fill, and float columns forced the genome to bitcast instead of storing keys.
+The legacy `DefaultSubstrate(num_inputs, num_outputs, coors, nodes, conns)` argument `coors` is now spelled `query_coors`, matching the property it stores.
 `nodes` is emitted 1-D (`(nodes_cnt,)` `int32`) instead of the legacy `(nodes_cnt, 1)` `float64` column; the column is still accepted on input for legacy callers.
 `full.analysis_substrate` takes `(input_coors, hidden_coors, output_coors)` — the legacy signature was `(input_coors, output_coors, hidden_coors)` while the constructor used the other order, a guaranteed transposition trap.
 `cal_coors` became `layer_coors` and moved next to `cartesian_product` in `base.py`, so `full.py` and `mlp.py` share one implementation of the coordinate math.
