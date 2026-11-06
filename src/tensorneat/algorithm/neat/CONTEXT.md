@@ -87,8 +87,8 @@ The allocation comes from the **crossover child** (`crossed.node_keys`), the pay
 Validity comes from the genome's `node_exists`, `conn_exists` and `max_conn_marker`, never from packaging.
 
 ## Measured Cost
-`benchmarks/PERF_NUMPY.md` is the committed numpy protocol record; the per-generation numbers below were measured on this tree in this worktree (2026-11-06).
-numpy backend, ms per generation: `xor_p100` 33.04, `xor_p500` 112.68, `xor_p1000` 177.43, `custom_pagie_p500` 847.13, `cartpole_p100` 248.70, with executed dispatches as in `## Intent`.
+`benchmarks/PERF_NUMPY.md` is the committed numpy protocol record; the per-generation numbers below were measured on tree `31a31328` in this worktree (2026-11-06, medians of 5 timed generations after 2 warmup, seed 42).
+numpy backend, ms per generation: `xor_p100` 33.22, `xor_p500` 113.97, `xor_p1000` 168.11, `custom_pagie_p500` 871.87, `cartpole_p100` 253.35, with executed dispatches as in `## Intent`.
 The numpy interpreter is charged ≈19–20 µs per dispatched op and by each op's element volume, so at these shapes **padded gene geometry and element volume are the levers, not dispatch count**; `max_nodes`/`max_conns` multiply every per-pair op, which is a workload change rather than a fix (the sizes are recorded in `../../CONTEXT.md`).
 `"single"` versus `"tiled"` (centre-width A/B, pre-change tree, 6 interleaved fresh-process rounds): `"single"` reproduces that tree within noise (0.986×/0.999×/1.004× at `P=500`/`1000`/`100`), while `"tiled"` dispatches fewer ops and runs 1.39×/1.54× slower at `P=500`/`1000` at 218.7 against 196.4 MiB peak RSS — hence `"single"` on numpy.
 The bounded key allocator costs +10 % / +4–8 % / +12–14 % at pop 100 / 500 / 1000, almost entirely the `(pop_size, key_span + 1)` free-key table built every generation although fewer than 6 % of rows ever need it.
