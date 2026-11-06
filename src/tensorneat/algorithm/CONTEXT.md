@@ -114,6 +114,7 @@ The gene payload encoding stays genome-owned: evoxc has **no bitcast**, so a flo
 
 ## Measured Cost
 The committed numpy record is `benchmarks/PERF_NUMPY.md`; this section keeps the numbers that decide kernel shape and the laws behind them.
+This tree, this session, numpy backend, 150 generations with 3 warmup, medians: **33.04** ms per generation on `xor_p100`, **112.68** on `xor_p500`, **177.43** on `xor_p1000`, **847.13** on `custom_pagie_p500`, **248.70** on `cartpole_p100`.
 The same five cells on `backend="iree"`, `device="rocm"` cost **17.42 / 13.24 / 16.29 / 16.18 / 150.41** ms per generation in that order, at a 7.2–8.0 s one-off build per static shape and ≈1.9 GiB peak RSS.
 Executed dispatches per generation on the numpy interpreter: `xor_p500` **7 592**, `cartpole_p100` **30 994** (count by wrapping `evoxc.backends.numpy.kernels.dispatch`; region ops run their body once per iteration and `evoxc.scan` peels step 0 at the enclosing level, so compare counts at the same generation).
 The numpy interpreter charges ≈**19–20 µs per dispatched op**, so at population-sized tensors dispatch count is the lever; on a workload that tiles the population (func fit, a rollout) element volume is the lever, and padded gene geometry (`max_nodes`/`max_conns`) is the largest single term.
