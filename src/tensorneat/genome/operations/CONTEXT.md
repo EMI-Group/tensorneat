@@ -63,8 +63,7 @@ The box drifts ±30 % between sessions: only a same-session A/B pair or a same-r
 
 ## Deviations from the pre-rewrite library (intentional)
 - Alignment is exact key-tuple equality through the packed-identity merge, never row position or an innovation-number match, which is why `(genome1, genome2)` = (winner, loser) is order-sensitive by contract.
-- The four plan functions (`plan_add_node`/`plan_delete_node`/`plan_add_conn`/`plan_delete_conn`) take the trailing `(P,) bool` gate, and delete-node reads the static row counts `genome.num_inputs`/`genome.num_outputs` instead of the legacy `input_idx`/`output_idx` lists.
-- Non-finite distance weights are rejected as well as negative ones, and `compatibility_disjoint`/`compatibility_weight` are validated at construction.
+- The four plan functions take the trailing `(P,) bool` gate and delete-node reads the static row counts `genome.num_inputs`/`genome.num_outputs` instead of the legacy `input_idx`/`output_idx` lists; non-finite distance weights are rejected as well as negative ones, and `compatibility_disjoint`/`compatibility_weight` are validated at construction.
 
 ## Test Strategy
 `test/unit/genome/test_mutation.py`, `test_crossover.py`, `test_distance.py` and `test_distance_digest.py` are the acceptance specs for the contracts above (`uv run pytest -o addopts="" -q test/unit/genome` → 154 passed on numpy, no optional extra), and `test/parity/test_distance.py` holds `execute_distance` exactly against the frozen legacy implementation (a deterministic kernel, so no tolerance; 60 passed with the `bench` extra).
