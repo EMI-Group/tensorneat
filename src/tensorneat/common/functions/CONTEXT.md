@@ -5,16 +5,16 @@ Single source of truth for the activation and aggregation options a NEAT node ge
 `act.py` / `agg.py` are graph code (called only during an `@evoxc.defn` trace); `act_sympy.py` / `agg_sympy.py` / `manager.py` are host-only, and nothing here knows about genomes, populations or the Pipeline.
 This node owns no `kernel_mode` / `distance_*` static: it emits the same graph on every backend.
 
-## Module map (no child directories; one responsibility per file, all far under ~1000 lines)
+## Module map (leaf; one responsibility per file, all far under ~1000 lines)
 | File | Lines | Responsibility |
 |---|---|---|
-| `act.py` | 378 | 12 activations, their constants, `ACT_IDENTITY`, `ACT_FUNCS`, `apply_activation`. |
-| `agg.py` | 720 | 6 aggregations, the `K`-plane folds (`_FOLD_MAX_WIDTH = 128`), the `_Window` memo, `AGG_FUNCS`, `apply_aggregation`. |
-| `act_sympy.py` | 221 | sympy twins of `ACT_FUNCS`, `SympyClip`, `ACT_SYMPY_HELPERS`. |
-| `agg_sympy.py` | 118 | sympy twins of `AGG_FUNCS`. |
-| `manager.py` | 381 | `FunctionManager`: pairing, lookups, validation, `sympy_module`, `random_index`. |
+| `act.py` | 377 | 12 activations, their constants, `ACT_IDENTITY`, `ACT_FUNCS`, `apply_activation`. |
+| `agg.py` | 719 | 6 aggregations, the `K`-plane folds (`_FOLD_MAX_WIDTH = 128`), the `_Window` memo, `AGG_FUNCS`, `apply_aggregation`. |
+| `act_sympy.py` | 220 | sympy twins of `ACT_FUNCS`, `SympyClip`, `ACT_SYMPY_HELPERS`. |
+| `agg_sympy.py` | 117 | sympy twins of `AGG_FUNCS`. |
+| `manager.py` | 380 | `FunctionManager`: pairing, lookups, validation, `sympy_module`, `random_index`. |
 
-`__init__.py` (42 lines) only wires `ACT` / `AGG` together and declares the five public names.
+`__init__.py` (41 lines) only wires `ACT` / `AGG` together and declares the five public names.
 
 ## Registry law
 An option id is the **position in the gene's own option tuple**, never a global index: the tuple's callables are normalised once in the node-gene constructor, and `ACT_FUNCS` / `AGG_FUNCS` are only the canonical order a genome gets when it passes the registry itself (`ACT.evoxc_fns`) as its option list.
