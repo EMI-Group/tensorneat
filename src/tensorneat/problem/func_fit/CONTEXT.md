@@ -66,6 +66,7 @@ The tiled `(P*S, I)` batch is exactly what `act_fn` receives, but the schedule a
 The remaining regrouping is the chunk budget `host_payload.eval_chunk_rows(device_kind, max_nodes)`: `EVAL_CHUNK_ROWS = 12_500` tiled rows on `device=None`/`"cpu"` (25 individuals at `S=500`), and `max(12_500, DEVICE_EVAL_CHUNK_BYTES // (4 * max_nodes))` with `DEVICE_EVAL_CHUNK_BYTES = 1 << 30` on every other device kind — ≈5.37 M rows at `max_nodes=50`, never below the CPU budget.
 That budget is read at trace time and unrolled (one prepared pass per group, group outputs concatenated in individual-major row order), so it is part of `Pipeline._shape_signature` and a CPU build is never reused on a device leg.
 On CPU a 250 000-row block is 20 groups; on a non-CPU device the same block fits the window and is one unchunked pass, and `xor_p100`/`xor_p500`/`xor_p1000` (`S=4`, ≤4 000 tiled rows) never chunk on either leg.
+A chunked group slices both trees through `host_payload._slice_batch`, which raises `TensorNEATError` on a non-scalar leaf whose axis 0 is not `P` instead of sharing or mis-slicing it.
 
 ## Graph-constant footprint
 `evoxc`'s `enp.zeros/ones/full/empty` materialise a full `Constant` op, and this problem hands `act_fn` a `P*S` batch, so anything a kernel sizes by that batch lands in the artifact — which is why the dataset is the one thing this node bakes, always `(S, I)`/`(S, O)`.
