@@ -32,11 +32,9 @@ The expansion row order is `p * Q + q` (individual slowest) and matches the `(P,
 
 ## Prepared-Pass Pair
 `prepare_forward(state, transformed, pop=None, samples=1)` ignores `pop` — the substrate payload travels inside `transformed` — and prepares `hyper_genome.prepare_pass(state, transformed.schedule, *payload rows, samples)`, forwarding `samples` unchanged because the substrate schedule sits at `P` rows and a tiled query is the substrate genome's own sample axis.
-`forward_prepared(state, transformed, prepared, inputs)` is `forward` minus the prelude: the same trailing bias column, then `hyper_genome.forward_prepared`.
-`forward` is exactly those two back to back, bit for bit, because `genome.forward` *is* `prepare_pass` + `forward_prepared`; `test_hyperneat.py` pins the equality.
-The signature is uniform with `NEAT`'s (`pop=None`, `samples`), so `host_payload._NetworkActFn` needs no arity adapter even though `NEAT` takes the payload and `HyperNEAT` does not.
-That class is the pair's only consumer and its `__call__` goes through `prepare`, so every generation runs the prepared pair and `HyperNEAT.forward` has no in-tree call site (it stays protocol API for direct callers).
-The tiled func-fit path (`host_payload._prepared_query`) slices both the `SubstrateSchedule` and its payload per chunk group and prepares one substrate pass per group at that group's `samples`, which is why every leaf must be population-major; `test/integration/test_chunking_guard.py` pins a forced chunk budget to bit-identical fitness.
+`forward_prepared` is `forward` minus the prelude (the same bias column, then `hyper_genome.forward_prepared`), so `forward` is exactly the two back to back, bit for bit, because `genome.forward` *is* `prepare_pass` + `forward_prepared`.
+The signature is uniform with `NEAT`'s (`pop=None`, `samples`), so `host_payload._NetworkActFn` needs no arity adapter even though `NEAT` takes the payload and `HyperNEAT` does not; that class is the pair's only consumer and its `__call__` goes through `prepare`, so every generation runs the prepared pair and `HyperNEAT.forward` has no in-tree call site.
+The tiled func-fit path (`host_payload._prepared_query`) slices both the `SubstrateSchedule` and its payload per chunk group and prepares one substrate pass per group at that group's `samples`, which is why every leaf must be population-major (`test/integration/test_chunking_guard.py` pins a forced chunk budget to bit-identical fitness).
 
 ## Gene Contract
 `HyperNEATNode`: `key_width == 1` (the `index` key alone) and `attr_width == 2` — the `int` option columns `aggregation` then `activation`, each with the single legal index `0` selecting the callables fixed at construction (a non-callable raises `ConfigError`), which `_assemble_substrate` paints with `0`.
