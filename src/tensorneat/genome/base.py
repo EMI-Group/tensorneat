@@ -7,7 +7,8 @@ The *shared* window-reduce machinery both concrete genomes compose lives in ``st
 Every compute method is batch-first (population on axis 0) with static shapes: batch
 dimensions are written explicitly and ``vmap``/``vectorize`` is never applied over these
 kernels. Control flow (``scan``/``cond``/``while_loop``) appears only at the outermost layer
-of a kernel — the feedforward level sweep's ``while_loop`` (``default.py``), the mutation
+of a kernel — the feedforward level sweep's ``while_loop`` (``default.py``) and its
+statically unrolled accelerator spelling, the mutation
 cycle predicate, and the ``while_loop``/``cond`` of the schedule derivation
 (``../common/tensorization.py``) — never inside a level step and never under ``vmap``. The
 exact gradient path in ``grad.py`` uses no region op at all: its level loop is a plain Python
