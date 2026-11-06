@@ -74,7 +74,7 @@ No `setup` method may appear — a subclass that needs state is a design error, 
 Files stay near 500 lines and there is one reason to change per file: protocol + shared geometry + private validators (`base.py`, ~515 lines because the protocol docstrings are kept verbatim), storage + validation (`default.py`), recurrent mesh (`full.py`), feedforward grid (`mlp.py`).
 
 ## Divergences from the legacy JAX implementation (deliberate)
-`StatefulBaseClass`, `setup`, `make_nodes(query_res)` and `make_conns(query_res)` are gone: arrays are exposed directly and the weight packing moved into the genome's gene payload builder inside `../hyperneat.py`.
+`StatefulBaseClass`, `setup`, `make_nodes(query_res)` and `make_conns(query_res)` are gone: arrays are exposed directly and the weight packing moved into `../hyperneat.py::_assemble_substrate`, which builds the four-array payload itself because no genome-level payload builder exists.
 `conns` (`(m, 3)` `float32` with a zero weight column) became `conn_index` (`(m, 2)` `int32`): the weight column was a lie this layer cannot fill, and float columns forced the genome to bitcast instead of storing keys.
 The legacy `DefaultSubstrate(num_inputs, num_outputs, coors, nodes, conns)` argument `coors` is now spelled `query_coors`, matching the property it stores.
 `nodes` is emitted 1-D (`(nodes_cnt,)` `int32`) instead of the legacy `(nodes_cnt, 1)` `float64` column; the column is still accepted on input for legacy callers.
