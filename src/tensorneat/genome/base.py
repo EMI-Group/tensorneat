@@ -44,6 +44,7 @@ from ..common import (
     TensorNEATError,
     Transformed,
     derive_schedule,
+    kernel_mode,
 )
 from .gene import BaseConn, BaseNode
 from .grad import build_grad
@@ -505,12 +506,15 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
         The only place the schedule is derived: it delegates to
         ``..common.tensorization.derive_schedule.fn`` (the ``@evoxc.defn`` object itself is not
         callable) with the input/output keys as ``int32`` in-graph constants and the six statics
-        of this genome. The last static is ``acyclic``, derived from :attr:`network_type` (never
+        of this genome. ``acyclic`` is derived from :attr:`network_type` (never
         a constructor argument): a feedforward genome cannot hold a cycle because
         ``execute_mutation`` refuses every cycle-closing edge, so the live-cycle detection is
         dropped (a *cyclic* payload, which its own operators cannot build, would then saturate
         its levels instead of reading ``I_INF``); a recurrent genome keeps ``acyclic=False`` and
-        so keeps the ``I_INF`` level of every node on or downstream of a cycle. The derivation
+        so keeps the ``I_INF`` level of every node on or downstream of a cycle. The trailing
+        static is the schedule's formulation, read off the trace-time ``state.kernel_mode``
+        (``"host"`` when the entry is absent), so a device-registered ``"accelerator"`` state
+        traces the scatter-free route and returns the same ``Transformed``. The derivation
         must stay outside any differentiated graph (``argsort`` has no AD rule), which is why
         :meth:`grad` takes an already-derived ``Transformed``.
 
@@ -579,6 +583,7 @@ class BaseGenome(NodeStepMixin, BaseGenomeHost, StatefulBaseClass):
             self.max_in_degree,
             self.key_span,
             self.network_type == "feedforward",
+            kernel_mode(state),
         )
 
     @staticmethod

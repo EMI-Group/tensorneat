@@ -149,9 +149,10 @@ class FamilyDigest(NamedTuple):
             traced value drives a branch — a caller that relies on the dense route asserts this
             count is zero on the host (like ``pipeline.py``'s ``max_overflow`` check), or keeps
             ``DefaultDistance(dense_single_centre=False)``.
-        layout (DenseLayout): static scaffold of the single-centre fast path — owner-table base,
-            centre-attribute base, row index, flat reorder offsets/buffer and the rank-0
-            geometry scalars, all built once per generation (see :mod:`.layout`).
+        layout (DenseLayout): static scaffold of the single-centre fast path — the merged
+            owner/attribute table base, the centre row index, the marker pad row, the flat
+            reorder offsets/buffer and the rank-0 geometry scalars, all built once per
+            generation (see :mod:`.layout`).
         statics (MeasureStatics): static scaffold of the row-wise ``measure`` route — the rank-0
             scalars of the key fold, the merge and the distance tail, plus the two per-individual
             flat index blocks (``2M`` merge strides, attribute-gather base) — built once per
@@ -551,6 +552,7 @@ def prepare_family(
         attr_width=int(attrs.shape[-1]),
         width=dense_width(gene, key_span),
         dense=dense,
+        marker_columns=max(0, width - _FOLDED_KEYS),
     )
     # The row-wise route's own scaffolding (rank-0 scalars, the two flat index blocks), built
     # from the same pool so a value both families need costs one op: this is what a ``measure``

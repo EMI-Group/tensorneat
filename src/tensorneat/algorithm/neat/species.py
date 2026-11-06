@@ -409,10 +409,11 @@ class SpeciesController(StatefulBaseClass):
                 the signature ``distance_fn(state, centre: GenomeTensors,
                 pop: GenomeTensors) -> distances``, where ``pop`` must be the
                 payload the digest was prepared from.  Every centre it receives is
-                **population-shaped** -- ``pop_size`` rows, row ``p`` measured
-                against population member ``p`` -- and returns one ``(pop_size,)``
-                distance row.  Slicing the centre out of the ``(S, ...)`` fields
-                and tiling it to ``pop_size`` rows is this method's job, not the
+                spelled by ``state.distance_centre``: **population-shaped** --
+                ``pop_size`` rows -- by default, or one-individual (leading axis
+                ``1``) when the entry is ``"single"``; either way the call returns
+                one ``(pop_size,)`` distance row.  Slicing the centre out of the
+                ``(S, ...)`` fields and expanding it is this method's job, not the
                 genome's; ``NEAT.tell`` builds the callable from
                 ``genome.prepare_distance`` (see :class:`._distance.DistanceRows`),
                 and ``genome.execute_distance`` no longer plugs in directly

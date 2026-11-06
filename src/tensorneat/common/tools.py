@@ -35,8 +35,11 @@ Why this module exists (validated evoxc facts that shape every signature):
   rank 1 for ``iree_linalg_ext.scatter`` through a materialization it cannot
   legalize while a second scatter still consumes the rank-2 value, and fails
   with ``failed to legalize unresolved materialization``. Two payloads that
-  write the *same* cells (e.g. ``in_conn`` and ``in_src``) therefore go into
-  one wider buffer and one scatter, never into two calls.
+  write the *same* cells therefore go into one wider buffer and one scatter,
+  never into two calls (no shipped kernel needs that spelling today: the
+  schedule's two scatters each write one payload, and where a cell block is
+  cheaper to *read* than to write, the gather is the better formulation — see
+  :func:`flat_scatter_prepared`).
 * ``argsort`` returns ``int64`` and requires ``stable=True`` wherever
   tie-breaking must be deterministic (group ranks).
 
@@ -524,7 +527,11 @@ def flat_scatter_prepared(x, flat_idx, updates):
         ``flat_idx`` emit two scatters sharing one index value, which
         ``iree-compile`` rejects (see the module docstring). Two payloads that
         write the same cells go through one call on a buffer wide enough to
-        hold both (``tensorization._window_pair`` is the worked example).
+        hold both — and where the cells are cheap to *read* instead of write,
+        a gather is the better formulation: ``evoxc`` lowers ``scatter`` to one
+        workgroup of one thread on ROCm (~16-21 ns per updated cell), while
+        ``gather`` is parallel (``tensorization.incoming_table`` is the worked
+        example of replacing a write with a read).
     """
     pop_size, row_len = _flat_shape(x)
     out = evoxc.scatter(
