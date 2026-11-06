@@ -14,7 +14,7 @@ Protocol members: `transform(state, pop) -> SubstrateSchedule`, `forward`, `prep
 Subclass hooks: `_genome_cls`, `_required_connection_type` and `_genome_extra_kwargs()` (the recurrent `activate_time`); `HyperNEATFeedForward` overrides only those three plus its `__init__` signature, so the variants cannot drift.
 
 ## Decode Algebra
-Static sizes: `P` = the payload's leading dimension (any static batch — the CPPN's `pop_size` in an evolution step, `1` for a `Pipeline.show` decode); `Q = substrate.conns_cnt`; `N = substrate.nodes_cnt`; `I = substrate.num_inputs` (inputs *including* the bias); `O = substrate.num_outputs`; `C = neat.num_inputs = substrate.query_coors.shape[1] = 2 * CD`; `NA`/`CK`/`CA` are the node and conn gene key/attr widths (`2`/`2`/`1` for the shipped genes).
+Static sizes: `P` = the payload's leading dimension (any static batch — the CPPN's `pop_size` in an evolution step, `1` for a `Pipeline.show` decode, which goes through `_constant_act_fn` and is value-identical to that individual's population row); `Q = substrate.conns_cnt`; `N = substrate.nodes_cnt`; `I = substrate.num_inputs` (inputs *including* the bias); `O = substrate.num_outputs`; `C = neat.num_inputs = substrate.query_coors.shape[1] = 2 * CD`; `NA`/`CK`/`CA` are the node and conn gene key/attr widths (`2`/`2`/`1` for the shipped genes).
 `I` and `C` are different numbers and must never be interchanged: `I` sizes the bias column of `forward`, `C` sizes the coordinate rows of `query_coors`.
 Every tiling helper takes `pop_size` as a static argument (`_query_coors`, `_expand_schedule`, `_expand_leaf`) and `_assemble_substrate` reads it from `weights.shape[0]`; none may fall back to `self.pop_size`.
 `transform(state, pop)`, in order:
