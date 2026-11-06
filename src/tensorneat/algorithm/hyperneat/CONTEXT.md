@@ -90,10 +90,9 @@ The exporter rule this node owns is the negative-axis ban: the bias `concatenate
 
 ## Constraints
 No `jax` / `torch` / `numpy.random` on the compute path; `numpy` is used only in `__init__`/`_validate`/`_static_bounds`, for `np.ascontiguousarray` before `evoxc.from_numpy`, and in host-only `repr`/`to_dict`.
-No `vmap`/`fori_loop`/`switch` and no `cond`/`while_loop`/`scan` of this node's own: every kernel here is region-free and batch-first.
-Args in graph ops are non-negative static integers, never `-1`, and every shape is static (`Q`/`N`/`I`/`O`/`NA`/`CK`/`CA` from configuration, `P` from the payload's static axis 0).
-No `.at[...]` updates, no `tile` on batched data, no `repeat`, no `max/sum(where=…)`, no `any`/`all`: mask with `evoxc.select` and reduce afterwards; `evoxc` `getitem` is static-only and rejects `Ellipsis`, so column selection goes through `column_of`.
-Python `if`/`for` over constructor configuration unrolls at trace time; branching on a traced value is a `TraceError`.
+No `vmap`/`fori_loop`/`switch` and no `cond`/`while_loop`/`scan` of this node's own: every kernel here is region-free and batch-first, with non-negative static axes (never `-1`) in every graph op.
+Every shape is static (`Q`/`N`/`I`/`O`/`NA`/`CK`/`CA` from configuration, `P` from the payload's static axis 0); no `.at[...]` updates, no `tile` on batched data, no `repeat`, no `max/sum(where=…)`, no `any`/`all` — mask with `evoxc.select` and reduce afterwards.
+`evoxc` `getitem` is static-only and rejects `Ellipsis`, so column selection goes through `column_of`; Python `if`/`for` over constructor configuration unrolls at trace time, while branching on a traced value is a `TraceError`.
 Nothing here mutates `State`, the substrate, the genome objects or any array in place, and user-facing validation raises `TensorNEATError`/`ConfigError` (never `assert`) while backend/shape errors propagate unchanged.
 
 ## Known Issues
