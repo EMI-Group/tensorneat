@@ -164,3 +164,4 @@ Only `pytest test/backends` proves the assembled generation graph, since per-ker
 | `./plan.py` | Plan `NamedTuple`s, `EditContext`, the single-operation `Edit` and the `apply` writer with its static `write_nodes`/`clear_conn` specializations. |
 | `./arrays.py` | Flat-index read toolkit: row fetches, block gathers, static index blocks, `uniform_bounds`, `i32` (read-only; writes live in `plan.apply`). |
 | `./degree.py` | Public in-degree audit of a post-write payload: exported, documented, never called in the library and never tested (never in the hot path either). |
+| `./__init__.py` | Re-export surface: `__all__` is `BaseMutation`, `DefaultMutation`, `RecurrentMutation`, `in_degree`, `max_in_degree`, `violation`; `closes_cycle`/`cycle_accelerator` are **not** re-exported (callers import from `.cycle`). |
