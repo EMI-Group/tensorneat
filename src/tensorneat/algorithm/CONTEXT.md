@@ -130,7 +130,6 @@ The bounded structural-key allocator costs ~+4 / ~+8 / ~+33 ms per generation (+
 
 ## Known Issues
 `test/unit/algorithm/test_spawn.py` encodes `loc(p) = #{i : spawn[i] > 0 and E[i] <= p} - 1`, which disagrees with `block_layout` for a live zero-spawn species in the middle of a table — the oracle needs the "last qualifying block" form (cross-node; `test/` is not writable here).
-`next_species_key` must stay strictly greater than every live key (`setup` seeds it at `1.0`, slot 0 uses `0.0`); a colliding counter silently merges two species' `member_count`.
 The XOR3d pop-100 cell is the algorithm's tightest and no algorithm-side knob gates it (`max_in_degree = 4` refuses only 0.00–0.04 of fired add-conn gates, `max_depth = 16` sits above an observed maximum node level of 6–9; species kill, spawn starvation, elite displacement and the output row are non-binding).
 Crossover is live only for species with more than `1 / survival_threshold` members (200 at the example 0.01): below that the survivor prefix is one genome and every non-elite child is a mutated copy of it.
 `SpeciesController._block_layout`/`_prefix_sum_exclusive` are maintained **test seams** (only caller `test/unit/algorithm/conftest.py::raw_kernel`); production goes through `_kernels.block_layout`/`prefix_sum_exclusive`, so a behavioural change belongs in `_kernels.py`.
