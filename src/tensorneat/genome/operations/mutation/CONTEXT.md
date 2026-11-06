@@ -13,7 +13,7 @@ The reference backend is the evoxc numpy interpreter, where a dispatched op cost
 - For recurrent `(P, tries, E)` slabs the **contiguous innermost** reduce is the cheap one (`axes=2` 0.82 ms against `axes=1` 1.65 ms at 2 M elements; `equal` 0.68 against 1.11), so do not transpose them.
 - A `select` pays for the whole array while an indexed write pays only for its cells: two row writes on `conn_keys`+`conn_attrs` cost 8 ops / 1.00 ms as `select`s and 20 ops / 0.42 ms as one flat `scatter` (pop 500), so op count alone is not the budget.
 - One `uniform`/`normal` on a rank-0 key costs 0.05–0.42 ms and is independent of the output shape; the kernel issues **13** of them (`masked_random_row` accounts for three) and draw-order bit-exactness forbids removing or reordering any.
-- A compiled device pays a different law, measured on this worktree: iree+rocm ≈63 µs fixed per graph plus **≈2.2–2.5 µs per dispatch**, and one `while` iteration ≈50 µs of submission — dispatch count, not op count or arithmetic, is what dominates there (`## Cycle predicate`).
+- A compiled device pays a different law, measured on this worktree: iree+rocm ≈63 µs fixed per graph plus **≈2.2–2.5 µs per dispatch**, and one `while` iteration ≈157 µs when its predicate is device data (≈57 µs when the trip count is provably static) — dispatch count, not op count or arithmetic, is what dominates there (`## Cycle predicate`).
 
 ## Four-stage sequential composition
 `mutate_structure` runs the four stages **in sequence**, one iteration of a Python `for index in range(_OPERATION_COUNT)` loop each.
