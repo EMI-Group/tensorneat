@@ -46,7 +46,7 @@ A family with no attribute column at all gets one broadcast constant id (aggrega
 `mutate`, the default per-column `crossover`, `distance`, `from_attrs` and every width helper are inherited from `gene/base.BaseGene` unchanged.
 
 ## Op count
-`aggregate` evaluates every configured option on the whole `(P, N, K)` window — each option's reduce is its own static K-plane fold in `common/functions/agg.py` (`O(K)` ops, never an innermost-axis `reduce_*`) — and then picks the row's option with one `select` per option; the `has_valid` guard, when emitted, adds `window.any_slot` (K `slice` + K-1 `logical_or` + one `reshape`) plus one `select`.
+`aggregate` evaluates every configured option on the whole `(P, N, K)` window — each option's reduce is its own static K-plane fold in `common/functions/agg.py` (`O(K)` ops, switching to the backend `reduce_*` only above that module's fold-width guard) — and then picks the row's option with one `select` per option; the `has_valid` guard, when emitted, adds `window.any_slot` (K `slice` + K-1 `logical_or` + one `reshape`) plus one `select`.
 `combine` is 2 ops (`multiply`, `add`) for `DefaultNode`, 1 (`add`) for `BiasNode` and 0 for `HyperNEATNode`; the activation cascade starts from `z` (the identity branch) and emits one `select` per configured option over `(P, N)`.
 A shipped single-option `DefaultNode` (`AGG.sum`, one activation) therefore spends per level one K-plane fold, 1 aggregation `select`, 3 combine-like ops and 1 activation `select`, and emits no `has_valid` guard.
 The per-**pass** cost is the `width` attribute column reads (each a `slice` plus a differentiable `reshape`), the `int32` casts of the option columns, one `equal` per configured option, one output-row `select`, and the pooled rank-0 constants.
