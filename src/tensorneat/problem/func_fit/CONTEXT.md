@@ -47,7 +47,7 @@ Fitness is a pure negated loss, never an accuracy: the return for sigmoid-bounde
 - Targets are computed host-side with `np.apply_along_axis(func, -1, inputs)`; a scalar per row is promoted to `(S, 1)`, and `output_shape` is read back from the generated targets (`(O,)`).
 - Constructor validation (all `TensorNEATError`): unknown `method`, `num_samples <= 0`, missing/wrong-shape/non-positive `step_size` for `"grid"`, `low_bounds.shape != upper_bounds.shape`, a non-finite bound, an axis where `low_bounds[i] >= upper_bounds[i]` (reported with the offending axis and bounds), `func(low_bounds)` raising, and an over-budget dataset; the shape check on the bounds runs first.
 - Everything that touches a traced value is `enp` only (plus top-level `evoxc.tile`, since `enp` has no `tile`); the dataset, bounds and targets stay host numpy, and datasets are always coerced to float32 before baking.
-- No python control flow over traced values and no `np.*` on a traced tensor; `show` and the budget helpers are the only host-side entry points.
+- No python control flow over traced values and no `np.*` on a traced tensor; the host-side entry points are `show`, `_host_dataset` and the budget helpers (`dataset_nbytes`, `validate_dataset`, `_dataset_footprint`, `_check_dataset_budget`).
 - Fitness semantics are pinned: the four reductions, NaN → `-inf` (`finalize_fitness`) and `mape`'s zero-target `inf` all match the frozen legacy implementation.
 
 ## Measured cost
