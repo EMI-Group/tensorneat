@@ -94,11 +94,11 @@ Per-generation medians on this tree (same session, one process per cell):
 
 | case | numpy | `backend="iree"`, `device="rocm"` |
 | --- | --- | --- |
-| xor_p100 | 33.04 ms | 17.42 ms |
-| xor_p500 | 112.68 ms | 13.24 ms |
-| xor_p1000 | 177.43 ms | 16.29 ms |
-| custom_pagie_p500 | 847.13 ms | 16.18 ms |
-| cartpole_p100 | 248.70 ms | 150.41 ms |
+| xor_p100 | 33.22 ms | 10.48 ms | 3.17× |
+| xor_p500 | 113.97 ms | 12.65 ms | 9.01× |
+| xor_p1000 | 168.11 ms | 15.60 ms | 10.77× |
+| custom_pagie_p500 | 871.87 ms | 15.75 ms | 55.4× |
+| cartpole_p100 | 253.35 ms | 61.65 ms | 4.11× |
 
 The ROCm leg builds **7.2–8.0 s per static shape** and peaks at **≈1.9 GiB** of RSS; it now beats the numpy interpreter on every measured cell, so `"numpy"` stays the default because it needs no optional dependency and is the portability reference, not because it is the fastest leg.
 `"iree"` on llvm-cpu remains slower per generation than the interpreter (the measured table, protocol and per-gate record are in `benchmarks/BACKENDS.md`); `"xla"` needs a user-supplied PJRT C API plugin (`EVOXC_PJRT_PLUGIN`) and `"tvm"` is untested.
