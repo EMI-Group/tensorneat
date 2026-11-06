@@ -61,7 +61,7 @@ The trailing `has_valid` select (`select(count > 0, acc, 0.0)`) is emitted only 
 `act_fns` / `agg_fns` must be **trace-time static** sequences of callables with the documented signature, which is why a test with a custom tuple binds it (`functools.partial`).
 
 ## Dtypes, NaN and sentinels
-Kernels take and return `float32`; ids are integral-valued `float32` gene columns (cast to `int32`) or already-`int32` (used as is); `NaN` is the only sentinel here (absent node row, uncomputed value, unmatched attribute slot) and propagates through every activation; `I_INF` never appears, because the mask plus `(P, N, K)` padding encode absence on the aggregation axis.
+Kernels take and return `float32`, ids are integral-valued `float32` gene columns or already `int32`, and `NaN` is the only sentinel (absent node row, uncomputed value, unmatched attribute slot), propagating through every activation; `I_INF` never appears, because the mask plus `(P, N, K)` padding encode absence on the aggregation axis.
 
 ## Cost
 The lever is the interpreter's per-op overhead: ≈19–20 µs per dispatched op on the numpy reference interpreter at population-sized tensors (the package-wide law in `../CONTEXT.md`), so a reduction on `(P, N, K)` is worth `K` ops on `(P, N, 1)` only when it does not buy a wider pass — the case for the fold: one reduce-over-`-1` at `(P, N, K) = (2000, 50, 4)` measures ≈1.4 ms per level against ≈0.4 ms for the `K`-plane fold of the same window, as the per-op law predicts for `K + 2` ops.
