@@ -23,7 +23,13 @@ import evoxc.numpy as enp
 import numpy as np  # host-only: layout rotation and the ``forward_func`` read-out
 import sympy as sp  # host-only: code generation
 
-from ..common import State, TensorNEATError, find_useful_nodes, topological_sort
+from ..common import (
+    State,
+    TensorNEATError,
+    find_useful_nodes,
+    kernel_mode,
+    topological_sort,
+)
 from ..common.functions import ACT, AGG
 from ..common.tensorization import Transformed
 from .base import BaseGenome
@@ -41,7 +47,7 @@ from .operations.mutation.default import (
     DEFAULT_GENOME_CONN_DELETE,
 )
 from .utils import GenomeTensors
-from .window import _iinf, by_samples, fill
+from .window import SeedPad, _iinf, by_samples, seed_pad, seed_values
 
 
 class _PreparedPass(NamedTuple):
@@ -53,9 +59,9 @@ class _PreparedPass(NamedTuple):
 
     ``readout`` is the :class:`.step._ReadOut` of the schedule (the output-slot gather index,
     its liveness mask and the ``NaN`` fill), ``one`` the rank-0 ``int32`` the level loop counts
-    with, and ``nan_pad`` the ``(rows, max_nodes - num_inputs)`` ``NaN`` block of the value seed
-    (``None`` when the network has no non-input row). All three depend only on the schedule and
-    the static shapes, so no query pays their derivation or their constants.
+    with, and ``seed_pad`` the :class:`.window.SeedPad` plan of the value seed's ``NaN`` block
+    (no block at all when the network has no non-input row). All three depend only on the
+    schedule and the static shapes, so no query pays their derivation or their constants.
     """
 
     node_attrs: evoxc.SymbolicTensor
@@ -67,7 +73,7 @@ class _PreparedPass(NamedTuple):
     max_nodes: int
     readout: Any
     one: evoxc.SymbolicTensor
-    nan_pad: evoxc.SymbolicTensor | None
+    seed_pad: SeedPad
 
 
 class DefaultGenome(BaseGenome):
@@ -315,9 +321,9 @@ class DefaultGenome(BaseGenome):
         # Force the node operand bundle here so it is traced in this block instead of inside
         # the loop body, where the region would re-evaluate it on every iteration.
         statics.node_operands(self, prepared_attrs)
-        # The value seed's ``NaN`` block: one broadcast of a rank-0 constant, derived here so a
-        # query pays only the ``concatenate`` that splices it behind the input rows (and no op
-        # at all when the network has no non-input row).
+        # The value seed's ``NaN`` block: planned here (one broadcast of a rank-0 constant in
+        # the host formulation) so a query pays only the splice of the input rows into it --
+        # and no op at all when the network has no non-input row.
         pad = max_nodes - self.num_inputs
         return _PreparedPass(
             node_attrs=prepared_attrs,
@@ -335,10 +341,8 @@ class DefaultGenome(BaseGenome):
             # ``reshape`` + ``gather`` + ``select``.
             readout=self._output_readout(transformed, samples),
             one=enp.full((), 1, dtype=evoxc.int32),
-            nan_pad=(
-                fill((pop_size * samples, pad), float("nan"), dtype=evoxc.float32)
-                if pad
-                else None
+            seed_pad=seed_pad(
+                kernel_mode(state), self.num_inputs, max_nodes, pop_size * samples
             ),
         )
 
@@ -379,14 +383,10 @@ class DefaultGenome(BaseGenome):
                 f"{expected} row(s); prepare the pass with the samples of this batch"
             )
         seed = inputs if self.input_transform is None else self.input_transform(inputs)
-        # The ``NaN`` block of the seed is a prepared operand (see :meth:`prepare_pass`): the
-        # query pays the ``concatenate`` only, and none at all when the network has no
+        # The ``NaN`` block of the seed is a prepared plan (see :meth:`prepare_pass`): the
+        # query pays only the splice of its input rows, and none at all when the network has no
         # non-input row.
-        values = (
-            evoxc.concatenate([seed, prepared.nan_pad], axis=1)
-            if prepared.nan_pad is not None
-            else seed
-        )
+        values = seed_values(seed, prepared.seed_pad)
         one = prepared.one
 
         def cond(carry) -> evoxc.SymbolicTensor:

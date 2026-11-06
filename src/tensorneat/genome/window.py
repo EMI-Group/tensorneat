@@ -32,13 +32,14 @@ No state, no genome class: every function is a pure tensor transformation of its
 every static (``row_len``, ``attr_width``, shapes) is a Python value fixed at trace time.
 """
 
-from typing import Any
+from typing import Any, NamedTuple
 
 import evoxc
 import evoxc.numpy as enp
 import numpy as np
 
 from ..common import I_INF, TensorNEATError
+from ..common.schedule_accelerator import resolve_mode
 
 
 def fill(
@@ -71,6 +72,117 @@ def fill(
     if not shape:
         return enp.full((), value, dtype=dtype)
     return enp.broadcast_to(enp.full((1,) * len(shape), value, dtype=dtype), shape)
+
+
+class SeedColumns(NamedTuple):
+    """Accelerator spelling of the value seed's splice: gather the input columns into place.
+
+    ``columns`` is a ``(max_nodes,) int32`` table of *column ids* -- the input columns in
+    order, then the last input column repeated for every ``NaN`` row -- so
+    ``evoxc.gather(seed, columns, axis=1)`` places all the input values at once, one
+    dispatch for the whole ``(rows, max_nodes)`` block instead of one per part. The ``NaN``
+    rows it repeats are then dropped by ``keep``, a ``(1, max_nodes) bool`` mask that
+    broadcasts over the rows, and ``nan`` is the rank-0 ``NaN`` fill the masked cells take
+    (derived once per pass, so a query emits no constant of its own). The index addresses
+    *columns*, not rows, so this table is ``max_nodes`` entries -- 200 bytes at the shipped
+    ``max_nodes=50`` -- whatever the row count of the batch.
+    """
+
+    columns: evoxc.SymbolicTensor
+    keep: evoxc.SymbolicTensor
+    nan: evoxc.SymbolicTensor
+
+
+class SeedPad(NamedTuple):
+    """Static plan for the ``NaN`` rows behind the input rows of a forward value seed.
+
+    A pass seeds the input rows of ``values`` with the network inputs and leaves every other
+    row ``NaN`` -- an uncomputed node, which is what makes a node without a live source keep
+    ``NaN``. Two spellings of that splice ship; they produce bit-identical values and differ
+    only in what a *compiled* backend lowers them to:
+
+    * ``block`` -- the host spelling's ``(rows, max_nodes - num_inputs)`` ``NaN`` operand of
+      ``evoxc.concatenate``. One traced op and by far the cheaper form on the numpy reference
+      interpreter, whose budget is op count (a ``concatenate`` body is a plain copy) and where
+      a per-column gather plus a ``select`` would be two ops for the same bytes. A compiled
+      backend instead lowers the splice to *two* dispatches: one copy of the dynamic input
+      rows and one copy of the constant block, the first of them a serialised ``slow_memcpy``.
+    * ``columns`` -- the accelerator spelling's :class:`SeedColumns`, which is one dispatch:
+      IREE fuses the column gather into the ``select`` that masks the ``NaN`` rows, so a
+      policy query pays a single parallel elementwise kernel instead of two copies.
+
+    Exactly one of the two is set, and both are ``None`` when the network has no non-input row
+    (``max_nodes == num_inputs``), where the seed *is* the input block and no splice happens.
+    """
+
+    block: evoxc.SymbolicTensor | None
+    columns: SeedColumns | None
+
+
+def seed_pad(mode: str, num_inputs: int, max_nodes: int, rows: int) -> SeedPad:
+    """Plan the value seed's ``NaN`` rows for one forward pass.
+
+    Args:
+        mode: Kernel formulation -- ``"host"`` (the numpy reference interpreter, where op
+            count is the budget) or ``"accelerator"`` (a compiled device, where dispatch
+            count is).
+        num_inputs: ``I``, the input rows the seed must carry.
+        max_nodes: ``N``, the rows of the value seed.
+        rows: Rows the seed will carry -- the schedule's ``P``, or the tiled ``P * samples``.
+            Only the host spelling needs it, because its ``NaN`` block is materialised.
+
+    Returns:
+        SeedPad: The ``block`` operand of ``mode == "host"``, the ``columns`` plan of
+        ``mode == "accelerator"``, or neither when ``N == I``.
+
+    Raises:
+        tensorneat.common.errors.ConfigError: If ``mode`` is not a documented formulation.
+    """
+    width = int(max_nodes) - int(num_inputs)
+    if width <= 0:
+        return SeedPad(block=None, columns=None)
+    if resolve_mode(mode) == "accelerator":
+        # The dead cells must address an *in range* column: gather clamps nothing, and the
+        # mask discards whatever these rows read, so the last input column is repeated.
+        columns = np.concatenate(
+            (
+                np.arange(num_inputs, dtype=np.int32),
+                np.full(width, max(int(num_inputs) - 1, 0), dtype=np.int32),
+            )
+        )
+        keep = np.concatenate(
+            (np.ones(num_inputs, dtype=bool), np.zeros(width, dtype=bool))
+        ).reshape(1, max_nodes)
+        return SeedPad(
+            block=None,
+            columns=SeedColumns(
+                columns=evoxc.constant(evoxc.from_numpy(np.ascontiguousarray(columns))),
+                keep=evoxc.constant(evoxc.from_numpy(np.ascontiguousarray(keep))),
+                nan=enp.full((), float("nan"), dtype=evoxc.float32),
+            ),
+        )
+    return SeedPad(
+        block=fill((rows, width), float("nan"), dtype=evoxc.float32), columns=None
+    )
+
+
+def seed_values(seed: evoxc.SymbolicTensor, pad: SeedPad) -> evoxc.SymbolicTensor:
+    """Splice ``pad``'s ``NaN`` rows behind the input rows of ``seed``.
+
+    Args:
+        seed: ``(rows, num_inputs)`` input block of the value seed, after any
+            ``input_transform``.
+        pad: The :class:`SeedPad` :func:`seed_pad` planned for this pass.
+
+    Returns:
+        ``(rows, max_nodes)`` value seed: the input rows followed by ``NaN``.
+    """
+    if pad.columns is not None:
+        placed = evoxc.gather(seed, pad.columns.columns, axis=1)
+        return enp.where(pad.columns.keep, placed, pad.columns.nan)
+    if pad.block is not None:
+        return evoxc.concatenate([seed, pad.block], axis=1)
+    return seed
 
 
 def _i32(value: int) -> evoxc.SymbolicTensor:
