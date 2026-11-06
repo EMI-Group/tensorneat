@@ -6,9 +6,11 @@ import numpy as np
 
 import evoxc
 import evoxc.numpy as enp
+from evoxc import ops
 
 from ..base import BaseProblem, build_options, finalize_fitness, static_batch_size
 from ...common.errors import TensorNEATError
+from ...common.schedule_accelerator import kernel_mode
 from ._common import (
     prepared_query,
     require_finite,
@@ -227,13 +229,15 @@ class Pendulum(BaseProblem):
            column: ``theta = raw_0 * pi`` and ``theta_dot = raw_1 * max_speed``.
            The key is not threaded through the loop and ``np.random`` is never
            used.
-        3. One ``evoxc.while_loop`` over ``max_step`` timesteps, carry
-           ``(theta (B, 1), theta_dot (B, 1), total (B, 1), step ())``: the
-           return accumulator rides in the carry instead of being gathered from
-           a scan output stack, which is what keeps the per-timestep cost free of
-           any ``B * max_step`` array traffic, and the two state variables ride
-           as separate rank-2 leaves so the step never re-splits an observation
-           row it just built (see :meth:`_rollout`).
+        3. One ``evoxc.while_loop`` over ``max_step`` timesteps. Two carry
+           formulations ship, chosen by the trace-time static
+           ``state.kernel_mode`` (see :meth:`_rollout`): the host carry
+           ``(theta (B, 1), theta_dot (B, 1), total (B, 1), step ())`` and, on
+           ``"accelerator"``, the packed ``(row (B, 3), step ())`` with
+           ``row = (theta, theta_dot, total)``. Either way the return
+           accumulator rides in the carry instead of being gathered from a scan
+           output stack, which is what keeps the per-timestep cost free of any
+           ``B * max_step`` array traffic.
         4. Step body, following Gym's ``Pendulum-v1`` order and evaluating every
            term on the **pre-transition** state::
 
@@ -249,6 +253,8 @@ class Pendulum(BaseProblem):
 
            with ``angle_normalize(x) = x - 2*pi*floor((x + pi) / (2*pi))``,
            the backend-portable spelling of Gym's ``((x + pi) % (2*pi)) - pi``.
+           The algebra is :meth:`_transition_rows` plus the ``new_theta`` line,
+           shared verbatim by both carry formulations.
         5. Fitness = mean over the ``repeat_times`` axis of the episode return
            (a value in ``[-max_step * max_cost, 0]`` per episode), then
            ``finalize_fitness``.
@@ -260,7 +266,10 @@ class Pendulum(BaseProblem):
         ``0.001 * u**2`` is NaN, the step's cost is NaN, the accumulator turns
         NaN and stays NaN for the rest of the episode. The mean over
         ``repeat_times`` keeps it NaN and ``finalize_fitness`` maps it to
-        ``-inf``, so a poisoned policy can never win selection.
+        ``-inf``, so a poisoned policy can never win selection. The packed
+        accelerator carry additionally drags that NaN into the ``theta`` column
+        (via ``NaN * 0``), which is outcome-identical because the fitness reads
+        the accumulator column only.
 
         Trace hygiene: every arithmetic constant is an in-trace
         ``enp.full((), v)`` so it stays float32 on the stablehlo/iree path, and
@@ -283,7 +292,7 @@ class Pendulum(BaseProblem):
                 axis (raised by :func:`static_batch_size`).
         """
         pop_size = static_batch_size(transformed)
-        total, _ = self._rollout(keys, act_fn, pop_size)
+        total, _ = self._rollout(keys, act_fn, pop_size, kernel_mode(state))
         return finalize_fitness(
             enp.mean(returns_of(total, pop_size, self.repeat_times), axis=1)
         )
@@ -311,6 +320,11 @@ class Pendulum(BaseProblem):
         -- reports from the numpy reference interpreter. There is no silent
         fallback: a backend that cannot run the report raises.
 
+        The report also traces the carry formulation the run trained with
+        (``state.kernel_mode``, see :meth:`_rollout`), so a state on the
+        accelerator leg reports from the packed one-dispatch step instead of
+        the host one.
+
         A non-finite return (a NaN-poisoned policy) prints as ``nan`` in the
         return columns rather than raising: unlike ``CartPole``'s survival
         count, nothing here needs an integer.
@@ -325,6 +339,7 @@ class Pendulum(BaseProblem):
             ``None``; the report goes to stdout.
         """
         key_spec = evoxc.TensorSpec(tuple(key.shape), key.dtype)
+        mode = kernel_mode(state)
 
         def report(key_value):
             """Roll out one individual and return its per-episode results.
@@ -335,7 +350,7 @@ class Pendulum(BaseProblem):
             Returns:
                 ``(returns (R,), final_obs (R, 2))`` for the single individual.
             """
-            total, final_obs = self._rollout(key_value, act_fn, 1)
+            total, final_obs = self._rollout(key_value, act_fn, 1, mode)
             return enp.reshape(total, (self.repeat_times,)), final_obs
 
         executable = evoxc.build(report, key_spec, **build_options(state))
@@ -359,38 +374,67 @@ class Pendulum(BaseProblem):
         keys: Any,
         act_fn: Callable,
         pop_size: int,
+        mode: str,
     ) -> tuple[Any, Any]:
         """Roll out ``pop_size * repeat_times`` episodes for one key.
 
         Must be called inside the active trace: it draws the initial states with
         ``evoxc.random.uniform`` and runs one ``evoxc.while_loop`` over
-        ``max_step`` timesteps, carry
-        ``(theta (B, 1), theta_dot (B, 1), total (B, 1), step ())`` with
-        ``B = pop_size * repeat_times`` in individual-major order.
-        The policy query is prepared once for the whole rollout, so the per-pass
-        operands are not re-derived per timestep.
+        ``max_step`` timesteps with ``B = pop_size * repeat_times`` episodes in
+        individual-major order. The policy query is prepared once for the whole
+        rollout, so the per-pass operands are not re-derived per timestep.
 
-        The two state variables are carried as separate ``(B, 1)`` leaves rather
-        than as one ``(B, 2)`` observation row, which saves the two ``slice`` ops
-        a per-step ``enp.split`` costs: the row is only built where it is
-        actually consumed (the policy query), as one elementwise select against
-        the baked ``(1, 2)`` boolean ``obs_columns``. The accumulator is carried
-        at the same ``(B, 1)`` rank as the cost, so the step needs no ``reshape``
-        either; it is flattened to ``(B,)`` once here, after the loop.
+        Two carry formulations ship, chosen by the trace-time static ``mode``
+        (``state.kernel_mode``, a host string, so a graph contains exactly one of
+        them):
 
-        That carry is the measured optimum under the numpy cost budget: a packed
-        ``(B, 3)`` row (``theta, theta_dot, total``) puts a whole step in one
-        IREE dispatch and drops the per-query prelude by two, but it has to split
-        the row back into its columns (``4`` slice ops) and assemble the next row
-        with two masked selects, i.e. ``5`` extra executed ops per timestep
-        (``+1 000`` per generation at ``max_step=200``) against a baseline of
-        27 422 -- so it is not shippable while numpy cost must not regress.
+        * ``"host"`` -- the four-leaf carry
+          ``(theta (B, 1), theta_dot (B, 1), total (B, 1), step ())``. The two
+          state variables ride as separate leaves rather than as one ``(B, 2)``
+          observation row, which saves the two ``slice`` ops a per-step
+          ``enp.split`` costs: the row is only built where it is actually
+          consumed (the policy query), as one elementwise select against the
+          baked ``(1, 2)`` boolean ``obs_columns``, and the accumulator rides at
+          the cost's own rank so no step needs a ``reshape``.
+        * ``"accelerator"`` -- the packed carry ``(row (B, 3), step ())`` with
+          ``row = (theta, theta_dot, total)``, see :meth:`_packed_rollout`.
+
+        Why the packing is gated rather than unconditional: on a compiled
+        backend a dispatch is one loop-carried float root region, so collapsing
+        three roots into one carried row takes the rollout body from three
+        elementwise dispatches to one fused one (measured statically on the
+        compiled ROCm configuration: a standalone rollout graph's body block
+        goes **3 -> 1**). Two costs keep it off the host leg and one keeps it
+        from being a bigger win than that:
+
+        * assembling the next row costs **+805 executed ops per generation** on
+          the numpy reference interpreter (accelerator mode 27 055 -> 27 860 on
+          the generation after setup, i.e. ~42 421 -> 43 226 averaged over 20
+          timed generations, +1.9 %), so it stays behind the accelerator static
+          and the host leg is byte-for-byte the shipped kernel (27 391 ops on
+          that same generation, identical per-step list, identical fitness);
+        * in the **assembled generation graph** IREE materialises the packed
+          body's column slices as one ``slow_memcpy`` dispatch each, so the
+          step block holds 2 copies + the fused elementwise = 3 dispatches
+          against the host formulation's 3 roots there: the whole-step dispatch
+          win does not survive graph assembly, and what does survive is the
+          per-query region, because the packed body slices its observation out
+          of the carried row instead of selecting it out of two leaves
+          (``^bb5`` 4 -> 3). Net at the reference geometry, accelerator mode:
+          ``^bb5`` 3 + 4 dispatches per level trip + ``^bb8`` 3 = **21**
+          dispatches per timestep against the host carry's 4 + 5 + 3 = 22 on
+          the same graph family, whole-graph static sites 415 -> 414. The
+          host-mode graph is untouched at 445 sites and 19 dispatches per
+          timestep.
 
         Args:
             keys: One rank-0 evoxc key for the single reset draw.
             act_fn: Callable mapping ``(B, 2)`` observations to ``(B, 1)``
                 logits, or a prepared-query object exposing ``prepare``.
             pop_size: Number of individuals ``P`` (static).
+            mode: Resolved ``state.kernel_mode``: ``"host"`` or
+                ``"accelerator"`` (already validated by
+                :func:`~tensorneat.common.schedule_accelerator.kernel_mode`).
 
         Returns:
             The pair ``(total (B,), final_obs (B, 2))``, where ``total`` is the
@@ -404,6 +448,10 @@ class Pendulum(BaseProblem):
         query = prepared_query(act_fn, batch)
         obs0 = self._reset(keys, consts, batch)
         theta0, theta_dot0 = enp.split(obs0, _OBS_DIM, axis=1)
+        if mode == "accelerator":
+            return self._packed_rollout(
+                query, consts, batch, theta0, theta_dot0
+            )
         init = (
             theta0,
             theta_dot0,
@@ -418,6 +466,56 @@ class Pendulum(BaseProblem):
         return (
             enp.reshape(total, (batch,)),
             enp.concatenate((theta, theta_dot), axis=1),
+        )
+
+    def _packed_rollout(
+        self,
+        query: Callable,
+        consts: _PendulumConstants,
+        batch: int,
+        theta0: Any,
+        theta_dot0: Any,
+    ) -> tuple[Any, Any]:
+        """Roll out the packed one-dispatch step of the accelerator formulation.
+
+        The carry is ``(row (B, 3), step ())`` with ``row = (theta, theta_dot,
+        total)``: one float root instead of three, which is what lets the whole
+        step body fuse into a single dispatch on a compiled backend
+        (:meth:`_rollout` holds the measured inventory and the caveat that the
+        assembled generation graph re-materialises the column slices). The step
+        is :meth:`_loop_body_packed`; everything after the loop is three
+        contiguous column slices of the final row, so the packing costs no op
+        outside the body.
+
+        Args:
+            query: The prepared policy query, as in :meth:`_rollout`.
+            consts: The bundle from :meth:`_constants`.
+            batch: Number of episodes ``B`` (static).
+            theta0: Initial angles, ``(B, 1)``.
+            theta_dot0: Initial angular velocities, ``(B, 1)``.
+
+        Returns:
+            The pair ``(total (B,), final_obs (B, 2))``, as :meth:`_rollout`.
+        """
+        init = (
+            enp.concatenate(
+                (
+                    theta0,
+                    theta_dot0,
+                    enp.zeros((batch, 1), dtype=evoxc.float32),
+                ),
+                axis=1,
+            ),
+            enp.zeros((), dtype=evoxc.int32),
+        )
+        row, _ = evoxc.while_loop(
+            self._loop_cond(consts, packed=True),
+            self._loop_body_packed(query, consts, batch),
+            init,
+        )
+        return (
+            enp.reshape(ops.slice(row, (0, 2), (batch, 1)), (batch,)),
+            ops.slice(row, (0, 0), (batch, _OBS_DIM)),
         )
 
     def _reset(
@@ -453,7 +551,11 @@ class Pendulum(BaseProblem):
         )
         return raw * consts.reset_scale
 
-    def _loop_cond(self, consts: _PendulumConstants) -> Callable:
+    def _loop_cond(
+        self,
+        consts: _PendulumConstants,
+        packed: bool = False,
+    ) -> Callable:
         """Build the trip condition of the rollout loop.
 
         The horizon is static config, so the loop runs exactly ``max_step``
@@ -462,21 +564,27 @@ class Pendulum(BaseProblem):
 
         Args:
             consts: The bundle from :meth:`_constants`.
+            packed (bool, optional): Which carry the condition guards -- the
+                packed ``(row, step)`` of the accelerator formulation when
+                ``True``, the four-leaf host carry otherwise. Defaults to
+                ``False``.
 
         Returns:
             ``cond(carry) -> () bool`` -- true while ``step < max_step``.
         """
+        index = 1 if packed else 3
 
         def cond(carry):
             """Test the loop counter against the static horizon.
 
             Args:
-                carry: ``(theta, theta_dot, total, step)``.
+                carry: ``(row, step)`` when packed, else
+                    ``(theta, theta_dot, total, step)``.
 
             Returns:
                 The rank-0 boolean ``step < max_step``.
             """
-            return enp.less(carry[3], consts.horizon)
+            return enp.less(carry[index], consts.horizon)
 
         return cond
 
@@ -486,6 +594,10 @@ class Pendulum(BaseProblem):
         consts: _PendulumConstants,
     ) -> Callable:
         """Build the per-timestep body of the rollout loop.
+
+        This is the **host** formulation; the accelerator leg uses the packed
+        carry of :meth:`_loop_body_packed` instead, and :meth:`_rollout` picks
+        one at trace time on ``state.kernel_mode``.
 
         One step forwards the policy, converts the logit into a bounded torque,
         scores the **pre-transition** state, integrates, and subtracts the cost
@@ -552,6 +664,117 @@ class Pendulum(BaseProblem):
 
         return step
 
+    def _loop_body_packed(
+        self,
+        query: Callable,
+        consts: _PendulumConstants,
+        batch: int,
+    ) -> Callable:
+        """Build the per-timestep body of the packed (accelerator) carry.
+
+        One step is the same algebra as :meth:`_loop_body` -- :meth:`_transition_rows`
+        then ``theta' = theta + theta_dot' * dt`` and ``total' = total - cost``
+        -- but it reads and writes one ``(B, 3)`` row ``(theta, theta_dot,
+        total)`` instead of three float leaves, so the step has one carried
+        float root instead of three (one IREE dispatch per root).
+
+        The row is split with static slices (:func:`evoxc.ops.slice`): the
+        leading ``(B, 2)`` window is the observation the policy consumes
+        (``theta``, ``theta_dot``), and the two single-column slices are the
+        state variables the transition reads. The next row is one fused
+        expression::
+
+            next_row = row * keep_dims + next_speed * speed_row - cost * total_dim
+
+        with the three ``(1, 3)`` float32 rows
+        ``keep_dims = [[1, 0, 1]]``, ``speed_row = [[dt, 1, 0]]`` and
+        ``total_dim = [[0, 0, 1]]``, so column ``0`` is literally
+        ``theta + next_speed * dt``, column ``1`` literally ``next_speed`` and
+        column ``2`` literally ``total - cost`` -- bit-identical to the host
+        carry for finite values. Both products against a ``0`` entry are exact
+        (``0`` or the operand), and the ``- 0`` the theta column carries is an
+        exact subtraction, so the packed step reproduces the host step op for
+        op; a NaN cost does drag the ``theta`` column to NaN (``NaN * 0``),
+        which the host carry does not, but the fitness reads the accumulator
+        column only and any NaN there is already ``-inf``.
+
+        Measured statically on the compiled ROCm configuration (``pop`` 100,
+        ``max_step`` 200, seed 42, ``iree-compile ... --compile-to=
+        executable-configurations``), the fused assembly is what the three
+        carried roots collapse into: the standalone rollout graph's body block
+        is **1 dispatch**, against three elementwise dispatches for the
+        three-leaf host carry. In the assembled generation graph IREE
+        materialises the column slices as one ``slow_memcpy`` dispatch each, so
+        the step block there holds those two copies plus the fused
+        ``elementwise_100x3`` -- 3 dispatches, the same count as the host
+        formulation's three roots, and the net win of the packing is one
+        dispatch in the per-query region (below).
+
+        The three baked rows are built **once per rollout, outside the loop**
+        (here, at trace time, not inside ``step``), so the body pays no
+        constant materialisation per timestep.
+
+        Args:
+            query: The policy query, prepared once for the whole rollout by
+                :func:`._common.prepared_query`; maps ``(B, 2)`` observations to
+                ``(B, 1)`` logits.
+            consts: The bundle from :meth:`_constants`.
+            batch: Number of episodes ``B`` (static), the row width.
+
+        Returns:
+            ``step(carry) -> (row, step)`` -- the next packed carry.
+        """
+        keep_dims = evoxc.constant(
+            evoxc.from_numpy(np.asarray([[1.0, 0.0, 1.0]], dtype=np.float32))
+        )
+        speed_row = evoxc.constant(
+            evoxc.from_numpy(
+                np.asarray([[self.dt, 1.0, 0.0]], dtype=np.float32)
+            )
+        )
+        total_dim = evoxc.constant(
+            evoxc.from_numpy(np.asarray([[0.0, 0.0, 1.0]], dtype=np.float32))
+        )
+
+        def step(carry):
+            """Advance every episode by one packed timestep.
+
+            The policy is the only consumer of a ``(B, 2)`` observation row, so
+            that row is the leading two-column slice of the carried row, taken
+            once and handed straight to the query; the transition then runs on
+            the two single-column slices (:meth:`_transition_rows`).
+
+            Slicing the observation out instead of building it with the
+            ``obs_columns`` select of the host formulation is what keeps the
+            per-query region at its host width: the select would need both
+            columns of a three-column row, while the leading slice is one
+            narrower (measured: the per-query region holds 3 dispatches against
+            the host formulation's 4 on the compiled ROCm configuration).
+
+            Args:
+                carry: ``(row (B, 3), index ())`` with ``row`` holding
+                    ``(theta, theta_dot, total)``.
+
+            Returns:
+                The next carry, same tree and leaf types.
+            """
+            row, index = carry
+            obs = ops.slice(row, (0, 0), (batch, _OBS_DIM))
+            logit = query(obs)
+            theta = ops.slice(row, (0, 0), (batch, 1))
+            theta_dot = ops.slice(row, (0, 1), (batch, 1))
+            next_speed, cost = self._transition_rows(
+                theta, theta_dot, logit, consts
+            )
+            next_row = (
+                row * keep_dims
+                + next_speed * speed_row
+                - cost * total_dim
+            )
+            return next_row, index + consts.one_step
+
+        return step
+
     def _constants(self) -> _PendulumConstants:
         """Bundle the physics constants as float32 graph scalars.
 
@@ -563,6 +786,12 @@ class Pendulum(BaseProblem):
         loop, so a scalar the body needs every step (``two_pi``,
         ``neg_max_speed``, the penalties) costs one Constant op per run rather
         than one per timestep.
+
+        The accelerator formulation's three ``(1, 3)`` selector rows
+        (``keep_dims``/``speed_row``/``total_dim``) are deliberately *not* part
+        of this bundle: only the packed body reads them, so
+        :meth:`_loop_body_packed` bakes them per rollout and a host-mode graph
+        carries no trace of the other formulation.
 
         Returns:
             A structure holding ``gravity_term`` (``3 * gravity / (2 * length)``)
@@ -645,8 +874,8 @@ class Pendulum(BaseProblem):
     ) -> tuple[Any, Any, Any]:
         """Advance the two ``(B, 1)`` state leaves by one Euler step and score them.
 
-        The whole algebra of the environment, in Gym's order: with
-        ``u = max_torque * tanh(logit)``, ``angle`` as in
+        :meth:`_transition_rows` plus the angle integration, in Gym's order:
+        with ``u = max_torque * tanh(logit)``, ``angle`` as in
         :meth:`_angle_normalize`, the step is exactly
 
         - ``cost = angle**2 + 0.1 * theta_dot**2 + 0.001 * u**2``, evaluated on
@@ -656,9 +885,8 @@ class Pendulum(BaseProblem):
           integrated and clipped **before** the angle integrates;
         - ``theta' = theta + theta_dot' * dt``.
 
-        The clip is ``enp.clip``, i.e. ``minimum``/``maximum`` against
-        ``max_speed``/``neg_max_speed``, and both bounds are symbolic graph
-        scalars like every other constant in the trace.
+        The first two lines are :meth:`_transition_rows`, shared verbatim with
+        the packed accelerator step so the two formulations cannot drift.
 
         The cost keeps the rank of the states it is computed from (``(B, 1)``),
         which is what lets a caller accumulating at that rank subtract it with
@@ -673,6 +901,44 @@ class Pendulum(BaseProblem):
         Returns:
             ``(next_theta (B, 1), next_theta_dot (B, 1), cost (B, 1))``.
         """
+        next_speed, cost = self._transition_rows(
+            theta, theta_dot, logit, consts
+        )
+        next_theta = theta + next_speed * consts.dt
+        return next_theta, next_speed, cost
+
+    def _transition_rows(
+        self,
+        theta: Any,
+        theta_dot: Any,
+        logit: Any,
+        consts: _PendulumConstants,
+    ) -> tuple[Any, Any]:
+        """Score the pre-transition state and integrate the velocity.
+
+        The shared half of :meth:`_advance_rows`, in the exact operand order the
+        environment has always used:
+
+        - ``u = max_torque * tanh(logit)``;
+        - ``cost = angle**2 + 0.1 * theta_dot**2 + 0.001 * u**2``, on the
+          **pre-transition** state;
+        - ``next_speed = clip(theta_dot + (gravity_term * sin(theta)
+          + torque_term * u) * dt, -max_speed, max_speed)`` -- the clip happens
+          here, i.e. before the angle integrates.
+
+        The clip is ``enp.clip``, i.e. ``minimum``/``maximum`` against
+        ``max_speed``/``neg_max_speed``, and both bounds are symbolic graph
+        scalars like every other constant in the trace.
+
+        Args:
+            theta: Pendulum angle in radians, ``(B, 1)``.
+            theta_dot: Angular velocity, ``(B, 1)``.
+            logit: Policy output of shape ``(B, 1)``.
+            consts: The bundle from :meth:`_constants`.
+
+        Returns:
+            ``(next_speed (B, 1), cost (B, 1))``.
+        """
         torque = consts.max_torque * enp.tanh(logit)
         angle = self._angle_normalize(theta, consts)
         cost = (
@@ -684,8 +950,7 @@ class Pendulum(BaseProblem):
             consts.gravity_term * enp.sin(theta) + consts.torque_term * torque
         ) * consts.dt
         next_speed = enp.clip(next_speed, consts.neg_max_speed, consts.max_speed)
-        next_theta = theta + next_speed * consts.dt
-        return next_theta, next_speed, cost
+        return next_speed, cost
 
     def _angle_normalize(self, x: Any, consts: _PendulumConstants) -> Any:
         """Wrap an angle in radians into ``[-pi, pi)``.
