@@ -90,11 +90,6 @@ Tests live in the sibling `./../../../test` tree (read-only from here), behaviou
 No `test/parity/algorithm/hyperneat/` exists, so the decode has no frozen-oracle comparison, and `test/backends` has no HyperNEAT cell.
 Every kernel must be deterministic given `(seed, state)`: no dict ordering, no host RNG, no float-to-int conversion without an explicit mask.
 
-## Notes for Agents
-`transform` must accept any static batch, not just `neat.pop_size`: `Pipeline.show` derives a one-individual schedule through `_constant_act_fn`, which calls `algorithm.transform(state, one)` and then the prepared pair, and the `P = 1` decode is value-identical to that individual's full-population row.
-The substrate tables are host data: read them through `_graph_constant` at trace time, never in `__init__` (only `_validate`/`_static_bounds` read them on the host), and keep `_validate` before `_make_hyper_genome`.
-If a substrate ever needs a table over ~1 MiB, stop in-graph and escalate: the coordinates would have to become an explicit executable input, which is a `pipeline.py` change.
-
 ## Routing Table
 | Path | Responsibility |
 | --- | --- |
