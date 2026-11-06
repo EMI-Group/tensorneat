@@ -98,11 +98,9 @@ Nothing here mutates `State`, the substrate, the genome objects or any array in 
 `HyperNEATFeedForward` inherits `activate_time = 10` although its genome ignores it, and the value enters `_substrate_signature`, so two instances differing only in that dead attribute would rebuild.
 
 ## Test Strategy
-Tests live in the sibling `./../../../test` tree (read-only from here) and cover this node behaviourally, with no marker and no `xfail`.
-`test/unit/algorithm/test_hyperneat.py` covers the decode helpers (`_query_coors`, `_expand_leaf`/`_expand_schedule` including the unchanged-leaf case, `_query_substrate` row order, `_assemble_substrate`, `_conn_keys`), `_static_bounds`, `_make_hyper_genome`, every `_validate` raise path, protocol arities and delegation, `P = 1` vs population-row decode equality, the bias column, `forward` = `prepare_forward`+`forward_prepared` and `test_forward_reads_the_substrate_output_neurons` (the read-out law).
-`test_hyperneat_weights.py` covers the weight map (zero, the threshold tie, just above it, large magnitudes, NaN, batching); `test_genes.py` both genes' widths and option tables plus the `ConfigError`, identity `combine`, masked aggregation, all-dead window and `ConnOperands` rules; `test_hyperneat_feedforward.py` the variant delta, substrate depth, recurrent-substrate rejection and the prepared split; `test_hyperneat_e2e.py` two-generation runs of both variants.
-`test/integration/test_hyperneat_integration.py` covers `show_config`, the substrate-change rebuild and the checkpoint round-trip, and `test/integration/test_chunking_guard.py` pins a forced chunk budget to bit-identical fitness.
-`test/unit/algorithm/test_substrate.py` covers the child subtree and `test/release_gate_no_jax.py` resolves both algorithm names; no `test/parity/algorithm/hyperneat/` exists, so the decode has no frozen-oracle comparison.
+Tests live in the sibling `./../../../test` tree (read-only from here), behaviourally, with no marker and no `xfail`: `test/unit/algorithm/` covers the decode helpers, `_static_bounds`, `_make_hyper_genome`, every `_validate` raise path, protocol delegation, `P = 1` vs population-row equality, the bias column, `forward` = `prepare_forward`+`forward_prepared`, the weight map, the two gene kernels, the feedforward variant delta, two-generation runs of both variants and `test_forward_reads_the_substrate_output_neurons` (the read-out law).
+`test/integration/` covers `show_config`, the substrate-change rebuild, the checkpoint round-trip and a forced chunk budget that stays bit-identical; `test/release_gate_no_jax.py` resolves both algorithm names.
+No `test/parity/algorithm/hyperneat/` exists, so the decode has no frozen-oracle comparison, and `test/backends` has no HyperNEAT cell.
 Every kernel must be deterministic given `(seed, state)`: no dict ordering, no host RNG, no float-to-int conversion without an explicit mask.
 
 ## Notes for Agents
