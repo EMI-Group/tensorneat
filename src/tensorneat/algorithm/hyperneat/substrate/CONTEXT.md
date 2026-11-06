@@ -48,7 +48,7 @@ Node keys: input block `0 .. si-1` (bias neuron last), output block `si .. si+so
 `query_coors` row `q` and `conn_index` row `q` describe the **same** connection, and the CPPN output on row `q` is that connection's weight — this alignment is the single most important invariant of the node.
 `FullSubstrate` row blocks, in this exact order: input→hidden (`si*sh` rows), hidden→hidden (`sh*sh` rows), hidden→output (`sh*so` rows); inside a block the source varies slowest.
 `MLPSubstrate` row order: layer pairs ascending (`layer_idx = 0 .. layer_cnt-2`), then source neuron ascending, then target neuron ascending; there are no self-loops and no backward edges, hence `"feedforward"`.
-`MLPSubstrate` coordinates: layer `0` at `y_min`, layer `-1` at `y_max`, hidden layer `i` at `y_min + i*(y_max-y_min)/(layer_cnt-1)`, every layer spread evenly over `[x_min, x_max]`.
+`MLPSubstrate` coordinates: layer `k` (`k = 0` inputs .. `k = layer_cnt-1` outputs) sits at `y = y_min + k*(y_max-y_min)/(layer_cnt-1)`, every layer is spread evenly over `[x_min, x_max]`, and a one-neuron layer is centred on `x`.
 `MLPSubstrate` coordinates are always 2-D, so `query_coors.shape[1] == 4`; `FullSubstrate` supports any `cd >= 1` because it inherits the coordinate width from the caller's arrays.
 The last input coordinate is the bias neuron: `FullSubstrate`'s default three inputs are two real inputs plus bias, and `MLPSubstrate`'s `layers[0]` counts the bias neuron too (the XOR example passes `layers=[4, ...]` for 3 real inputs).
 Pruning is expressed as zero CPPN-derived weights, never as missing genes: `max_nodes`/`max_conns` equal `nodes_cnt`/`conns_cnt`, so both arrays are dense and carry no NaN padding.
