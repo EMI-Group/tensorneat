@@ -50,7 +50,6 @@ Backend is ``"numpy"``: no GPU, no ``iree``, no optional extra, no jax/torch.
 
 from __future__ import annotations
 
-import collections
 import dataclasses
 from typing import Any
 
@@ -63,6 +62,8 @@ from support.runner import run_graph, spec_like
 
 import tensorneat.algorithm.neat._kernels as kernels_module
 import tensorneat.common.errors as errors_module
+
+from ..ir_ops import op_names
 
 #: Population size / species-slot capacity of the speciation table.
 POP_SIZE = 8
@@ -85,34 +86,6 @@ ACCELERATOR_STATICS = (
         "distance_formulation": "index_free",
     },
 )
-
-
-# --------------------------------------------------------------------------- #
-# traced-IR helpers
-# --------------------------------------------------------------------------- #
-
-
-def _count_block(block: Any, counter: collections.Counter) -> None:
-    """Count op names of one IR block, nested region blocks included.
-
-    The ``return`` terminator is not an executed op; a region's bodies live in
-    ``.blocks``, and a plain block is accepted too.
-    """
-    for op in block.ops:
-        if op.name == "return":
-            continue
-        counter[op.name] += 1
-        for region in getattr(op, "regions", ()) or ():
-            for inner in getattr(region, "blocks", (region,)):
-                _count_block(inner, counter)
-
-
-def _op_histogram(graph: Any) -> collections.Counter:
-    """Op-name histogram of every function of a traced ``evoxc`` graph."""
-    counter: collections.Counter = collections.Counter()
-    for function in graph.module.functions:
-        _count_block(function.entry_block, counter)
-    return counter
 
 
 # --------------------------------------------------------------------------- #
@@ -291,7 +264,7 @@ def test_host_gated_speciate_graph_carries_cond_ops(algorithm, base_state):
     assert kernels_module.gated(SPECIES_SIZE, POP_SIZE, "host") is True
 
     graph, _leaves, _names = _trace_speciate(algorithm, state)
-    histogram = _op_histogram(graph)
+    histogram = op_names(graph)
 
     assert histogram["if"] == HOST_GATED_IF_OPS, (
         "the gated host leg must build one cond per traced scan-body instance "
@@ -310,7 +283,7 @@ def test_host_dense_speciate_graph_carries_no_cond(algorithm, base_state, forced
     state = base_state.register(kernel_mode="host")
 
     graph, _leaves, _names = _trace_speciate(algorithm, state)
-    histogram = _op_histogram(graph)
+    histogram = op_names(graph)
 
     assert histogram["if"] == 0, (
         "the dense host leg must not build a lazy row; the traced speciate "
@@ -331,7 +304,7 @@ def test_accelerator_speciate_graph_carries_no_cond(algorithm, base_state, stati
     assert kernels_module.gated(SPECIES_SIZE, POP_SIZE, "accelerator") is False
 
     graph, _leaves, _names = _trace_speciate(algorithm, state)
-    histogram = _op_histogram(graph)
+    histogram = op_names(graph)
 
     assert histogram["if"] == 0, (
         "accelerator mode must construct zero evoxc.cond operations; the "
@@ -351,18 +324,18 @@ def test_the_three_legs_trace_non_vacuously_different_graphs(
     host_gated_graph, _leaves, _names = _trace_speciate(
         algorithm, base_state.register(kernel_mode="host")
     )
-    host_gated = _op_histogram(host_gated_graph)
+    host_gated = op_names(host_gated_graph)
 
     accelerator_graph, _leaves, _names = _trace_speciate(
         algorithm, base_state.register(kernel_mode="accelerator")
     )
-    accelerator = _op_histogram(accelerator_graph)
+    accelerator = op_names(accelerator_graph)
 
     forced_gate(0)
     host_dense_graph, _leaves, _names = _trace_speciate(
         algorithm, base_state.register(kernel_mode="host")
     )
-    host_dense = _op_histogram(host_dense_graph)
+    host_dense = op_names(host_dense_graph)
 
     assert sum(host_gated.values()) > 0, "the gated host graph traced no ops"
     assert sum(host_dense.values()) > 0, "the host dense graph traced no ops"

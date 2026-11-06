@@ -64,11 +64,10 @@ Gotchas this module encodes
 * The sweep is selected only for ``samples == 1`` on the accelerator leg on purpose:
   a tiled dataset keeps the loop (the unrolled form multiplies a ``P * samples``-row
   batch by ``max_depth``). Never "simplify" the gate to the formulation static alone.
-* ``_count_ops`` walks a region's **blocks** (``region.blocks``); the sibling walker
-  in ``test_distance_digest.py`` recurses into the ``Region`` itself, which has no
-  ``.ops`` — that branch is dead there because no ``measure_distance`` graph carries
-  a region, and it raises ``AttributeError`` on the first ``while`` (reported
-  upward; this module does not edit that file).
+* The op counts come from the shared walker ``..ir_ops``, which descends a region's
+  **blocks** (``op.regions -> region.blocks -> block.ops``): a ``Region`` is an
+  ordered list of blocks and has no ``.ops`` of its own, so recursing into the
+  region itself would raise ``AttributeError`` on the first ``while``.
 * Debug with ``--tb=short``: a trace-time exception inside a fixture surfaces as a
   build error, and tracing this node's graphs takes about ten times a run.
 
@@ -81,6 +80,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+
+from ..ir_ops import op_names
 
 # --------------------------------------------------------------------------- #
 # helpers: one genome factory, the two formulation states, one evaluator
@@ -248,29 +249,6 @@ def _sigmoid(values):
     return 1.0 / (1.0 + np.exp(-values))
 
 
-def _count_ops(block, counts):
-    """Count the traced ops of one block by name, nested region blocks included.
-
-    Args:
-        block: An ``evoxc`` IR block (``entry_block`` or a region body).
-        counts: The accumulator, ``op name -> count``, updated in place.
-
-    Notes:
-        The ``return`` terminator is not an executed op, so it is not counted. A
-        region is an ordered list of *blocks* (``region.blocks``), which is where
-        this walker differs from the one in ``test_distance_digest.py``: that one
-        recurses into the ``Region`` itself, which has no ``.ops``, so its nested
-        branch would raise on the first ``while`` op (reported to the parent).
-    """
-    for op in block.ops:
-        if op.name == "return":
-            continue
-        counts[op.name] = counts.get(op.name, 0) + 1
-        for region in getattr(op, "regions", ()) or ():
-            for inner in region.blocks:
-                _count_ops(inner, counts)
-
-
 def _total(counts):
     """Total traced ops of one route, ``while`` bodies included."""
     return sum(counts.values())
@@ -341,11 +319,7 @@ def traced(runner, common, chain):
                 state, common.Transformed(*arrays[:width]), *arrays[width:]
             )
 
-        graph = evoxc.trace(forward_route, *specs)
-        route_counts = {}
-        for function in graph.module.functions:
-            _count_ops(function.entry_block, route_counts)
-        counts[route] = route_counts
+        counts[route] = op_names(evoxc.trace(forward_route, *specs))
     return counts
 
 

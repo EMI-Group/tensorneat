@@ -49,10 +49,10 @@ Everything runs on the numpy backend: no GPU, no ``iree`` extra, no ``requires_i
 
 from __future__ import annotations
 
-import collections
-
 import numpy as np
 import pytest
+
+from ..ir_ops import op_names
 
 #: ``I_INF``, the payload's absent-key sentinel.
 MISSING = np.iinfo(np.int32).max
@@ -174,26 +174,15 @@ def _assert_pair_answers(label, answers, expected_rows, expected_present):
         )
 
 
-def _op_names(block):
-    """Every non-terminator op name of one IR block, nested region blocks included."""
-    names = [op.name for op in block.ops if op.name != "return"]
-    for op in block.ops:
-        for region in getattr(op, "regions", ()) or ():
-            for inner in region.blocks:
-                names.extend(_op_names(inner))
-    return names
-
-
 def _op_histogram(fn, *specs):
-    """``Counter`` of the traced op names over every function of a freshly traced graph."""
+    """``Counter`` of the traced op names over every function of a freshly traced graph.
+
+    The walk is the shared one in ``..ir_ops``: non-terminator ops only, nested
+    region bodies reached through ``op.regions -> region.blocks``.
+    """
     import evoxc
 
-    graph = evoxc.trace(fn, *specs)
-    return collections.Counter(
-        name
-        for function in graph.module.functions
-        for name in _op_names(function.entry_block)
-    )
+    return op_names(evoxc.trace(fn, *specs))
 
 
 # --------------------------------------------------------------------------- #

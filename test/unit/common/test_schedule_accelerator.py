@@ -79,13 +79,14 @@ Scope: the schedule family's fourth module (semantics in
 
 from __future__ import annotations
 
-from collections import Counter
 from typing import Any, NamedTuple
 
 import numpy as np
 import pytest
 
 from support import runner
+
+from ..ir_ops import op_names
 
 # Shared structural constant: the documented field order of ``Transformed`` (the
 # seam module imports its fixtures and helpers the same way).
@@ -233,19 +234,15 @@ def _trace(case, mode):
 
 
 def _op_counts(graph):
-    """Count ``op.name`` over the graph, descending into every nested region."""
-    counts = Counter()
+    """``op.name -> count`` over the graph, descending into every nested region.
 
-    def walk(block):
-        for op in block.ops:
-            counts[op.name] += 1
-            for region in op.regions:
-                for inner in region.blocks:
-                    walk(inner)
-
-    for function in graph.module.functions:
-        walk(function.entry_block)
-    return counts
+    Terminators included on purpose: this module compares *whole* histograms of
+    two legs (``default == traces["host"]``), where a differing block count must
+    not cancel out. The walk itself is the shared one in ``..ir_ops``, whose
+    descent is ``op.regions -> region.blocks`` (a region is an ordered list of
+    blocks, not a block).
+    """
+    return op_names(graph, include_terminators=True)
 
 
 def _campaign(cap, unroll, detect_cycles=False):

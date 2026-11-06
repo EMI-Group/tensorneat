@@ -75,6 +75,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from ..ir_ops import count_graph_ops, count_ops
+
 #: Population size of the evolved fixture: big enough for a real speciate pass to
 #: have shuffled the payload, small enough for a module-scoped build.
 POP_SIZE = 100
@@ -642,25 +644,19 @@ def _count_ops(block):
 
     Returns:
         int: Non-terminator ops of the block plus every ``op.regions`` body — the
-        same recursive walk the cost tables in ``CONTEXT.md`` are counted with.
+        shared walk of ``..ir_ops``, which descends ``region.blocks`` (a region is
+        an ordered list of blocks, not a block).
 
     Notes:
         The ``return`` terminator is not an executed op, so counting it would make
         the budget depend on how many blocks a kernel happens to have.
     """
-    total = 0
-    for op in block.ops:
-        if op.name == "return":
-            continue
-        total += 1
-        for region in getattr(op, "regions", ()) or ():
-            total += _count_ops(region)
-    return total
+    return count_ops(block)
 
 
 def _graph_ops(graph):
     """Traced IR ops over every function of a traced ``evoxc`` graph."""
-    return sum(_count_ops(function.entry_block) for function in graph.module.functions)
+    return count_graph_ops(graph)
 
 
 def test_measure_stays_under_its_op_budget(runner, routes, evolved):
