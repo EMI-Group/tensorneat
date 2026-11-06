@@ -84,6 +84,11 @@ Every legacy `assert` (and `DefaultSubstrate`'s total lack of shape checks) beca
 `query_coors` is `float32` at the source instead of `float64` NumPy arrays relying on `jnp.array` to downcast later.
 A multi-output CPPN still silently misaligns weights in the legacy `make_conns` (its `self.conns.at[:, -1].set(query_res.flatten())` pours a multi-column result into one weight column); `../hyperneat.py` therefore raises unless `neat.num_outputs == 1`, because this node never sees the CPPN.
 
+## Known Issues
+`DefaultSubstrate`'s `query_coors` coercion checks shape only, never finiteness (unlike `as_coor_array`), so a `NaN`/`Inf` coordinate row reaches the graph as a `NaN` CPPN input and shows up only as `NaN` weights and a `-inf` fitness at the end of the generation.
+`_to_int32` accepts every integer and boolean dtype, so a `bool` key array casts to `0/1` keys instead of raising; the duplicate-key and permutation checks still reject the degenerate cases, but the failure message names duplicates rather than the dtype.
+`DefaultSubstrate.validate` re-runs on the stored arrays only, so a subclass that replaces `_query_coors`/`_nodes`/`_conn_index` without re-normalising them (e.g. a float array) can still pass every check and hand `float64`/`int64` tables to `../hyperneat.py`, which only casts through `np.asarray`.
+
 ## Test Strategy
 Tests live in the sibling `./../../../test` tree (read-only from here): `test/unit/algorithm/test_substrate.py` holds 38 test functions (123 collected cases) on plain host NumPy with no optional dependency, and it covers `base.py`, `default.py`, `full.py` and `mlp.py` at 100 % of statements.
 Its oracles are never the implementation's own helpers: hand-computed literal arrays from the documented row order and key blocks, a hand-written key → coordinate map that rebuilds `query_coors` from `conn_index` with a Python loop, closed forms (`si*sh + sh*sh + sh*so`, `sum(layers[i]*layers[i+1])`, `np.sort(nodes) == arange(nodes_cnt)`), and `match=` substrings of the documented messages.
