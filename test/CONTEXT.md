@@ -114,7 +114,7 @@ No test body is a placeholder: every test either asserts on a real kernel or is 
 The two release gates name the forbidden frameworks only inside subprocess script strings — `release_gate_no_jax.py` under the refusing import hook, `test_release_gate_surface.py`'s probe on purpose — so no such import ever runs in the pytest process.
 A behaviour the implementation documents but does not deliver is pinned with `xfail(strict=True)` and a reason starting `src defect:` — never removed, never softened.
 Shapes and keys in the suite are small (pop ≤ 16, `max_nodes` ≤ 16) except where a test exists specifically to exceed a static bound.
-No network, no GPU, `backend="numpy"` everywhere except tests marked `requires_iree`.
+No network, no GPU, `backend="numpy"` everywhere except tests marked `requires_iree` (llvm-cpu) and `requires_rocm` (a real HIP device).
 Files stay under ~1000 lines; one test module per source module, named `test_<module>.py`.
 
 ## Constraints
