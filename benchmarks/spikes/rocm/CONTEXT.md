@@ -27,6 +27,43 @@ Worst kernels by device time on `xor_p500` (share of the warm generation's 42.6 
 Phase attribution of those kernels (matching dispatch-shape suffixes across variant traces) puts 80.4 % of `xor_p500` device time in tell, 13.9 % in kernels shared by all three phases, and 4.7 % in evaluate.
 `cartpole_p100` device time is spread thin instead: the two sorts are 10.7 + 3.7 ms, and 4 016 `copyBuffer` + 2 167 `slow_memcpy` + 2 066 `elementwise` dispatches at 1–2.5 µs each carry the rollout.
 Per-generation host round trips cost `xor_p500` 0.69 ms for the four payload arrays (1.1 MB, 1.6 GB/s in step, 4.6 GB/s isolated), 0.074 ms for the `(P,)` fitness vector and 0.054 ms for the overflow scalar; every single `Tensor.to(cpu)` carries a fixed ≈47–60 µs regardless of size (a 8-byte scalar costs the same as 100 KB).
+## Host round-trip cost model: the pinned 1-byte staging buffer (tree `81011094`, 2026-11-06 04:22–04:45 UTC, IREE 3.13.0, evoxc v0.1.1 `be145ee`, ROCm 7.1, MI300X VF gfx942, rocprofv3 1.0.0)
+Protocol: artifact prepare/run split (an unprofiled process traces+lowers+compiles the generation graph and `Executable.save`s it, the profiled process only `Executable.load`s and runs it, exiting with `sys.exit`); `rocprofv3 -r` (HIP runtime + memory + kernel); generation windows cut on `CLOCK_MONOTONIC` markers the profiled script prints around each `evoxc.run` + its one D2H.
+Profiling inflates wall 1.6–2.0× at ~1.9 µs per extra HIP call, so the trace supplies **counts only** and every unit cost below was measured separately (ctypes on `libamdhip64`, unprofiled, medians of 100–300 calls).
+**Mechanism**: every control-flow decision whose predicate lives on the device — a `while` trip condition or a `cond` branch predicate — is read back to the host through a **fresh 1-byte pinned, mapped host buffer**: `hipHostMalloc(1)` → `hipHostGetDevicePointer` → copy → `hipHostFree`.
+Unit costs: that exact sequence costs **106.7 µs** (p10 104.7 / p90 111.8, n=300), size-independent to 64 KiB (`hipHostMalloc` 22.5 µs + `hipHostFree` 86.9 µs; 1 MiB → 184 + 159 µs); with the copy and its events a readback costs **~157 µs** end to end (`hipMemcpyAsync` D2H 4 KiB submit 11.9 µs, submit + `hipEventRecord` + `hipEventSynchronize` 19.2 µs).
+A **static/counter** condition is host-counted instead: ~21 µs per iteration with an empty body, 57 µs with a fused body.
+Per-generation counts (one warm generation, generation 8, seed 42; `wall` is the unprofiled 3-warm/5-timed median except cartpole 152.2 = the 200-step horizon):
+| case | wall ms | kernels | device ms | `hipMemcpyAsync` | pinned 1-byte pairs | launches | eventRecord | eventSync | streamWait | ctxSet |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `cartpole_p100` | 152.2 | 6 917 | 12.9–17.3 | 2 223 | **647** | 4 408 | 8 720 | 4 360 | 3 149 | 15 713 |
+| `xor_p100` (gated) | 16.8 | 1 205 | 3.5 | 239 | **53** | 884 | 1 192 | 596 | 533 | 2 509 |
+| `xor_p100` (ungated) | 10.5 | 1 602 | 4.5 | 201 | **13** | 1 345 | 618 | 309 | 249 | 3 163 |
+| `xor_p500` (ungated, the geometry's own path) | 13.6 | 1 604 | 7.0 | 201 | **13** | 1 347 | 618 | 309 | 258 | 3 165 |
+`cartpole_p100` closes to 133 ms of host HIP API time against a 152 ms wall: 647 × 106.7 µs = **69 ms of pinned alloc/free**, 2 223 copies ≈ 27 ms, 4 408 launches ≈ 18 ms, the event family ≈ 20 ms, device 12.9–17.3 ms mostly overlapped — **the missing ~110 ms is the pinned-alloc churn plus the copy/event churn of the same round trips, not device work and not the loop machinery**.
+Per rollout iteration the arithmetic is 2.85 pinned-alloc pairs + 9.5 copies + 17.2 launches + 18.4 event syncs + 36.7 event records (0.65–0.69 ms/iteration measured: slope 0.694 between horizons 100→200 and 0.646 across 25→200 over a 23–28 ms fixed intercept).
+The 2.85 pairs per rollout iteration are the genome level sweep: `genome/default.py`'s `while_loop` predicate is `level <= prepared.limit` with `limit` a **device** tensor, so it is data-dependent even though its value is trace-static.
+`xor_p100`'s 53 pairs decompose as **2 per species slot (40 at `species_size` 20) + 13 fixed**: `species_size` 5 gives 23 pairs and 9.2 ms less wall, and `xor_p500` (`20 × 500 = 10 000 > GATED_ROWS`, i.e. ungated) gives exactly the 13 fixed pairs.
+The 2-per-slot term is the `cond` that `_kernels.gated()` wraps each scan iteration in — **on ROCm a `cond` iteration costs ~157 µs and an extra unconditional dispatch ~2 µs, so the gate is a loss on an accelerator** even though it wins on the numpy interpreter.
+Measured fix, no source change (the trace-time predicate reads the module global): `GATED_ROWS = 0` takes `xor_p100` from 16.8 to **10.5 ms/gen (1.60×)** with 1 602 kernels and 4.5 ms device, and takes `xor_p500` from 18.2 (forced gated) to 13.6 ms (1.34×).
+Scratch-graph structural experiment (100-row f32, one graph per process, iree/rocm; `$TMPDIR`, not committed):
+| form | wall ms | per iteration | copies | pinned pairs |
+|---|---|---|---|---|
+| flat 200 × 0 body ops | 4.20 | 21 µs | 4 | 1 |
+| flat 200 × 20 / 40 / 60 body ops | 11.54 / 11.43 / 11.37 | **57 µs, saturated** | 204 | 1 |
+| flat 600 × 20 body ops | 33.17 | 55 µs | — | — |
+| nested 200 × (3 × 20 ops), static condition | 35.6 | 60 µs per inner | 604 | 1 |
+| nested 200 × (3 × 20 ops), data-dependent condition | **157.7** | 263 µs per inner | 2 204 | 800 |
+So **nesting costs +7 % at equal op count** (36.0 vs 33.2 ms) while a **data-dependent condition costs 4.4×** (157.7 vs 35.6 ms for identical ops), and per-iteration cost saturates at ~57 µs from 20 to 60 fused ops — extra statically unrolled device work is free inside a loop body.
+Prediction for the flat formulation (level sweep unrolled over `max_depth`, mask-gated, one flat rollout loop): 200 × 57–90 µs + the 23–28 ms fixed part = **36–43 ms/gen against today's 152 ms (3.5–4.2×)**.
+Break-even for statically unrolling the speciation scan instead of dropping its gate: the gate costs 6.3 ms/gen and the unroll costs +5.6–8.4 s of `iree-compile`, i.e. ~890–1 330 generations — still not worth it on a 13.6 ms generation, and the gate removal buys the same 6.3 ms for zero compile time.
+## Numerical fidelity of the device-gated kernels (same tree and session)
+`gpu_measure.py run --target iree-rocm --warmup 2 --generations 5` (8 steps, seed 42): gen-1 int keys **exact** on all three cases, float attrs ≤ 4.77e-7 and fitness ≤ 2.38e-7 (rtol 1e-5 / atol 1e-6), no NaN/`-inf` mask mismatch.
+`cartpole_p100` passes even the final state (fitness pinned at 200.0, keys exact); `xor_p500` and `custom_pagie_p500` drift in the final state (fitness max |Δ| 0.1125 / 0.0836) as documented.
+Lockstep from one seed at pop 500: gen-1 payload keys 0 mismatches and species leaves 8/10 equal (the two differ by ≤ 8.9e-8, float32 ulps), gen 2 has 5/10 species leaves equal and `species_count` 19 vs 18, gen 3 diverges the genomes (308 of 94 999 node keys); the RNG key is identical every generation, so this is not a PRNG-stream difference.
+`--trace 8` reports `first_key_divergence 4`.
+Running **speciate on one fixed bit-identical payload** gives **all 10 species leaves exactly equal** across numpy and rocm, so the device-gated distance/alignment kernels are numerically identical and the drift is a threshold amplification of float32 ulps: species membership is a discrete decision taken on a continuous distance.
+The cross-check's generation-1 gate compares payload + fitness only, so a species-level ulp difference at generation 1 is invisible to it; comparing the species leaves at generation 1 is the gate that would cover speciate.
 ## Ceiling (current architecture, one graph per generation)
 `xor_p500`: device 42.6 ms is the floor once host submission stops binding, so the reachable wall is ≈43.5 ms against today's 47.1 ms — halving tell's 2 737-dispatch host cost alone buys ≈3 ms and then device time binds; below that the speciation distance matrix (201² per individual per scan iteration) and the per-genome 252-key sort must shrink.
 `cartpole_p100`: device is 31.8 ms, so the reachable floor is ≈33 ms against today's 164 ms; halving tell's host cost leaves ≈134 ms because the 200-step rollout's ~5 460 dispatches (0.67 ms per step) are the binding term.
@@ -65,7 +102,9 @@ Only a *single* warm generation inside a trace is usable: the first generation i
 - The stub variants (tell/evaluate/forward replaced by a constant) are decomposition probes, never correctness evidence: they freeze the population and their graphs are not valid NEAT generations.
 - Keep the scripts throwaway: `ROCM_FINDINGS.md` and its probes are a historical record and stay as they are; a new ROCm probe belongs in this directory as its own file with its protocol printed.
 ## Known Issues
-- No committed artifact backs the cost-model table above: the probe scripts were session scratch scripts outside the repo (this node is read-only apart from CONTEXT.md), so reproducing a row means re-running the prepare/run split described in `## Method and its traps`.
+- No committed artifact backs either cost-model table: the probe scripts are session scratch scripts outside the repo (this node is read-only apart from CONTEXT.md), so reproducing a row means re-running the prepare/run split described in `## Method and its traps`.
+- The prepare/run split's profiled half runs the artifact outside `Pipeline`, so it measures `evoxc.run` + one D2H only: the host bookkeeping `Pipeline.step` adds (`to_numpy`, the overflow check) is not in the trace and is 0.1 % of a generation.
+- `rocprofv3 -r` has no HIP-argument capture in 1.0.0, so copy **sizes** are inferred from the `__amd_rocclr_copyBuffer` grid sizes (2 KiB and 6 KiB dominate at `cartpole_p100`) and pinned-buffer sizes from `memory_allocation_trace.csv` (every per-readback allocation is 1 byte).
 - `ROCm_FINDINGS.md` still says "no full ROCm generation runs today" and extrapolates ≈45–65 ms per generation; that forecast is now superseded by the measured 28–164 ms range above and should not be read as a current claim.
 - The phase table's three deltas do not add up to the full generation: each stub freezes the population at generation 0, while the full run measures evolved (deeper, denser) genomes whose loops iterate more.
 ## Routing Table
