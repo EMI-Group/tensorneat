@@ -38,7 +38,6 @@ Parent pairing takes `survive_size = clamp(floor(survival_threshold * member_cou
 Elite slot `k` of a block (`idx_in_block == k < genome_elitism`) pins **both** parents to that block's own `k`-th ranked member (`min(arange(P), live_members - 1)` as the rank index), so the top `genome_elitism` members survive unmutated as *distinct* individuals; the champion is never cloned into every elite slot.
 Block flattening: with exclusive prefix `E` of `spawn`, `loc(p)` is the **last** `i` with `E[i] <= p` and `idx_in_block(p) = p - E[loc(p)]`, one `gather` at `flat = loc * P + idx_in_block` into the row-major `(S, P)` pair arrays; no `spawn[i] > 0` term is needed because `spawn >= 0` makes `E` monotone and the total makes that index a live block.
 Post-pass: leftovers with `isnan(idx2species)` adopt the last live species key (reachable only when the species cap is hit), created slots get `best_fitness = -inf` / `last_improved = generation`, and `member_count` is one masked compare-sum over `(S, P)`.
-`new_conn_markers` continues from `state.pop.conn_keys` through `max_conn_marker` when `conn_gene.uses_historical_marker`, else zeros; a marker is an exact identity match, never a table index, so it is not range tested.
 
 ## Speciation Scans
 `species.py::SpeciesController.speciate` is the host-facing wrapper (population resolution, `SpeciesState` rebuild) and delegates to `_kernels.speciate`, which selects the body set from `state.kernel_mode` at trace time (`common/schedule_accelerator.py::is_accelerator`).
