@@ -46,6 +46,7 @@ Each `analysis_substrate` re-runs its own argument validators, so calling it dir
 
 ## Geometry rules (ordering invariants — a silent reorder shows up only as bad fitness)
 Node keys: input block `0 .. si-1` (bias neuron last), output block `si .. si+so-1`, hidden block(s) `si+so .. si+so+sh-1`; `nodes` is always a dense permutation of `0 .. nodes_cnt-1`.
+`validate` pins only those two leading blocks positionally, so hidden keys may appear in any order after them (both shipped substrates emit them ascending).
 `query_coors` row `q` and `conn_index` row `q` describe the **same** connection, and the CPPN output on row `q` is that connection's weight — this alignment is the single most important invariant of the node.
 `FullSubstrate` row blocks, in this exact order: input→hidden (`si*sh` rows), hidden→hidden (`sh*sh` rows), hidden→output (`sh*so` rows); inside a block the source varies slowest.
 `MLPSubstrate` row order: layer pairs ascending (`layer_idx = 0 .. layer_cnt-2`), then source neuron ascending, then target neuron ascending; there are no self-loops and no backward edges, hence `"feedforward"`.
