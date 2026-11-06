@@ -87,7 +87,7 @@ A multi-output CPPN still silently misaligns weights in the legacy `make_conns` 
 ## Known Issues
 `DefaultSubstrate`'s `query_coors` coercion checks shape only, never finiteness (unlike `as_coor_array`), so a `NaN`/`Inf` coordinate row reaches the graph as a `NaN` CPPN input and shows up only as `NaN` weights and a `-inf` fitness at the end of the generation.
 `_to_int32` accepts every integer and boolean dtype, so a `bool` key array casts to `0/1` keys instead of raising; the duplicate-key and permutation checks still reject the degenerate cases, but the failure message names duplicates rather than the dtype.
-`DefaultSubstrate.validate` re-runs on the stored arrays only, so a subclass that replaces `_query_coors`/`_nodes`/`_conn_index` without re-normalising them (e.g. a float array) can still pass every check and hand `float64`/`int64` tables to `../hyperneat.py`, which only casts through `np.asarray`.
+`DefaultSubstrate.validate` re-reads the stored arrays with `np.asarray` and never re-coerces them, so a subclass that replaces `_query_coors`/`_nodes`/`_conn_index` with un-normalised tables (e.g. `float64`/`int64`) passes every check and hands those dtypes to `../hyperneat.py`, which only wraps them for `evoxc.from_numpy`.
 
 ## Test Strategy
 Tests live in the sibling `./../../../test` tree (read-only from here): `test/unit/algorithm/test_substrate.py` holds 38 test functions (123 collected cases) on plain host NumPy with no optional dependency, and it covers `base.py`, `default.py`, `full.py` and `mlp.py` at 100 % of statements.
