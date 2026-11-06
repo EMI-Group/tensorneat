@@ -129,7 +129,10 @@ Suite output must be deterministic — a flaky test is a bug in the test, not a 
 | Path | Purpose |
 |---|---|
 | `./unit` | numpy-backend kernel/invariant suites, mirroring `../src/tensorneat/`. |
+| `./unit/ir_ops.py`, `./unit/test_ir_ops.py` | the one traced-IR walker (`count_ops`/`count_graph_ops`/`op_names`) every op-counting test shares, and its own truth table (nested regions, terminator accounting). |
+| `./unit/common/test_schedule_accelerator.py`, `./unit/genome/test_accelerator_equivalence.py`, `./unit/genome/test_forward_accelerator.py`, `./unit/algorithm/test_distance_accelerator.py`, `./unit/algorithm/test_scan_accelerator.py` | the accelerator formulations: pop-100 schedule/`Transformed` bit-identity and zero-`cond` IR proofs, `closes_cycle`/homologue/forward-sweep equivalence, all eight `kernel_mode × distance_centre × distance_formulation` combinations through `DistanceRows.matrix` and `NEAT.tell`, and the speciation gate's `if` counts. |
 | `./unit/test_host_payload.py` | `_one_individual`'s two accepted spellings and its `P > 1` / `None` rejections (12 tests). |
+| `./unit/test_pipeline_device.py` | the `device=` placement layer: host-only setup options, one-time placement through host memory, the host side-channel and the single D2H step (13 tests). |
 | `./unit/algorithm/test_exports.py` | the `tensorneat.algorithm` public surface: four documented names, exactly those in `__all__` (4 tests). |
 | `./unit/algorithm/test_hyperneat*.py`, `./unit/algorithm/test_substrate.py` | the HyperNEAT behavioural suites: substrate geometry and validation, both gene kernels, the CPPN→weight map, decode algebra and the forward/prepared split, the feedforward variant, and pop-4 two-generation `Pipeline` runs (373 cases in the directory counting the NEAT algebra files). |
 | `./parity` | kernel equality vs the frozen legacy JAX library (marker `parity`) and the `test_oracle_integrity.py` ratchet that keeps the differential evidence from silently shrinking. |
