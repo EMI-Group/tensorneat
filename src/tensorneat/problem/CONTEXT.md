@@ -110,7 +110,6 @@ The rollout *component* alone (`evaluate` traced alone, no genome forward) is 3.
 ## Notes for Agents
 - Cross-node findings (not editable from here):
   - `genome/default.py`'s forward value seed is `genome/window.py::fill` — one element plus a `broadcast_to`, materialised at the evaluated row count — so it puts no population- or sample-scaled NaN constant into a func-fit graph.
-  - `common/tensorization.py` bakes 104 population-scaled constants (3.43 MB at P=200, 8.56 MB at P=500).
   - `problem/base.py::finalize_fitness` costs 3 ops where `evoxc.nan_to_num(x, nan=-inf)` would cost 1; not taken (inf semantics differ from numpy's).
   - `rl/_common.to_numpy` duplicates `common/tools.to_numpy`; both are live (the three RL `show`s use the copy, `func_fit.py` the original), so consolidating them is a sibling-node decision.
   - The per-timestep genome cost (`^bb5` prelude and `^bb7` level loop at 4–5 dispatches per trip) is the sibling genome node's; `genome/CONTEXT.md` holds that inventory and the level-loop refutations.
