@@ -440,10 +440,12 @@ def closes_cycle(
         equality template (no ``scatter``) and carries a ``(P, N)`` reached set marked with a
         broadcast reduction instead of a write, because a compiled backend serialises
         ``scatter`` (see that module's note and its measured device numbers).
-        The accelerator route carries a second loop value, its growth flag, and consumes it
-        after the loop: an unused ``while`` result makes ``iree-compile`` emit an illegal
-        ``scf.while`` for the assembled generation graph, so that term is a release gate and
-        not dead code (same module note).
+        The accelerator route runs a **static** trip count of ``node_count`` hops (a breadth-first
+        closure from one source over ``node_count`` nodes saturates inside that budget), so its
+        loop condition is a hop counter and not a growth flag; its one carried value is the
+        reached set with that counter in its last column, and the answer reads that value, because
+        an unused ``while`` result makes ``iree-compile`` emit an illegal ``scf.while`` for the
+        assembled generation graph (same module note).
         The branch is a static host read — the entry is a plain string on the configuration
         ``State`` — so a graph contains exactly one of the two spellings and no traced value
         ever drives it.  The batch axis is written explicitly — no ``vmap`` over the region.
