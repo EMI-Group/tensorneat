@@ -87,20 +87,23 @@ Exactly one `evoxc.random.split` happens at the pipeline boundary per generation
 `best_genome.npz` is omitted when no generation produced a finite fitness; a bare `step` loop writes no files (`auto_run`/`_analyse` is the writer, and it materialises a device-resident payload through `materialize_payload` before writing).
 
 ## Measured Cost
-The cost laws of this tree, measured in one session (2026-11-06) on one box: the numpy reference interpreter charges **≈19–20 µs per dispatched op** (op count is the lever at population-sized tensors, element volume once a problem tiles the population); on `iree`+`rocm` a generation costs **`max(host submission, device)`**, a flat graph pays **≈63 µs fixed + ≈2.2–2.5 µs per dispatch**, **one `while` iteration costs ≈50 µs** because the loop condition is read back to the host, and **`Tensor.to(cpu)` costs a fixed ≈47–60 µs per leaf** regardless of its size.
+The cost laws of this tree, measured in one session (2026-11-06) on one box: the numpy reference interpreter charges **≈19–20 µs per dispatched op** (op count is the lever at population-sized tensors, element volume once a problem tiles the population).
+On `iree`+`rocm` a generation costs **`max(host submission, device)`** — the device is not the constraint — a flat graph pays **≈63 µs fixed + ≈2.2–2.5 µs per dispatch**, and **`Tensor.to(cpu)` costs a fixed ≈47–60 µs per leaf** regardless of its size.
+A `while`/`scan` iteration costs **≈57 µs when its predicate is trace-static** (a counter against a constant; saturated, since extra fused device work inside the body is nearly free up to ~60 ops) and **≈157 µs when the predicate is device data**, because each readback makes a fresh 1-byte pinned `hipHostMalloc`/`hipHostFree` pair (106.7 µs, size-independent) plus a D2H `hipMemcpyAsync` (~12 µs) and event churn; that same law governs `node_levels`' fixpoint, the species gate and every loop exit.
 The box drifts ±30 % between sessions, so a same-session pair is the load-bearing number, never the absolute milliseconds.
 
-Per-generation medians on this tree (same session, one process per cell):
+Per-generation medians on this tree (`31a31328`, same session, one process per cell, warmup 2 + 5 timed generations, seed 42):
 
-| case | numpy | `backend="iree"`, `device="rocm"` |
-| --- | --- | --- |
-| xor_p100 | 33.04 ms | 17.42 ms |
-| xor_p500 | 112.68 ms | 13.24 ms |
-| xor_p1000 | 177.43 ms | 16.29 ms |
-| custom_pagie_p500 | 847.13 ms | 16.18 ms |
-| cartpole_p100 | 248.70 ms | 150.41 ms |
+| case | numpy | `backend="iree"`, `device="rocm"` | speed-up | frozen JAX baseline |
+| --- | --- | --- | --- | --- |
+| xor_p100 | 33.22 ms | 10.48 ms | 3.17× | 3.72× (38.99 ms) |
+| xor_p500 | 113.97 ms | 12.65 ms | 9.01× | 23.3× (295.33 ms) |
+| xor_p1000 | 168.11 ms | 15.60 ms | 10.77× | 51.8× (807.30 ms) |
+| custom_pagie_p500 | 871.87 ms | 15.75 ms | 55.4× | 34.2× (539.19 ms) |
+| cartpole_p100 | 253.35 ms | 61.65 ms | 4.11× | n/a |
 
-The ROCm leg builds **7.2–8.0 s per static shape** and peaks at **≈1.9 GiB** of RSS; it now beats the numpy interpreter on every measured cell, so `"numpy"` stays the default because it needs no optional dependency and is the portability reference, not because it is the fastest leg.
+The ROCm leg builds **7.2–8.4 s per static shape** and peaks at **≈1.9 GiB** of RSS; it beats the numpy interpreter on every measured cell, so `"numpy"` stays the default because it needs no optional dependency and is the portability reference, not because it is the fastest leg.
+Generation-1 fitness and payload agree with the numpy leg on all five cells (`gpu_measure.py run`, cross-check on by default); at pop 500/1000 and on Pagie the *state* drifts from generation 3, which is float32 ulps amplified by a discrete species-membership decision taken on a continuous distance — `speciate` alone on one bit-identical payload returns bit-identical species leaves on both backends, and the RNG key stays identical every generation.
 `"iree"` on llvm-cpu remains slower per generation than the interpreter (the measured table, protocol and per-gate record are in `benchmarks/BACKENDS.md`); `"xla"` needs a user-supplied PJRT C API plugin (`EVOXC_PJRT_PLUGIN`) and `"tvm"` is untested.
 Executed ops per generation on this tree, counted on the numpy interpreter with a monkeypatched `evoxc.backends.numpy.kernels.dispatch`: `xor_p500` **7 592** (of which the 40 compatibility-distance calls are 3 675, 48 %) and `cartpole_p100` **30 994**.
 Those counts exclude the `output_slot` read-out, which adds one gather plus `O` mask comparisons once per pass and never per level.
@@ -157,14 +160,18 @@ A device that cannot be reached raises `evoxc`'s own error (`DeviceError`, or th
 
 ## Accelerator Status (ROCm / MI300X)
 A full generation graph runs on ROCm: `Pipeline(..., backend="iree", device="rocm", compile_options={"target_backends": ["rocm"]})` sets up on CPU, places `pop`/`randkey`/`generation`/species on `Device("rocm", 0)`, builds a generation graph in 7.2–8.0 s and runs every shipped case end to end — no `DeviceError` anywhere, and the per-generation numbers are the ROCm column of `## Measured Cost`.
-What dominates there is the **dispatch floor, not arithmetic**: one dispatch costs ≈2.2–2.5 µs however little work it does, plus a ≈63 µs fixed per-graph charge, so above a few hundred kernels the lever is dispatch count; a `while`/`scan` region boundary additionally pays a ≈50 µs host round trip per iteration, which is why an unrolled graph of the same device time can beat a loop (`algorithm/neat/CONTEXT.md` holds the rejection that follows from it).
+What dominates there is the **dispatch floor, not arithmetic**: one dispatch costs ≈2.2–2.5 µs however little work it does, plus a ≈63 µs fixed per-graph charge, so above a few hundred kernels the lever is dispatch count; a `while`/`scan` region boundary additionally pays a **≈157 µs host round trip** per iteration when its predicate is device data (≈57 µs when the predicate is a counter against a static constant), so an unrolled or statically counted graph of strictly *more* device work wins — `cartpole_p100` fell 151.8 → 61.6 ms that way.
+Per-level dispatch count is the floor once the loops are static: the swept genome level body is **4 dispatches** (a wide window `gather`, a wide `live` mask, the message-plus-neutral-fill group, and one narrow group holding the fold, the combine, the activation, the update select and the `node_level == level` compare), and three cheaper-looking spellings were measured worse or wrong — `any_slot` fusion (3/level, not semantics-preserving: a node whose only present slots point at `NaN` sources must keep `NaN`, not take its bias), a prepared `(P,N,N)` incidence mask (7/level) and a real `reduce_sum` fold (breaks bit identity with the reference fold).
 The kernel-level law behind the formulations: an `evoxc` `scatter` lowers to **one workgroup of one thread**, at 17–21 ns per update element and independent of the destination width, while `gather`, elementwise ops and reductions spread over the whole grid.
 Three device-shaped routes are selected by the statics described under `## Caching Policy` on a GPU-class device kind, and every one is bit-identical to the host route, generation for generation:
 
 | route | module | selection |
 | --- | --- | --- |
 | schedule writes without their scatter (`cumulative_indegree` for `cc`, `key_template` for the key→slot table) | `common/schedule_accelerator.py` | `kernel_mode` |
-| cycle hop without a scatter (equality template + windowed hop) | `genome/operations/mutation/cycle_accelerator.py` | `kernel_mode` |
+| cycle hop without a scatter (equality template + windowed hop) | `genome/operations/mutation/cycle_accelerator.py` | `kernel_mode` (the reach loop keeps its data-dependent exit: a static `node_count`-hop count measured 13.3 → 21.3 ms on `xor_p500` and 60.2 → 69.0 ms on `cartpole_p100`, because these populations saturate in 2–3 hops) |
+| forward level loop unrolled at trace time over `max_depth` with `update_mask = node_level == level` (no data-dependent exit) | `genome/default.py::_level_sweep` | `kernel_mode` **and** `samples == 1` — a tiled func-fit pass is `P·S = 250 000` rows, where 16 unrolled levels measured 16.0 → 51.0 ms on `custom_pagie_p500` while it runs only the batch's real depth (2–3) |
+| speciation's per-slot lazy `cond` disabled (the gate is a numpy op-count optimisation and backwards on a compiled backend: 40 slots × 2 = 40 of `xor_p100`'s 53 pinned readbacks) | `algorithm/neat/_kernels.py::gated` | `kernel_mode` (`False` under `"accelerator"`) |
+| `node_levels`' fixpoint campaign: 4 relaxation sub-steps per condition evaluation in the fast campaign, and a static counter with no `changed` leaf in the `detect_cycles` campaign | `common/tensorization.py` | `kernel_mode` |
 | homologue table as one `(P,M,M)` equality table instead of the sort merge | `genome/operations/distance/index_free.py` | `distance_formulation` |
 | homologue alignment as comparison-rank over `(P,M,M)` (no `argsort`) | `genome/operations/alignment_accelerator.py` | `kernel_mode` |
 | one `measure` call per `k = 2` centre slots (scan 1 only; `k > 1` requires `"tiled"` mode and the accelerator leg) | `genome/operations/distance/grouped.py` | `kernel_mode` + `distance_centre` |
@@ -180,7 +187,7 @@ The HIP `while`/`scan` abort that blocked this leg on `iree-base-runtime` 3.11 i
 ## Known Issues / Notes for Agents
 `HyperNEAT`, `HyperNEATFeedForward` and every substrate class are covered by behavioural unit tests (`test/unit/algorithm/test_hyperneat*.py`, `test_hyperneat_weights.py`, `test_substrate.py`, `test_genes.py`, `test/integration/test_hyperneat_integration.py`): the decode algebra, the `_validate` raise paths, both executor variants with a hidden block, and the substrate kwargs.
 `test_hyperneat.py::test_forward_reads_the_substrate_output_neurons` is a plain passing test, not a marker: the executor schedule is derived with the substrate's output keys and the read-out gathers `output_slot`, so the suite carries no `xfail`.
-File sizes against the ~1000-line rule: `algorithm/neat/neat.py` (1026), `common/tensorization.py` (1057) and `genome/base.py` (1005) are the declared exceptions; `genome/operations/distance/base.py` and `algorithm/neat/_kernels.py` are exactly at 1000, so the next addition there goes to a sibling module (`_scan_accelerator.py`/`_distance.py` for the speciation layer, `index_free.py`/`grouped.py` for distance).
+File sizes against the ~1000-line rule: `algorithm/neat/neat.py` (1026), `common/tensorization.py` (1098) and `genome/base.py` (1006) are the declared exceptions; `genome/operations/distance/base.py` and `algorithm/neat/_kernels.py` are exactly at 1000, so the next addition there goes to a sibling module (`_scan_accelerator.py`/`_distance.py` for the speciation layer, `index_free.py`/`grouped.py` for distance).
 `pipeline.py` (1390 lines) and `host_payload.py` (900) are one documented pair — see `## Constraints` — and `problem/rl/pendulum.py` (980) is the closest file to the limit.
 `Pipeline(host_payload=False)`, `host_payload.materialize_payload` and `host_payload.eval_chunk_rows`/`DEVICE_EVAL_CHUNK_BYTES` have no committed test: the device-aware chunk budget and the lazy payload path are covered by hand runs only, and the missing guard belongs to `./test`.
 `auto_run`'s docstring says `best_genome` stays `None` under `Pipeline(host_payload=False)` with reporting off; in the code `_analyse` materialises the payload whenever a generation sets a new best, which the first finite generation always does, so `best_genome` is populated and the copy is paid on those generations only.
@@ -198,7 +205,7 @@ The shipped connection gates live on the genome (`DefaultMutation(conn_add=0.4, 
 - Errors: user/config validation raises `common.errors.TensorNEATError` (and its subclasses); tensor/backend errors are never caught and re-wrapped.
 - The formulation statics are trace-time Python strings read off the configuration `State`: never a traced value, never a graph-boundary tensor, and an unknown value raises rather than falling back silently.
 - A new kernel with a device-specific spelling goes beside its host spelling in its own module behind one of the three statics, stays bit-identical to it, and leaves the host path untouched — a route that only wins on a compiled backend must not change the numpy graph.
-- Files ≤ ~1000 lines; shared math lives in `common/`, never duplicated per genome/algorithm. Declared exceptions: `common/tensorization.py` (1057, one cohesive schedule derivation including both formulations), `algorithm/neat/neat.py` (1026, `tell` plus the diagnostics that belong beside it) and `genome/base.py` (1005, the kernel contract every genome subclass shares).
+- Files ≤ ~1000 lines; shared math lives in `common/`, never duplicated per genome/algorithm. Declared exceptions: `common/tensorization.py` (1098, one cohesive schedule derivation including both formulations and both `node_levels` campaigns), `algorithm/neat/neat.py` (1026, `tell` plus the diagnostics that belong beside it) and `genome/base.py` (1006, the kernel contract every genome subclass shares).
 - The numpy interpreter keeps every SSA result of a block alive until that block returns, so a kernel's live set is charged once per enclosing block: never hoist a kernel out of a `while`/`scan` without measuring peak RSS (hoisting the 20 speciation rows was 28 % faster and 1.7× the memory; measuring them inside one `evoxc.scan` is 40 % faster and below the starting memory).
 - Never seed a `while`-carried value with a `scatter`: it SIGSEGVs `iree-compile` in the assembled graph while exporting cleanly; seed with a one-hot `equal`/`logical_and`, and treat only `test/backends` as proof of portability.
 - `pipeline.py` (1390 lines) is one job — the single compile site, the device-placement helpers (`_placement_device`/`_host_build_options`/`_place_state`/`_host_view`) and the design, caching, overflow and measured-cost documentation that belongs next to them; the host-side payload/fitness/config helpers live in `./host_payload.py` (900 lines, including the device-kind → formulation rule and the chunk budget), so the pair keeps to the documented ~1000-line exception.
