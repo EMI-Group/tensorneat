@@ -86,10 +86,10 @@ Key-form is whatever `splitmix64` produces (rank-0 int64); nothing assumes a JAX
 2. `species_number_calculate_by="fitness"` poisoned `min`/`sum` with the NaN `best_fitness` of dead slots; every reduction masks dead slots first.
 3. `HyperNEATNode` declares its two `int` option columns and an identity `combine`, so the node-gene protocol (`valid_mask`, two-argument `aggregation`) runs it unchanged. See `./hyperneat`.
 4. `spawn_number` relied on NaN → int32 cast semantics; dead slots are explicitly zeroed before the cast.
-5. `HyperNEAT.__init__` validates `weight_threshold ∈ [0, 1)`, `max_weight > 0`, `activate_time >= 1`, the substrate's `inputs, outputs, hidden` key block order and the CPPN arity, raising instead of dividing by zero.
-6. Sort tie-order stays bit-compatible by using a *stable ascending* `argsort` plus an index reversal gather (evoxc `argsort(descending=True)` breaks ties the other way).
-7. The spawn residual lands on the first **live** slot rather than literally slot `0`: identical after the descending sort, but a hand-built unsorted table can no longer hand slots to a dead species.
-8. Random streams differ by construction — one key per population kernel drawing `(P, …)` randomness inside instead of one key per genome — so parity compares kernels on fixed inputs, never RNG bit-patterns.
+5. `HyperNEAT.__init__` validates `weight_threshold ∈ [0, 1)`, `max_weight > 0`, `activate_time >= 1`, the substrate's key block order and the CPPN arity, raising instead of dividing by zero.
+6. Sort tie-order stays bit-compatible through a *stable ascending* `argsort` plus an index reversal gather (evoxc `argsort(descending=True)` breaks ties the other way).
+7. The spawn residual lands on the first **live** slot rather than literally slot `0`, so a hand-built unsorted table can never hand slots to a dead species.
+8. Random streams differ by construction — one key per population kernel drawing `(P, …)` randomness inside instead of one key per genome — so parity compares kernels on fixed inputs.
 
 ## Search Quality (numpy backend, measured)
 The quality contract is `benchmarks/cases.py`: `DefaultGenome(num_inputs=3|2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, `XOR3d()`/`XOR()`, 150 generations, no early stop, fitness = −mse.
