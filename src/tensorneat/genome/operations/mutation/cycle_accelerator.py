@@ -37,6 +37,14 @@ element volume in full (it is ~6-8x the host call there), which is exactly why `
 stays the default and this route is selected by :data:`KERNEL_MODE_KEY` on a device where the
 serialised scatters dominate.
 
+A **statically counted** spelling of the same hop -- the reached set plus a hop counter in one
+``(P, N + 1) int32`` carry, ``cond = hops < node_count``, no per-hop readback -- answers the same
+boolean and is **rejected on measurement**: a whole generation costs 21.28 against 13.27 ms on
+``xor_p500`` (pop 500) and 69.01 against 60.16 ms on ``cartpole_p100``, 23.56 against 16.19 on
+``xor_p1000`` and 24.16 against 16.13 on ``custom_pagie_p500`` (one session, seed 42, ``iree`` on
+``rocm``, warmup 2 + 5 timed generations) -- these populations stabilize in two or three hops,
+while the counted loop pays the ``O(P * E * N)`` destination one-hot for all ``N = 50`` hops.
+The readback this body pays per hop is therefore the cheaper of the two; keep it.
 The switch is a **static host branch**: both spellings are plain traced helpers (never
 ``@evoxc.defn``), so a graph is exactly one of them and no backend ever sees both.
 
