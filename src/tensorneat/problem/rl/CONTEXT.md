@@ -93,8 +93,7 @@ The per-iteration overhead around the step costs **0** dispatches (the trip cond
 - `show` and every report graph are host-side and built with `**problem.base.build_options(state)`; reporting is finite-safe, so no report may convert a return with `int()`/`round()` or test it against a bound without `math.isfinite` first — `CartPole` prints `survived n/a (NaN return)`, `MountainCarContinuous` prints `goal n/a (NaN return)`, `Pendulum` prints `nan`.
 - Every numeric knob and every `fitness_target` goes through a `_common` validator, so a configuration error is always `TensorNEATError` with a `<Owner>: <name> must be ...` message, never a bare `TypeError`/`ValueError`.
 - Files <= ~1000 lines (`cartpole.py` 744, `mountaincar.py` 849, `pendulum.py` 980, `_common.py` 214).
-- Per-timestep IREE dispatch inventory at `L = 3`: `CartPole` 3 + 4·L + 6 = **21** (446 sites), `Pendulum` 4 + 4·L + 3 = **19** host / 3 + 5·L + 3 = **21** accelerator (445 / 414 sites), `MountainCarContinuous` 3 + 4·L + 4 = **19** (443 sites); the genome's `^bb5`/`^bb7` are the sibling genome node's, so this node's own budget is `^bb8` 6 / 3 / 4.
-  `L` is a **runtime** value (the population's own depth): instrumenting `Interpreter._run_block` over 20 `CartPole` generations reads `L` 2 at the generation after setup, 3 at the median and 4 at the deepest.
+- `L` (the level loop's trip count) is a **runtime** value — the population's own depth — so a per-timestep total moves by the level trip's width per `L`: instrumenting `Interpreter._run_block` over 20 `CartPole` generations reads `L` 2 at the generation after setup, 3 at the median and 4 at the deepest.
 
 ## Measured cost
 On this worktree (2026-11-06, reference geometry): one `cartpole_p100` generation costs **248.70 ms** on the numpy interpreter and executes **30 994** dispatched ops, and the same cell on `backend="iree"`, `device="rocm"` costs **150.41 ms** per generation.
