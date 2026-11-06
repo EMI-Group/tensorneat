@@ -70,7 +70,7 @@ Everything else in a dispatch is 3 ops per non-identity option over `(P, N)` (`c
 Rejected levers (measured; do not re-derive): a halving tree, which matches numpy's order only at `K = 8`; per-plane `select` folded with the adds (1.606 vs 1.609 ms, +10 ops, and it takes `maxabs` off the shared window); the masked multiply above; a gather/`stack` dispatcher, which trades 2 ops per option for a `(len, P, N)` stack (≈2.4 MB at `P = 1000`) plus clamp plumbing for the `-1` rule.
 
 ## Portability
-Every op this package emits is `v1` in `evoxc.backends.stablehlo.ops.status()` (elementwise ops, `slice`, `reshape`, `select`, `equal`, `greater`, `cast`, `argmax`, `gather`, and `reduce_*` on the wide-window fallback); `erf` / `gelu` are deferred in that table and no ACT option is either, and nothing here emits an unsigned dtype, a `scatter`, `cumsum`, `flip`, `tril`/`triu` or a `while`.
+Every op this package emits is `v1` in `evoxc.backends.stablehlo.ops.status()` (elementwise ops, `slice`, `reshape`, `select`, `equal`, `greater`, `cast`, `argmax`, `gather`, and `reduce_*` on the wide-window fallback); `erf` / `gelu` are deferred there and no ACT option is either, so nothing here emits an unsigned dtype, a `scatter`, `cumsum`, `flip`, `tril`/`triu` or a `while`.
 Recorded rule from evoxc's op table rather than a fresh export from this node; `test/backends` is the only proof of portability.
 
 ## Sympy / interpretability contract (host-only)
