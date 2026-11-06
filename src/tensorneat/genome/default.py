@@ -66,8 +66,9 @@ class _PreparedPass(NamedTuple):
     schedule and the static shapes, so no query pays their derivation or their constants.
 
     ``sweep`` selects the level spelling: ``True`` is the accelerator's statically unrolled
-    sweep, which reads no depth bound and no counter, so ``limit`` and ``one`` are ``None``
-    there; the host leg keeps both and walks them in one ``evoxc.while_loop``.
+    sweep on a non-tiled pass, which reads no depth bound and no counter, so ``limit`` and
+    ``one`` are ``None`` there; every other pass (the host leg, and any tiled batch) keeps both
+    and walks them in one ``evoxc.while_loop``.
     """
 
     node_attrs: evoxc.SymbolicTensor
@@ -335,10 +336,17 @@ class DefaultGenome(BaseGenome):
         # the host formulation) so a query pays only the splice of the input rows into it --
         # and no op at all when the network has no non-input row.
         pad = max_nodes - self.num_inputs
-        # The level spelling is one host-side read of the formulation static: the accelerator
-        # leg unrolls the sweep statically, so it needs neither the depth bound (a
-        # ``reduce_max`` dispatch only the loop consumes) nor the loop's counter.
-        sweep = is_accelerator(kernel_mode(state))
+        # The level spelling is one host-side read of two statics: the accelerator leg unrolls
+        # the sweep statically, so it needs neither the depth bound (a ``reduce_max`` dispatch
+        # only the loop consumes) nor the loop's counter -- but only for a non-tiled pass.
+        # ``samples == 1`` is the discriminator: a rollout queries one payload ``max_step``
+        # times per generation, so the loop's per-level host readback is paid per query, while a
+        # tiled dataset is queried once per generation and amortises that readback away.
+        # Meanwhile the unrolled sweep multiplies a tiled pass by ``max_depth``: at
+        # ``P * samples = 250 000`` rows (func-fit) that measured 16.0 -> 51.0 ms/generation on
+        # iree+rocm, so a tiled batch keeps the ``while_loop`` verbatim -- do not "simplify" this
+        # gate to the formulation static alone.
+        sweep = is_accelerator(kernel_mode(state)) and samples == 1
         return _PreparedPass(
             node_attrs=prepared_attrs,
             statics=statics,
@@ -475,7 +483,12 @@ class DefaultGenome(BaseGenome):
         per trip (~157-263 us measured, against ~57 us for a statically counted iteration),
         while extra unrolled device work is nearly free (the per-iteration cost of a fused body
         saturates from 20 to 60 ops). On the dispatch-bound numpy interpreter the trade is the
-        other way round, which is why ``kernel_mode`` gates it.
+        other way round, which is why ``kernel_mode`` gates it, and so is the trade on a tiled
+        batch: the sweep is selected only for a non-tiled (``samples == 1``) pass on the
+        accelerator leg, whereas a tiled dataset keeps the loop because its rows are
+        ``P * samples`` (each unrolled level would cost that many rows: 16.0 -> 51.0
+        ms/generation at ``P * samples = 250 000``) and its per-level readback is amortised over
+        one query per generation instead of one per rollout timestep.
 
         Same values as :meth:`_level_loop`, bit for bit:
 
