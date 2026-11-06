@@ -137,8 +137,13 @@ import evoxc.numpy as enp
 
 from tensorneat.common.errors import TensorNEATError
 
+from tensorneat.common.schedule_accelerator import is_accelerator, kernel_mode
+
 from ._kernels import centre_payload
 from ._validation import distance_centre_mode
+
+#: Static spelling of :meth:`DistanceRows.matrix` on the accelerator formulation.
+_MATRIX_UNROLL = True
 
 
 class DistanceRows:
@@ -326,9 +331,38 @@ class DistanceRows:
             length ``1``.  Measuring the same rows at the top level of the
             generation graph would keep all ``K`` of them resident -- see
             `Peak memory` in the module docstring.
+
+            The scan is a *numpy-interpreter* memory scope and nothing else: a
+            compiled backend charges it one single-workgroup ``(K, P)`` ``y``
+            stack write plus four loop-scaffolding dispatches per iteration, so
+            in the ``"accelerator"`` formulation the rows are measured as ``K``
+            top-level calls and ``concatenate`` d into the column of an
+            ``(K, P)`` table, which is the same kernels and the same floats with
+            no serialised stack write.  A compiler backend's live set is its
+            own codegen's business, so the rule that ends the module docstring
+            does not apply there; the host spelling keeps the scan.
         """
         count = int(centres[0].shape[0])
         tiled = distance_centre_mode(state) == "tiled"
+        if _MATRIX_UNROLL and is_accelerator(kernel_mode(state)):
+            rows = [
+                self.genome.measure_distance(
+                    state,
+                    centre_payload(
+                        self.population,
+                        tuple(
+                            evoxc.gather(field, slot, axis=0) for field in centres
+                        ),
+                        self.pop_size,
+                        tiled,
+                    ),
+                    self.digest,
+                )
+                for slot in range(count)
+            ]
+            return enp.concatenate(
+                [enp.reshape(row, (1, self.pop_size)) for row in rows], 0
+            )
 
         def body(carry: Any, slot: Any) -> Any:
             """One centre row of the table, measured inside the scan region."""

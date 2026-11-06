@@ -895,10 +895,11 @@ def speciate(
             block=rows1,
         )
         live_slots = evoxc.logical_not(evoxc.isnan(species_state.species_keys))
-        carry, closest_table = evoxc.scan(
+        carry, closest_table = _scan_accelerator.run_steps(
             _scan_accelerator.reserve_step(operands, reserve_row),
             _scan_accelerator.reserve_carry(pop_size, gate),
-            iota_i32(species_size),
+            species_size,
+            unroll=not gate,
         )
         assign, dist, *_ = carry
         # The raw minimal index is the sentinel exactly when the slot claimed
@@ -907,10 +908,11 @@ def speciate(
         centre_after1 = rebuilt(
             claimed, evoxc.select(claimed, closest_table, zero_i32), centre_fields
         )
-        carry, seed_table = evoxc.scan(
+        carry, seed_table = _scan_accelerator.run_steps(
             _scan_accelerator.assign_step(operands, member_row, selected_centre),
             (assign, dist, species_state.next_species_key),
-            iota_i32(species_size),
+            species_size,
+            unroll=not gate,
         )
         assign, _dist, next_key = carry
         created = evoxc.logical_and(
