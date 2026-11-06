@@ -107,6 +107,19 @@ Per-kernel ledger (protocol: `DefaultGenome(num_inputs=2, num_outputs=1, max_nod
 
 On the pipeline's tiled `4P` batch the same 98-op `forward` measures 3.5 / 12.9 / 24.9–26.5 ms at P=100/500/1000, bit-identically to the row-local pass; its split there is the aggregation's innermost-axis `reduce_sum` ~33 %, the `(P, N, K)` window gather 1.6 ms, the wide `select`s 2.6 ms, every other elementwise op 2.6 ms and interpreter dispatch 3.5 ms.
 The box drifts ±30 % between sessions, so only a same-session A/B pair or a same-run old-vs-new ratio is load-bearing; for the CPU speed contract use `benchmarks/PERF_NUMPY.md` pass 2, where the same-run frozen-JAX side makes that tree 1.96× faster on `xor_p500` and 0.65× / 0.61× on `custom_pagie_p500` / `xor3d_p500`, so the CPU speed contract is not met.
+## Measured cost of the accelerator level sweep (tree `231249da`, 2026-11-06, MI300X gfx942, IREE 3.13.0)
+Protocol: `benchmarks/gpu_measure.py run --target iree-rocm --warmup 2 --generations 5 --no-cross-check`, seed 42, one process per cell, median ms/generation, same session as the host-loop A/B.
+| case | host loop (`kernel_mode="host"`) | sweep (`max_depth=16`) |
+|---|---|---|
+| `cartpole_p100` | 155.8 | **67.3** |
+| `xor_p500` (`samples > 1`, unchanged path) | 12.9 | 13.1 |
+| `xor_p1000` (unchanged path) | 16.2 | 16.1 |
+| `custom_pagie_p500` (`samples > 1`, unchanged path) | 16.0 | 16.0 |
+So the sweep buys **2.3×** on the only shipped rollout-shaped cell and is neutral everywhere else; the 200-step rollout goes from `max_step × 0.78 ms` to `max_step × 0.22 ms`.
+The marginal cost of one unrolled level inside the rollout body is **2.56 ms/generation** (`cartpole_p100` at `max_depth` 4 / 8 / 16 = 36.6 / 47.2 / 67.3 ms), i.e. ≈12.8 µs per level per query ≈ 5 dispatches: the "extra unrolled device work is nearly free" plateau only holds to ~60 fused ops per loop iteration, and 16 levels of `_node_step` exceed it.
+`max_depth` = 4 therefore sits at the flat-iteration floor (36.6 ms ≈ 200 × 57 µs + 23 ms fixed), so the remaining lever on that leg is the per-level dispatch count (or a smaller `max_depth`, a caller decision that changes the evolved depth ceiling), not the readback.
+The tiled func-fit regime is why the gate is not `kernel_mode` alone: with `samples = 500` (`custom_pagie_p500`, 250 000 rows) the same unrolled sweep measured **51.0 ms against 16.0 ms** — a 3.2× regression — because every level is a 50 M-element pass and the loop only ever ran the batch's real depth.
+The numpy leg is untouched op for op: 110 traced ops for the non-tiled forward and 149 for the tiled one, before and after the change, and the measured numpy rows stay in band (`cartpole_p100` 260.3 against the recorded 248.70, `xor_p500` 113.8 against 112.68, `custom_pagie_p500` 872.2 against 847.13).
 ## Compiled-device dispatch structure (level loop, ROCm/gfx942)
 Counting recipe: build with `backend="iree"` and `device=None`, take `pipe._executable_for(state).backend_executable.artifact.payload["mlir_text"]`, run `iree-compile --iree-input-type=stablehlo --iree-hal-target-backends=rocm --iree-rocm-target=gfx942 --compile-to=executable-configurations` (pure CPU compile), and count `stream.cmd.dispatch` per block of `util.func public @main`.
 Per policy query at pop 100: the value-seed prelude is **3** dispatches under `kernel_mode="host"` and **2** under `"accelerator"`; the level-loop body is **4** per trip host / **5** accelerator, identical for `cartpole_p100`, `pendulum_p100`, `mountaincar_p100` and `xor_p500` (which needs no loop and pays the query once per generation).
