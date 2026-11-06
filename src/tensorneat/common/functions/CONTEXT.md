@@ -13,7 +13,8 @@ This node owns no `kernel_mode` / `distance_*` static: it emits the same graph o
 | `act_sympy.py` | 221 | sympy twins of `ACT_FUNCS`, `SympyClip`, `ACT_SYMPY_HELPERS`. |
 | `agg_sympy.py` | 118 | sympy twins of `AGG_FUNCS`. |
 | `manager.py` | 381 | `FunctionManager`: pairing, lookups, validation, `sympy_module`, `random_index`. |
-| `__init__.py` | 42 | Wiring; `__all__` = `ACT`, `AGG`, `FunctionManager`, `apply_activation`, `apply_aggregation` (the canonical tuples stay importable, unexported). |
+
+`__init__.py` (42 lines) only wires `ACT` / `AGG` together and declares the five public names.
 
 ## Registry law
 An option id is the **position in the gene's own option tuple**, never a global index: the tuple's callables are normalised once in the node-gene constructor, and `ACT_FUNCS` / `AGG_FUNCS` are only the canonical order a genome gets when it passes the registry itself (`ACT.evoxc_fns`) as its option list.
