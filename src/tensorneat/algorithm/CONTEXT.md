@@ -146,7 +146,7 @@ No Python branching, `bool()`, `len()` or host reads on traced values; static Py
 Constructor validation raises `tensorneat.common.errors.TensorNEATError`; trace/shape/backend errors propagate unchanged and are never re-wrapped or silently fallen back.
 Nothing here reads `state` fields it did not register, except the documented genome/problem keys and the three formulation statics.
 One documented exception to the package's ~1000-line rule is kept un-split on purpose: `neat/neat.py` at 1026 (one generation's `tell`/breed algebra; the cohesive split, if taken, is its host diagnostics into `_details.py`).
-The others sit at or inside the baseline with no room left: `neat/_kernels.py` exactly 1000, `neat/species.py` 979, `hyperneat/hyperneat.py` 930, `neat/_distance.py` 427, `neat/_scan_accelerator.py` 416, `neat/_keys.py` 325, `hyperneat/genes.py` 297, `neat/_validation.py` 165 — a new speciation helper belongs in `_scan_accelerator.py`/`_distance.py`.
+The others sit at or inside the baseline with no room left: `neat/_kernels.py` exactly 1000, `neat/species.py` 991, `hyperneat/hyperneat.py` 930, `neat/_distance.py` 427, `neat/_scan_accelerator.py` 418, `neat/_keys.py` 325, `hyperneat/genes.py` 297, `neat/_validation.py` 165 — a new speciation helper belongs in `_scan_accelerator.py`/`_distance.py`.
 
 ## Test Strategy
 Tests live in the sibling `./../../test` tree (read-only from here): `test/unit/algorithm/` for the spawn/selection/stagnation algebra on fixed keys and the speciation scans, `test/parity/algorithm/` against `benchmarks/legacy_jax` (the divergences above are the only allowed mismatches), `test/integration/` for a full XOR run reaching its target with a reproducible seed.
