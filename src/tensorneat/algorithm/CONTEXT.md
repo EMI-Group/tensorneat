@@ -46,7 +46,7 @@ That pair's signature is **uniform** across algorithms (`pop=None`, `samples` = 
 The algorithm registers exactly four keys: `pop_size` (static int, sizes the batch-first `genome.initialize`), `pop` (one `GenomeTensors` payload), `generation` (0-d float32 — kept float so it flows through `last_improved`) and `species`.
 `randkey` is never registered here: `setup` only advances it, so `Pipeline.setup` must create it first with `evoxc.random.key(seed)` (`TensorNEATError` otherwise); a `(seed, config, shape)` triple then reproduces a run bit-for-bit.
 `species` is a frozen dataclass `SpeciesState` (owned by `./neat`): `(species_size,)` float32 `species_keys`, `best_fitness`, `last_improved`, `member_count` (NaN = dead slot), `(pop_size,)` float32 `idx2species`, the four centre payload arrays at `(S, …)` and 0-d float32 `next_species_key`.
-Dead slots are addressed solely by the `isnan(species_keys)` mask; a dead slot's centre gene rows hold stale integers that are never read, because the integer payload cannot carry NaN.
+Dead slots are addressed solely by the `isnan(species_keys)` mask; a dead slot's centre gene rows hold stale integers never read, because the integer payload cannot carry NaN.
 `generation` is incremented at the *start* of `tell`, so stagnation is judged against the generation that produced the fitness just consumed.
 
 ## NEAT Generation Algebra (`tell`)
