@@ -1076,9 +1076,12 @@ class Pipeline(StatefulBaseClass):
             checkpoint to write, the per-generation report or the problem's
             ``show_details`` hook.  With ``Pipeline(host_payload=False)``,
             ``is_detailed=False`` and no saving, a run therefore never pays a
-            payload copy; it still records :attr:`fitness_history` and
-            :attr:`best_fitness`, and :attr:`best_genome` stays ``None`` because
-            nothing materialised it.
+            per-generation payload copy for its caller; it still records
+            :attr:`fitness_history` and :attr:`best_fitness`.  This loop's own
+            best-genome bookkeeping does materialise the payload whenever a
+            generation sets a new best -- the first finite generation always
+            does -- so :attr:`best_genome` is populated rather than ``None``,
+            and only those generations pay the copy.
         """
         self._executable_for(state)
         if self.is_detailed:
