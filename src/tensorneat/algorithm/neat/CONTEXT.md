@@ -103,7 +103,7 @@ The lever is genome-side and shipped: `DefaultGenome`/`RecurrentGenome` build `D
 ## Known Issues
 What is left is genome-owned: the irreducible `2 · species_size · pop_size` pair count (a created species' centre is the first unassigned genome, so its row depends on every earlier assignment), the padded gene geometry, and the merge's per-centre homologue sort, which the dense single-centre route removes.
 The allocator's census (XOR3d, `key_span=150`, seed 42, five `step`s at pop 100 and 500) reads 0 out-of-span node keys, 0 out-of-span connection endpoints and 0 duplicate node keys after every generation, and the fallback serves under 6 % of the population.
-`show_details` caches one counting executable per payload shape, reads every tensor through `to_numpy`, and a failure from it is recorded once per hook label in `Pipeline.detail_failures` instead of being swallowed or aborting the run; `next_species_key` must stay strictly greater than every live key (`setup` seeds it at `1.0`, slot 0 uses `0.0`), since a colliding counter silently merges two species' `member_count`.
+`next_species_key` must stay strictly greater than every live key (`setup` seeds it at `1.0`, slot 0 uses `0.0`), since a colliding counter silently merges two species' `member_count`.
 Crossover is live only for species with more than `1 / survival_threshold` members (200 at the example `0.01`): below that the survivor prefix is a single genome and every non-elite child is a mutated copy of it.
 `Pipeline.setup` registers the centre spelling from the device kind — `"single"` on numpy, `"tiled"` on a GPU-class device — and the two agree bit for bit because the compatibility kernel is row-independent.
 
