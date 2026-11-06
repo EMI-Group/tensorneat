@@ -3,7 +3,7 @@
 ## Intent
 Score a genome by the return of a batched episode rollout, with the environment dynamics written as evoxc ops instead of a JAX simulator.
 Three environments ship: the discrete `CartPole` and the continuous classic-control tasks `Pendulum` and `MountainCarContinuous`.
-Each one is the reference recipe for a user-defined environment: no registry, no simulator dependency, just a step kernel and one `while_loop`, one file per environment.
+Each one is the recipe for a user-defined environment: one step kernel and one `while_loop` per file, no registry and no simulator dependency.
 
 ## API Surface
 - `cartpole.py: CartPole(BaseProblem)` — `__init__(max_step=500, repeat_times=1, gravity=9.8, masscart=1.0, masspole=0.1, length=0.5, force_mag=10.0, dt=0.02, x_threshold=2.4, theta_threshold=12.0, reset_scale=0.05, fitness_target=None)`; every knob is host-validated and raises `TensorNEATError`.
