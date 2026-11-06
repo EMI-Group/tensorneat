@@ -303,7 +303,7 @@ such rounds.
 
 ## Pass 3 — dependency side (pinned `v0.1.1` tag vs the local `evoxc` checkout)
 
-Protocol: `63f0fc67` in the worktree, `backend="numpy"`, new side only, one fresh process per cell, `--generations 150 --warmup 3 --repeats 1` at seed 42, `--threads 0`, on a box that was shared part-time (per-run `loadavg_start` 0.43–1.02 on nine of the ten runs, `loadavg_end` up to 3.29 in round 2).
+Protocol: `63f0fc67` in the worktree, `backend="numpy"`, new side only, one fresh process per cell, `--generations 150 --warmup 3 --repeats 1` at seed 42, `--threads 0`, on a box that was otherwise idle (per-run `loadavg_start` 0.43–1.02 on every run, `loadavg_end` up to 1.02 except a single 3.29 sample at the end of the round-2 pinned `xor_p500` cell, where the venv restore ran).
 Both legs are installed into one venv in turn: **leg A** is the pinned dependency `[tool.uv.sources]` resolves (`evoxc` from git tag `v0.1.1`), **leg B** is the local checkout `/root/evoxc` (`git describe` `v0.1.1-34-g474bf72`, HEAD `474bf72`) installed from a `git archive HEAD` copy with `uv pip install --no-deps --reinstall`.
 Both dists report `evoxc 0.1.0` in their metadata, so each leg is identified by a sha256 over every `*.py` under the installed package: **`d0d1f4b4b7777f1b`** (150 files) pinned versus **`90b801c7bbc89a8d`** (151 files) checkout, and the recipe is below.
 Two rounds alternate the order so drift cancels: round 1 measures A then B on all three cases, round 2 measures B then A on `xor_p500` and `cartpole_p100`.
