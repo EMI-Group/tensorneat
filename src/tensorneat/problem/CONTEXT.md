@@ -75,7 +75,6 @@ On iree+rocm a generation costs `max(host submission, device)`: a flat graph is 
 Function fitting: the evaluate *segment* (transform + tiling + `genome.forward` over the tiled batch + loss) is ≈15–30 ms of an `xor_p500` generation, so `tell`/speciation dominates, and tiling + loss alone is 0.15 ms (XOR pop 500) with `evaluate` tracing 14 IR ops.
 The rollout *component* alone (`evaluate` traced alone, no genome forward) is 3.4–10.0× cheaper on iree-llvm-cpu once built (0.06 s numpy build against 0.65–1.24 s per shape), linear in `max_step` and nearly flat in `pop` (10× the population is ≈1.07–1.09×) because the fixed per-op cost sets the time; at pipeline level it is only 6–18 % of a CartPole evaluate share, so a continuous-control generation is genome-forward-bound too (`./rl/CONTEXT.md` is the authoritative per-cell table).
 `Pipeline` builds and runs end to end on `backend="iree"` (`test/backends/test_iree_pipeline.py` is the gate), so the shipped default stays `numpy`.
-`Pipeline` builds and runs end to end on `backend="iree"` (`test/backends/test_iree_pipeline.py` is the gate), so the shipped default stays `numpy`.
 
 ## Constraints
 - Compute path uses only `evoxc.numpy as enp` plus top-level `evoxc.{isnan, select, tile, floor, from_numpy, constant}`; there is no eager mode, so never call `np.*` on a traced value.
