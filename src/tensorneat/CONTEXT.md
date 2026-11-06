@@ -167,7 +167,7 @@ Three device-shaped routes are selected by the statics described under `## Cachi
 | cycle hop without a scatter (equality template + windowed hop) | `genome/operations/mutation/cycle_accelerator.py` | `kernel_mode` |
 | homologue table as one `(P,M,M)` equality table instead of the sort merge | `genome/operations/distance/index_free.py` | `distance_formulation` |
 | homologue alignment as comparison-rank over `(P,M,M)` (no `argsort`) | `genome/operations/alignment_accelerator.py` | `kernel_mode` |
-| one `measure` call per `k = 2` centre slots | `genome/operations/distance/grouped.py` | `kernel_mode` |
+| one `measure` call per `k = 2` centre slots (scan 1 only; `k > 1` requires `"tiled"` mode and the accelerator leg) | `genome/operations/distance/grouped.py` | `kernel_mode` + `distance_centre` |
 | speciation slot axis reduced row-wise as one `(S,P)` block (scan 2's seed stays the residual per-slot reduction) | `algorithm/neat/_scan_accelerator.py` | `kernel_mode` and `distance_centre` |
 | seed block spliced by one gather plus a baked `where` mask instead of a `concatenate` | `genome/window.py::seed_pad`/`seed_values` | `kernel_mode` |
 | prepared-pass read-out gathered once per pass (`_ReadOut`/`_output_readout`) | `genome/step.py` | every leg (one gather + `O` mask comparisons) |
