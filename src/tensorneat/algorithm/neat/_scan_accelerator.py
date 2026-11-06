@@ -67,18 +67,39 @@ it is; the levers below turn them into multi-workgroup work or delete them.
    ``gather`` of its row disappears (the block is closed over).  The gated path
    has no table to close over -- its row is a lazily built ``cond`` -- so it
    keeps the per-slot form.
-5. **Scan 2's seed reduction stays unconditional (a rejection).**  ``seed`` is
-   only *used* by a dead slot (``create = not live and the population still has
-   an unassigned genome``), and "some slot is dead" is a loop-invariant scalar
-   off the pre-scan ``species_keys``, so wrapping the body's ``(P,)``-axis-0
-   index reduction in one ``evoxc.cond`` on that scalar is the obvious next
-   removal -- and it is measured **slower**: on the MI300X it costs
-   +2.2 ms/generation at ``P = 500`` (14.19/14.15 -> 16.59/16.35 over two
-   interleaved rounds) and +2.2 ms at ``P = 1000`` (17.31/16.91 ->
-   19.00/19.33), i.e. the ``if`` region in front of the body's distance kernel
-   is dearer than the reduction it skips.  It also wins no dispatch count (the
-   region *adds* one ``if`` per body).  So the reduction stays where the host
-   spelling has it and the removal is recorded, not shipped.
+5. **Scan 2's seed reduction stays unconditional (two measured rejections).**
+   ``seed`` is only *used* by a dead slot (``create = not live and the
+   population still has an unassigned genome``), and it is the last serialised
+   ``(P,)``-axis-0 reduction inside a scan body: on the MI300X it is 20
+   dispatches of ``reduction_500_f32xi32xi32``, 0.39-0.48 ms of a ~6 ms
+   ``xor_p500`` generation.  Both spellings that would skip or spread it were
+   built, measured under ``rocprofv3 --kernel-trace`` against HEAD's artifact and
+   rejected; the flat form is what ships.
+   (a) **A two-level tree reduce** -- ``reshape (P,) -> (k, P // k)``,
+   ``reduce_min(axes=1) -> (k,)``, one more ``reduce_min`` -- turns one
+   single-workgroup reduction into a multi-workgroup one and costs two extra
+   dispatches per iteration: the cell read 1 044 -> 1 082 generation kernels and
+   107 -> 125 single-workgroup dispatches, with the 0.46 ms reduction replaced by
+   ``elementwise`` (0.53 ms) + ``reduction_20_i32`` (0.52 ms) +
+   ``elementwise_broadcast_500x200_i32`` (0.41 ms) over the same 20 iterations.
+   On this backend a dispatch in a dependency chain costs ~20 us whatever its
+   size, so trading one reduction for three dispatches loses ~3x.
+   (b) **A minimal-scope ``evoxc.cond`` around the reduction alone** (predicate
+   ``not live`` of the iteration's own slot -- *not* the earlier shape that
+   wrapped the body's distance call, which an earlier session measured at
+   +16 % wall at ``P = 500`` and +12 % at ``P = 1000`` because the ``if`` sat in
+   front of the distance kernel): it works -- the numpy interpreter's
+   ``reduce_min`` dispatch count falls 64 -> 44 at ``xor_p500``, i.e. the 20 seed
+   reductions of a fully live table are skipped -- and it still loses on device
+   time: the 20 ``if`` dispatches replace 20 executions of a 19 us kernel, the
+   seed kernel drops 20 -> 14 dispatches (0.39 -> 0.25 ms) only because the
+   measured trajectory had six dead slots, and single-workgroup dispatches rise
+   107 -> 121.  Numpy's own dispatch total is unchanged (6 248), so the region is
+   pure overhead on the interpreter and a wash at best on the device.
+   The invariant both rejections share: **on this backend the seed reduction is
+   already one fused kernel** (``isnan`` + ``select`` + ``reduce_min`` in a single
+   ``reduction_500`` dispatch, so there is no second dispatch to delete) and the
+   dependency chain -- not the element work -- is what it costs.
 
 Bit identity
 ------------
