@@ -40,7 +40,7 @@ A statically counted `node_count`-hop variant of the same body (same boolean, no
 **Grouping is wired on the accelerator leg only**: `grouped.group_size` answers `k = 1` unless `is_accelerator(kernel_mode(state))`, so the numpy pipeline keeps its plain digest and its dispatch count, wall time and peak RSS do not move; on numpy the grouped form is a measured **loss** — −13 % dispatched ops (7 592 → 6 589) but peak RSS 233.8 → 253.2 MiB and wall time bimodal at 152–165 ms against 196–253 ms in 7 of 13 fresh processes (the 2× wider `(2P, 2*max_conns)` merge intermediates stop fitting in cache, so `argsort`/`gather`/`cast`/`reshape` cost more per pair than the dispatch they save), `k = 4` reading +15 % wall / +30.5 % RSS — so it stays unwired there.
 `group_digest(digest, k)` tiles the digest so one `measure` call covers `k * P` centre rows with the plain merge body, whose 93 traced ops are independent of `k`; `grouped.group_size`/`for_state`/`centre_batch` are its host seam and `algorithm/neat/_distance.py::DistanceRows.matrix` its one caller, keeping the body result rank 1 because a rank-3 axis-0 `scatter` fails the StableHLO v1 export.
 ## Cost law (measured, numpy reference interpreter)
-1. **An ordinary traced op pays its interpreter dispatch plus its own array traffic** — ≈19–20 µs per dispatched op on population-shaped kernels on this box, with the recorded pairs implying ≈15 µs/op at `xor_p500` (7 592 ops in 112.68 ms) and ≈8 µs/op at `cartpole_p100` (30 994 ops in 248.70 ms) because most of those ops are narrow — so op count is the budget for elementwise/gather/select/reshape work while element volume decides the wide passes and rule 2's reduces.
+1. **An ordinary traced op pays its interpreter dispatch plus its own array traffic** — ≈19–20 µs per dispatched op on population-shaped kernels on this box, with the recorded pairs implying ≈15 µs/op at `xor_p500` (7 592 ops in 113.97 ms) and ≈8 µs/op at `cartpole_p100` (30 994 ops in 253.35 ms) because most of those ops are narrow — so op count is the budget for elementwise/gather/select/reshape work while element volume decides the wide passes and rule 2's reduces.
 2. **An innermost-axis reduction over `(P, N, K)` is 10–20× an ordinary op and scales with elements**: `np.max((1000,50,4) int32, axis=2)` = 1.00 ms (bool 0.74) against 0.093 ms with the window on axis 1 and 0.167 ms for an unrolled `maximum`/`logical_or` fold of the 4 slices; `np.sum` = 1.50 ms against 1.06 ms for the slice-add fold. Hence `window.any_slot` (`K` slices + `K-1` logical ops, `_WINDOW_FOLD_LIMIT = 8`) replaces `reduce_max(mask, -1)` wherever "any live slot" is asked.
 For the mutation slabs the opposite layout rule holds: in `(P, tries, E)` blocks the *contiguous innermost* axis is the cheap one (`axes=2` 0.82 ms vs transposed 1.65 ms; `gene/CONTEXT.md`).
 ## Forward algebra (feedforward)
@@ -86,22 +86,22 @@ The shipped pair `(0.1, 0.1, 0.4, 0.05)` raises P(any structural change) from 0.
 - An `int32` tensor plus a Python literal promotes to `int64`, so index math stays in int32 tensors and every sentinel/level index is a **rank-0** constant (`window._iinf`, `enp.full((), ...)`); graph-op axes are non-negative static integers (`axis=len(shape)`, never `axis=-1`).
 - Errors: configuration violations raise `../common/errors.TensorNEATError` (and `ConfigError`/`ShapeBoundError`); tensor/backend errors propagate unchanged.
 - One window-reduce node step lives in `step.py::NodeStepMixin`, parameterized by the update mask, never duplicated between `default.py` and `recurrent.py`.
-- Files stay under ~1000 lines and each file is one job: `base.py` (1005) is the node's only file above that guideline, `operations/distance/base.py` (1000) sits exactly on it, `grad.py` is 582, and the rest run down from `operations/distance/digest.py` (953) to `gene/node/origin.py` (61).
+- Files stay under ~1000 lines and each file is one job: `base.py` (1006) is the node's only file above that guideline, `operations/distance/base.py` (1000) sits exactly on it, `grad.py` is 582, and the rest run down from `operations/distance/digest.py` (953) to `gene/node/origin.py` (61).
 ## Measured cost (this tree)
-Per-generation wall clock, one generation per case on the benchmark geometries (`../../benchmarks/cases.py`; XOR/XOR3d at pop 100/500/1000, Pagie at pop 500, CartPole at pop 100):
+Per-generation wall clock on the benchmark geometries (`../../benchmarks/cases.py`; XOR/XOR3d at pop 100/500/1000, Pagie at pop 500, CartPole at pop 100), measured on tree `31a31328`, one process per cell, warmup 2 + 5 timed generations, seed 42, `benchmarks/gpu_measure.py run`:
 
-Measured on this tree (`9f3fd77e`), one process per cell, warmup 2 + 5 timed generations, seed 42, `benchmarks/gpu_measure.py run --no-cross-check`:
-
-| case | numpy ms/generation | iree+rocm ms/generation | numpy dispatched ops/generation | rocm build s / peak RSS MiB |
+| case | numpy ms/generation | iree+rocm ms/generation | numpy dispatched ops/generation | speed-up |
 |---|---|---|---|---|
-| `xor_p100` | 35.61 | 10.86 | — | 7.6 / 1 886 |
-| `xor_p500` | 113.11 | 12.97 | 7 592 | 7.7 / 1 904 |
-| `xor_p1000` | 171.62 | 16.40 | — | 7.9 / 1 926 |
-| `custom_pagie_p500` | 854.73 | 16.03 | — | 8.0 / 1 933 |
-| `cartpole_p100` | 252.91 | 61.05 | 30 994 | 8.3 / 1 909 |
+| `xor_p100` | 33.22 | 10.48 | — | 3.17× |
+| `xor_p500` | 113.97 | 12.65 | 7 592 | 9.01× |
+| `xor_p1000` | 168.11 | 15.60 | — | 10.77× |
+| `custom_pagie_p500` | 871.87 | 15.75 | — | 55.4× |
+| `cartpole_p100` | 253.35 | 61.65 | 30 994 | 4.11× |
 
-The same run with the harness's numerical cross-check enabled passes on generation 1 for `cartpole_p100` (59.80 ms median in that row).
-The numpy interpreter stays the fastest leg on CPU and the default; the compiled leg is launch-bound, so it wins on the flat func-fit graphs and loses on the rollout-heavy one unless that rollout's level sweep is unrolled (`## Measured cost of the accelerator level sweep`; the `cartpole_p100` row is dominated by the sweep).
+The ROCm leg builds 7.2–8.4 s per static shape and peaks at ≈1.9 GiB of RSS.
+Every cell passes the generation-1 cross-check against numpy; at pop 500/1000 and on Pagie the state then drifts from generation 3 (float32 ulps amplified by a discrete species-membership decision on a continuous distance), while `speciate` on one bit-identical payload returns bit-identical species leaves on both backends.
+
+The numpy interpreter stays the fastest leg on CPU and the default; the compiled leg is launch-bound and wins every measured cell, the rollout-heavy `cartpole_p100` included, because its level steps are the statically unrolled sweep (`## Measured cost of the accelerator level sweep`).
 Per-kernel ledger (protocol: `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)` + `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)` + `XOR()`, seed 42, payload = the population at generation 5, build excluded, one warmup + 5 timed runs, one fresh process per pop; traced ops recursive over `module.functions[*].entry_block` and every `op.regions` body):
 
 | kernel | P=100 | P=500 | P=1000 |
@@ -123,7 +123,7 @@ So the sweep buys **2.3×** on the only shipped rollout-shaped cell and is neutr
 The marginal cost of one unrolled level inside the rollout body is **2.56 ms/generation** (`cartpole_p100` at `max_depth` 4 / 8 / 16 = 36.6 / 47.2 / 67.3 ms), i.e. ≈12.8 µs per level per query ≈ 5 dispatches: the "extra unrolled device work is nearly free" plateau only holds to ~60 fused ops per loop iteration, and 16 levels of `_node_step` exceed it.
 `max_depth` = 4 therefore sits at the flat-iteration floor (36.6 ms ≈ 200 × 57 µs + 23 ms fixed), so the remaining lever on that leg is the per-level dispatch count (or a smaller `max_depth`, a caller decision that changes the evolved depth ceiling), not the readback.
 The tiled func-fit regime is why the gate is not `kernel_mode` alone: with `samples = 500` (`custom_pagie_p500`, 250 000 rows) the same unrolled sweep measured **51.0 ms against 16.0 ms** — a 3.2× regression — because every level is a 50 M-element pass and the loop only ever ran the batch's real depth.
-The numpy leg is untouched op for op: 110 traced ops for the non-tiled forward and 149 for the tiled one, before and after the change, and the measured numpy rows stay in band (`cartpole_p100` 260.3 against the recorded 248.70, `xor_p500` 113.8 against 112.68, `custom_pagie_p500` 872.2 against 847.13).
+The numpy leg is untouched op for op: 110 traced ops for the non-tiled forward and 149 for the tiled one, before and after the change, and the measured numpy rows stay in band (`cartpole_p100` 260.3 against the recorded 253.35, `xor_p500` 113.8 against 113.97, `custom_pagie_p500` 872.2 against 871.87).
 ## Compiled-device dispatch structure (level loop, ROCm/gfx942)
 Counting recipe: build with `backend="iree"` and `device=None`, take `pipe._executable_for(state).backend_executable.artifact.payload["mlir_text"]`, run `iree-compile --iree-input-type=stablehlo --iree-hal-target-backends=rocm --iree-rocm-target=gfx942 --compile-to=executable-configurations` (pure CPU compile), and count `stream.cmd.dispatch` per block of `util.func public @main`.
 Per policy query at pop 100: the value-seed prelude is **3** dispatches under `kernel_mode="host"` and **2** under `"accelerator"`; the level-loop body is **4** per trip host / **5** accelerator, identical for `cartpole_p100`, `pendulum_p100`, `mountaincar_p100` and `xor_p500` (which needs no loop and pays the query once per generation).
@@ -137,7 +137,7 @@ Every exact spelling of "any live incoming slot" therefore carries either that `
 Replacing the static slice fold with a real reduction (`reduce_sum` for the K-sum, `reduce_max` for `any_slot`) — the one shape that lets a wide producer fuse into the fold — moves the `max_depth` 4 sweep block from 23 to 21 dispatches (TOTAL 416 → 415), not the 4 a per-level fusion would need, and it is unshippable regardless: the reduction's association order is not the numpy fold's, so the accelerator leg would stop matching the reference.
 `max_depth` is the dominant config term on the rollout leg and the largest lever left there: `cartpole_p100` measures **32.38 / 41.96 / 60.15 ms** per generation at `max_depth` 4 / 8 / 16 (same session, warmup 2 + 5 timed generations, seed 42), i.e. ≈2.3 ms per unrolled level ≈ 11.7 µs per level per query, against a floor of ≈21 ms fixed plus 200 × 57 µs for the rollout itself.
 The evolved population never uses the ceiling: over 30 generations at the shipped `max_depth=16` the CartPole depth histogram is 2332 individuals at depth 1, 645 at 2, 21 at 3 and 2 at 4 with nothing deeper (per-generation maximum 1–4, mean 2.33, computed host-side from the payload keys). So `max_depth=4` is lossless on that workload and 1.86× faster and `max_depth=8` is 1.43× faster, while the default stays 16 because the ceiling is exactly what keeps a deeper evolved network from silently losing its value to `NaN` — shrinking it is a caller decision, not a library one.
-Cost model on that leg: a flat graph pays ≈63 µs fixed plus ≈2.2–2.5 µs per dispatch, one `while` iteration ≈50 µs, and one `Tensor.to(cpu)` ≈47–60 µs per leaf, so a launch-bound graph is costed by dispatch count and `while` trips, not element volume; the seed trick saves exactly one dispatch per policy query (200 / 200 / 999 per generation for `CartPole` / `Pendulum` / `MountainCarContinuous`).
+Cost model on that leg: a flat graph pays ≈63 µs fixed plus ≈2.2–2.5 µs per dispatch, one `while` iteration ≈157 µs when its predicate is device data against ≈57 µs when its trip count is provably static, and one `Tensor.to(cpu)` ≈47–60 µs per leaf, so a launch-bound graph is costed by dispatch count and `while` trips, not element volume; the seed trick saves exactly one dispatch per policy query (200 / 200 / 999 per generation for `CartPole` / `Pendulum` / `MountainCarContinuous`).
 ## Deviations from the pre-rewrite library (intentional)
 - `activation == -1` means **identity** everywhere; the legacy `lax.switch(-1, ...)` clamped to the last option, so `BiasNode` split nodes silently used the wrong activation.
 - Activation/aggregation options are evaluated for **all** configured options and selected with `select` over per-pass masks, so a non-total option (division by zero, `log/sqrt` of a possibly negative value) can poison gradients even where it is not selected.
@@ -174,11 +174,11 @@ The level sweep's own guard is cheapest as a numpy unit test: build one payload 
 | `./gene/node/` | `BaseNode` (611), `DefaultNode` (444), `BiasNode` (307), `OriginNode` (61): attr layout, `NodeOperands`, `combine`, identity/zero attrs. |
 | `./gene/conn/` | `BaseConn` (309), `DefaultConn` (208), `OriginConn` (90): per-edge message, `ConnOperands`, optional `historical_marker`. |
 | `./operations/` | Operator contracts, the packed-identity alignment (`alignment.py` 723) and its accelerator twin (`alignment_accelerator.py` 221), the in-degree audit. |
-| `./operations/mutation/` | Four-gate plan/apply kernels (`base.py` 874, `default.py` 483, `plan.py` 469, `recurrent.py` 281, `arrays.py` 292), the two cycle predicates (`cycle.py` 459 scattered frontier, `cycle_accelerator.py` 351 scatter-free growth-flag hop), `degree.py` (153). |
+| `./operations/mutation/` | Four-gate plan/apply kernels (`base.py` 874, `default.py` 483, `plan.py` 469, `recurrent.py` 281, `arrays.py` 292), the two cycle predicates (`cycle.py` 459 scattered frontier, `cycle_accelerator.py` 359 scatter-free growth-flag hop), `degree.py` (153). |
 | `./operations/crossover/` | Key-aligned crossover (`base.py` 136, `default.py` 219): parent-1 structure, block attribute inheritance, `align_gene_rows`/`find_homologous`. |
 | `./operations/distance/` | Merge body (`base.py` 1000, `default.py` 524, `digest.py` 953, `layout.py` 748), index-free (363), dense (380), grouped (521, accelerator leg only), `ConstantPool` (`consts.py` 107). |
 | `./window.py` | `by_samples`, `_slot_index`, `_row_offsets`, `_column_index`/`_column_mask`, `_gather_prepared`, `any_slot`, `_iinf`, `fill`, and the seed plan `SeedPad`/`SeedColumns`/`seed_pad`/`seed_values` (475). |
-| `./base.py` | `BaseGenome` (1005): configuration/validation, `initialize`, `transform` (statics, key overrides, payload checks), operator entry points. |
+| `./base.py` | `BaseGenome` (1006): configuration/validation, `initialize`, `transform` (statics, key overrides, payload checks), operator entry points. |
 | `./step.py` | `NodeStepMixin` (679): `_StepStatics`, `_ReadOut`/`_output_readout`, `_sample_count`, `_padding_safe_attrs`, `_hit_conn_attrs`, `_node_step`, `_output_row_mask`/`_output_values`, row predicates. |
 | `./grad.py` | The exact gradient path (582): `build_grad`, `dense_grad_plan`, `dense_forward`, the mask-and-reduce read-out. |
 | `./host.py` | Host-only `BaseGenomeHost` (673): `network_dict`, `repr`, indices, numpy `hash`, `grad_from_payload`. |
