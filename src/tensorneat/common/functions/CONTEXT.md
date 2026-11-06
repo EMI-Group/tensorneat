@@ -99,7 +99,7 @@ The node-gene forward path calls the **registry kernels directly**, not the disp
 
 ## Test contract
 `test/unit/common/test_functions.py` (24 test functions) pins the literal tables (12 / 6) and their sympy twins, the name↔id↔kernel↔sympy pairing plus its `ValueError` / `IndexError` / `AttributeError` paths, `random_index` staying in `[0, len)` over seeded keys, and both dispatchers against a per-option Python loop and `test/support/functions_ref.py` on the documented edge cases (`NaN` in masked-out slots, a live `NaN`, all-`False` / all-`True` columns, `maxabs` sign/tie, `mean` edge counts, `-1` / out-of-range ids, int64 id columns, custom lists).
-Falsifiable invariants: a `zero_on_empty`-only list and a list holding `product` / `max` / `min` both give `0.0` on an all-`False` column; `identity.is_identity` changes no output but removes two ops; each aggregation standalone returns `sum` `0.0`, `product` `1.0`, `max` `-inf`, `min` `+inf`, `maxabs` `0.0`, `mean` `0.0`; `maxabs` needs a working `..tools.flat_gather`.
+Falsifiable invariants: `identity.is_identity` changes no output but removes two ops; a `zero_on_empty`-only list and a list holding `product` / `max` / `min` both give `0.0` on an all-`False` column; each aggregation standalone returns its neutral (`sum` `0.0`, `product` `1.0`, `max` `-inf`, `min` `+inf`); `maxabs` needs a working `..tools.flat_gather`.
 `test/parity/` compares every kernel and both dispatchers against `benchmarks/legacy_jax/tensorneat_legacy/common/functions/` on the same inputs and option lists — the legacy `maxabs` sign, the `mean` guard and the `-1` identity sentinel are the three cases most likely to regress.
 
 ## Routing Table
