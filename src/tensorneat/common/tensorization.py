@@ -314,7 +314,8 @@ def derive_schedule(
     )
     in_valid = enp.not_equal(in_conn, _iinf_like(in_conn))
     node_level = node_levels(
-        in_conn, in_src, input_slot, max_nodes, acyclic, (src, dst, edge_valid)
+        in_conn, in_src, input_slot, max_nodes, acyclic, (src, dst, edge_valid),
+        kernel_mode,
     )
     node_exists = _key_present(node_keys)
     slots = _node_slots(pop_size, max_nodes)
@@ -634,7 +635,9 @@ def incoming_table(order, cc, src, max_nodes, max_in_degree):
     return in_conn, in_src, edge_overflow
 
 
-def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=None):
+def node_levels(
+    in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=None, kernel_mode="host"
+):
     """Longest-path depth of every node (the level-synchronous schedule).
 
     Args:
@@ -652,6 +655,9 @@ def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=Non
         edges: ``(src, dst, edge_valid)`` — the ``(P, C)`` endpoint slots and the
             "both endpoints matched" mask of the connection rows; required when
             ``acyclic`` is ``False`` as the fallback's trigger.
+        kernel_mode (str): ``"host"`` (default) or ``"accelerator"``, the formulation
+            static :func:`derive_schedule` resolved and forwards here too;
+            ``"accelerator"`` drops the ``changed`` flag and trips each campaign its cap.
 
     Returns:
         ``(P, N)`` ``int32`` levels: ``0`` for input nodes, ``max(pred) + 1``
@@ -677,6 +683,15 @@ def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=Non
         acyclic ones, and a ``level`` still ``-1`` marks a node unreachable from the
         inputs. Both campaigns are one ``settle(cap, detect_cycles)``.
 
+        ``kernel_mode`` picks the trip predicate at trace time (a Python ``if``, never a
+        traced value): the host leg stops at the fixpoint (``step < cap and changed``,
+        a carried ``reduce_max`` of the relaxed values), the accelerator leg runs all
+        ``cap`` trips on ``step < cap`` alone, since a device predicate costs a readback
+        per iteration there. That trip count is bit-identical: a settled body is
+        idempotent (``best + 1 <= values``, and ``best == -1`` keeps ``values``), so extra
+        trips change no value. :func:`_cycle_violation`'s ``evoxc.cond`` stays
+        data-dependent on purpose — its expensive branch is a second campaign.
+
         The ``edges`` guard compares ``dst``/``edge_valid`` against ``src``'s own
         connection axis, so it rejects a ``dst``/``edge_valid`` that disagrees with
         ``src`` but cannot detect a ``src`` *shorter* than the payload's connection
@@ -685,6 +700,7 @@ def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=Non
         is a caller contract.
     """
     max_nodes = _positive_static(max_nodes, "max_nodes")
+    fixed_trips = is_accelerator(resolve_mode(kernel_mode))
     pop_size, nodes, width = in_conn.shape
     pop_size, nodes, width = int(pop_size), int(nodes), int(width)
     if nodes != max_nodes:
@@ -758,56 +774,59 @@ def node_levels(in_conn, in_src, input_slot, max_nodes, acyclic=False, edges=Non
             )
 
         def keep_going(state):
-            """Loop condition; both campaigns carry ``(step, ..., changed)``."""
-            return enp.logical_and(enp.less(state[0], cap), state[-1])
+            """Trip predicate; the accelerator leg counts instead of looking."""
+            within = enp.less(state[0], cap)
+            return within if fixed_trips else enp.logical_and(within, state[-1])
+
+        def drive(advance, init, compared):
+            """Run ``advance`` from ``init = (step, level, ...)``; returns the carried tuple."""
+            if fixed_trips:  # a static trip count: nothing is read back per iteration
+                return evoxc.while_loop(keep_going, advance, init)
+
+            def body(state):
+                """Carry the fixpoint flag: ``reduce_max`` over the compared pairs."""
+                new = advance(state[:-1])
+                moved = None
+                for old, nxt in zip(state[1:-1][:compared], new[1:][:compared]):
+                    pair = enp.not_equal(nxt, old)
+                    moved = pair if moved is None else enp.logical_or(moved, pair)
+                return (*new, evoxc.reduce_max(moved))
+
+            flag = enp.full((), True, dtype=evoxc.bool_)
+            return evoxc.while_loop(keep_going, body, (*init, flag))
 
         if not detect_cycles:
-            def body(state):
-                step, level, _changed = state
+            def advance(state):
+                """One level-only step over ``(step, level)``."""
+                step, level = state
                 next_level = evoxc.select(pinned, zero_level, relax(level))
-                next_step = evoxc.add(step, step_one)
-                moved = enp.not_equal(next_level, level)
-                return (next_step, next_level, evoxc.reduce_max(moved))
+                return (evoxc.add(step, step_one), next_level)
 
-            _step, level, _changed = evoxc.while_loop(
-                keep_going,
-                body,
-                (
-                    enp.zeros((), dtype=evoxc.int32),
-                    evoxc.select(pinned, zero_level, minus_one),
-                    enp.full((), True, dtype=evoxc.bool_),
-                ),
-            )
+            step0 = enp.zeros((), dtype=evoxc.int32)
+            level0 = evoxc.select(pinned, zero_level, minus_one)
+            _step, level = drive(advance, (step0, level0), 1)[:2]
             blank = enp.logical_and(enp.logical_not(pinned), enp.less(level, 0))
         else:
-            def body(state):
-                step, level, reach, reach_at, _changed = state
+            def advance(state):
+                """One cycle-detecting step over ``(step, level, reach, reach_at)``."""
+                step, level, reach, reach_at = state
                 next_level = evoxc.select(pinned, zero_level, relax(level))
                 next_reach = relax(reach)
                 next_step = evoxc.add(step, step_one)
                 snapshot = enp.equal(next_step, max_nodes)
-                moved = enp.logical_or(
-                    enp.not_equal(next_level, level), enp.not_equal(next_reach, reach)
-                )
                 return (
                     next_step,
                     next_level,
                     next_reach,
                     evoxc.select(snapshot, next_reach, reach_at),
-                    evoxc.reduce_max(moved),
                 )
 
-            _step, level, reach, reach_at, _changed = evoxc.while_loop(
-                keep_going,
-                body,
-                (
-                    enp.zeros((), dtype=evoxc.int32),
-                    evoxc.select(pinned, zero_level, minus_one),
-                    zero_level,
-                    enp.full((pop_size, nodes), no_snapshot, dtype=value_dtype),
-                    enp.full((), True, dtype=evoxc.bool_),
-                ),
-            )
+            step0 = enp.zeros((), dtype=evoxc.int32)
+            level0 = evoxc.select(pinned, zero_level, minus_one)
+            reach_at0 = enp.full((pop_size, nodes), no_snapshot, dtype=value_dtype)
+            _step, level, reach, reach_at = drive(
+                advance, (step0, level0, zero_level, reach_at0), 2
+            )[:4]
             # growth between the snapshots, or never reached from the inputs
             blank = enp.logical_and(
                 enp.logical_not(pinned),
