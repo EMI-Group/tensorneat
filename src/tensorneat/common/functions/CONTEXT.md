@@ -1,7 +1,7 @@
 # tensorneat/common/functions — ACT/AGG option registries, their evoxc kernels and sympy twins
 
 ## Intent
-Single source of truth for the activation and aggregation options a NEAT node gene may select: the evoxc kernels, the per-node `select` cascades that stand in for `lax.switch`, the sympy counterparts used for interpretability, and the immutable `FunctionManager` pairing them in one fixed, parity-critical order.
+Single source of truth for the activation and aggregation options a NEAT node gene may select: the evoxc kernels, the `select` cascades that stand in for `lax.switch`, the sympy counterparts, and the immutable `FunctionManager` pairing them in one fixed, parity-critical order.
 `act.py` / `agg.py` are graph code (called only during an `@evoxc.defn` trace); `act_sympy.py` / `agg_sympy.py` / `manager.py` are host-only, and nothing here knows about genomes, populations or the Pipeline.
 This node owns no `kernel_mode` / `distance_*` static: it emits the same graph on every backend.
 
