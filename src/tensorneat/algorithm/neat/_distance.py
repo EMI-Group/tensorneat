@@ -26,7 +26,8 @@ spelled by ``state.distance_centre``: a host string read at trace time
 
 Both spellings carry the same centre row and return the same ``(P,)`` floats.
 The ``group * pop_size`` batch the genome also accepts belongs to a
-``group_digest``-tiled digest, which this module never builds.
+``group_digest``-tiled digest, which :meth:`DistanceRows.matrix` builds on the
+accelerator spelling only (see `Measured cost`).
 
 :meth:`DistanceRows.__call__` is single-valued: it accepts a centre payload of
 batch ``1`` or batch ``pop_size`` and rejects every other batch width; in
@@ -41,14 +42,16 @@ invocations on the gated path and 2 on the dense one, plus one :meth:`matrix`:
 ``evoxc.scan`` peels step 0 at the enclosing level and traces the body again, so
 each scan body is traced twice).
 :meth:`DistanceRows.row` is the same measurement spelled explicitly for one
-centre, and :meth:`DistanceRows.matrix` is the explicit whole-table form: one
-such call per centre row, run as a single fixed-length ``evoxc.scan`` over the
-``S`` centre rows, so an ``(S, P)`` table is ``S`` calls of one centre row
-rather than one ``S * P`` batch.  The rows are identical either way, because the
-compatibility kernel is row-independent, and one centre per call keeps the
-kernel's transient footprint at one centre instead of ``S`` of them, which
-the scan body then releases again before the next iteration.  ``matrix`` is
-never selected by ``__call__``: a caller that wants a whole table asks for it by
+centre, and :meth:`DistanceRows.matrix` is the explicit whole-table form: the
+``S`` centre rows measured as straight-line calls on the accelerator spelling
+(``k`` centre rows per call against a ``k``-times tiled digest, see
+:meth:`DistanceRows._straight_line`) and as one fixed-length ``evoxc.scan`` over
+those rows on the host spelling, so an ``(S, P)`` table is never one ``S * P``
+batch.  The rows are identical either way, because the compatibility kernel is
+row-independent, and the host spelling keeps one centre per call so the kernel's
+transient footprint stays at one centre instead of ``S`` of them, which the scan
+body then releases again before the next iteration.  ``matrix`` is never
+selected by ``__call__``: a caller that wants a whole table asks for it by
 name, which is what the dense path's scan 1 does.
 
 Nothing here re-implements distance arithmetic: every number comes from the
@@ -82,34 +85,40 @@ So on numpy a pipeline selects ``"single"``, and ``"tiled"`` exists for
 GPU-class devices, where the dense route's per-call scatters are lowered
 single-threaded (40 x 0.97 ms + 40 x 0.52 ms of a generation) and the merge is
 the 2x cheaper device shape.
-The table costs exactly one ``measure_distance`` call per centre row -- 40 calls per
-generation at ``species_size = 20``, 20 here and 20 in scan 2 -- and what the
-scan buys is the *region* around those calls, not fewer of them.
+The table costs exactly one ``measure_distance`` call per centre row on the host
+spelling -- 40 calls per generation at ``species_size = 20``, 20 here and 20 in
+scan 2 -- and what the scan buys there is the *region* around those calls, not
+fewer of them.
 
-Pre-measuring *both* speciation scans needs a ``cond`` for scan 2's
-data-dependent ``pop[seed]`` centre and costs ~50 % more peak RSS for no timed
-gain.
+Pre-measuring *both* speciation scans on the host spelling needs a ``cond`` for
+scan 2's data-dependent ``pop[seed]`` centre and costs ~50 % more peak RSS for no
+timed gain.
 
-Grouping several centres into one ``measure_distance`` call is a measured
-rejection and an unwired option, not a shipped path: the genome's
-``tensorneat.genome.operations.distance.group_digest`` / ``GroupedDigest`` route
-is tested and bit-identical to the separate calls, and it is a row-wise-merge
-option only (the tiled digest carries no dense table), so it competes with
-``"tiled"``, not with the one-individual call this module makes in ``"single"``.
-Measured against that merge over the whole generation at ``P = 500`` /
-``species_size = 20``, scan 1 grouped two centres per call dispatched 6 589 ops
-(-13 %) at 253.2 MiB peak RSS (+8.3 %) against the ungrouped 7 592 at 233.8 MiB,
-and its wall time was bimodal at process level: 152-165 ms in the fast mode,
-196-253 ms in 7 of 13 fresh default-environment processes, an intrinsic ~4 % win
-only with glibc's mmap/trim thresholds pinned to 1 GiB.
-The mechanism is the row width: the kernel's ``(rows, 2 * max_conns)``
-intermediates double at ``k = 2`` and grow linearly beyond (273.8 MiB, 353.1 at
-``k = 4``, 593 / 753 at ``k = 10`` / ``k = 20``), so a wider call's per-element
-cost eats the dispatch it saves -- at ``k = 4`` the per-op-name profile moved
-``argsort`` 25.5 -> 37.0 ms, ``gather`` 21.5 -> 36.1 ms, ``cast`` 8.0 -> 17.7 ms
-and ``reshape`` 4.3 -> 8.9 ms while dispatches fell 8061 -> 4885 against a 28 %
-wall-time increase, and a second pre-measured table for scan 2 at ``k = 2`` read
-+58 % wall time (258.96 ms at 6 661 ops).
+Grouped ``k``-centre calls are the **accelerator spelling's** table
+(:meth:`DistanceRows._straight_line`), never the host one's: the genome's
+``group_digest`` / ``GroupedDigest`` route is bit-identical to ``k`` plain
+``P``-row calls and is a row-wise-merge shape, so it competes with ``"tiled"``
+rather than with ``"single"``, and ``grouped.group_size`` answers ``k = 1`` for
+every non-accelerator state, which is why the numpy pipeline traces exactly the
+calls it traced before.
+Measured on the MI300X (``xor_p500``, seed 42, production statics
+``distance_centre="tiled"`` / ``distance_formulation="index_free"`` /
+``kernel_mode="accelerator"``, one warm generation under ``rocprofv3
+--kernel-trace``, four interleaved fresh-process rounds): scan 1's 20 ``P``-row
+calls become **10** calls of ``2 * P`` rows, the generation's kernel count falls
+1 267 -> 1 130 (-10.8 %) and its device time 7.45 -> 6.83 ms on the round means
+(median 7.41 -> 7.01), with the 107 single-workgroup dispatches and their
+1.18-1.22 ms unchanged; wall time over ten generations reads 10.31 / 9.64 ->
+9.28 / 8.96 ms, `iree-compile` 14.22 -> 13.41 s, the graph's
+``hal.executable.export`` count 528 -> 519 and its numpy executed dispatches
+6 542 -> 5 756.
+The same grouping did **not** ship for numpy: there the interpreter is charged by
+element volume rather than by dispatch, and the ``k``-times wider
+``(k * P, 2 * max_conns)`` merge intermediates cost more than the dispatches they
+save (253.2 against 233.8 MiB peak RSS, wall time bimodal at process level).
+Scan 2 is not grouped at all: its per-slot centre is ``pop[seed]`` on a creating
+slot, and ``seed`` depends on the assignments made by the earlier slots, so a
+group of consecutive centres cannot be formed before their rows are measured.
 
 Peak memory
 -----------
@@ -117,8 +126,11 @@ Peak memory
 environment until the block returns, and pops a nested region's environment per
 iteration.  A kernel inside a ``scan`` body therefore pays one region's
 transients at a time, while a kernel at the top level keeps them alive for the
-rest of the generation -- which is what the whole-table scan is for, and why the
-top-level spelling of the same rows is never used.
+rest of the generation -- which is what the host spelling's whole-table scan is
+for, and why the host spelling never measures the same rows at the top level.
+A compiled backend's live set is its own codegen's business, so the accelerator
+spelling's straight-line rows take that rule off the table and trade the region
+for the launch it was paying.
 The measured footprint is per mode (the table above): 196.4 / 302.5 MiB at
 ``P = 500`` / ``P = 1000`` in ``"single"`` and 218.7 / 348.5 MiB in ``"tiled"``,
 the merge's wider rows being the difference; build follows the same split,
@@ -138,6 +150,7 @@ import evoxc.numpy as enp
 from tensorneat.common.errors import TensorNEATError
 
 from tensorneat.common.schedule_accelerator import is_accelerator, kernel_mode
+from tensorneat.genome.operations.distance.grouped import centre_batch, for_state
 
 from ._kernels import centre_payload
 from ._validation import distance_centre_mode
@@ -338,31 +351,15 @@ class DistanceRows:
             in the ``"accelerator"`` formulation the rows are measured as ``K``
             top-level calls and ``concatenate`` d into the column of an
             ``(K, P)`` table, which is the same kernels and the same floats with
-            no serialised stack write.  A compiler backend's live set is its
-            own codegen's business, so the rule that ends the module docstring
-            does not apply there; the host spelling keeps the scan.
+            no serialised stack write, and it groups those calls ``k`` centres at
+            a time (:meth:`_straight_line`).  A compiler backend's live set is
+            its own codegen's business, so the rule that ends the module
+            docstring does not apply there; the host spelling keeps the scan.
         """
         count = int(centres[0].shape[0])
         tiled = distance_centre_mode(state) == "tiled"
         if _MATRIX_UNROLL and is_accelerator(kernel_mode(state)):
-            rows = [
-                self.genome.measure_distance(
-                    state,
-                    centre_payload(
-                        self.population,
-                        tuple(
-                            evoxc.gather(field, slot, axis=0) for field in centres
-                        ),
-                        self.pop_size,
-                        tiled,
-                    ),
-                    self.digest,
-                )
-                for slot in range(count)
-            ]
-            return enp.concatenate(
-                [enp.reshape(row, (1, self.pop_size)) for row in rows], 0
-            )
+            return self._straight_line(state, centres, count, tiled)
 
         def body(carry: Any, slot: Any) -> Any:
             """One centre row of the table, measured inside the scan region."""
@@ -379,3 +376,80 @@ class DistanceRows:
             enp.arange(0, count, dtype=evoxc.int32),
         )
         return stacked
+
+    def _straight_line(
+        self, state: Any, centres: Any, count: int, tiled: bool
+    ) -> Any:
+        """The accelerator spelling of the whole centre table.
+
+        Args:
+            state (Any): Shared state; its ``kernel_mode`` and ``distance_centre``
+                entries pick the spelling and the centre width.
+            centres (Any): Centre payload of ``count`` rows -- the ``(S, ...)``
+                centre arrays of a speciation phase.
+            count (int): Static row count ``S`` of the table.
+            tiled (bool): ``True`` when ``state.distance_centre`` is ``"tiled"``.
+
+        Returns:
+            Any: ``(S, P)`` float32 distances, row ``s`` against the whole
+            population.
+
+        Note:
+            No region: a compiled backend charges a scan its ``(S, P)`` ``y``
+            stack write and five loop-scaffolding dispatches per iteration, so
+            the rows are measured as straight-line calls and ``concatenate`` d in
+            order (``_MATRIX_UNROLL``).
+
+            The calls are **grouped**: ``grouped.for_state`` pairs this state's
+            leg with the ``k`` centre batches one ``measure_distance`` call
+            should cover -- ``k = 1`` on every non-accelerator state, so the
+            numpy pipeline gets its plain digest and its dispatch count is
+            untouched, and ``k = 2`` on an accelerator state up to
+            ``GROUP_ROW_BUDGET`` rows.  Each grouped call measures ``k`` centre
+            rows at once against the ``k``-times tiled digest, and its
+            ``(k * P,)`` answer is ``reshape`` d back into ``(k, P)`` rows in
+            slot order, so at most ``count % k`` trailing slots are measured
+            singly against the plain digest.  Both spellings return the same
+            floats: every op of the compatibility kernel is row-local and the
+            tiled digest's statics carry each group's own row offsets, so a
+            grouped call is bit-identical to the ``k`` plain calls it replaces.
+
+            Grouping needs ``P``-row centres (the ``"tiled"`` width) to fill a
+            ``k * P`` batch, so a ``"single"``-width state keeps the ungrouped
+            spelling; ``k == 1`` falls back the same way.
+        """
+        digest, group = for_state(state, self.digest, species_size=count)
+        grouped = group > 1 and tiled
+        rows = []
+        measured = 0
+        if grouped:
+            for base in range(0, count - group + 1, group):
+                payloads = tuple(
+                    centre_payload(
+                        self.population,
+                        tuple(evoxc.gather(field, slot, axis=0) for field in centres),
+                        self.pop_size,
+                        True,
+                    )
+                    for slot in range(base, base + group)
+                )
+                merged = self.genome.measure_distance(
+                    state, *centre_batch(payloads), digest
+                )
+                rows.append(enp.reshape(merged, (group, self.pop_size)))
+            measured = count - count % group
+        for slot in range(measured, count):
+            single = self.genome.measure_distance(
+                state,
+                centre_payload(
+                    self.population,
+                    tuple(evoxc.gather(field, slot, axis=0) for field in centres),
+                    self.pop_size,
+                    tiled,
+                ),
+                self.digest,
+            )
+            rows.append(enp.reshape(single, (1, self.pop_size)))
+        if len(rows) == 1:
+            return rows[0]
+        return enp.concatenate(rows, 0)
