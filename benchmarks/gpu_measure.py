@@ -13,10 +13,13 @@ fingerprint and every rendered line -- lives in ``benchmarks/gpu_report.py``.
 
 Targets
 -------
-A *target* is a named way to build the ``Pipeline`` (data in :data:`TARGETS`):
-``numpy`` -> backend numpy, no device, no options; ``iree-llvm-cpu`` -> iree with
-``target_backends=["llvm-cpu"]``; ``iree-rocm`` -> iree with ``device="rocm"`` and
-``target_backends=["rocm"]``. Raw passthrough flags override a named target's
+A *target* is a named way to build the ``Pipeline`` (data in
+:data:`benchmarks.gpu_targets.TARGETS`): ``numpy`` -> backend numpy, no device, no
+options; ``iree-llvm-cpu`` -> iree with ``target_backends=["llvm-cpu"]``;
+``iree-rocm`` -> iree with ``device="rocm"`` and ``target_backends=["rocm"]``;
+``xla-rocm`` -> evoxc's ``xla`` adapter with ``device="rocm"``, driving a
+user-supplied PJRT C API plugin (``--pjrt-plugin PATH`` or ``$EVOXC_PJRT_PLUGIN``;
+no pip package ships one). Raw passthrough flags override a named target's
 defaults, for hardware this file does not name: ``--device KIND`` with
 ``--device-index N`` (together they build ``evoxc.Device(KIND, N)``; an index alone
 re-indexes the target's own device kind), ``--target-backends a,b``,
@@ -26,6 +29,15 @@ appended to that same list). They apply to **every** row of a ``matrix`` run, so
 combination that no longer pairs a loadable device with its target backends becomes
 an ``error`` row instead of being repaired here: ``device`` and ``target_backends``
 must stay aligned.
+
+The xla target's plugin (``--pjrt-plugin``, forwarded by ``matrix`` to every row)
+-------------------------------------------------------------------------------
+The plugin path goes into ``compile_options["plugin_path"]`` **and** into
+``EVOXC_PJRT_PLUGIN``, because the adapter's availability probe reads only the
+variable (resolution, fingerprint and that rule live in
+``benchmarks/gpu_targets.py``). Resolution order is ``--pjrt-plugin`` then
+``$EVOXC_PJRT_PLUGIN``; without one an xla row is a named ``error`` row and
+``matrix`` exits 2 before measuring -- never a fallback, never a made-up number.
 
 Cases
 -----
@@ -106,12 +118,17 @@ Usage
         --cases xor_p100,xor_p500,xor3d_p500 --targets numpy,iree-llvm-cpu,iree-rocm \\
         --warmup 3 --generations 10 --seed 42 \\
         --json benchmarks/results/gpu_2026-11-05.json --out benchmarks/GPU.md
+    uv run --extra iree python benchmarks/gpu_measure.py matrix \\
+        --cases xor_p100 --targets numpy,xla-rocm --pjrt-plugin /path/to/pjrt_plugin.so \\
+        --json $TMPDIR/xla.json --out $TMPDIR/xla.md
     uv run --extra iree python benchmarks/gpu_measure.py render \\
         --json benchmarks/results/gpu_2026-11-05.json --out benchmarks/GPU.md
 
 Requires ``tensorneat`` (installed, or importable from ``../src``) and ``numpy``; the
 ``iree`` targets additionally need the optional ``iree`` extra
-(``uv sync --extra iree``) plus, for ``iree-rocm``, a working ROCm runtime.
+(``uv sync --extra iree``) plus, for ``iree-rocm``, a working ROCm runtime; the
+``xla-rocm`` target needs no extra at all, only a PJRT C API plugin ``.so`` built
+against the PJRT C API header (``--pjrt-plugin``/``$EVOXC_PJRT_PLUGIN``).
 
 Notes
 -----
@@ -167,6 +184,17 @@ from gpu_report import (  # noqa: E402  (after the sys.path guard)
     splice_block,
     summary_line,
 )
+from gpu_targets import (  # noqa: E402  (after the sys.path guard)
+    NUMPY_PLAN,
+    PJRT_ENV_VAR,
+    PJRT_FLAG,
+    PJRT_TARGETS,
+    TARGETS,
+    PluginError,
+    fingerprint_plugin,
+    plugin_for,
+    require_plugin,
+)
 
 #: The protocol defaults of the accelerator matrix.
 DEFAULT_CASES = "xor_p100,xor_p500,xor3d_p500"
@@ -180,23 +208,6 @@ DEFAULT_TIMEOUT = 3600
 DEFAULT_JSON = HERE / "results" / "gpu.json"
 DEFAULT_REPORT = HERE / "GPU.md"
 DEFAULT_TITLE = "TensorNEAT accelerator measurement — numpy / iree llvm-cpu / iree rocm"
-
-#: Named target -> how the ``Pipeline`` is built. Data, never code paths.
-TARGETS: dict[str, dict[str, Any]] = {
-    "numpy": {"backend": "numpy", "device": None, "compile_options": None},
-    "iree-llvm-cpu": {
-        "backend": "iree",
-        "device": None,
-        "compile_options": {"target_backends": ["llvm-cpu"]},
-    },
-    "iree-rocm": {
-        "backend": "iree",
-        "device": "rocm",
-        "compile_options": {"target_backends": ["rocm"]},
-    },
-}
-#: The build plan of the ``backend="numpy"`` reference leg (cross-check and trace).
-NUMPY_PLAN: dict[str, Any] = {"name": "numpy", **TARGETS["numpy"], "device_index": None}
 
 
 # --- Lazy imports (module scope stays numpy/evoxc/tensorneat-free) ----------------------
@@ -249,13 +260,18 @@ def _split_csv(text: str | None) -> list[str]:
     return [item.strip() for item in text.split(",") if item.strip()]
 
 
-def _target_plan(target_name: str, args: argparse.Namespace) -> dict[str, Any]:
+def _target_plan(
+    target_name: str, args: argparse.Namespace, plugin: str | None = None
+) -> dict[str, Any]:
     """Resolve one named target plus the raw passthrough flags into a build plan.
 
     Args:
-        target_name: A key of :data:`TARGETS`.
+        target_name: A key of :data:`gpu_targets.TARGETS`.
         args: Parsed CLI arguments; ``device``/``device_index``/``target_backends``/
             ``rocm_target``/``iree_compile_arg`` each override the named defaults.
+        plugin: The resolved PJRT plugin path (:func:`gpu_targets.plugin_for`); it
+            becomes ``compile_options["plugin_path"]`` for a target of
+            :data:`gpu_targets.PJRT_TARGETS` and is ignored otherwise.
 
     Returns:
         A JSON-safe ``{"name", "backend", "device", "device_index",
@@ -279,6 +295,9 @@ def _target_plan(target_name: str, args: argparse.Namespace) -> dict[str, Any]:
             flags.append(f"--iree-rocm-target={args.rocm_target}")
         flags.extend(args.iree_compile_arg or [])
         compile_options["iree_compile_args"] = flags
+    if target_name in PJRT_TARGETS and plugin is not None:
+        compile_options = dict(compile_options or {})
+        compile_options["plugin_path"] = plugin
     explicit = args.device is not None or args.device_index is not None
     device_index = (0 if args.device_index is None else args.device_index) if (
         device is not None and explicit) else None
@@ -550,16 +569,21 @@ def measure_row(args: argparse.Namespace) -> dict[str, Any]:
     Returns:
         The JSON-safe row; ``status`` is ``"ok"`` or ``"error"``, and an ``error``
         row carries ``error`` (the full traceback) plus whatever was measured before
-        the failure. Never raises for a measurement failure.
+        the failure. Never raises for a measurement failure. A target of
+        :data:`gpu_targets.PJRT_TARGETS` resolves its PJRT plugin first -- the path
+        goes into the plan's ``compile_options["plugin_path"]`` *and* into
+        :data:`gpu_targets.PJRT_ENV_VAR`, which is what the adapter's
+        ``check_available`` probe reads -- and an unresolvable plugin is a named
+        ``error`` row, never a fallback to another backend.
     """
-    plan = _target_plan(args.target, args)
+    named = TARGETS[args.target]
     record: dict[str, Any] = {
         "case": args.case,
-        "target": plan["name"],
-        "backend": plan["backend"],
-        "device": plan["device"],
-        "device_index": plan["device_index"],
-        "compile_options": plan["compile_options"],
+        "target": args.target,
+        "backend": named["backend"],
+        "device": named["device"],
+        "device_index": None,
+        "compile_options": copy.deepcopy(named["compile_options"]),
         "seed": args.seed,
         "warmup_generations": args.warmup,
         "timed_generations": args.generations,
@@ -568,6 +592,19 @@ def measure_row(args: argparse.Namespace) -> dict[str, Any]:
         "error": None,
     }
     record["timestamp_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        plugin = plugin_for(args.target, args.pjrt_plugin)
+    except PluginError as exc:
+        # Nothing was measured and nothing fell back: the message is the record.
+        return {**record, "status": "error", "error": str(exc), "plugin_error": True}
+    if plugin is not None:
+        os.environ[PJRT_ENV_VAR] = plugin  # read by the adapter's check_available probe
+        record["pjrt_plugin"] = fingerprint_plugin(plugin)
+    plan = _target_plan(args.target, args, plugin)
+    record.update(
+        backend=plan["backend"], device=plan["device"],
+        device_index=plan["device_index"], compile_options=plan["compile_options"],
+    )
     record["env"] = environment()
     record["device_info"] = {
         **plan,
@@ -634,7 +671,12 @@ def _selected_targets(text: str) -> list[str]:
 
 
 def _child_command(
-    args: argparse.Namespace, script: Path, case_name: str, target: str, row_path: Path
+    args: argparse.Namespace,
+    script: Path,
+    case_name: str,
+    target: str,
+    row_path: Path,
+    plugin: str | None = None,
 ) -> list[str]:
     """The ``run`` argv that measures one matrix row in a fresh process."""
     command = [
@@ -643,6 +685,8 @@ def _child_command(
         "--warmup", str(args.warmup), "--generations", str(args.generations),
         "--seed", str(args.seed), "--json", str(row_path),
     ]
+    if plugin is not None:
+        command += [PJRT_FLAG, plugin]
     if args.device is not None:
         command += ["--device", args.device]
     if args.device_index is not None:
@@ -658,6 +702,19 @@ def _child_command(
     if args.trace:
         command += ["--trace", str(args.trace)]
     return command
+
+
+def _child_environment(plugin: str | None) -> dict[str, str]:
+    """The environment of a row subprocess: this one, plus the resolved plugin.
+
+    The child re-resolves the plugin from its own ``--pjrt-plugin`` argv, but the
+    variable is exported too because ``XlaBackend.check_available`` reads it during
+    backend registration and never sees the build's compile options.
+    """
+    env = dict(os.environ)
+    if plugin is not None:
+        env[PJRT_ENV_VAR] = plugin
+    return env
 
 
 def _tail(text: str | None, lines: int = 20, limit: int = 4000) -> str:
@@ -719,10 +776,18 @@ def _read_child_row(
 
 
 def _document_meta(
-    args: argparse.Namespace, started: datetime, finished: datetime
+    args: argparse.Namespace,
+    started: datetime,
+    finished: datetime,
+    pjrt_plugin: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The ``meta`` block of a matrix document (command, title/note, env, protocol)."""
-    return {
+    """The ``meta`` block of a matrix document (command, title/note, env, protocol).
+
+    ``pjrt_plugin`` is the plugin fingerprint when an ``xla`` target was
+    measured; the key is absent otherwise, so a record of the numpy/iree targets
+    keeps the shape it always had (and renders without a plugin line).
+    """
+    meta = {
         "command": shlex.join([sys.executable, *sys.argv]),
         "report_title": args.report_title, "report_note": args.report_note,
         "created_utc": started.isoformat(timespec="seconds"),
@@ -733,6 +798,9 @@ def _document_meta(
         "targets": _selected_targets(args.targets),
         "env": environment(),
     }
+    if pjrt_plugin is not None:
+        meta["pjrt_plugin"] = pjrt_plugin
+    return meta
 
 
 def matrix_command(args: argparse.Namespace) -> int:
@@ -743,18 +811,26 @@ def matrix_command(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"gpu_measure matrix: {exc}", file=sys.stderr)
         return 2
+    # Resolve once, before any row: a missing plugin must not cost a session.
+    try:
+        plugin, plugin_fingerprint = require_plugin(targets, args.pjrt_plugin)
+    except PluginError as exc:
+        print(f"gpu_measure matrix: {exc}", file=sys.stderr)
+        return 2
     plan = [(case.name, target) for case in cases for target in targets]
     script = Path(__file__).resolve()
     started = datetime.now(timezone.utc)
     records: list[dict[str, Any]] = []
+    child_env = _child_environment(plugin)
     with tempfile.TemporaryDirectory(prefix="gpu_measure_") as tmp:
         for index, (case_name, target) in enumerate(plan, 1):
             row_path = Path(tmp) / f"row_{index:03d}.json"
-            command = _child_command(args, script, case_name, target, row_path)
+            command = _child_command(args, script, case_name, target, row_path, plugin)
             print(f"[{index}/{len(plan)}] {case_name} / {target}: running", flush=True)
             try:
                 completed = subprocess.run(
-                    command, capture_output=True, text=True, timeout=args.timeout
+                    command, capture_output=True, text=True, timeout=args.timeout,
+                    env=child_env,
                 )
             except subprocess.TimeoutExpired as exc:
                 record = _crash_row(
@@ -776,7 +852,7 @@ def matrix_command(args: argparse.Namespace) -> int:
 
     document = {
         "schema": SCHEMA,
-        "meta": _document_meta(args, started, finished),
+        "meta": _document_meta(args, started, finished, plugin_fingerprint),
         "records": records,
     }
     args.json.parent.mkdir(parents=True, exist_ok=True)
@@ -824,10 +900,14 @@ def list_command(args: argparse.Namespace) -> int:
     del args
     print("targets (named label -> how the Pipeline is built):")
     for name, base in TARGETS.items():
+        plugin = (f"  plugin from {PJRT_FLAG}/${PJRT_ENV_VAR}"
+                  if name in PJRT_TARGETS else "")
         print(f"  {name:<16} backend={base['backend']:<6} device={base['device']!r:<8} "
-              f"compile_options={base['compile_options']!r}")
+              f"compile_options={base['compile_options']!r}{plugin}")
     print()
     print("passthrough overrides (apply to every matrix row, by target name):")
+    print("  --pjrt-plugin PATH                 the PJRT C API plugin the xla targets drive")
+    print(f"  (or export {PJRT_ENV_VAR}=PATH; the flag wins, no pip package ships one)")
     print("  --device KIND / --device-index N   build evoxc.Device(KIND, N)")
     print("  --target-backends a,b              replace target_backends")
     print("  --rocm-target ARCH                 append --iree-rocm-target=ARCH")
@@ -889,6 +969,13 @@ def _add_measurement_arguments(parser: argparse.ArgumentParser) -> None:
         help=("raw device kind (rocm, hip, cuda, ...); with --device-index it builds "
               "evoxc.Device(KIND, N) and overrides the named target's device"))
     parser.add_argument(
+        "--pjrt-plugin", default=None, metavar="PATH",
+        help=(f"PJRT C API plugin .so (exporting GetPjRtApi) that the xla targets "
+              f"drive: it becomes compile_options['plugin_path'] and is exported as "
+              f"{PJRT_ENV_VAR} for the adapter's availability probe. Resolution order: "
+              f"this flag, then ${PJRT_ENV_VAR}; an xla target with neither is a named "
+              "error, never a fallback to another backend"))
+    parser.add_argument(
         "--device-index", type=_non_negative_int, default=None, metavar="N",
         help="device index; materialises evoxc.Device(<kind>, N)")
     parser.add_argument(
@@ -907,15 +994,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="gpu_measure.py",
         description=(
-            "Measure accelerator rows (numpy / iree llvm-cpu / iree rocm) one "
-            "configuration per process, and render the measured block of "
+            "Measure accelerator rows (numpy / iree llvm-cpu / iree rocm / xla rocm) "
+            "one configuration per process, and render the measured block of "
             "benchmarks/GPU.md."),
         epilog=(
             "Try: gpu_measure.py --list  |  gpu_measure.py run --case xor_p100 "
-            "--target iree-rocm  |  gpu_measure.py matrix --out benchmarks/GPU.md  |  "
-            "gpu_measure.py render --json benchmarks/results/gpu_2026-11-05.json. "
+            "--target iree-rocm  |  gpu_measure.py run --case xor_p100 --target xla-rocm "
+            "--pjrt-plugin /path/to/pjrt_plugin.so  |  gpu_measure.py matrix "
+            "--out benchmarks/GPU.md  |  gpu_measure.py render --json "
+            "benchmarks/results/gpu_2026-11-05.json. "
             "'matrix' exits 1 when any planned row is an error row (a blocked device "
-            "path must be loud) and 2 when the report could not be rendered."),
+            "path must be loud), 2 when the report could not be rendered or when a "
+            "planned xla target has no PJRT plugin."),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

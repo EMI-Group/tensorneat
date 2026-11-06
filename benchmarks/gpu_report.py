@@ -19,6 +19,7 @@ import json
 import os
 import platform
 import subprocess
+import sys
 import traceback
 from importlib import metadata
 from pathlib import Path
@@ -27,6 +28,10 @@ from typing import Any
 #: Repository root (``<repo>/benchmarks/gpu_report.py``).
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
+
+if str(HERE) not in sys.path:  # ``gpu_targets`` is a sibling module, not a package
+    sys.path.insert(0, str(HERE))
+from gpu_targets import short_sha  # noqa: E402  (after the sys.path guard)
 
 #: Schema of the aggregated matrix document (one record list under ``records``).
 SCHEMA = "tensorneat-gpu/1"
@@ -534,6 +539,30 @@ def _git_text(env: dict[str, Any]) -> str:
 # --- The six block sections -------------------------------------------------------------
 
 
+def _pjrt_plugin(document: dict[str, Any]) -> dict[str, Any]:
+    """The PJRT plugin fingerprint of a record (``{}`` when it carries none).
+
+    Records of the numpy/iree targets store no plugin, so this returns an empty
+    mapping and the environment table renders exactly the rows it always had.
+    A row-level fingerprint is the fallback for a record whose ``meta`` lost it.
+    """
+    meta = document.get("meta") or {}
+    if isinstance(meta.get("pjrt_plugin"), dict):
+        return meta["pjrt_plugin"]
+    for record in document.get("records") or []:
+        if isinstance(record.get("pjrt_plugin"), dict):
+            return record["pjrt_plugin"]
+    return {}
+
+
+def _plugin_text(plugin: dict[str, Any]) -> str:
+    """Render a plugin fingerprint as one cell: basename, size and short digest."""
+    name = plugin.get("basename") or plugin.get("path") or "n/a"
+    size = plugin.get("size_bytes")
+    mib = f"{size / (1024 * 1024):.1f} MiB" if isinstance(size, (int, float)) else "n/a"
+    return f"`{name}` ({mib}, sha256 `{short_sha(plugin.get('sha256'))}…`)"
+
+
 def _environment_section(document: dict[str, Any]) -> list[str]:
     """Section 1: the measured environment fingerprint as a two-column table."""
     meta = document.get("meta") or {}
@@ -553,6 +582,7 @@ def _environment_section(document: dict[str, Any]) -> list[str]:
     memory = env.get("memory_mb")
     threads = env.get("threads")
     loadavg = env.get("loadavg")
+    plugin = _pjrt_plugin(document)
     rows = [
         ["Date / session (UTC)", _session_text(meta.get("session_utc"))],
         ["GPU model (gfx version)", gpu_text],
@@ -561,6 +591,7 @@ def _environment_section(document: dict[str, Any]) -> list[str]:
         ["Driver version", rocm.get("driver_version") or "n/a"],
         ["IREE compiler / runtime",
          f"{iree.get('compiler') or 'n/a'} / {iree.get('runtime') or 'n/a'}"],
+        *([["PJRT plugin (xla targets)", _plugin_text(plugin)]] if plugin else []),
         ["evoxc", env.get("evoxc") or "n/a"],
         ["numpy", env.get("numpy") or "n/a"],
         ["Python", env.get("python") or "n/a"],
@@ -874,16 +905,11 @@ def render_row(record: dict[str, Any]) -> str:
         f"{record['backend']} / device {record['device']!r} / seed {record['seed']}"
     )
     if record.get("status") != "ok":
-        return "\n".join(
-            [
-                head,
-                "",
-                "status: error",
-                str(record.get("error") or "(no error recorded)").rstrip(),
-                "",
-                f"device_info: {record.get('device_info')!r}",
-            ]
-        )
+        lines = [head, "", "status: error",
+                 str(record.get("error") or "(no error recorded)").rstrip()]
+        if "device_info" in record:  # a row that never built a pipeline has none
+            lines += ["", f"device_info: {record['device_info']!r}"]
+        return "\n".join(lines)
     timing = record["ms_per_generation"]
     return "\n".join(
         [

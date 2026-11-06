@@ -1,31 +1,34 @@
-"""Loud-failure guard for the optional compiled-backend (``iree``) suite.
+"""Loud-failure guard for the optional compiled-backend (``iree``) suites.
 
-``test_iree_pipeline.py`` needs the optional ``evoxc[iree]`` extra, so it skips
-at import when ``iree`` cannot be found.  That structural skip is the right shape
-for a whole-tree run: the extra is optional and the numpy suites must stay green
-without it.
+``test_iree_pipeline.py`` (llvm-cpu) and ``test_rocm_pipeline.py`` (AMD GPU) both
+need the optional ``iree`` extra -- the IREE 3.13.0 compiler and runtime wheels
+-- so each skips at import when ``iree`` cannot be found.  That structural skip is
+the right shape for a whole-tree run: the extra is optional and the numpy suites
+must stay green without it.
 
-It is the wrong shape when the compiled-backend leg was *explicitly requested*.
-``pytest -m requires_iree`` in an environment without the extra used to exit 0
-with "1 skipped", indistinguishable from a green run -- a silent degradation of
-exactly the leg the user asked for.  This conftest closes that hole: when the
-command line selects the ``requires_iree`` marker and ``iree`` is genuinely
+It is the wrong shape when a compiled-backend leg was *explicitly requested*.
+``pytest -m requires_iree`` (or ``-m requires_rocm``) in an environment without
+the extra used to exit 0 with "1 skipped", indistinguishable from a green run -- a
+silent degradation of exactly the leg the user asked for.  This conftest closes
+that hole: when the command line selects either marker and ``iree`` is genuinely
 absent, the session stops with a non-zero exit code and the install command
 instead of collecting a skip.
 
 Two intents are distinguished deliberately:
 
-* an explicit ``-m`` selector whose expression implies ``requires_iree`` (e.g.
-  ``-m requires_iree``, ``-m "requires_iree or parity"``) is a *capability*
-  request -- the compiled backend must be there, so its absence is a hard error;
+* an explicit ``-m`` selector whose expression implies the requested marker (e.g.
+  ``-m requires_iree``, ``-m requires_rocm``, ``-m "requires_rocm or parity"``) is
+  a *capability* request -- the compiled backend must be there, so its absence is
+  a hard error;
 * merely naming ``test/backends`` on the command line (``pytest test/backends``)
-  is a *scope* request, not a capability request -- the module still skips, but
+  is a *scope* request, not a capability request -- the modules still skip, but
   the skip is announced together with the install command so it cannot be
   mistaken for a green compiled-backend run.
 
-Nothing here imports ``iree``: availability is probed with
-:func:`importlib.util.find_spec`, so loading this file never pulls in an optional
-dependency (and never pays the ~80 MB iree import).
+Nothing here imports ``iree`` -- nor probes ``/dev/kfd`` or the HIP driver, which
+would need the extension -- so loading this file never pulls in an optional
+dependency: availability is decided by :func:`importlib.util.find_spec`, and the
+ROCm-specific preconditions live in ``test_rocm_pipeline.py``.
 """
 
 from __future__ import annotations
@@ -46,18 +49,26 @@ from _pytest.mark.expression import Expression
 #: This directory, resolved, so a relative command-line argument can be compared.
 BACKENDS_DIR = Path(__file__).resolve().parent
 
-#: The marker that selects the compiled-backend leg (registered in ``../conftest.py``).
+#: The markers that select the compiled-backend legs (registered in ``../conftest.py``).
+#: ``requires_iree`` is the llvm-cpu leg; ``requires_rocm`` the GPU leg, which needs
+#: the same IREE wheels *plus* a HIP device.
 MARKER = "requires_iree"
+ROCM_MARKER = "requires_rocm"
 
-#: The optional top-level package the ``evoxc[iree]`` extra provides.
+#: The markers this guard treats as compiled-backend capability requests.
+REQUESTED_MARKERS = (MARKER, ROCM_MARKER)
+
+#: The optional top-level package the ``iree`` extra provides.
 OPTIONAL_MODULE = "iree"
 
-#: One install step: the project extra, which pins ``evoxc`` from git rather than PyPI.
-#: ``uv pip install "evoxc[iree]"`` is deliberately *not* offered: it resolves the PyPI
-#: release 0.1.0, which ``pyproject.toml`` forbids (the frontend work landed in 0.1.1).
+#: One install step, spelled the way ``pyproject.toml``/``uv.lock`` resolve it: the
+#: ``iree`` extra names the IREE 3.13 wheels directly (``iree-base-compiler`` +
+#: ``iree-base-runtime``) instead of ``evoxc[iree]``, whose pin is 3.11 and whose HIP
+#: runtime aborts on loop-carried ``while`` graphs.  Compiler and runtime must be the
+#: same release, hence the matching ``>=3.13,<3.14`` bounds on both.
 INSTALL_COMMAND = (
     "uv sync --extra iree   (equivalently: pip install "
-    '"evoxc[iree] @ git+https://github.com/EMI-Group/evoxc@v0.1.1")'
+    '"iree-base-compiler>=3.13,<3.14" "iree-base-runtime>=3.13,<3.14")'
 )
 
 
@@ -65,9 +76,11 @@ def iree_available() -> bool:
     """Whether ``import iree`` would find the optional compiled backend.
 
     The probe uses :func:`importlib.util.find_spec` and therefore never imports
-    the iree extension.  ``find_spec`` raises ``ValueError`` when the module is
-    already in :data:`sys.modules` without a ``__spec__``; that state still means
-    it is importable, so it counts as available.
+    the iree extension (which on IREE 3.13 costs ~0.14 s and a few MiB of RSS,
+    but would still make every numpy-only run pay for it).  ``find_spec`` raises
+    ``ValueError`` when the module is already in :data:`sys.modules` without a
+    ``__spec__``; that state still means it is importable, so it counts as
+    available.
     """
     try:
         return importlib.util.find_spec(OPTIONAL_MODULE) is not None
@@ -100,11 +113,11 @@ def explicit_marker_expressions(config: pytest.Config) -> list[str]:
     return expressions
 
 
-def implies_requires_iree(expression: str) -> bool:
-    """Whether ``expression`` selects a test *because* it carries the ``requires_iree`` marker.
+def implies_marker(expression: str, marker: str = MARKER) -> bool:
+    """Whether ``expression`` selects a test *because* it carries ``marker``.
 
     The compiled ``-m`` expression is evaluated twice against the same synthetic
-    test, one that carries the ``requires_iree`` marker and nothing else:
+    test, one that carries ``marker`` and nothing else:
 
     * with a matcher that accepts that marker, i.e. the real selector;
     * with a matcher that accepts nothing, i.e. the same test as if it lacked
@@ -113,24 +126,50 @@ def implies_requires_iree(expression: str) -> bool:
     The expression implies the marker only when the first selects the test and
     the second does not, so a selector that happens to include every marker-free
     test (``not parity and not slow``) is *not* misread as a capability request:
-    it selects the bare-``requires_iree`` test twice, once with and once without
-    the marker.
+    it selects the bare-marker test twice, once with and once without the marker.
 
-    Consequences: ``requires_iree`` and ``requires_iree or parity`` do imply the
-    compiled-backend leg, while ``not requires_iree``, ``requires_iree and slow``,
-    ``parity`` and ``not parity and not slow`` do not.
+    Consequences, for either of the compiled-backend markers: ``requires_iree``,
+    ``requires_rocm``, ``requires_iree or parity`` and
+    ``requires_iree or requires_rocm`` do imply the leg, while
+    ``not requires_iree``, ``not requires_rocm``, ``requires_iree and slow``,
+    ``requires_iree and requires_rocm``, ``parity`` and ``not parity and not slow``
+    do not.  The two markers are independent: a request for one is not a request
+    for the other.
 
     A malformed expression returns ``False`` and is left to pytest's own ``-m``
     validation, which reports it with pytest's message; raising a second error
     here would only obscure that one.
+
+    Args:
+        expression: A ``-m`` expression taken from the command line.
+        marker: The marker the expression might be requesting.
+
+    Returns:
+        bool: ``True`` only when the marker alone changes the selection.
     """
     try:
         compiled = Expression.compile(expression)
     except SyntaxError:
         return False
-    selected_with = compiled.evaluate(lambda name, **kwargs: name == MARKER)
+    selected_with = compiled.evaluate(lambda name, **kwargs: name == marker)
     selected_without = compiled.evaluate(lambda name, **kwargs: False)
     return selected_with and not selected_without
+
+
+def implies_requires_iree(expression: str) -> bool:
+    """Whether ``expression`` requests the llvm-cpu compiled-backend leg.
+
+    The marker-defaulting wrapper around :func:`implies_marker`, kept because it
+    is the predicate this directory's tests name explicitly; its behaviour is
+    exactly ``implies_marker(expression, MARKER)``.
+
+    Args:
+        expression: A ``-m`` expression taken from the command line.
+
+    Returns:
+        bool: ``True`` only when ``requires_iree`` alone changes the selection.
+    """
+    return implies_marker(expression, MARKER)
 
 
 def names_the_backends_directory(config: pytest.Config) -> bool:
@@ -159,22 +198,24 @@ def pytest_configure(config: pytest.Config) -> None:
 
     ``pytest_configure`` is a historic hook, so it also runs for this
     sub-directory conftest when pytest reaches ``test/backends`` during
-    collection -- before the module-level ``importorskip`` could turn the leg
+    collection -- before the module-level ``importorskip`` could turn either leg
     into a single silent skip.
     """
     if iree_available():
         return
 
     requested = [
-        expression
+        (marker, expression)
+        for marker in REQUESTED_MARKERS
         for expression in explicit_marker_expressions(config)
-        if implies_requires_iree(expression)
+        if implies_marker(expression, marker)
     ]
     if requested:
+        marker, expression = requested[-1]
         pytest.exit(
             "test/backends: this run explicitly requests the compiled-backend leg "
-            f"(-m {requested[-1]!r}) but the optional iree backend is not "
-            "installed.\n"
+            f"(-m {expression!r}, which selects the {marker!r} marker) but the "
+            "optional iree backend is not installed.\n"
             "Its absence must not read as a green '1 skipped' run, so the session "
             "stops here instead of collecting the skip.\n"
             f"Install it with: {INSTALL_COMMAND}",
@@ -188,7 +229,8 @@ def pytest_configure(config: pytest.Config) -> None:
                 "backend is not installed: its tests are skipped as a structural "
                 "optional-dependency skip, so this run proves nothing about the "
                 f"compiled backend. Install it with: {INSTALL_COMMAND}. "
-                "An explicit `pytest -m requires_iree` run fails instead of skipping."
+                "An explicit `pytest -m requires_iree` (or `-m requires_rocm`) run "
+                "fails instead of skipping."
             ),
             stacklevel=1,
         )

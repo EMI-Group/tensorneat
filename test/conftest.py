@@ -69,6 +69,10 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "requires_rocm: needs an IREE ``hip`` device and ``/dev/kfd``; in no gate",
+    )
+    config.addinivalue_line(
+        "markers",
         "unit: numpy-backend kernel and invariant test (default gate)",
     )
 

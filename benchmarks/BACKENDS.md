@@ -3,9 +3,9 @@
 **Verdict for the tree and session measured here: `backend="iree"` compiles and runs TensorNEAT end to end and is 1.54× (pop 100), 5.47× (pop 500) and 6.63× (pop 1000) slower per generation than the numpy reference interpreter, measured as the median of three fresh-process repeats per population; each static shape pays one 8.0–9.6 s `iree-compile` before its first generation.**
 The problem classes exercised on iree are `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum` and `MountainCarContinuous`, plus the `RecurrentGenome` and `HyperNEAT` paths: every one of them ran a full generation on this session's tree (configurations and outputs under "Measured: numpy vs iree").
 These are IREE **3.13.0** numbers (`iree-base-compiler`/`iree-base-runtime`, what `uv sync --extra iree` now resolves); the 3.11.0 session this file used to record is superseded and only git holds it.
-`xla` is not available here: the evoxc xla adapter needs a PJRT C API plugin `.so` (`EVOXC_PJRT_PLUGIN`, unset on this box) and nothing provides one. `tvm` was not attempted.
+`xla` had no plugin in this session: the evoxc xla adapter needs a PJRT C API plugin `.so` (`EVOXC_PJRT_PLUGIN`, unset here) and the session's search found none, so this file measures `iree` on **llvm-cpu** only and carries no accelerator row. That absence is no longer a property of this box — `jax-rocm7-pjrt`'s `jax_plugins/xla_rocm7/xla_rocm_plugin.so` is now installed and the `xla` leg is measured end to end on ROCm in `GPU.md` (`## IREE vs XLA on the same device`), which is a separate accelerator artifact of its own session, not a row of this file. `tvm` was not attempted.
 The CPU performance contract therefore stays on the numpy backend (`RESULTS.md`, a generated pre-fix record — the provenance of every report in this directory is tabulated in `CONTEXT.md`).
-The ROCm accelerator leg is a **different artifact**: `GPU.md` + `benchmarks/results/gpu_rocm_2026-11-05.json`. No GPU number is folded into this file.
+The ROCm accelerator leg is a **different artifact**: `GPU.md` + `benchmarks/results/gpu_rocm_xla_2026-11-06.json` (the block it renders; the earlier two-target `benchmarks/results/gpu_rocm_2026-11-05.json` is superseded as its source). No GPU number is folded into this file.
 
 ## Provenance: which tree these numbers describe
 
