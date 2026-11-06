@@ -41,6 +41,7 @@ It validates `num_inputs`/`num_outputs` as positive non-`bool` ints and every hi
 `MLPSubstrate(layers, coor_range=(-1, 1, -1, 1))` — `connection_type = "feedforward"`; one grid column per layer, adjacent layers fully connected, `coor_range = (x_min, x_max, y_min, y_max)`.
 `FullSubstrate.analysis_substrate(input_coors, hidden_coors, output_coors)` and `MLPSubstrate.analysis_substrate(layers, coor_range)` — pure functions returning `(query_coors, nodes, conn_index)`; stateless, so tests and users can diff geometry without instantiating a substrate.
 Both concrete constructors normalise their arguments into attributes first (`input_coors`/`hidden_coors`/`output_coors` as `float32`; `layers` as a `tuple[int, ...]` and `coor_range` as a four-`float` tuple), call their own `analysis_substrate`, and then hand `(num_inputs, num_outputs, query_coors, nodes, conn_index)` up to `DefaultSubstrate.__init__`, which normalises, stores and validates once.
+Each `analysis_substrate` re-runs its own argument validators, so calling it directly (the stateless diffing path) is as safe as constructing the substrate.
 `FullSubstrate.num_inputs`/`num_outputs` re-derive from the coordinate arrays and `MLPSubstrate`'s from `layers`; both agree with the stored `_num_inputs`/`_num_outputs` by construction.
 
 ## Geometry rules (ordering invariants — a silent reorder shows up only as bad fitness)
