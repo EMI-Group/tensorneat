@@ -164,6 +164,16 @@ The remaining hot kernels are runtime overhead — `__amd_rocclr_copyBuffer` 815
 The upstream HIP `while`/`scan` abort that blocked this leg on `iree-base-runtime` 3.11 is fixed in 3.13; `benchmarks/spikes/rocm/repro_minimal.py` and that directory's ladder remain its reproducer.
 No ROCm row belongs in `benchmarks/RESULTS.md` until the harness measures this leg; the per-generation record for it is this section plus the formulation records under `algorithm/` and `genome/`.
 
+### Tell-Side Device Cost (ROCm, `xor_p500`, one warm generation)
+The four pathological shapes the tell side used to run, and what replaced them (device time from `rocprofv3 --kernel-trace`, rocm/gfx942, IREE 3.13):
+| before | ms | after | ms |
+|---|---|---|---|
+| 240 × `reduction_500x201x201_*` (the merge route's count-mode `argsort` expansion: 8 `(E,R,E)` blocks per family pair, `E = 2M+1`, ≈405 M touches per call) | ≈20 | `distance_formulation="index_free"`: one `(P,M,M)` `equal` + `select`/`reduce_min`/gather/reduce, ≈18.8 M touches per call, no sort, no scatter, 12 dispatches per call, further halved by `k = 2` grouping | ≈1.2 |
+| `sort_500x200xi32` 5.5 + `sort_500x100xi32` 2.0 (IREE bitonic, one workgroup per row) | 7.5 | `alignment_accelerator.py`: comparison-rank over `(P,M,M)` with the `(key, index)` lexicographic tie-break, no sort at all in the alignment path | ≈0.05 |
+| `scatter`s of 50 000–201 000 update cells at one workgroup of one thread (`_window_pair` 1.66, cycle hop 3 × 1.05, `edge_order` 1.32, `key_slot_table` 1.10) | ≈6.5 | `incoming_table` gathers its window out of the prefix counts, `cycle_accelerator.py` hops without a scatter, `key_slot_table` → equality template plus `cumulative_indegree`, alignment → compare-rank; the remaining scatters total 0.51 | ≈0.5 |
+| 58 serialised per-slot reductions in the two speciation scans (20.8 / 18.9 / 11.7 µs each, one thread) | ≈1.8 | scan 1's slot axis reduced row-wise as one `(S,P)` block (`_block_min_index`), scan 2's seed kept as the one residual 20 × 20.3 µs | ≈1.1 |
+Generation total: **42.61 → 8.89 ms device, 2 861 → 1 614 kernels**; wall 47.22 → 12.85 ms. The cost law behind every row: on this device an `evoxc` `scatter` lowers to **one workgroup of one thread at 17–21 ns per update cell** (destination width irrelevant, narrower carriers worse), `gather` is fully parallel, and one dispatch costs ~4.6 µs, so above a few hundred kernels the lever is dispatch count, not arithmetic.
+
 ## Known Issues / Notes for Agents
 `HyperNEAT`, `HyperNEATFeedForward` and every substrate class are covered by behavioural unit tests (`test/unit/algorithm/test_hyperneat.py`, `test_hyperneat_feedforward.py`, `test_hyperneat_e2e.py`, `test_hyperneat_weights.py` plus the shared `hyperneat_kernel.py`): the decode algebra, the `_validate` raise paths, both executor variants with a hidden block, and the substrate kwargs.
 `test_hyperneat.py::test_forward_reads_the_substrate_output_neurons` is a plain passing test, not a marker: the executor schedule is derived with the substrate's output keys and the read-out gathers `output_slot`, so the defect the test once pinned (outputs read from the last `num_outputs` node rows, a hidden neuron whenever the substrate has a hidden block) is gone and the suite carries no `xfail`.
