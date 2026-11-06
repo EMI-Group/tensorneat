@@ -38,7 +38,8 @@ The attribute part goes through the inherited `_normalize_attrs`, which narrows 
 `attrs` accepts `(*shape, attr_width)` rows, a `(*shape,)` per-connection scalar broadcast over the attribute axis (the spelling a dense-substrate weight table would take), or `None` for zeros.
 `historical_marker` is accepted only by families that declare the column; omitted (`OriginConn`) it is filled with the flat row index `0..prod(shape)-1` reshaped to `shape` (`_row_index_keys`), supplied it is cast to int32 and stacked as column 2.
 Passing `historical_marker` to a family without that column, destination keys of a different shape than the source keys, or attribute rows of an unusable shape raises `common.errors.ConfigError`.
-`algorithm/hyperneat` builds its dense substrate payload with exactly this pair (`node_gene.from_attrs(keys)`, `conn_gene.from_attrs(in_keys, out_keys, weights)`).
+`algorithm/hyperneat` builds its dense substrate payload itself, not through this pair: `hyperneat.py` broadcasts the constant node keys with `enp.broadcast_to`, `_conn_keys` broadcasts the `(Q, 2)` endpoint table and appends its own `arange(Q) + 1` marker column, and `_attr_columns` stacks the `(P, rows)` attribute columns with the decoded weights painted into `"weight"`.
+`from_attrs` therefore has no call site in `src/`, `test/`, `examples/`, `benchmarks/` or `docs/` — only docstrings name it as a consumer.
 
 ## Genetic operators
 `mutate` and `distance` are inherited from `BaseGene` and act on the float attribute rows only.
