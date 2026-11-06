@@ -4,7 +4,7 @@
 The problem classes exercised on iree are `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum` and `MountainCarContinuous`, plus the `RecurrentGenome` and `HyperNEAT` paths: every one of them ran a full generation on this session's tree (configurations and outputs under "Measured: numpy vs iree").
 These are IREE **3.13.0** numbers (`iree-base-compiler`/`iree-base-runtime`, what `uv sync --extra iree` now resolves); the 3.11.0 session this file used to record is superseded and only git holds it.
 `xla` had no plugin in this session: the evoxc xla adapter needs a PJRT C API plugin `.so` (`EVOXC_PJRT_PLUGIN`, unset here) and the session's search found none, so this file measures `iree` on **llvm-cpu** only and carries no accelerator row. That absence is no longer a property of this box — `jax-rocm7-pjrt`'s `jax_plugins/xla_rocm7/xla_rocm_plugin.so` is now installed and the `xla` leg is measured end to end on ROCm in `GPU.md` (`## IREE vs XLA on the same device`), which is a separate accelerator artifact of its own session, not a row of this file. `tvm` was not attempted.
-The CPU performance contract therefore stays on the numpy backend (`RESULTS.md`, a generated pre-fix record — the provenance of every report in this directory is tabulated in `CONTEXT.md`).
+The CPU performance contract therefore stays on the numpy backend (`RESULTS.md`, the generated record of the old-vs-new matrix re-measured on the merged tree at `63f0fc67` — the provenance of every report in this directory is tabulated in `CONTEXT.md`).
 The ROCm accelerator leg is a **different artifact**: `GPU.md` + `benchmarks/results/gpu_rocm_xla_2026-11-06.json` (the block it renders; the earlier two-target `benchmarks/results/gpu_rocm_2026-11-05.json` is superseded as its source). No GPU number is folded into this file.
 
 ## Provenance: which tree these numbers describe
@@ -326,7 +326,7 @@ The minimal reproducers for gates 1–5 are ~20 lines of `evoxc` each (a rank-3 
 
 ## What this does not change
 
-`RESULTS.md` is generated evidence for the old-vs-new CPU contract and was not regenerated or hand-edited for this report: the contract is measured on the numpy backend and that is still what it measures.
+`RESULTS.md` is generated evidence for the old-vs-new CPU contract, measured on the numpy backend and still not hand-edited; it was regenerated since this session by a full harness re-run at `63f0fc67` (2026-11-06), which is a tree later than the one measured here.
 `benchmarks/results/iree.json` + `benchmarks/iree.md` remain the historical pre-fix record (8/8 `error`); the numbers above supersede them for the code as of this session, which is the tree the ratios in this file belong to.
-`PERF_NUMPY.md` remains the numpy-interpreter performance record, and `GPU.md` + `benchmarks/results/gpu_rocm_2026-11-05.json` remain the accelerator record — neither was re-measured or edited here.
-A GPU optimizer pass landing in `src/tensorneat` in parallel with this session may change these numbers afterwards: every row above describes the stamped tree `6869a131` and nothing later, so re-run the commands in "Reproduce" before quoting them for a newer tree.
+`PERF_NUMPY.md` remains the numpy-interpreter performance record, and `GPU.md` + `benchmarks/results/gpu_rocm_xla_2026-11-06.json` remain the accelerator record — neither was re-measured or edited here.
+Every row above describes the stamped tree `6869a131` and nothing later: the optimizer and structure work has since landed in `src/tensorneat`, so these llvm-cpu numbers predate it, and the commands in "Reproduce" must be re-run before quoting them for a newer tree.
