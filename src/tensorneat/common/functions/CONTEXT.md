@@ -23,17 +23,9 @@ An option's registry name is its kernel `__name__` — hence the builtin shadowi
 Ids are drawn by the gene layer (`genome/gene/blocks.py`: `evoxc.random.randint` over `len(spec.options)`, `options[0]` when one is configured), never by `FunctionManager.random_index` — that helper answers a rank-0 `int32` in `[0, len)` (`randint(key, (1,), 0, len(self))` reshaped, because the numpy backend rejects a bare 0-d draw) but has no `src/` caller.
 
 ### ACT — canonical order (12)
-| id | name | formula (`z` elementwise, float32) | | id | name | formula |
-|---|---|---|---|---|---|---|
-| 0 | `scaled_sigmoid` | `3.0/(1+exp(-z))` | | 6 | `lelu` | `select(z>0, z, 0.005*z)` |
-| 1 | `sigmoid` | `1/(1+exp(-z))` | | 7 | `identity` | `z` (target of `ACT_IDENTITY = -1`; `is_identity = True`) |
-| 2 | `scaled_tanh` | `3.0*tanh(z)` | | 8 | `inv` | `1/select(z>0, max(z,1e-7), min(z,-1e-7))` |
-| 3 | `tanh` | `tanh(z)` | | 9 | `log` | `log(maximum(z, 1e-7))` |
-| 4 | `sin` | `sin(z)` | | 10 | `exp` | `exp(z)`, unclipped (overflows to `inf` above ~88) |
-| 5 | `relu` | `maximum(z, 0)` | | 11 | `abs` | `abs(z)` |
-
-Activations are shape-polymorphic and elementwise — canonical call shape `(P, N)`, and the same kernels serve `(P, out_dim)` output transforms and HyperNEAT substrate nodes; `NaN` in → `NaN` out, no masking.
-The formulas are bit-identical to the frozen legacy library (same expression order), so `evoxc.sigmoid` / `evoxc.relu` and friends are **not** used; `ACT_IDENTITY` is a cross-node constant (written into output rows by `gene/node/base.py`, read by `BiasNode` / `DefaultNode`).
+Ids 0–11 are `scaled_sigmoid, sigmoid, scaled_tanh, tanh, sin, relu, lelu, identity, inv, log, exp, abs`, built from the module constants `SCALE = 3.0` (the two `scaled_*`), `LELU_SLACK = 0.005` (`lelu` = `select(z>0, z, 0.005*z)`), `INV_EPS = LOG_EPS = 1e-7` (`inv` = `1/clamped(z)`, `log` = `log(maximum(z, 1e-7))`) and an unclipped `exp` (overflows to `inf` above ~88); `identity` is `z`, the target of `ACT_IDENTITY = -1`, and carries `is_identity = True`.
+The expressions and their evaluation order are bit-identical to the frozen legacy library, so `evoxc.sigmoid` / `evoxc.relu` and friends are **not** used; `act_sympy.py` imports the same constants, so the two representations cannot drift.
+Activations are shape-polymorphic and elementwise — canonical call shape `(P, N)`, and the same kernels serve `(P, out_dim)` output transforms and HyperNEAT substrate nodes; `NaN` in → `NaN` out, no masking, and `ACT_IDENTITY` is a cross-node constant (written into output rows by `gene/node/base.py`, read by `BiasNode` / `DefaultNode`).
 
 ### AGG — canonical order (6)
 | id | name | combine over the last axis of `z (P, N, K)` | neutral padding | `zero_on_empty` |
