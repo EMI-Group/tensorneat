@@ -180,12 +180,7 @@ __all__ = [
     "assign_step",
     "reserve_carry",
     "reserve_step",
-    "run_steps",
 ]
-
-#: Static spelling of one speciation phase's slot axis: ``True`` runs the step
-#: once per slot as ordinary SSA, ``False`` wraps it in one ``evoxc.scan``.
-UNROLL_STEPS = True
 
 
 @dataclass(frozen=True)
@@ -268,64 +263,6 @@ def _block_min_index(
         axes=1,
     )
     return evoxc.gather(closest, slot, axis=0)
-
-
-def run_steps(
-    step: Callable, carry: tuple, species_size: int, unroll: bool = True
-) -> tuple:
-    """Run one speciation phase's step over the whole static slot axis.
-
-    Args:
-        step (Callable): ``(carry, slot) -> (carry, record)`` -- one iteration of
-            :func:`reserve_step` or :func:`assign_step`.
-        carry (tuple): The phase's initial carry.
-        species_size (int): Static number of species slots ``S``.
-        unroll (bool): ``True`` to run the step once per slot as ordinary SSA;
-            ``False`` to wrap it in one ``evoxc.scan``.  A static Python choice,
-            so one graph contains one spelling.
-
-    Returns:
-        tuple: ``(final_carry, records)`` where ``records`` is the ``(S,)``
-        ``int32`` stack of the per-slot records the code after the phase
-        expects (scan 1: the raw ``closest`` index, scan 2: the raw ``seed``
-        index, both ``I_INF`` on a slot that wrote nothing).
-
-    Notes:
-        ``evoxc.scan`` de-sugars to ``while`` + ``gather``/``scatter``: it peels
-        step ``0`` at the enclosing level and then pays, per remaining
-        iteration, one ``gather`` of the slot index, one ``reshape`` and one
-        ``scatter`` of the step's ``y``, plus the counter ``add``/``less`` pair
-        -- five dispatches, and the ``y`` write is a ``scatter``, which a
-        compiled backend lowers to one workgroup of one thread.  The slot axis
-        is static, so a phase can also be unrolled: ``slot`` is a graph constant
-        per iteration (one ``constant`` op, folded into the kernels that read
-        it), the carry threads as ordinary SSA and the per-slot records are
-        collected in Python and ``concatenate`` d into the same ``(S,)`` stack.
-        That removes the ``while`` region and every one of its scaffolding
-        dispatches without touching the algebra: the step body is the identical
-        traced callable, and the records are the identical values.
-
-        The *gated* phase passes ``unroll=False``: its step body is an
-        ``evoxc.cond`` over the four population field tables, and twenty of
-        those at the top level of the graph fuse into one dispatch with 26
-        operands -- above the ROCm/HIP HAL's 16-binding cap per exported
-        dispatch, so the artifact compiles but fails to load
-        (``INVALID_ARGUMENT ... binding_flags count 26 exceeds maximum of 16``).
-        A region's body keeps each dispatch small, so the lazy path keeps its
-        scan; it is also the cell where a compiled backend has the least to win,
-        because most slots are skipped there.
-
-        ``UNROLL_STEPS`` is the static spelling selector read at trace time, so
-        one graph contains one spelling; it exists so the value-identity oracle
-        can compare the two forms on the numpy interpreter.
-    """
-    if UNROLL_STEPS and unroll:
-        records = []
-        for slot in range(species_size):
-            carry, record = step(carry, enp.full((), slot, dtype=evoxc.int32))
-            records.append(enp.reshape(record, (1,)))
-        return carry, enp.concatenate(records, 0)
-    return evoxc.scan(step, carry, enp.arange(0, species_size, dtype=evoxc.int32))
 
 
 def reserve_carry(pop_size: int, gated: bool) -> tuple:
