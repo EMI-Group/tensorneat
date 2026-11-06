@@ -92,7 +92,7 @@ The numpy interpreter is charged ≈19–20 µs per dispatched op and by each op
 The bounded key allocator costs +10 % / +4–8 % / +12–14 % at pop 100 / 500 / 1000, almost entirely the `(pop_size, key_span + 1)` free-key table built every generation although fewer than 6 % of rows ever need it.
 iree+rocm on this tree (same session, one process per case): ms per generation `xor_p100` 17.42, `xor_p500` 13.24, `xor_p1000` 16.29, `custom_pagie_p500` 16.18, `cartpole_p100` 150.41, with a 7.2–8.0 s `iree-compile` build per static shape and ≈1.9 GiB peak RSS.
 Cost laws on that leg: a generation costs `max(host submission, device)`; a flat graph pays ≈63 µs fixed plus ≈2.2–2.5 µs per dispatch; one `while` iteration costs ≈50 µs because the loop condition is read back to the host; `Tensor.to(cpu)` costs ≈47–60 µs per leaf regardless of size.
-`breed` is genome-bound (the census attributed 67 % of its IR ops to `genome.execute_mutation`, 21 % to `execute_crossover`, 9 % to `update_species`); no committed artifact re-measures that census or the per-kernel tables on this tree — those live in `../../CONTEXT.md` `## Accelerator Status`.
+`breed` is genome-bound (67 % of its IR ops are `genome.execute_mutation`, 21 % `execute_crossover`, 9 % `update_species`); the per-kernel and per-phase tables belong to `../../CONTEXT.md` `## Accelerator Status`, which no committed artifact re-measures on this tree.
 
 ## Search Quality (XOR3d / XOR, measured)
 Config: `DefaultGenome(num_inputs=3 (XOR3d) / 2 (XOR), num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)`, `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)`, `backend="numpy"`, 150 generations; per-seed finals and the oracle comparison live in `../CONTEXT.md` (the authority).
