@@ -10,10 +10,11 @@ then executed once per generation on a switchable backend and device.
 optional dependency; ``backend="iree"`` is the compiled backend that works end
 to end here (``uv sync --extra iree``) and, on the CPU, is still slower per
 generation than the numpy interpreter (the CPU-side record, on IREE 3.13, is
-``benchmarks/BACKENDS.md``); ``backend="xla"`` requires a user-supplied PJRT C
-API plugin ``.so``, named by the ``EVOXC_PJRT_PLUGIN`` environment variable or by
-``compile_options={"plugin_path": "/path/to/plugin.so"}``, and none ships with
-the package; ``tvm`` is untested here.  There is no JAX and no PyTorch
+``benchmarks/BACKENDS.md``); ``backend="xla"`` requires a PJRT C API plugin
+``.so``, named by the ``EVOXC_PJRT_PLUGIN`` environment variable or by
+``compile_options={"plugin_path": "/path/to/plugin.so"}`` -- the ``xla-rocm``
+extra installs the AMD wheel, no CPU plugin is pip-installable, and none ships
+with the package; ``tvm`` is untested here.  There is no JAX and no PyTorch
 anywhere in the library.
 
 ``device=`` is the second axis.  A device kind (``"cpu"``, ``"cuda"``,
@@ -119,28 +120,32 @@ nothing falls back if they do not:
    )
 
 XLA on the same device -- the ``xla`` backend is driven by a PJRT C API plugin
-``.so`` that no package of this project ships, so the plugin is installed into
-the project environment after the sync, because a later ``uv sync`` prunes a
-package it does not track:
+``.so`` that no module of this package ships; the ``xla-rocm`` extra installs
+the AMD one, so the plugin is part of the sync and every later sync keeps it:
 
 .. code-block:: bash
 
-   uv sync --extra iree                      # or your own extras -- this creates the project venv
-   uv pip install --no-deps jax-rocm7-pjrt   # ships jax_plugins/xla_rocm7/xla_rocm_plugin.so
-   export EVOXC_PJRT_PLUGIN=$(uv run python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")/jax_plugins/xla_rocm7/xla_rocm_plugin.so
+   uv sync --extra xla-rocm                  # jax-rocm7-pjrt==0.10.2
+   export EVOXC_PJRT_PLUGIN=$(uv run python -c "import sysconfig,glob,os; print(glob.glob(os.path.join(sysconfig.get_paths()['purelib'],'jax_plugins','*','*.so'))[0])")
 
 .. code-block:: python
 
    pipeline = Pipeline(..., backend="xla", device="rocm")
 
-On an NVIDIA box the plugin package is ``jax-cuda12-pjrt`` and the device kind
-is ``"cuda"``.  The pinned ``evoxc`` (the tag ``uv`` resolves) does not scan
-``site-packages`` for plugins: it resolves the plugin from
-``compile_options["plugin_path"]``, then from ``EVOXC_PJRT_PLUGIN``, then from a
-few well-known library directories -- and its availability probe takes no
-options and reads only that variable, so export it as above rather than passing
-``plugin_path`` alone.  A newer ``evoxc`` discovers an installed
-``jax_plugins/*/*_plugin.so`` by itself.
+``jax-rocm7-pjrt`` is the AMD plugin wheel; on this box it lands at
+``<site-packages>/jax_plugins/xla_rocm7/xla_rocm_plugin.so``, which is the path
+the ``uv run python -c ...`` line above globs for.  On an NVIDIA box the wheel
+is ``jax-cuda12-pjrt`` and the device kind is ``"cuda"``: install it the same
+way by pointing the ``xla-rocm`` entry in ``pyproject.toml``'s
+``[project.optional-dependencies]`` at that wheel and re-running ``uv lock``,
+or one-off with ``uv pip install --no-deps jax-cuda12-pjrt``, which a later
+``uv sync`` prunes because no extra tracks it.  The pinned ``evoxc`` (the tag
+``uv`` resolves) does not scan ``site-packages`` for plugins: it resolves the
+plugin from ``compile_options["plugin_path"]``, then from
+``EVOXC_PJRT_PLUGIN``, then from a few well-known library directories -- and
+its availability probe takes no options and reads only that variable, so
+export it as above rather than passing ``plugin_path`` alone.  A newer ``evoxc``
+discovers an installed ``jax_plugins/*/*_plugin.so`` by itself.
 
 Both compiled paths are bit-identical to the reference interpreter at generation
 1 (integer keys exact, attributes within two float32 ulps).  On this box's AMD
