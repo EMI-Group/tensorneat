@@ -74,7 +74,7 @@ The hop is a `scatter` on a **flat** `(P, N + 1) bool` frontier: `gather(frontie
 The frontier only gains bits and the node count bounds it, so the loop carries `(frontier, growing)` and `growing` alone terminates it: no iteration counter, no hop cap.
 The seed is a one-hot `equal(arange(width), dst_row) & dst_hit` — **an IREE release gate, not a style choice**: a boolean `scatter` as the `while_loop` init SIGSEGVs `iree-compile` (IREE 3.11, llvm-cpu) on the assembled generation graph while the same scatter inside the body and the same kernel standalone both compile, so only `pytest test/backends` catches a regression.
 The final read is one flat gather at `src_row`, `logical_and`-ed with `src_hit`/`dst_hit`, so a self-loop on an existing node answers `True` from the seed alone.
-Cost: **81 traced ops / 2 scatters**, 3.2 / 3.5 / 3.7 ms per call at pop 500 on generation-1/5/10 payloads; a `dot` hop against a dense `(P, N, N)` adjacency is decision-identical but costs +24 ops, 1.30–1.31× numpy wall time and a quadratic buffer, so it is rejected.
+Cost: **81 traced ops / 2 scatters**, 3.2 / 3.5 / 3.7 ms per call at pop 500 on generation-1/5/10 payloads; a `dot` hop against a dense `(P, N, N)` adjacency is decision-identical but slower and allocates a quadratic buffer (`## Rejected levers`).
 
 ### Accelerator formulation (`cycle_accelerator.closes_cycle_accelerator`)
 `cycle_accelerator.kernel_mode(state)` reads `state.kernel_mode` — `"host"` when the entry is absent, `"accelerator"` the second accepted value, anything else a `TensorNEATError` — and `cycle.closes_cycle` is one static host branch on `selected(state)`, so a graph contains exactly one spelling and no traced value drives it.
