@@ -26,7 +26,7 @@ A gene row is **split, never packed**: `*_keys (*shape, key_width) int32` (`I_IN
 - `mutate(state, key, attrs)` → `blocks.mutate_attrs`, `crossover(state, key, attrs1, attrs2)` → `blocks.crossover_attrs` (one `U[0, 1)` block draw, `< 0.5` takes the first parent), and `distance(state, attrs1, attrs2)` → the per-column kernel below; all are batched over the leading axes.
 - `mutate` is the only operator that validates the attribute width (`ConfigError`); `crossover`/`distance` leave a mismatched block to the evoxc op.
 - Host-only: `repr`/`to_dict` (label-driven, `-1` activation renders `"identity"`) and each family's `sympy_func`.
-- Every kernel takes `state` as its first parameter for the protocol and never reads it (`blocks.py` does not even take it).
+- The public kernels (`setup`, `new_random_attrs`, `new_identity_attrs`, `new_zero_attrs`, `mutate`, `crossover`, `distance`) take `state` for the protocol and never read it; `blocks.py` and both families' `prepare` hooks do not take it at all, which is why no `State` entry can steer a gene kernel.
 
 ## Module helpers (trace-time, used by every family)
 `column(tensor, index)` is `_column_view` — one `slice(i, i+1)` view that keeps the width axis — plus one `reshape` that drops it: the shape-preserving read, because a dim-dropping integer index has a VJP that raises `evoxc.ShapeError` in the numpy backend while this form is differentiable through `evoxc.grad`.
