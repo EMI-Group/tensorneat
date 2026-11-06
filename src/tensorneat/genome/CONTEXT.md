@@ -178,7 +178,7 @@ The level sweep's own guard is cheapest as a numpy unit test: build one payload 
 | `./operations/crossover/` | Key-aligned crossover (`base.py` 136, `default.py` 219): parent-1 structure, block attribute inheritance, `align_gene_rows`/`find_homologous`. |
 | `./operations/distance/` | Merge body (`base.py` 1000, `default.py` 524, `digest.py` 953, `layout.py` 748), index-free (363), dense (380), grouped (521, accelerator leg only), `ConstantPool` (`consts.py` 107). |
 | `./window.py` | `by_samples`, `_slot_index`, `_row_offsets`, `_column_index`/`_column_mask`, `_gather_prepared`, `any_slot`, `_iinf`, `fill`, and the seed plan `SeedPad`/`SeedColumns`/`seed_pad`/`seed_values` (475). |
-| `./base.py` | `BaseGenome` (1005): configuration/validation, `initialize`, `transform` (statics, key overrides, payload checks), operator entry points. |
+| `./base.py` | `BaseGenome` (1006): configuration/validation, `initialize`, `transform` (statics, key overrides, payload checks), operator entry points. |
 | `./step.py` | `NodeStepMixin` (679): `_StepStatics`, `_ReadOut`/`_output_readout`, `_sample_count`, `_padding_safe_attrs`, `_hit_conn_attrs`, `_node_step`, `_output_row_mask`/`_output_values`, row predicates. |
 | `./grad.py` | The exact gradient path (582): `build_grad`, `dense_grad_plan`, `dense_forward`, the mask-and-reduce read-out. |
 | `./host.py` | Host-only `BaseGenomeHost` (673): `network_dict`, `repr`, indices, numpy `hash`, `grad_from_payload`. |
