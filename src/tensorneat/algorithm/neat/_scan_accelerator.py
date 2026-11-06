@@ -202,8 +202,10 @@ class ScanOperands:
         one_f32: 0-d ``float32`` ``1.0`` -- one created species.
         threshold: 0-d ``float32`` the compatibility threshold.
         gated (bool): ``True`` when the row is computed lazily behind one
-            ``evoxc.cond`` (``species_size * pop_size <= GATED_ROWS``); scan 1
-            then carries the unassigned counter its predicate reads.
+            ``evoxc.cond`` (``_kernels.gated``: host mode *and*
+            ``species_size * pop_size <= GATED_ROWS`` -- never on an accelerator
+            state, which always takes the dense form); scan 1 then carries the
+            unassigned counter its predicate reads.
         block: ``(S, P) float32`` the dense path's pre-measured scan-1 distance
             table (row ``i`` is slot ``i``'s row), or ``None`` on the gated path,
             where no such table exists.  When it is present scan 1 reduces it

@@ -58,6 +58,7 @@ import evoxc.numpy as enp
 
 from tensorneat.common import State, StatefulBaseClass
 from tensorneat.common.errors import TensorNEATError
+from tensorneat.common.schedule_accelerator import kernel_mode
 from tensorneat.common.tools import rank_elements
 
 from . import _kernels
@@ -484,19 +485,25 @@ class SpeciesController(StatefulBaseClass):
             two fields.
 
         Note:
-            **Below ``_kernels.GATED_ROWS`` both scans compute their distance row
-            lazily, behind one ``evoxc.cond`` per iteration.**  The predicate is
-            the mask that lets the iteration write -- ``live and any-pending`` for
-            scan 1, ``live or create`` for scan 2 -- so a slot that cannot claim a
-            genome (scan 1) or take a member (scan 2) never runs the
-            compatibility kernel.  The skipped branch yields zeros, which the
-            iteration's own write mask discards, so no reader ever consumes a
-            row that was not computed: the substitution is bit-identical.  A
-            sparse table (1-3 live slots of 20 at pop 8/100) would pay for the
-            rows of slots that cannot write, so the lazy path is kept there.
+            **In ``"host"`` kernel mode below ``_kernels.GATED_ROWS`` both scans
+            compute their distance row lazily, behind one ``evoxc.cond`` per
+            iteration.**  The predicate is the mask that lets the iteration write
+            -- ``live and any-pending`` for scan 1, ``live or create`` for scan 2
+            -- so a slot that cannot claim a genome (scan 1) or take a member
+            (scan 2) never runs the compatibility kernel.  The skipped branch
+            yields zeros, which the iteration's own write mask discards, so no
+            reader ever consumes a row that was not computed: the substitution is
+            bit-identical.  A sparse table (1-3 live slots of 20 at pop 8/100)
+            would pay for the rows of slots that cannot write, so the lazy path is
+            kept there.  ``_kernels.gated`` never gates in ``"accelerator"``
+            mode: there each ``cond`` reads its predicate back to the host, while
+            the extra unconditional row is nearly free in the already-launched
+            device sequence, so the accelerator leg always uses the dense form
+            below.
         Note:
-            **Above ``_kernels.GATED_ROWS`` scan 1's whole centre table is
-            measured *before* the scan** (``distance_fn.matrix``, one
+            **Above ``_kernels.GATED_ROWS`` -- and always in ``"accelerator"``
+            kernel mode, whatever the table size -- scan 1's whole centre table
+            is measured *before* the scan** (``distance_fn.matrix``, one
             population-shaped call per centre row -- run inside that method's own
             fixed-length ``scan``, so each centre's kernel transients are scoped
             to one region) and each iteration reads its own row with a
@@ -509,12 +516,15 @@ class SpeciesController(StatefulBaseClass):
             iteration reads and the rows are the same floats (the compatibility
             kernel is row-independent).  Once the
             species table is full every slot is live and nothing is skippable,
-            so a lazy row's ``if`` region costs more than it saves (see
-            ``_kernels.GATED_ROWS``).  The gate is a pure static predicate, so
+            so a lazy row's ``if`` region costs more than it saves, and in
+            ``"accelerator"`` mode the per-slot host round trip costs more than
+            the row it skips (see ``_kernels.GATED_ROWS``).  The gate is a pure
+            static predicate on ``(species_size, pop_size, kernel_mode)``, so
             exactly one of the two paths reaches the graph.  The dense path
             needs the digest-backed callable (``DistanceRows.matrix``) and raises
-            ``TensorNEATError`` for any other callable -- there is no silent
-            fallback to the slower shape.
+            ``TensorNEATError`` for any other callable -- an accelerator-mode
+            state with a matrix-less callable raises instead of silently
+            re-gating, and there is no fallback to the slower shape.
         """
         population = self._population(state, pop)
         values = _kernels.speciate(
@@ -525,7 +535,9 @@ class SpeciesController(StatefulBaseClass):
             self.pop_size,
             self.species_size,
             self.compatibility_threshold,
-            _kernels.gated(self.species_size, self.pop_size),
+            _kernels.gated(
+                self.species_size, self.pop_size, kernel_mode(state)
+            ),
         )
         return state.update(species=SpeciesState(*values))
 

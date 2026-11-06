@@ -544,36 +544,35 @@ def read_population(state: Any, pop: Any = None) -> Any:
 
 
 #: Largest ``species_size * pop_size`` species table that keeps the lazy
-#: per-slot ``evoxc.cond`` distance rows.
-#:
-#: The lazy ``cond`` pays off only while the species table is *sparse*, because a
-#: skipped slot still leaves its ``if`` region (and its carry) in the graph: the
-#: table is sparse only on small populations (1-3 live slots out of 20 at pop
-#: 8/100, 20 of 20 at pop >= 500).  Measured one configuration per fresh process,
-#: ``Pipeline.step`` medians of the gated against the ungated tree: 2.3x at pop
-#: 100, 1.2x at pop 300, parity from pop 200 up, while an *unconditional*
-#: ``cond`` loses 26 % at pop 500 in the nested-``if`` regions alone -- hence the
-#: gate, with the threshold between the pop-300 and pop-500 tables.
-#: ``GATED_ROWS`` is only compared against static Python ints, so the choice is
-#: made at trace time and costs no op.
+#: per-slot ``evoxc.cond`` distance rows (host mode only).
+#: The lazy ``cond`` is a numpy-interpreter op-count optimisation -- it skips
+#: the compatibility kernel on a slot that cannot write -- and pays off only
+#: while the table is *sparse* (1-3 live slots of 20 at pop 8/100, 20 of 20 at
+#: pop >= 500): measured ``Pipeline.step`` medians of the gated against the
+#: ungated tree are 2.3x at pop 100, 1.2x at pop 300, parity from pop 200 up.
+#: On a compiled backend it is backwards -- each ``cond`` reads its predicate
+#: back to the host, while the extra device work is nearly free inside the
+#: already-launched kernel sequence -- so accelerator mode never gates.
 GATED_ROWS = 6000
 
 
-def gated(species_size: int, pop_size: int) -> bool:
+def gated(species_size: int, pop_size: int, mode: str = "host") -> bool:
     """Whether ``speciate`` computes its distance rows lazily behind a ``cond``.
 
     Args:
         species_size (int): Static number of species slots ``S``.
         pop_size (int): Static population size ``P``.
+        mode (str): The trace-time ``kernel_mode`` static (``"host"`` default).
 
     Returns:
-        bool: ``True`` when ``species_size * pop_size <= GATED_ROWS``, i.e. when
-            the species table is sparse enough that skipping dead/finished slots
-            buys more than the nested-``if`` regions cost (see ``GATED_ROWS``).
-        A pure host-side predicate: the caller branches on it with an ordinary
-        Python ``if`` at trace time, never with a traced ``cond``.
+        bool: ``False`` for an accelerator formulation, where the lazy ``cond``
+            costs a host round trip per species slot and the row it skips is one
+            extra unconditional dispatch instead (see ``GATED_ROWS``); else
+            ``species_size * pop_size <= GATED_ROWS`` -- the sparse-table test,
+            a pure host predicate the caller branches on with a Python ``if``
+            at trace time, never with a traced ``cond``.
     """
-    return species_size * pop_size <= GATED_ROWS
+    return not is_accelerator(mode) and species_size * pop_size <= GATED_ROWS
 
 
 def speciate(
@@ -637,12 +636,14 @@ def speciate(
     iteration gathers its own row, while scan 2 measures its selected centre per
     iteration because a creating slot's centre is data-dependent.  That form
     needs a callable with ``matrix`` (:class:`._distance.DistanceRows`) and
-    raises ``TensorNEATError`` for any other, while the gated path still accepts
-    an arbitrary callable.
+    raises ``TensorNEATError`` for any other -- the gated path's arbitrary
+    callable is not a fallback -- so an accelerator state whose callable has no
+    ``matrix`` raises instead of silently re-gating.
 
-    ``gate`` is a static Python ``bool``, so exactly one of the two paths is
-    traced; the distance-centre spelling is a second, independent static choice,
-    and both compute the same rows from the same kernel and centre row.
+    ``gate`` is a static ``bool`` (never set on the accelerator leg) so exactly
+    one path is traced; the distance-centre spelling is a second, independent
+    static choice, and both compute the same rows from the same kernel and
+    centre row.
     """
     centre_fields = (
         species_state.center_node_keys,
@@ -670,14 +671,13 @@ def speciate(
     threshold = const(float(compatibility_threshold))
     skipped_row = enp.zeros((pop_size,), dtype=evoxc.float32)
     # The dense path measures whole centre rows *outside* the scans, so the
-    # callable must expose the by-name table form; raised here rather than
-    # silently falling back to the per-iteration shape this path avoids.
+    # callable must expose the by-name table form -- raised, never re-gated.
     if not gate and not hasattr(distance_fn, "matrix"):
         raise TensorNEATError(
             "speciate: the dense distance table (species_size * pop_size > "
-            f"{GATED_ROWS}) needs a digest-backed distance_fn with a matrix "
-            f"method, got {type(distance_fn).__name__}; only the lazy gated path "
-            "accepts an arbitrary callable"
+            f"{GATED_ROWS}, or accelerator kernel_mode) needs a digest-backed "
+            f"distance_fn with a matrix method, got {type(distance_fn).__name__}; "
+            "only the lazy gated path accepts an arbitrary callable"
         )
 
     def selected_centre(create, seed, slot):
