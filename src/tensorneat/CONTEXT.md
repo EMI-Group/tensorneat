@@ -100,7 +100,8 @@ Per-generation medians on tree `31a31328` (same session, one process per cell, s
 | custom_pagie_p500 | 871.87 ms | 15.75 ms | 55.4× |
 | cartpole_p100 | 253.35 ms | 61.65 ms | 4.11× |
 
-The ROCm leg builds **7.2–8.0 s per static shape** and peaks at **≈1.9 GiB** of RSS; it now beats the numpy interpreter on every measured cell, so `"numpy"` stays the default because it needs no optional dependency and is the portability reference, not because it is the fastest leg.
+Every cell passes the generation-1 cross-check against numpy; at pop 500/1000 and on Pagie the state then drifts from generation 3 (float32 ulps amplified by a discrete species-membership decision on a continuous distance), while `speciate` on one bit-identical payload returns bit-identical species leaves on both backends.
+The ROCm leg builds **7.2–8.4 s per static shape** and peaks at **≈1.9 GiB** of RSS; it beats the numpy interpreter on every measured cell, so `"numpy"` stays the default because it needs no optional dependency and is the portability reference, not because it is the fastest leg.
 `"iree"` on llvm-cpu remains slower per generation than the interpreter (the measured table, protocol and per-gate record are in `benchmarks/BACKENDS.md`); `"xla"` needs a user-supplied PJRT C API plugin (`EVOXC_PJRT_PLUGIN`) and `"tvm"` is untested.
 Executed ops per generation on this tree, counted on the numpy interpreter with a monkeypatched `evoxc.backends.numpy.kernels.dispatch`: `xor_p500` **7 592** (of which the 40 compatibility-distance calls are 3 675, 48 %) and `cartpole_p100` **30 994**.
 Those counts exclude the `output_slot` read-out, which adds one gather plus `O` mask comparisons once per pass and never per level.
