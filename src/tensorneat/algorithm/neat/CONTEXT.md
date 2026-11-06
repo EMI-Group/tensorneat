@@ -333,7 +333,8 @@ No `.at[]`, no `cumsum` on the compute path (prefix sums are triangular `dot`), 
 Shapes are static: `P`, `S`, `max_nodes`, `max_conns` are fixed at build time; a change forces a rebuild by the pipeline.
 Errors: configuration validation raises `common.errors.TensorNEATError` with a named message; trace/shape/backend errors propagate unchanged and are never re-wrapped or silently fallen back.
 State keys touched: `randkey`, `pop_size`, `pop`, `generation`, `species` and the host-only `distance_centre` mode, plus the genome/problem keys documented above — nothing else.
-Files stay near the ~1000-line baseline: `neat.py` (1026) the population cycle, `_kernels.py` (1000) the graph helpers and the two scan call sites, `species.py` (979) the species algebra, `_distance.py` (347) the digest-backed rows, `_keys.py` (325) the bounded key allocator, `_scan_accelerator.py` (239) the accelerator scan formulations, `_validation.py` (165) the host validators and the distance-centre mode.
+Files stay near the ~1000-line baseline: `neat.py` (1026) the population cycle, `_kernels.py` (1002) the graph helpers and the two scan call sites, `species.py` (979) the species algebra, `_scan_accelerator.py` (479) the accelerator spellings, `_distance.py` (455) the digest-backed rows and the grouped table, `_keys.py` (325) the bounded key allocator, `_validation.py` (165) the host validators and the distance-centre mode.
+`_kernels.py` and `neat.py` are the two files at or just past the threshold: `neat.py` is the documented exception named in `../CONTEXT.md`, and `_kernels.py` sits at 1002 with the speciation scans plus their shared primitives, so a further addition there belongs in `_scan_accelerator.py`.
 
 ## Known Risks
 `evoxc.random.randint` needs a symbolic `high` that stays ≥ 1 at runtime — guaranteed by `max(survive_size, 1)`, which also removes the legacy NaN case.
