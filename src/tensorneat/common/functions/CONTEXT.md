@@ -88,7 +88,7 @@ Out-of-range ids fall back to identity / `0.0` instead of clamping to the last o
 ## Constraints
 - No `jax`, `torch`, `numpy.random` anywhere in this package; graph code uses `evoxc` ops only, host code may use `numpy` / `sympy`.
 - Nothing here imports `genome`, `algorithm`, `problem`, `pipeline`, `benchmarks` or `test`; the only intra-package dependency is `..tools.flat_gather` (used by `maxabs`).
-- Append only to `ACT_FUNCS` / `AGG_FUNCS` and their sympy tuples, and never change a kernel's arithmetic — the formulas are compared bit for bit against the frozen legacy library, so `evoxc.sigmoid`-style fused ops are off limits.
+- Never change a kernel's arithmetic or reorder the tuples — both are compared bit for bit against the frozen legacy library, so `evoxc.sigmoid`-style fused ops are off limits.
 - Never use the builtin that `sum` / `max` / `min` / `abs` shadow inside `agg.py` / `act.py`; kernel names must equal the registry names.
 - Errors: broken tables raise `ValueError` at import time (fail fast); unknown option names/ids raise `ValueError` / `IndexError`; nothing is swallowed.
 
