@@ -618,6 +618,14 @@ wheels = [
 ]
 
 [[package]]
+name = "jax-rocm7-pjrt"
+version = "0.10.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4b/7b/04673b3e351fe02c9380b05740f185a10903b9d9fe222df314391c79e71c/jax_rocm7_pjrt-0.10.2-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:2e61678a00bfb72a616c555f1acabccc7cd8e64bb36b90b09d6f991c426b24f0", size = 154379457, upload-time = "2026-06-24T23:29:36.138Z" },
+]
+
+[[package]]
 name = "jaxlib"
 version = "0.10.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1814,6 +1822,9 @@ test = [
 tvm = [
     { name = "evoxc", extra = ["tvm"] },
 ]
+xla-rocm = [
+    { name = "jax-rocm7-pjrt" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1830,6 +1841,7 @@ requires-dist = [
     { name = "iree-base-runtime", marker = "extra == 'compilers'", specifier = ">=3.13,<3.14" },
     { name = "iree-base-runtime", marker = "extra == 'iree'", specifier = ">=3.13,<3.14" },
     { name = "jax", marker = "extra == 'bench'", specifier = ">=0.4.28" },
+    { name = "jax-rocm7-pjrt", marker = "extra == 'xla-rocm'", specifier = "==0.10.2" },
     { name = "matplotlib", specifier = ">=3.9.0" },
     { name = "networkx", specifier = ">=3.3" },
     { name = "numpy", specifier = ">=1.24" },
@@ -1839,7 +1851,7 @@ requires-dist = [
     { name = "sphinx-rtd-theme", marker = "extra == 'docs'" },
     { name = "sympy", specifier = ">=1.12.1" },
 ]
-provides-extras = ["iree", "tvm", "compilers", "bench", "test", "docs"]
+provides-extras = ["iree", "tvm", "xla-rocm", "compilers", "bench", "test", "docs"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0" }]

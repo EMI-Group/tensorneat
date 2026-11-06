@@ -51,6 +51,13 @@ dependencies = [
 # Compiler and runtime must be the same release.
 iree = ["iree-base-compiler>=3.13,<3.14", "iree-base-runtime>=3.13,<3.14"]
 tvm = ["evoxc[tvm]"]
+# The `xla` backend drives a PJRT C API plugin .so over ctypes (no `jax`
+# import). For an AMD ROCm device the JAX ROCm PJRT plugin wheel provides one;
+# evoxc discovers an installed `jax_plugins/*/*_plugin.so` automatically, while
+# the pinned v0.1.1 needs `EVOXC_PJRT_PLUGIN` or `compile_options["plugin_path"]`.
+# NVIDIA users install `jax-cuda12-pjrt` instead; no CPU PJRT plugin is
+# pip-installable, so the CPU leg stays numpy / iree-llvm-cpu.
+xla-rocm = ["jax-rocm7-pjrt==0.10.2"]
 compilers = [
     "iree-base-compiler>=3.13,<3.14",
     "iree-base-runtime>=3.13,<3.14",
