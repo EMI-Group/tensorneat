@@ -27,14 +27,20 @@ test/
   support/               shared host-side test infrastructure (runner, payloads, numpy oracles, lazy imports)
   unit/                  numpy-backend kernel and invariant tests, mirrors src/tensorneat/
     conftest.py          session-wide optional-framework leak guard
-    common/  genome/  algorithm/  problem/  benchmarks/   (algorithm = the NEAT generation algebra plus the `test_hyperneat*.py` behavioural suites and `test_substrate.py`; problem = func_fit, cartpole, pendulum, mountaincar)
+    ir_ops.py            the one traced-IR walker (`count_ops`/`count_graph_ops`/`op_names`) every op-counting test shares
+    common/  genome/  algorithm/  problem/  benchmarks/   (algorithm = the NEAT generation algebra, the accelerator distance/speciation equivalence suites and the `test_hyperneat*.py` behavioural suites; genome = payload/forward/mutation/distance plus the accelerator transform/cycle/homologue/forward suites; problem = func_fit, cartpole, pendulum, mountaincar)
     test_host_payload.py the host-side `_one_individual` normalisation `Pipeline.show` funnels through
+    test_pipeline_device.py the `device=` placement layer: host setup, one-time placement, host view, D2H step
+    test_ir_ops.py       the shared IR walker's own truth table (nested regions, terminator accounting)
     test_version.py      `tensorneat.__version__` against the installed distribution metadata
   parity/                same kernels vs the frozen legacy JAX library, marker `parity`
-  integration/           whole-Pipeline runs, marker `slow`
-  backends/              compiled-backend runs (marker `requires_iree`), skips without `evoxc[iree]`, plus the guard's own truth table
-    conftest.py          the request guard: `-m requires_iree` fails instead of skipping when the extra is absent
-    test_conftest.py     which `-m` expressions imply `requires_iree`, and the git-pinned install step (no extra needed)
+  integration/           whole-Pipeline runs, marker `slow` (including the `host_payload=False` and executable-cache contracts)
+  backends/              compiled-backend runs (markers `requires_iree`/`requires_rocm`), skip without the extra or a HIP device, plus the guard's own truth table
+    conftest.py          the request guard: `-m requires_iree`/`-m requires_rocm` fail instead of skipping when the extra is absent
+    _tiny_xor.py         the shared tiny-XOR harness (configuration, driving, planted-payload assertions) both backends use
+    test_iree_pipeline.py  llvm-cpu execution, same-seed equality vs numpy, no-silent-fallback
+    test_rocm_pipeline.py  the HIP/ROCm device leg, skipped with a named reason when /dev/kfd or the driver/device is missing
+    test_conftest.py     which `-m` expressions imply either marker, and the IREE-3.13 install step (no extra needed)
 ```
 Every directory that holds test modules carries an `__init__.py`: pytest's default prepend import mode names a module by its basename, so un-namespaced directories collide (`test/unit/genome/test_forward.py` vs `test/parity/test_forward.py`) and abort the session with an import-mismatch error.
 Current counts: `unit/common` 246, `unit/genome` 154, `unit/algorithm` 373 (373 passed, no xfail), `unit/problem` 367, `unit/benchmarks` 82, `unit/test_version.py` 2, `unit/test_host_payload.py` 12, `parity` 60 (24 collected / 22 passing without jax), `integration` 43, `backends` 13 (3 compiled-backend cases + 10 guard cases), `support/test_lazy.py` 9, import-hygiene gate 4, surface gate 5 — 1370 collected with every extra installed, 1370 passing at this tree.
