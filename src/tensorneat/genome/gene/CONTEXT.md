@@ -13,7 +13,8 @@ Nothing here imports `jax`/`torch`, and no hook on the compute path runs eager N
 ## Gene payload (binding)
 A gene row is **split, never packed**: `*_keys (*shape, key_width) int32` (`I_INF` on an absent row) and `*_attrs (*shape, attr_width) float32` (NaN on an absent row).
 `evoxc` has no bitcast, so a mixed-dtype row is impossible: every operator twiddles int keys and float attrs separately.
-`from_attrs` is the assembly helper (its consumers are `algorithm/hyperneat` and the test fixtures) and it **narrows rather than validates dtypes** (keys cast to `int32`, attrs to `float32`); a wrong key width, a wrong attribute shape or a key column of the wrong shape raises `ConfigError`.
+`from_attrs` is the public split-payload assembly helper and has **no caller** in `src/`, `test/`, `examples/`, `benchmarks/` or `docs/` — `algorithm/hyperneat` builds its substrate key tables itself (`hyperneat.py::_conn_keys`, `enp.broadcast_to` for the node keys) — so only docstrings name it as a consumer.
+It **narrows rather than validates dtypes** (keys cast to `int32`, attrs to `float32`); a wrong key width, a wrong attribute shape or a key column of the wrong shape raises `ConfigError`.
 
 ## The attr table (`base.py`)
 `BaseGene(StatefulBaseClass)` class data: `fixed_attrs: tuple[str, ...]` (int32 key columns), `attr_specs: tuple[GeneAttr, ...]` (float32 attribute columns in row order), `labels: dict[str, str]` (short render names; `repr`/`to_dict` fall back to the declared name).
