@@ -1,7 +1,7 @@
 tensorneat.genome.operations
 ============================
 
-Genome operators: crossover, distance and mutation.
+Genome operators: crossover, distance and mutation, plus the homologue alignment's two spellings — the shipped two-sort rank merge and the index-free equality table.
 
 .. toctree::
    :maxdepth: 4
@@ -10,3 +10,4 @@ Genome operators: crossover, distance and mutation.
    tensorneat.genome.operations.distance
    tensorneat.genome.operations.mutation
    tensorneat.genome.operations.alignment
+   tensorneat.genome.operations.alignment_accelerator

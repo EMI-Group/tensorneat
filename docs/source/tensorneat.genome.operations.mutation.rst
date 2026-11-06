@@ -1,7 +1,7 @@
 tensorneat.genome.operations.mutation
 =====================================
 
-Mutation: the batch-first mutation contract and the four-stage structural write plan, the default and recurrent operators, the cycle predicate and in-graph row toolkit they build on, and a diagnostic in-degree audit.
+Mutation: the batch-first mutation contract and the four-stage structural write plan, the default and recurrent operators, the cycle predicate and its scatter-free accelerator spelling, the in-graph row toolkit they build on, and a diagnostic in-degree audit.
 
 .. toctree::
    :maxdepth: 4
@@ -9,6 +9,7 @@ Mutation: the batch-first mutation contract and the four-stage structural write 
    tensorneat.genome.operations.mutation.arrays
    tensorneat.genome.operations.mutation.base
    tensorneat.genome.operations.mutation.cycle
+   tensorneat.genome.operations.mutation.cycle_accelerator
    tensorneat.genome.operations.mutation.default
    tensorneat.genome.operations.mutation.degree
    tensorneat.genome.operations.mutation.plan
