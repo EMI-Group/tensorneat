@@ -42,7 +42,7 @@ Every accelerator formulation is bit-identical to the host route, generation for
 That pair's signature is **uniform** across algorithms (`pop=None`, `samples` = the static tiling factor of the `P * samples` queried rows), so the pipeline needs no arity adapter, unlike `forward`.
 `NEAT.prepare_forward` takes the payload (`None` = `state.pop`); `HyperNEAT.prepare_forward` ignores `pop` (its payload is the substrate schedule inside `transformed`); both forward `samples` into `genome.prepare_pass` / `hyper_genome.prepare_pass`, because the substrate schedule sits at `P` rows and a tiled query is the substrate genome's own sample axis.
 `host_payload._NetworkActFn` is the pair's only consumer and the problem layer queries through `act_fn.prepare(batch_rows)`: an RL rollout asks once per generation (`problem/rl/_common.py`), the tiled func-fit evaluate once per chunk group (`host_payload._prepared_query`), so the prelude is paid once per batch shape rather than once per query.
-`tell(state, fitness) -> State` consumes a `(P,)` maximised fitness array and returns the next-generation state; `show_details(state, fitness) -> None` is the only other host-side method (converts with `common.tools.to_numpy`, prints — evoxc has no `io_callback`).
+`tell(state, fitness) -> State` consumes a `(P,)` maximised fitness array and returns the next-generation state; `show_details(state, fitness) -> None` is the only other host-side method (converts with `common.tools.to_numpy` and prints — evoxc has no `io_callback`).
 `num_inputs`, `num_outputs`, `pop_size` are static Python ints, the first two asserted against the problem's declared shapes; `NEAT.transform`/`NEAT.forward` take an optional trailing `pop=`, which `HyperNEAT` uses for its `(P·Q)` CPPN query batch.
 
 ## State Layout
@@ -128,19 +128,14 @@ Distance work is `2 · species_size · pop_size` pairs dispatched as 1 `prepare_
 A kernel's live set is charged once per enclosing block: the interpreter keeps every SSA result of a block until it returns but pops a nested region's environment per iteration, so `matrix` measures inside a fixed-length scan — one centre's transients rather than `species_size` of them; measure peak RSS and build next to wall time for every hoist, and put a kernel inside a static loop region rather than duplicating it at the top level.
 Grouping is the accelerator leg's route only: on the interpreter it cuts dispatches (7 592 → 6 589 at `k = 2`) but the 2× wider `(2 · pop_size, 2 · max_conns)` intermediates make the cell bimodally slower, so `grouped.group_size` answers `k = 1` for every non-accelerator state (capped at `ACCELERATOR_GROUP = 2`, `GROUP_ROW_BUDGET // pop_size` and the slot count).
 The bounded structural-key allocator costs ~+4 / ~+8 / ~+33 ms per generation (+10 % / +5 % / +12 %) at pop 100 / 500 / 1000, almost entirely the `(pop_size, key_span + 1)` free-key table its collision fallback builds although fewer than 6 % of rows need it.
-Already applied, so do not re-derive: one rank-raising `evoxc.broadcast` per field instead of a 4-op centre tiling, centre-row writes hoisted out of the `reserve` body, a rank-0 scan `y`, one `scalar_f32` spelling with a static fast path, `pair_parents`' hoisted constants with `trusted=True` `flat_gather`s, `block_layout`'s `sum(E[:, None] <= p, axis=0) - 1`, and the `argmin_with_mask`/`fetch_first` sentinels hoisted out of both scan bodies.
-The 51 / 109 / 157 ms figures at pop 100 / 500 / 1000 are the *declared* contract in `benchmarks/RESULTS.md`, not a measurement (its measured frozen-JAX side is 38.99 / 295.33 / 807.30 ms).
 
 ## Known Issues
-`speciate` is per-pair bound above pop ≈300: `DefaultDistance`'s `find_homologous` sorts `2·M` key rows per pair, so the same population genome is re-sorted once per centre — a genome-side sorted-row reuse is the next real lever and lies outside this subtree.
-`genome/base.py::_iinf` materialises a full-size `I_INF` constant, so tracing warns `Embedding a tensor of … bytes as a graph constant` from pop 500 upward (genome-owned).
 `test/unit/algorithm/test_spawn.py` encodes `loc(p) = #{i : spawn[i] > 0 and E[i] <= p} - 1`, which disagrees with `block_layout` for a live zero-spawn species in the middle of a table — the oracle needs the "last qualifying block" form (cross-node; `test/` is not writable here).
 `next_species_key` must stay strictly greater than every live key (`setup` seeds it at `1.0`, slot 0 uses `0.0`); a colliding counter silently merges two species' `member_count`.
 The XOR3d pop-100 cell is the algorithm's tightest and no algorithm-side knob gates it (`max_in_degree = 4` refuses only 0.00–0.04 of fired add-conn gates, `max_depth = 16` sits above an observed maximum node level of 6–9; species kill, spawn starvation, elite displacement and the output row are non-binding).
 Crossover is live only for species with more than `1 / survival_threshold` members (200 at the example 0.01): below that the survivor prefix is one genome and every non-elite child is a mutated copy of it.
 `SpeciesController._block_layout`/`_prefix_sum_exclusive` are maintained **test seams** (only caller `test/unit/algorithm/conftest.py::raw_kernel`); production goes through `_kernels.block_layout`/`prefix_sum_exclusive`, so a behavioural change belongs in `_kernels.py`.
 `evoxc.scan` peels step 0 and traces its body again, so each scan body is traced twice, and `DistanceRows.__call__`'s batch-`pop_size` branch, its batch-width rejection, `_check_population`'s payload rejection and the idle centre mode's tiling branch are unexercised inside the package.
-`NEAT.__init__`'s `self.species_controller = self.species` is a deliberate public legacy-compat alias with no in-repo reader; `show_details` caches one counting executable per payload shape and a failure is printed and recorded once per hook label in `Pipeline.detail_failures`, so a broken printer never fails a run.
 
 ## Known Risks (evoxc)
 `evoxc.scan` de-sugars to `while` + gather/scatter, so a wide carry trips iree's affinity analysis on CUDA/ROCm; the numpy backend is the reference and packed carries are the mitigation.
@@ -160,10 +155,8 @@ The others sit at or inside the baseline with no room left: `neat/_kernels.py` e
 ## Test Strategy
 Tests live in the sibling `./../../test` tree (read-only from here): `test/unit/algorithm/` for the spawn/selection/stagnation algebra on fixed keys and the speciation scans, `test/parity/algorithm/` against `benchmarks/legacy_jax` (the divergences above are the only allowed mismatches), `test/integration/` for a full XOR run reaching its target with a reproducible seed.
 Every kernel must be deterministic given `(seed, state)`: no dict ordering, no host RNG, no float-to-int conversion without an explicit mask.
-End-to-end verification is spread over `test/release_gate_no_jax.py` (resolves the two HyperNEAT dotted names, evolves `NEAT + DefaultGenome + XOR` for two generations), `test/unit/algorithm/`'s behavioural HyperNEAT suites and `test/integration/`.
 The accelerator spellings have no committed test — their bit-identity to the host route is a hand run, and a `test/backends` cell building a gated pop-100 graph in that mode is the missing regression guard.
 The speciate rewrite is verified by whole-run bit-identity (`fitness_history`, the four payload arrays, all ten `SpeciesState` leaves, `randkey`, `generation`, compared with `tobytes()` equality because padding NaNs defeat `np.array_equal`) at pop 100, 500 and 1000 — 144 arrays, zero mismatches.
-Kernels are additionally built through `evoxc.build` on numpy against hand-built tables (full assignment, `sum(spawn) == pop_size` in both modes, survivor-prefix/elite pinning, stagnation kills, bit-identical repeats) at `species_size * pop_size <= 6 000`, so the dense `matrix` path never compiles in the suite.
 
 ## Routing Table
 | Path | Responsibility |
