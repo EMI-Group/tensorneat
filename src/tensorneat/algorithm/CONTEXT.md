@@ -111,8 +111,7 @@ The compatibility distance is not the gate (a fresh random population spans 0.22
 `genome`: statics `num_inputs`, `num_outputs`, `max_nodes`, `max_conns`, `key_span`, `node_gene.length`, `conn_gene.length`, `conn_gene.uses_historical_marker`, plus `node_exists`, `conn_exists`, `max_node_key` and `max_conn_marker` (one maximum **per individual**, `(P,) int32`) — the algorithm never inspects the padding encoding.
 `genome`: `NEAT.genome` is read directly by `HyperNEAT._query_substrate` on a `(P·Q)` batch, so `genome.forward` must not assert `batch == pop_size` and the decode takes `P` from the payload's axis 0.
 The gene payload encoding stays genome-owned: evoxc has **no bitcast**, so how a float attribute travels inside an integer slot is not decidable here; `./hyperneat` synthesises its own substrate payload from the gene specs, and `conn_gene.forward` receives a `ConnOperands` bundle whose columns genes read through `column_of`.
-`common`: `State`, `errors.TensorNEATError`/`ConfigError`, `StatefulBaseClass`, `functions.{ACT, AGG, apply_activation, apply_aggregation}` (`AGG` members take `(z, mask)`), `schedule_accelerator.{kernel_mode, is_accelerator}`, `tools.{rank_elements, fetch_first, argmin_with_mask, flat_gather, to_numpy}`.
-`pipeline`: creates `randkey`, calls `setup` on the host, derives/registers the three formulation statics, drives `ask → transform → prepare_forward`/`forward_prepared → tell`, and calls `show_details` on host-readable values.
+`common`: `State`, `errors`, `StatefulBaseClass`, `functions.{ACT, AGG}` (`AGG` members take `(z, mask)`), `schedule_accelerator.{kernel_mode, is_accelerator}`, `tools.{rank_elements, fetch_first, argmin_with_mask, flat_gather, to_numpy}`.
 `problem`: `evaluate(state, key, act_fn, transformed)` where `key` is one rank-0 evoxc key and `act_fn` the prepared-pass pair; the problem owns the dataset tiling into the population axis.
 
 ## Measured Cost
