@@ -86,7 +86,7 @@ The shipped pair `(0.1, 0.1, 0.4, 0.05)` raises P(any structural change) from 0.
 - An `int32` tensor plus a Python literal promotes to `int64`, so index math stays in int32 tensors and every sentinel/level index is a **rank-0** constant (`window._iinf`, `enp.full((), ...)`); graph-op axes are non-negative static integers (`axis=len(shape)`, never `axis=-1`).
 - Errors: configuration violations raise `../common/errors.TensorNEATError` (and `ConfigError`/`ShapeBoundError`); tensor/backend errors propagate unchanged.
 - One window-reduce node step lives in `step.py::NodeStepMixin`, parameterized by the update mask, never duplicated between `default.py` and `recurrent.py`.
-- Files stay under ~1000 lines and each file is one job: `base.py` (1005) is the node's only file above that guideline, `operations/distance/base.py` (1000) sits exactly on it, `grad.py` is 582, and the rest run down from `operations/distance/digest.py` (953) to `gene/node/origin.py` (61).
+- Files stay under ~1000 lines and each file is one job: `base.py` (1006) is the node's only file above that guideline, `operations/distance/base.py` (1000) sits exactly on it, `grad.py` is 582, and the rest run down from `operations/distance/digest.py` (953) to `gene/node/origin.py` (61).
 ## Measured cost (this tree)
 Per-generation wall clock on the benchmark geometries (`../../benchmarks/cases.py`; XOR/XOR3d at pop 100/500/1000, Pagie at pop 500, CartPole at pop 100), measured on tree `31a31328`, one process per cell, warmup 2 + 5 timed generations, seed 42, `benchmarks/gpu_measure.py run`:
 
