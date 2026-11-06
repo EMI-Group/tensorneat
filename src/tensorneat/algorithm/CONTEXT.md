@@ -31,7 +31,7 @@ The setup-time initialisation graph gets the same treatment through `NEAT._stati
 Both passes read the **state**, so updating any of the three entries forces exactly one rebuild and leaves the other signature entries untouched.
 They are part of `Pipeline._shape_signature` (`host_payload._formulation_signature`, defaulted to `"tiled"`/`"merge"`/`"host"` for a state no `setup` produced) next to the payload geometry, the substrate statics and the tiled-evaluate chunk budget; `show_config()["pipeline"]` renders all three.
 A missing entry is never an error — the kernels default to `"tiled"`/`"merge"`/`"host"` (`_validation.distance_centre_mode`, `common.schedule_accelerator.kernel_mode`, the genome's `distance_formulation` reader), which is what a bare `State()` and every committed test get.
-`distance_centre` selects the width of every speciation centre payload here; `kernel_mode` selects the speciation body set (`_kernels.speciate` → `_scan_accelerator`), the distance grouping (`grouped.group_size`) and the schedule's scatter-free formulation; `distance_formulation` selects the genome's homologue resolution and is read inside `genome/operations/distance`, not here.
+`distance_centre` sets the width of every speciation centre payload here; `kernel_mode` selects the speciation body set (`_kernels.speciate` → `_scan_accelerator`), the distance grouping (`grouped.group_size`) and the schedule's scatter-free formulation; `distance_formulation` is read inside `genome/operations/distance`, not here.
 Every accelerator formulation is bit-identical to the host route, generation for generation; no committed test selects the statics, so this subtree's evidence is hand-run verification.
 
 ## BaseAlgorithm Protocol (`base.py`)
