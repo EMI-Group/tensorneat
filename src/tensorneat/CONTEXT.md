@@ -90,10 +90,10 @@ Exactly one `evoxc.random.split` happens at the pipeline boundary per generation
 The cost laws of this tree, measured in one session (2026-11-06) on one box: the numpy reference interpreter charges **≈19–20 µs per dispatched op** (op count is the lever at population-sized tensors, element volume once a problem tiles the population); on `iree`+`rocm` a generation costs **`max(host submission, device)`**, a flat graph pays **≈63 µs fixed + ≈2.2–2.5 µs per dispatch**, **one `while` iteration costs ≈157 µs when its predicate is device data** (a fresh 1-byte pinned `hipHostMalloc`/`hipHostFree` pair, a D2H copy and event churn) **against ≈57 µs when its trip count is provably static** (a counter against a constant, no early-exit flag), and **`Tensor.to(cpu)` costs a fixed ≈47–60 µs per leaf** regardless of its size.
 The box drifts ±30 % between sessions, so a same-session pair is the load-bearing number, never the absolute milliseconds.
 
-Per-generation medians on this tree (same session, one process per cell):
+Per-generation medians on tree `31a31328` (same session, one process per cell, seed 42, warmup 2 + 5 timed generations):
 
-| case | numpy | `backend="iree"`, `device="rocm"` |
-| --- | --- | --- |
+| case | numpy | `backend="iree"`, `device="rocm"` | speed-up |
+| --- | --- | --- | --- |
 | xor_p100 | 33.22 ms | 10.48 ms | 3.17× |
 | xor_p500 | 113.97 ms | 12.65 ms | 9.01× |
 | xor_p1000 | 168.11 ms | 15.60 ms | 10.77× |
