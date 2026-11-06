@@ -98,7 +98,7 @@ If a substrate ever needs a table over ~1 MiB, stop in-graph and escalate: the c
 ## Routing Table
 | Path | Responsibility |
 | --- | --- |
-| `./hyperneat.py` | `SubstrateSchedule`, `HyperNEAT` (decode algebra + protocol delegation) and the `_validate`/`_static_bounds`/`_make_hyper_genome`/`_genome_extra_kwargs`/`_graph_constant`/`_query_coors`/`_expand_schedule`/`_expand_leaf`/`_query_substrate`/`_weights_from_query`/`_assemble_substrate`/`_attr_columns`/`_conn_keys` helpers. |
+| `./hyperneat.py` | `SubstrateSchedule`, `HyperNEAT` (decode algebra + protocol delegation) and the `_validate`/`_static_bounds`/`_make_hyper_genome`/`_genome_extra_kwargs`/`_graph_constant`/`_query_coors`/`_expand_schedule`/`_expand_leaf`/`_query_substrate`/`_weights_from_query`/`_assemble_substrate` helpers. |
 | `./genes.py` | `HyperNEATNode` (fixed single-option aggregation/activation columns, identity `combine`) and `HyperNEATConn` (one multiply by the decoded weight via `column_of`), plus their host-only helpers. |
 | `./hyperneat_feedforward.py` | `HyperNEATFeedForward`: the feedforward variant delta only (`_genome_cls`, `_required_connection_type`, `_genome_extra_kwargs`, `__init__` signature). |
 | `./substrate` | Host-only substrate geometry (`BaseSubstrate`, `DefaultSubstrate`, `FullSubstrate`, `MLPSubstrate`): coordinate → node/connection analysis, `connection_type` contract, `query_coors`/`conn_index` tables, shared geometry helpers. |
