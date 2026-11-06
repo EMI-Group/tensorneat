@@ -20,7 +20,7 @@ Two usable implementations: `FullSubstrate` (recurrent full mesh) and `MLPSubstr
 `validate() -> None` — abstract on the base; `DefaultSubstrate` implements it as the public re-check of the storage invariants, so constructors run it and user subclasses may re-run it after replacing topology fields.
 `__repr__() -> str` — implemented once on the base: one-line host-side summary (class name, `connection_type`, the four counts); never dumps the arrays.
 `__repr__` reads the counts through the properties, so it works for every concrete substrate and raises `NotImplementedError` only on a bare `BaseSubstrate`, which has no counts to report.
-**No weight column exists anywhere in this node** — weights arrive later from the CPPN and are packed by the genome's gene payload builder, so this layer stays blind to gene layout.
+**No weight column exists anywhere in this node** — weights arrive later from the CPPN and `../hyperneat.py::_assemble_substrate` packs them into the substrate payload, so this layer stays blind to gene layout.
 `weight_threshold` and `max_weight` are `HyperNEAT` constructor knobs applied to the raw CPPN output in `../hyperneat.py::_weights_from_query` (a strict dead zone, then an unclipped `max_weight / (1 - weight_threshold)` scale); no substrate option reads them, and `activate_time` is likewise an executor knob, not a geometry knob.
 `__init__.py` re-exports `BaseSubstrate`, `DefaultSubstrate`, `FullSubstrate`, `MLPSubstrate` plus the shared geometry helpers `as_coor_array`, `cartesian_product`, `check_same_coordinate_dim`, `layer_coors`, `node_key_blocks`.
 
