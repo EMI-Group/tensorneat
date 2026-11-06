@@ -155,7 +155,6 @@ The **capacity gate** is a soak: `Pipeline.step` on `OriginNode`/`OriginConn`, p
 **Coverage gaps.** The gene value stage (`gene/blocks.py::mutate_attrs`/`init_attrs`/`crossover_attrs`) has no independent oracle (its distributions and per-column draw order are pinned only payload-level by `test_mutation.py`), `plan.apply`'s write-slot sharing is pinned only end-to-end, and the accelerator cycle formulation has no committed test — its gate is the ad-hoc identity matrix above plus `test/backends`.
 **StableHLO portability** (`evoxc.backends.stablehlo.export`, with every payload leaf passed as a `TensorSpec` and the rank-0 key built inside the trace): the four-stage mutation graph exports at **207 699 bytes / 2 143 op uses over 29 distinct ops** (12 `scatter`s and one `while` among them), passing the gate — no deferred op, no unsigned element type, every `dimension =` attribute non-negative.
 Only `pytest test/backends` proves the assembled generation graph, since per-kernel compilation does not.
-The population-scaled seeds stay one element plus `broadcast_to` (`window.fill`) rather than a materialised `(pop_size, …)` fill, and the four `EditContext` rebuilds are what re-materialise the population-scaled index blocks.
 
 ## Routing Table
 | Path | Responsibility |
