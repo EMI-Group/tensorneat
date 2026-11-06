@@ -84,16 +84,15 @@ At pipeline level the rollout is only 6–18 % of a CartPole evaluate share and 
 
 ## Constraints
 - Compute path uses only `evoxc.numpy as enp` plus top-level `evoxc.{isnan, select, tile, floor, from_numpy, constant}`; there is no eager mode, so never call `np.*` on a traced value.
-- `enp` gaps to remember: no `isnan`/`isfinite` (`evoxc.isnan`), no `tile`/`take`/`take_along_axis`/`einsum`/`floor`/`remainder` (tiling is `evoxc.tile`, wrapping is `evoxc.floor`, the rest compose from `broadcast_to`, `reshape`, `split`, `concatenate`, `where`, `select`).
+- `enp` gaps to remember: no `isnan`/`isfinite`/`tile`/`take`/`take_along_axis`/`einsum`/`floor`/`remainder` (tiling is `evoxc.tile`, wrapping `evoxc.floor`, the rest compose from `broadcast_to`, `reshape`, `split`, `concatenate`, `where`, `select`).
 - Never wrap an angle with `evoxc.remainder`: it is floor-mod on numpy but `fmod` on stablehlo/iree, which silently made iree Pendulum returns 2.36× wrong while numpy looked perfect; `x - two_pi*floor((x + pi)/two_pi)` is bit-identical on both.
 - Rank hygiene whenever a `(B, 1)` action meets a `(B,)` accumulator: reshape the squared action and the goal mask to rank 1 (numpy broadcasting would silently build a `(B, B)` total), and broadcast `(B,)` masks with `enp.expand_dims` before `enp.where`.
 - `MountainCarContinuous`'s terminal reward must stay deferred behind the pre-step `alive` mask, otherwise the frozen post-goal state re-awards the `100` bonus every remaining timestep.
 - `enp.clip` is `minimum(maximum(...))` and propagates NaN, so a NaN continuous action survives the clip: never add a fallback that would fold the poison away, and never "sanitise" a clipped action.
 - `enp.zeros/ones/full/empty` are **graph** constants that materialise their whole array (the concrete creators of the same name live at top level `evoxc.*`); create them inside the traced function, never at module scope, and never with a shape that scales with the population or the horizon.
-- Scalar float literals become f64 constants on the stablehlo/iree path, so every arithmetic constant in a kernel is built with `enp.full((), v)` to stay float32 and keep numpy/iree numerically aligned; each environment bundles them once per rollout, outside its loop.
+- Scalar float literals become f64 constants on the stablehlo/iree path, so every arithmetic constant in a kernel is built with `enp.full((), v)` to stay float32; each environment bundles them once per rollout, outside its loop.
 - Static-shape hygiene for compiler backends: non-negative axes in `concatenate`/`split` (`axis=1`, not `axis=-1`) and loop outputs kept rank-1 — a rank-3 stacked output needs a rank-3 `scatter` that the v1 stablehlo exporter rejects.
-- No `@evoxc.defn` may call another `@evoxc.defn`, and a Python callable is not a static value: `evaluate`/`show` stay plain helpers and `act_fn` reaches them by closure.
-- `show`'s `act_fn` must predict over **traced** tensors (its schedule is rebuilt in the same trace); `Pipeline._constant_act_fn` satisfies that, a host-bound `functools.partial(algorithm.forward, ...)` raises `evoxc.TraceError`.
+- `show`'s `act_fn` must predict over **traced** tensors (its schedule is rebuilt in the same trace): `Pipeline._constant_act_fn` satisfies that, a host-bound `functools.partial(algorithm.forward, ...)` raises `evoxc.TraceError`.
 - No Python control flow over traced values: horizon, dataset size and population are static config, and the only loops here are the three RL `while_loop`s, each with a static trip count (`step < horizon`).
 - Errors: constructor/config validation raises `tensorneat.common.errors.TensorNEATError`; shape/dtype/backend errors from evoxc are never caught or re-wrapped.
 - Files ≤ ~1000 lines; the tiling + reduction lives once in `func_fit/func_fit.py`, each RL environment is one self-contained file, and the genuinely generic RL host helpers live once in `rl/_common.py`.
