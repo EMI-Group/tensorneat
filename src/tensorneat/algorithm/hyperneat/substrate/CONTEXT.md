@@ -14,7 +14,7 @@ Two usable implementations: `FullSubstrate` (recurrent full mesh) and `MLPSubstr
 `num_outputs -> int` property — output neuron count, also the phenotype's output width.
 `nodes_cnt -> int` property — neuron count, equal to the hyper genome's `max_nodes`.
 `conns_cnt -> int` property — connection count, equal to the hyper genome's `max_conns`.
-`query_coors -> np.ndarray` property — `(conns_cnt, 2*cd)` `float32`; row `q` is `[coor_of_source, coor_of_target]` of connection `q`, so `query_coors.shape[1]` is the CPPN's required `num_inputs` (`../hyperneat.py` asserts this).
+`query_coors -> np.ndarray` property — `(conns_cnt, 2*cd)` `float32`; row `q` is `[coor_of_source, coor_of_target]` of connection `q`, so `query_coors.shape[1]` is the CPPN's required `num_inputs` (`../hyperneat.py::_validate` raises unless it equals `neat.num_inputs`).
 `nodes -> np.ndarray` property — `(nodes_cnt,)` `int32` node keys; a dense permutation of `0 .. nodes_cnt-1` in the order input block, output block, hidden block(s), so genome index `k` is node key `k`.
 `conn_index -> np.ndarray` property — `(conns_cnt, 2)` `int32` `(in_key, out_key)` rows aligned row-for-row with `query_coors`.
 `validate() -> None` — abstract on the base; `DefaultSubstrate` implements it as the public re-check of the storage invariants, so constructors run it and user subclasses may re-run it after replacing topology fields.
