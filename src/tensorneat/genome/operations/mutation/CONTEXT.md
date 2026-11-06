@@ -10,10 +10,8 @@ Nothing here allocates keys: `new_node_keys (P,)` and `new_conn_keys (P, 3)` arr
 ## Cost model
 The reference backend is the evoxc numpy interpreter, where a dispatched op costs **≈19–20 µs** whatever its operands (a rank-0 constant, a `reshape`, a `slice` and a `broadcast` are each a whole op) plus its own array traffic.
 - Rank-0 constants are real ops, so one distinct value per trace is hoisted into `EditContext` / `_StageContext` and shared by the stage that reads it.
-- Each stage rebuilds its `EditContext` from the payload the previous stage produced (~20 traced ops a stage): the price of sequential composition, not a hoistable duplication.
 - For recurrent `(P, tries, E)` slabs the **contiguous innermost** reduce is the cheap one (`axes=2` 0.82 ms against `axes=1` 1.65 ms at 2 M elements; `equal` 0.68 against 1.11), so do not transpose them.
 - A `select` pays for the whole array while an indexed write pays only for its cells: two row writes on `conn_keys`+`conn_attrs` cost 8 ops / 1.00 ms as `select`s and 20 ops / 0.42 ms as one flat `scatter` (pop 500), so op count alone is not the budget.
-- The four-stage kernel traces **536 ops** and measures **18.3 ms** per call at pop 500 on an evolved generation-5 payload (build excluded), so the kernel is roughly a quarter of a generation's static ops.
 - One `uniform`/`normal` on a rank-0 key costs 0.05–0.42 ms and is independent of the output shape; the kernel issues **13** of them (`masked_random_row` accounts for three) and draw-order bit-exactness forbids removing or reordering any.
 - A compiled device pays a different law, measured on this worktree: iree+rocm ≈63 µs fixed per graph plus **≈2.2–2.5 µs per dispatch**, and one `while` iteration ≈50 µs of submission — dispatch count, not op count or arithmetic, is what dominates there (`## Cycle predicate`).
 
