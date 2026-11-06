@@ -102,7 +102,9 @@ Only a *single* warm generation inside a trace is usable: the first generation i
 - The stub variants (tell/evaluate/forward replaced by a constant) are decomposition probes, never correctness evidence: they freeze the population and their graphs are not valid NEAT generations.
 - Keep the scripts throwaway: `ROCM_FINDINGS.md` and its probes are a historical record and stay as they are; a new ROCm probe belongs in this directory as its own file with its protocol printed.
 ## Known Issues
-- No committed artifact backs the cost-model table above: the probe scripts were session scratch scripts outside the repo (this node is read-only apart from CONTEXT.md), so reproducing a row means re-running the prepare/run split described in `## Method and its traps`.
+- No committed artifact backs either cost-model table: the probe scripts are session scratch scripts outside the repo (this node is read-only apart from CONTEXT.md), so reproducing a row means re-running the prepare/run split described in `## Method and its traps`.
+- The prepare/run split's profiled half runs the artifact outside `Pipeline`, so it measures `evoxc.run` + one D2H only: the host bookkeeping `Pipeline.step` adds (`to_numpy`, the overflow check) is not in the trace and is 0.1 % of a generation.
+- `rocprofv3 -r` has no HIP-argument capture in 1.0.0, so copy **sizes** are inferred from the `__amd_rocclr_copyBuffer` grid sizes (2 KiB and 6 KiB dominate at `cartpole_p100`) and pinned-buffer sizes from `memory_allocation_trace.csv` (every per-readback allocation is 1 byte).
 - `ROCm_FINDINGS.md` still says "no full ROCm generation runs today" and extrapolates ≈45–65 ms per generation; that forecast is now superseded by the measured 28–164 ms range above and should not be read as a current claim.
 - The phase table's three deltas do not add up to the full generation: each stub freezes the population at generation 0, while the full run measures evolved (deeper, denser) genomes whose loops iterate more.
 ## Routing Table
