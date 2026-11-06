@@ -71,7 +71,7 @@ Neither speciation scan writes a gene table: the host spelling records per-slot 
 `_keys.first_free_keys` writes its occupancy cells with the rank-1 form on the flattened table, because a `(P, max_nodes)` index block against a rank-2 table is neither a rank-1 scatter nor a rank-2 row write.
 No `tril`/`triu`/`flip`/`cumsum`/`iota`: static tables are baked with `static_i32`/`static_f32` (one `constant` op each), so the gate matrix of `prefix_sum_exclusive` is `static_f32(np.tril(np.ones((S, S)), -1))`.
 `argmin`/`argmax` appear in the host spelling only; unsigned dtypes are outside iree's declared set, so a graph uses `int32`/`int64` only, and the numpy interpreter accepts every rank — a violation is invisible until `evoxc.lower(graph, backend="iree")`.
-Verification is hand-run, never a committed test: classify every op with `evoxc.backends.stablehlo.ops.status(op.name)` (only `"deferred"` is a violation), check every `scatter`'s operand rank and `axis`, then `evoxc.lower(..., backend="iree")` plus both `iree-compile` stages.
+Verification is hand-run, never a committed test: classify every op with `evoxc.backends.stablehlo.ops.status(op.name)` (only `"deferred"` is a violation), check every `scatter`'s rank and `axis`, then `evoxc.lower(..., backend="iree")` and both `iree-compile` stages.
 
 ## Gene Keys & Padding
 `_keys.node_keys_for_split(node_keys, key_span, max_nodes, base)` allocates the structural node key as a **wrapped per-individual spread** `max_nodes + (base + 1 + slot) mod (key_span - max_nodes)`, with `base = genome.max_node_key(state, node_keys)`.
