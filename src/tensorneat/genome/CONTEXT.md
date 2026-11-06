@@ -101,8 +101,7 @@ Per-generation wall clock on the benchmark geometries (`../../benchmarks/cases.p
 The ROCm leg builds 7.2–8.4 s per static shape and peaks at ≈1.9 GiB of RSS.
 Every cell passes the generation-1 cross-check against numpy; at pop 500/1000 and on Pagie the state then drifts from generation 3 (float32 ulps amplified by a discrete species-membership decision on a continuous distance), while `speciate` on one bit-identical payload returns bit-identical species leaves on both backends.
 
-The same run with the harness's numerical cross-check enabled passes on generation 1 for `cartpole_p100` (59.80 ms median in that row).
-The numpy interpreter stays the fastest leg on CPU and the default; the compiled leg is launch-bound, so it wins on the flat func-fit graphs and loses on the rollout-heavy one unless that rollout's level sweep is unrolled (`## Measured cost of the accelerator level sweep`; the `cartpole_p100` row is dominated by the sweep).
+The numpy interpreter stays the fastest leg on CPU and the default; the compiled leg is launch-bound and wins every measured cell, the rollout-heavy `cartpole_p100` included, because its level steps are the statically unrolled sweep (`## Measured cost of the accelerator level sweep`).
 Per-kernel ledger (protocol: `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, output_transform=ACT.sigmoid)` + `NEAT(pop_size=P, species_size=20, survival_threshold=0.01)` + `XOR()`, seed 42, payload = the population at generation 5, build excluded, one warmup + 5 timed runs, one fresh process per pop; traced ops recursive over `module.functions[*].entry_block` and every `op.regions` body):
 
 | kernel | P=100 | P=500 | P=1000 |
