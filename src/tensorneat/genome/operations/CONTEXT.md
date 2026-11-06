@@ -6,7 +6,7 @@ Operators never allocate RNG keys or structural keys: the algorithm draws `key` 
 It is the shared operator layer between `genome/` (which forwards into it) and the families `./mutation/`, `./crossover/` and `./distance/`, and it owns the one homologue implementation (`alignment.py` host / `alignment_accelerator.py` accelerator) that crossover and distance both consume.
 ## Call contract (binding for `genome/base.py` and `algorithm/`)
 - `BaseMutation.__call__(state, genome, key, node_keys, node_attrs, conn_keys, conn_attrs, new_node_keys (P,), new_conn_keys (P, 3)) -> GenomeTensors` — validates the two key shapes (`ConfigError`), splits the key per stage and runs the structural stages before the value stage.
-- `new_conn_keys` columns: `0` = add-node identity edge, `1` = add-node copy edge, `2` = plain add-connection edge.
+- `new_conn_keys` columns: `0` = add-node identity edge, `1` = add-node copy edge, `2` = plain add-connection edge (`mutation/CONTEXT.md` owns the per-column use).
 - `BaseCrossover.__call__(state, genome, key, node_keys1, node_attrs1, conn_keys1, conn_attrs1, node_keys2, node_attrs2, conn_keys2, conn_attrs2) -> GenomeTensors` — `genome1` is the fitter parent and keeps its keys; identical parent shapes are required (`ConfigError`).
 - `BaseDistance.__call__(state, genome, node_keys1 … conn_attrs1, node_keys2 … conn_attrs2) -> (P,) float32` — no key argument; the algorithm forms the pairs, distances are `0` for an empty pair and never NaN.
 - Key tables are node `(P, N)` (or `(P, N, 1)`) and connection `(P, E, CK)`; `alignment.key_rows` normalises them and any other rank raises `ConfigError`.
