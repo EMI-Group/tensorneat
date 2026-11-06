@@ -174,7 +174,7 @@ The level sweep's own guard is cheapest as a numpy unit test: build one payload 
 | `./gene/node/` | `BaseNode` (611), `DefaultNode` (444), `BiasNode` (307), `OriginNode` (61): attr layout, `NodeOperands`, `combine`, identity/zero attrs. |
 | `./gene/conn/` | `BaseConn` (309), `DefaultConn` (208), `OriginConn` (90): per-edge message, `ConnOperands`, optional `historical_marker`. |
 | `./operations/` | Operator contracts, the packed-identity alignment (`alignment.py` 723) and its accelerator twin (`alignment_accelerator.py` 221), the in-degree audit. |
-| `./operations/mutation/` | Four-gate plan/apply kernels (`base.py` 874, `default.py` 483, `plan.py` 469, `recurrent.py` 281, `arrays.py` 292), the two cycle predicates (`cycle.py` 459 scattered frontier, `cycle_accelerator.py` 351 scatter-free growth-flag hop), `degree.py` (153). |
+| `./operations/mutation/` | Four-gate plan/apply kernels (`base.py` 874, `default.py` 483, `plan.py` 469, `recurrent.py` 281, `arrays.py` 292), the two cycle predicates (`cycle.py` 459 scattered frontier, `cycle_accelerator.py` 359 scatter-free growth-flag hop), `degree.py` (153). |
 | `./operations/crossover/` | Key-aligned crossover (`base.py` 136, `default.py` 219): parent-1 structure, block attribute inheritance, `align_gene_rows`/`find_homologous`. |
 | `./operations/distance/` | Merge body (`base.py` 1000, `default.py` 524, `digest.py` 953, `layout.py` 748), index-free (363), dense (380), grouped (521, accelerator leg only), `ConstantPool` (`consts.py` 107). |
 | `./window.py` | `by_samples`, `_slot_index`, `_row_offsets`, `_column_index`/`_column_mask`, `_gather_prepared`, `any_slot`, `_iinf`, `fill`, and the seed plan `SeedPad`/`SeedColumns`/`seed_pad`/`seed_values` (475). |
