@@ -77,7 +77,8 @@ The choice is measured: at `P=1000`, `max_nodes=50`, `attr_width=4` the material
 ## Hooks other nodes rely on
 `genome/base.py::initialize` uses `new_random_attrs` only; `genome/operations/mutation/base.py` uses `new_identity_attrs` (the add-node split and its identity edge) and `new_zero_attrs` (add-conn).
 `genome/step.py` prepares the node and conn operands once per pass and then calls `conn_gene.forward` then `node_gene.forward` per level/tick; `grad` differentiates only the float attr arrays, which works because `column` is differentiable.
-`genome/operations/**` uses `mutate`, `crossover`, `distance`, `attr_width`/`key_width` and `from_attrs`; `uses_historical_marker` is read by `mutation/base.py`, `step.py` and `algorithm/neat/neat.py`.
+`genome/operations/**` uses `mutate`, `crossover`, `distance` and the `attr_width`/`key_width` statics, never `from_attrs`.
+`uses_historical_marker` is read by `genome/base.py` (initial markers = row index), `genome/step.py::max_conn_marker`, `genome/operations/mutation/base.py` (whether a planned key row carries the third column), `algorithm/neat/neat.py::_new_gene_keys` and `conn/base.py::from_attrs` itself.
 `algorithm/hyperneat` builds its dense substrate payload with `node_gene.from_attrs(keys)` and `conn_gene.from_attrs(in_keys, out_keys, weights)`, and reads `GeneAttr` from `gene/base.py`.
 `BaseConn.from_attrs` accepts `attrs=None` (zeros), a `(*shape,)` per-connection scalar broadcast over the attribute axis, or full `(*shape, attr_width)` rows, plus an optional `historical_marker` key column.
 
