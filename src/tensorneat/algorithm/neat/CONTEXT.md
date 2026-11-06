@@ -81,7 +81,7 @@ The candidate is tested exactly like the genome's `plan_add_node` alias guard (`
 `first_free_keys(node_keys, key_span)` is the fallback — the **lowest key in `[0, key_span)` the individual's own rows do not hold** — for the rows that already hold the spread candidate; it builds a `(P, key_span + 1)` occupancy table with the padded and out-of-span keys redirected to a permanently occupied dump cell, then reads the answer with one `argmin`.
 The composed allocator is 35 traced ops plus `genome.max_node_key` (7), with no region; availability is static, because `key_span > max_nodes` is enforced by `validate_key_space`.
 The allocation comes from the **crossover child** (`crossed.node_keys`), the payload the mutation receives, because a base derived from the pre-crossover parents can already be owned by the child and the alias guard would then silently refuse the split; uniqueness holds within one individual's own keys only, so two individuals with the same occupied set get the same new key and the distance reads it as a homologue.
-`new_conn_markers` continues from `state.pop.conn_keys` through `max_conn_marker` when `conn_gene.uses_historical_marker`, else zeros; a marker is an identity matched exactly by the distance kernel, never a table index, so it is not range tested.
+`new_conn_markers` continues from `state.pop.conn_keys` through `max_conn_marker` when `conn_gene.uses_historical_marker`, else zeros; a marker is an exact identity match, never a table index, so it is not range tested.
 Validity comes from the genome's `node_exists`, `conn_exists` and `max_conn_marker`, never from packaging.
 
 ## Measured Cost
