@@ -1,29 +1,19 @@
-# numpy reference backend — per-generation cost, before vs after the two measured performance passes
+# numpy reference backend — per-generation cost across the three measured passes
 
-> **Hand-maintained record** of two focused performance passes on the `numpy` reference interpreter.
-> Pass 1 is the op-count pass (`a697531` → the tree the pass was recorded on, `f619f46`) and pass 2 is
-> the tiled func-fit evaluate plus the RL rollout hoist (`ce5bb88` → `90d97b4`); each pass keeps its
-> own measured pair, its own commits and its own protocol below.
-> `RESULTS.md` remains the *generated* old-vs-new harness report (rendered from
-> `results/authoritative.json`); its new-side rows **carry pass 1 and predate pass 2**, so they are
-> stale until the harness is re-run. This file is not a re-verdict: it holds the measured before/after
-> pair of each pass — pass 1 with both cells taken in one session, alternating trees so drift cancels,
-> pass 2 with an interleaved same-session no-regression control beside a cross-session `before`
-> column that is labelled indicative.
+> **Hand-maintained record** of three measured passes on the `numpy` reference interpreter.
+> Pass 1 is the op-count pass (`a697531` → the tree the pass was recorded on, `f619f46`), pass 2 is the tiled func-fit evaluate plus the RL rollout hoist (`ce5bb88` → `90d97b4`), and pass 3 is the dependency-side A/B of the pinned `evoxc` tag against the local `/root/evoxc` checkout (both legs at `63f0fc67`); each pass keeps its own measured pair, its own commits and its own protocol below.
+> `RESULTS.md` is the *generated* old-vs-new harness report rendered from `results/authoritative.json`, re-measured on the merged tree at `63f0fc67` on 2026-11-06, so its new-side rows carry pass 1, pass 2 and the search-quality fixes and are no longer stale.
+> This file is not a re-verdict: it holds the measured before/after pair of each pass — pass 1 and pass 3 with both cells taken in one session, alternating trees so drift cancels, pass 2 with an interleaved same-session no-regression control beside a cross-session `before` column that is labelled indicative.
+> Pass 3's headline is a null result: the dependency side is not where this backend's per-generation cost lives.
 
 ## Which tree each record belongs to
 
-No committed artifact measures the merged tree, and each record in this directory speaks only for the
-tree and session it names — the table in `CONTEXT.md` ("Provenance") is the canonical map.
-The three trees this file depends on: `results/authoritative.json` (and therefore `RESULTS.md`) was
-measured at `ebeaf1f8` on 2026-11-04T19:01Z, after pass 1 and before pass 2 and before the
-search-quality fixes; pass 2's `after` record `results/fix_after.json` was measured at `90d97b4` on
-2026-11-04T21:51Z, after both passes and before the search-quality fixes;
-`results/xor3d_quality_2026-11-04.json` was measured at `58657f6` on 2026-11-05T00:57Z on a branch
-that carries the search-quality fixes but not pass 2, so it is post-quality and pre-tiling.
-So the only post-pass-2 timing numbers in this node are the case-scoped rows in pass 2 below, and they
-describe `90d97b4`, not the merged tree: the search-quality fixes change the mutation and speciation
-paths that the timings include, and no committed record re-measures that cost.
+Each record in this directory speaks only for the tree and session it names — the provenance table in `CONTEXT.md` is the canonical map — and the merged tree now has its own committed record instead of only these case-scoped pairs.
+`results/authoritative.json`, and therefore the committed `RESULTS.md`, is that merged-tree record: re-measured at `63f0fc67` on 2026-11-06 (session 11:31Z–12:09Z, 45/45 runs `ok`), after pass 1, pass 2 and the search-quality fixes, with verdict FAIL on both timing and quality.
+Its new-side `numpy` legs are (`ms/gen`) `xor_p100` 41.417, `xor_p500` 119.023, `xor_p1000` 199.160, `xor3d_p100` 36.020, `xor3d_p500` 127.976, `xor3d_p1000` 212.409, `custom_pagie_p500` 1258.042 and `cartpole_p100` 307.164, against old-side (JAX) rows of 38.868, 308.485, 809.342, 24.628, 105.635, 226.660, 480.205 and `n/a`.
+`results/xor3d_quality_2026-11-04.json` was measured at `58657f6` on 2026-11-05T00:57Z on a branch that carries the search-quality fixes but not pass 2, so it is post-quality and pre-tiling and is not comparable with the merged-tree record.
+Pass 2's `after` record `results/fix_after.json` was measured at `90d97b4` on 2026-11-04T21:51Z, after both of its passes and before the search-quality fixes; it stays git-ignored scratch, and the rows in pass 2 below remain `90d97b4`'s numbers rather than the merged tree's.
+Pass 3's four leg records were measured at `63f0fc67` on 2026-11-06 (12:14Z–12:22Z) and live in `$TMPDIR` only.
 
 ## Pass 1 — op-count pass (`a697531` → `f619f46`)
 
@@ -104,8 +94,9 @@ the 1 360 older notes claimed.
 Independently, 3 generations of the full pipeline at pop 500 and pop 1000 hash identically to
 `a697531` over all four payload arrays, the `(P,)` fitness and the returned `State`
 (`fitness_history`, `SpeciesState` leaves, `randkey`, `generation`). The suite was green on the tree
-this pass was recorded on (`f619f46`); the count quoted for the merged HEAD is 674 passed (see pass 2
-and `../CONTEXT.md`), and an older count describes that older tree, never HEAD.
+this pass was recorded on (`f619f46`); the only other count quoted below is 674 passed on pass 2's
+tree, and an older count describes that older tree, never HEAD (`../CONTEXT.md` holds the current
+merged-tree count).
 The counts need the optional extras: `test/parity` needs the `bench` extra (`jax`) and `test/backends`
 needs `evoxc[iree]` (without it those three tests skip rather than fail).
 
@@ -150,10 +141,7 @@ committed `RESULTS.md` is untouched):
 | xor_p500 | 321.37 | 157.16 | 2.04× | PASS | 722.5 / 240.9 MiB |
 | xor_p1000 | 830.10 | 271.70 | 3.06× | PASS | 706.3 / 391.9 MiB |
 
-Read this as *internal* evidence only. This box resolves `jax 0.10.2` for both sides of the comparison,
-and the committed `RESULTS.md` (measured at `ebeaf1f8` with the same `jax 0.10.2`) records old-side
-rows of 295.33 / 807.30 ms at p500 / p1000 against 321.37 / 830.10 ms for this 50-generation pair, so
-the session, not the interpreter version, is what separates them. The contract verdict must therefore
+Read this as *internal* evidence only. This box resolves `jax 0.10.2` for both sides of the comparison, and the committed `RESULTS.md` records old-side rows of 308.49 / 809.34 ms at p500 / p1000 on the merged tree at `63f0fc67` (the `ebeaf1f8` record it replaced held 295.33 / 807.30 ms) against 321.37 / 830.10 ms for this 50-generation pair, so the session, not the interpreter version, is what separates them. The contract verdict must therefore
 be re-rendered by the harness on the same interpreter and box as the record it replaces; this file
 does not claim a contract PASS.
 The `xor_p1000` quality row fails against the JAX side, which is a search-trajectory difference, not a
@@ -164,10 +152,8 @@ seed ⇒ same evolution), so that verdict is unchanged by this pass.
 - The box drifts ±30 % between sessions; every comparison above is *within* one session, alternating
   the two trees, and the median is the load-bearing statistic (the pop-1000 mean is skewed by one slow
   generation and is reported for completeness).
-- The contract verdict is still owned by the generated report; this file states the before/after pair
-  of the pass, not a re-verdict. The committed `RESULTS.md`/`authoritative.json` pair postdates this
-  pass and predates pass 2 (measured at `ebeaf1f8`, 2026-11-04T19:01Z), so its new-side rows are the
-  post-pass-1 / pre-pass-2 cost and must not be read as this pass's `after` column.
+- The contract verdict is still owned by the generated report; this file states the before/after pair of the pass, not a re-verdict.
+  When this pass was recorded the committed `RESULTS.md`/`authoritative.json` pair was the `ebeaf1f8` record (2026-11-04T19:01Z), which postdated this pass and predated pass 2; it has since been re-measured on the merged tree (`63f0fc67`, 2026-11-06) and that record is post-pass-1, post-pass-2 and post-search-quality, so neither form is this pass's `after` column.
 - Build time is one-off per shape signature and improved on every cell, but a `T=50`-step build now
   traces the distance kernel inside a scan body instead of 20 times, which is why it fell.
 
@@ -177,10 +163,10 @@ Protocol: same box, `backend="numpy"`, harness seeds 42/43/44 (repeat `r` uses `
 `--generations 150 --warmup 3 --repeats 3`. `after` = the case-scoped run on `90d97b4` (the perf
 stream's tip, before the search-quality merge, so not the merged HEAD), record
 `benchmarks/results/fix_after.json` (a git-ignored scratch record, rendered to `$TMPDIR/fix_after.md`,
-so the committed `RESULTS.md` was never rewritten). `before` = the committed
-`benchmarks/results/authoritative.json` (measured at `ebeaf1f8`, the commit its own environment
-fingerprint stores; the report rendered from it, `RESULTS.md`, was committed at `ce5bb88`; same
-protocol, same box family). Both sides of the old-vs-new column come from the same pass-2 run.
+so the committed `RESULTS.md` was never rewritten). `before` = the `authoritative.json` record this
+pass was measured against, since replaced (that one measured at `ebeaf1f8`, the commit its own
+environment fingerprint stores; the report rendered from it, `RESULTS.md`, was committed at `ce5bb88`;
+same protocol, same box family). Both sides of the old-vs-new column come from the same pass-2 run.
 
 ### Headline
 
@@ -191,8 +177,9 @@ protocol, same box family). Both sides of the old-vs-new column come from the sa
 | `xor_p500` (control) | 161.73 · 241.3 MiB (1.83× of old) | 178.24 / 178.64 / 177.34 → **178.24** · 228.6 MiB · 0.55 s | 349.98 / 248.17 / 403.98 → 349.98 | 1.96× |
 | `xor3d_p500` (control) | 171.16 · 265.5 MiB (0.63× of old) | 188.50 / 176.91 / 183.22 → **183.22** · 237.2 MiB · 0.54 s | 111.84 / 94.68 / 132.84 → 111.84 | 0.61× |
 
-Every `before` cell is the new-side row of the committed `results/authoritative.json` (measured at
-`ebeaf1f8`, rendered into the committed `RESULTS.md` at `ce5bb88`); the `(1.83× of old)` /
+Every `before` cell is the new-side row of the `results/authoritative.json` record of its day (measured
+at `ebeaf1f8`, rendered into the `RESULTS.md` committed at `ce5bb88`, since replaced by the merged-tree
+record); the `(1.83× of old)` /
 `(0.63× of old)` notes are that record's own same-run old-vs-new ratios. Every `after` cell is the
 new-side row of `results/fix_after.json` (measured at `90d97b4`, same case config, 3 repeats, median
 taken over the three repeats, peak RSS the per-run high-water mark). The old-side column and the
@@ -202,18 +189,18 @@ CartPole.
 
 The `custom_pagie_p500` cell is the point of the pass: wall time and peak RSS both fall sharply,
 about **−74 % wall and −70 % RSS** against the `before` record (3156.73 → 833.81 ms/gen,
-4577.1 → 1361.4 MiB), while the same case's old-side row moved from 496.45 ms/gen in the committed
+4577.1 → 1361.4 MiB), while the same case's old-side row moved from 496.45 ms/gen in the `before`
 record to 539.19 ms/gen in this run — the box, not the code.
 `cartpole_p100` falls about **−28 %** (381.73 → 275.24 ms/gen) and remains new-only.
-The two XOR control rows move by roughly **±10 % against the committed record** (161.73 → 178.24,
+The two XOR control rows move by roughly **±10 % against the `before` column's record** (161.73 → 178.24,
 171.16 → 183.22), which is **box drift, not a regression**: an interleaved same-session A/B at pop 500
 (20 timed generations, 3 rounds, pre-fix tree `ce5bb88` vs `90d97b4`) gives xor medians base
 175.9 / 178.1 / 176.6 ms vs `90d97b4` 179.7 / 172.0 / 170.0 ms, and xor3d base 181.3 / 184.8 / 189.1 ms vs
 `90d97b4` 174.3 / 180.4 / 174.9 ms — neutral to slightly better at `S = 4` and `S = 8`.
 The old-side rows of `RESULTS.md` and of this record were measured with the same `jax 0.10.2`, and
-today's box runs about 10 % slower than the committed record (old `xor_p500` 349.98 ms here vs
-295.33 ms there). So the same-run old-vs-new ratio is the load-bearing number, never the
-cross-session delta.
+today's box runs about 10 % slower than the record that supplied the `before` column (old `xor_p500`
+349.98 ms here vs 295.33 ms there; the merged-tree record at `63f0fc67` now holds 308.49 ms). So the
+same-run old-vs-new ratio is the load-bearing number, never the cross-session delta.
 
 ### Where the time was
 
@@ -275,7 +262,7 @@ byte-exactly against the pre-fix tree for `custom_pagie_p500`, `xor_p100`, `xor_
 CartPole over 8 generations; Pendulum and MountainCar at `R = 1` and `R = 2`. Executed dispatch counts
 are unchanged on the untouched paths (pagie 11 490 before and after the hoist, `xor_p500` 8 263).
 Executed ops per generation at the pass-2 tree (`90d97b4`): pagie 11 490 (chunked, unchanged by the
-hoist), `xor_p500` 8 263, cartpole 31 604. Tests at the merged HEAD: `uv sync --all-extras` then
+hoist), `xor_p500` 8 263, cartpole 31 604. Tests at the pass-2 tree (`90d97b4`): `uv sync --all-extras` then
 `uv run pytest -o addopts="" -q` → 674 passed, 0 failed, 0 skipped; a suite count belongs to the tree
 it was run on, so any earlier count quoted for a pass describes that pass's tree, never HEAD.
 
@@ -311,11 +298,94 @@ such rounds.
 - The box drifts ±30 % between sessions, so only the interleaved same-session pairs and the same-run
   old-vs-new ratio are load-bearing.
 - The `before` column comes from a different session and is indicative, not a same-session control.
-- `RESULTS.md` / `results/authoritative.json` remain a generated record from before this pass; only a
-  full `run_benchmark.py` re-run replaces them, which this file does not claim to do.
+- `RESULTS.md` / `results/authoritative.json` held the `ebeaf1f8` record, which predates this pass, while this pass was measured; they have since been re-measured on the merged tree (`63f0fc67`, 2026-11-06), a tree that includes this pass, so the current committed report supersedes the `before` column above instead of repeating it.
 - `results/fix_after.json` is git-ignored scratch, not committed evidence.
 
-## Rules the two passes establish
+## Pass 3 — dependency side (pinned `v0.1.1` tag vs the local `evoxc` checkout)
+
+Protocol: `63f0fc67` in the worktree, `backend="numpy"`, new side only, one fresh process per cell, `--generations 150 --warmup 3 --repeats 1` at seed 42, `--threads 0`, on a box that was shared part-time (per-run `loadavg_start` 0.43–1.02 on nine of the ten runs, `loadavg_end` up to 3.29 in round 2).
+Both legs are installed into one venv in turn: **leg A** is the pinned dependency `[tool.uv.sources]` resolves (`evoxc` from git tag `v0.1.1`), **leg B** is the local checkout `/root/evoxc` (`git describe` `v0.1.1-34-g474bf72`, HEAD `474bf72`) installed from a `git archive HEAD` copy with `uv pip install --no-deps --reinstall`.
+Both dists report `evoxc 0.1.0` in their metadata, so each leg is identified by a sha256 over every `*.py` under the installed package: **`d0d1f4b4b7777f1b`** (150 files) pinned versus **`90b801c7bbc89a8d`** (151 files) checkout, and the recipe is below.
+Two rounds alternate the order so drift cancels: round 1 measures A then B on all three cases, round 2 measures B then A on `xor_p500` and `cartpole_p100`.
+
+### Headline
+
+| case | leg A — pinned `v0.1.1`<br>round 1 · round 2 (ms/gen) | leg B — local checkout<br>round 1 · round 2 (ms/gen) | checkout vs pinned | peak RSS A / B (MiB) | build A / B (s) | trajectory |
+| --- | --- | --- | --- | --- | --- | --- |
+| `xor_p500` | 116.33 · 121.97 | 121.17 · 119.54 | +4.2 % · −2.0 % | 191.2–191.7 / 191.5–191.6 | 0.467–0.473 / 0.455–0.457 | bit-identical |
+| `cartpole_p100` | 311.89 · 301.32 | 301.62 · 313.54 | −3.3 % · +4.1 % | 107.7 / 107.8 | 0.443–0.456 / 0.448–0.463 | bit-identical |
+| `custom_pagie_p500` | 1246.32 | 1256.42 | +0.8 % | 1296.2 / 1296.8 | 1.557 / 1.550 | bit-identical |
+
+**The honest null result: the local checkout measures within run-to-run drift of the pinned tag on all three cases**, so nothing in this repository's numpy cost depends on an unreleased `evoxc` and the pin stays `v0.1.1`.
+The drift band is the two rounds themselves: the pinned leg moves 116.33 → 121.97 ms/gen (+4.9 %) on its own `xor_p500` cell and 311.89 → 301.32 (−3.4 %) on cartpole, and the sign of the leg difference flips between rounds on both cases (+4.2 % then −2.0 % at pop 500, −3.3 % then +4.1 % on cartpole).
+Ordering and drift therefore dominate any leg effect, so not one of these differences is a speed-up or a regression.
+`custom_pagie_p500` carries a single round, so its +0.8 % has no reversed-order control at all and reads as noise of the same size.
+Peak RSS and build time are flat across the legs too (within 0.6 MiB and 0.02 s), which is what a dependency that only supplies the interpreter loop and the RNG should do.
+
+### Trajectories and op counts are identical
+
+Both legs reproduce the same search exactly: the per-generation `best_fitness` / `mean_fitness` / `valid_count` curves and `final_best_fitness` are equal element-for-element between the legs on all three cases and in both rounds.
+`custom_pagie_p500` ends on `-0.006567014846950769` on both legs, `xor_p500` on `-0.0` and `cartpole_p100` on `200.0` (its horizon-capped maximum), and `generations_to_target` matches as well (32 on xor, 95 on pagie, none on cartpole, which declares no informative target).
+That is what this repository's design predicts: both legs run `evoxc`'s splitmix64 stream over this repository's own numpy kernels, so the dependency supplies the interpreter and the RNG and nothing else.
+Executed op counts are unchanged between the legs for the same reason — the dispatch count is a property of this repository's graphs, which a dependency cannot alter, so a newer `evoxc` changes how an op executes and never how many ops the graph dispatches.
+Pass 2 records 8 263 / 11 490 / 31 604 dispatches per generation for exactly these three cases at `90d97b4`.
+
+### Why a null result is the expected one
+
+Read from the dependency's own history rather than inferred: `git -C /root/evoxc diff --stat v0.1.1..HEAD -- '*.py'` over the 34 post-tag commits touches nine files (+1 602 / −29) and none of them is on the numpy CPU path.
+`evoxc/backends/adapters/iree.py` and `evoxc/pipeline_options.py` add the iree-only `dispatch_formation` compile option; `evoxc/core/tensor.py` (`__dlpack__`, `_payload_dlpack_exporter`, `_payload_dlpack_device_probe`), `evoxc/external.py` and `evoxc/bench/probe_dispatch_formation.py` add the zero-copy DLPack export and the Triton/torch external-kernel round trip.
+The rest is tests and documentation, and the only file under `evoxc/backends/numpy/` that changed is its `CONTEXT.md`.
+So there is no numpy-interpreter kernel body and no per-op-overhead change in the 34 commits: on this backend a newer `evoxc` has nothing to speed up, which is what the two interleaved rounds measured.
+
+### How to reproduce
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"; uv sync --extra bench
+# leg A — the pinned tag
+uv run --extra bench python benchmarks/run_benchmark.py --impl new --backend numpy \
+    --cases xor_p500,custom_pagie_p500,cartpole_p100 --generations 150 --warmup 3 --repeats 1 \
+    --json $TMPDIR/evoxc_pinned_A.json --out $TMPDIR/evoxc_pinned_A.md
+# leg B — the local checkout (uv run would re-sync the pinned tag back, so drive .venv/bin/python)
+mkdir -p $TMPDIR/evoxc_local && git -C /root/evoxc archive HEAD | tar -x -C $TMPDIR/evoxc_local
+uv pip install --no-deps --reinstall $TMPDIR/evoxc_local
+.venv/bin/python benchmarks/run_benchmark.py --impl new --backend numpy \
+    --cases xor_p500,custom_pagie_p500,cartpole_p100 --generations 150 --warmup 3 --repeats 1 \
+    --json $TMPDIR/evoxc_local_B.json --out $TMPDIR/evoxc_local_B.md
+uv sync --extra bench   # restores the pinned tag
+# round 2 — reversed order, written to $TMPDIR/evoxc_local_B2.json then $TMPDIR/evoxc_pinned_A2.json
+#            with --cases xor_p500,cartpole_p100
+```
+
+Both legs self-report `evoxc 0.1.0`, so verify which bytes are installed before believing a cell:
+
+```bash
+uv run --extra bench python - <<'PY'
+import hashlib, importlib.metadata as md, pathlib, evoxc
+pkg = pathlib.Path(evoxc.__file__).parent
+h = hashlib.sha256()
+for f in sorted(pkg.rglob("*.py")):
+    h.update(f.relative_to(pkg).as_posix().encode())
+    h.update(f.read_bytes())
+print(md.version("evoxc"), len(list(pkg.rglob("*.py"))), h.hexdigest()[:16])
+PY
+# pinned tag (v0.1.1)                  0.1.0 150 d0d1f4b4b7777f1b
+# local checkout (v0.1.1-34-g474bf72)  0.1.0 151 90b801c7bbc89a8d
+```
+
+Never `uv run` the checkout leg: `uv run` performs an implicit sync that reverts the `uv pip install` to the pinned tag, which silently measures leg A twice.
+Every leg record is a git-ignored scratch file written to `$TMPDIR`, with `--out` beside it, so no committed report is touched.
+
+### Caveats
+
+- One repeat per seed per leg: the ±2–5 % band is read off the two rounds, not off a repeat distribution, so no cell here has a confidence interval.
+- One run's own sample spread dwarfs the leg difference: leg A's 150 generation samples span 110.96–138.83 ms on `xor_p500` and 799.30–1643.67 ms on `custom_pagie_p500`, so a ±2–5 % median shift is far inside a single run's noise.
+- `custom_pagie_p500` was measured in round 1 only; its null result rests on one interleaved pair.
+- Round 2's pinned run ends at `loadavg_start`/`loadavg_end` 0.89 / 3.29, so the reversed round was measured on a busier box — another reason the two rounds bound a drift band rather than an order effect.
+- Leg B is a `git archive HEAD` copy installed with `--no-deps --reinstall`, not an editable install; the fingerprint proves which bytes ran, but it cannot prove the two legs were built by the same compile flags.
+- This pass changes no code and no dependency: `pyproject.toml`/`uv.lock` keep `v0.1.1`, and the measurement removes the case for moving them.
+- Numerical identity between the legs is expected and observed, and says nothing about the frozen oracle — `test/parity/` owns fidelity against `benchmarks/legacy_jax`.
+
+## Rules the performance passes establish
 
 **Rule A — the interpreter's blocks are the unit of memory.** The numpy interpreter keeps every SSA
 result of an interpreter block alive until that block returns, so bound the row group a problem asks
@@ -335,3 +405,6 @@ the fitness and payload arrays against the tree it replaced.
 `agg` fold added 16 executed ops and made `forward` 26 % faster, while pass 2 cut dispatches 42 549 →
 31 604 and still banked only 1.25×, so every change is validated end to end on wall time, peak RSS and
 the identity checks, in one session with the trees interleaved.
+Pass 3 establishes no rule of its own: it shows the dependency side is not where the numpy cost lives
+(the checkout measures inside the pinned tag's run-to-run drift, with identical trajectories and
+dispatch counts), so every rule above stays owned by this repository's graphs.
