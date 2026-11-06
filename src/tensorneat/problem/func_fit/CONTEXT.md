@@ -90,3 +90,4 @@ So the dataset is never the constant problem here.
 | `./xor.py` | 2-input XOR literals. |
 | `./xor3d.py` | 3-input parity literals. |
 | `./custom.py` | User-supplied function sampling/gridding, `cartesian_product`. |
+| `../../host_payload.py` | Owns the tiled-evaluate chunk budget this node's `act_fn` runs through: `eval_chunk_rows`/`EVAL_CHUNK_ROWS`/`DEVICE_EVAL_CHUNK_BYTES`, `_NetworkActFn`/`_prepared_query` (regrouping, one prepared pass per group) and `_slice_batch` (sibling — read-only). |
