@@ -37,8 +37,6 @@ Every page must stay reachable from `source/modules.rst`; an unreachable page wa
 Pages stay 5–20 lines; a page that needs more is documenting more than one thing.
 
 ## Known Issues
-`src/tensorneat/common/schedule_accelerator.py`'s module docstring is not valid RST: its `Bit identity` section has no blank line between the lead-in paragraph (`…rather than the raw keys:`, line 34) and the first bullet (line 35), so docutils reports `Unexpected indentation` and `Block quote ends without a blank line; unexpected unindent` and the strict build exits 1 with two problems.
-The fix is one blank line at source; no page-level directive can avoid it, because `automodule` always renders the module docstring and suppression is not allowed.
 Two public-looking objects are absent from their module's `__all__`, so `automodule :members:` never registers them and a reader following the docs cannot find them.
 `DEFAULT_GENOME_CONN_ADD = 0.4` and `DEFAULT_GENOME_CONN_DELETE = 0.05` live in `src/tensorneat/genome/operations/mutation/default.py` under an eight-line `#:` doc comment, but that module's `__all__ = ["DefaultMutation"]`; they are the connection gates every `DefaultGenome()`/`RecurrentGenome()` ships when no operator is passed, so the documented `DefaultMutation` defaults (`0.2`/`0.2`) are not the ones a plain pipeline uses.
 `FamilyTerms` lives in `src/tensorneat/genome/operations/distance/dense.py` with a class docstring and an `Attributes:` section, but that module's `__all__ = ["enabled", "measure_centre"]`; it is the `NamedTuple` the private `_family_terms` helper returns, named only as plain text in that helper's `Returns:` block.
