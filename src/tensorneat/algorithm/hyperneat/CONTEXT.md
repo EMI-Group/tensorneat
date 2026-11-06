@@ -72,11 +72,6 @@ Nothing here may read the statics directly: a device-specific formulation belong
 Those entries are exactly what the graph bakes: the substrate counts become the executor's static sizes, its tables become graph constants, and the weight map's two numbers become float32 constants.
 Replacing the substrate on a live pipeline therefore forces exactly one new build, and the rebuilt pass is index-for-index equal to a fresh pipeline on the same geometry (`test/integration/test_hyperneat_integration.py`, which also pins that the CPPN half of the signature is unchanged).
 
-## Backend Behaviour (iree)
-The whole generation graph exports to StableHLO v1 and runs end to end on `backend="iree"` llvm-cpu for both variants; the measured per-step rows, the cross-backend tolerance table and the one-off compile cost for that case live in `benchmarks/BACKENDS.md`.
-The exporter rule this node owns is the negative-axis ban: the bias `concatenate` (`axis=1`), the attribute stack (`axis=2`) and the connection-key marker `concatenate` (`axis=2`) must all use explicit non-negative static axes, because the exporter forwards the axis verbatim as `stablehlo.concatenate`'s `dimension` and `iree-compile` rejects a negative one.
-`test/backends` has no HyperNEAT cell (it covers a tiny XOR `NEAT` pipeline only), so iree coverage of this node remains a hand-run record.
-
 ## Constraints
 No `jax` / `torch` / `numpy.random` on the compute path; `numpy` is used only in `__init__`/`_validate`/`_static_bounds`, for `np.ascontiguousarray` before `evoxc.from_numpy`, and in host-only `repr`/`to_dict`.
 Every kernel here is region-free and batch-first — no `vmap`/`fori_loop`/`switch` and no `cond`/`while_loop`/`scan` of this node's own — with non-negative static axes (never `-1`), static shapes (`Q`/`N`/`I`/`O`/`NA`/`CK`/`CA` from configuration, `P` from the payload's axis 0), and no `.at[...]`/`tile`/`repeat`/`max|sum(where=…)`/`any`/`all` (mask with `evoxc.select`, then reduce).
