@@ -55,6 +55,18 @@ class _CartPoleConstants(NamedTuple):
             row, ``(x_threshold, +inf, theta_threshold, +inf)``: the two
             velocity columns are not tested, and no finite or infinite value
             can beat an ``+inf`` limit, so they can never fail the comparison.
+        perm_idx: The ``(4,)`` int32 lane rotation ``(1, 0, 3, 2)`` applied to
+            an observation row: lane 0 receives ``x_dot`` and lane 2 receives
+            ``theta_dot``, exactly the two Euler derivatives that are the
+            row's own velocity columns. Lanes 1 and 3 receive ``x`` and
+            ``theta`` and are then overwritten by the two accelerations, so
+            the rotation is the whole row assembly -- no column split, which
+            is what makes the step one fused compile region instead of four
+            copies.
+        lane_xacc: The ``(1, 4)`` boolean row selecting lane 1, the
+            ``x_dot`` derivative slot.
+        lane_thetaacc: The ``(1, 4)`` boolean row selecting lane 3, the
+            ``theta_dot`` derivative slot.
         zero: A float32 ``0``, the split point of the death slack.
         reset_scale: Half-width of the uniform reset distribution.
         neg_reset_scale: ``-reset_scale``, the lower bound of the reset draw.
@@ -74,6 +86,9 @@ class _CartPoleConstants(NamedTuple):
     neg_force_mag: Any
     dt: Any
     threshold_row: Any
+    perm_idx: Any
+    lane_xacc: Any
+    lane_thetaacc: Any
     zero: Any
     reset_scale: Any
     neg_reset_scale: Any
@@ -504,10 +519,12 @@ class CartPole(BaseProblem):
             ``polemass_length`` (``masspole * length``), ``total_mass``
             (``masscart + masspole``), ``length``, ``force_mag``,
             ``neg_force_mag``, ``dt``, the ``(1, 4)`` ``threshold_row`` (with
-            ``theta_threshold`` in radians) and ``zero``, ``reset_scale``,
-            ``neg_reset_scale``, ``four_thirds``, ``nan`` (all float32), plus
-            the int32 loop scalars ``one_step`` and ``horizon`` -- so neither
-            the reset draw nor the trip condition ever sees an f64 constant.
+            ``theta_threshold`` in radians), the row-assembly lanes
+            ``perm_idx``/``lane_xacc``/``lane_thetaacc`` and ``zero``,
+            ``reset_scale``, ``neg_reset_scale``, ``four_thirds``, ``nan`` (all
+            float32), plus the int32 loop scalars ``one_step`` and ``horizon``
+            -- so neither the reset draw nor the trip condition ever sees an
+            f64 constant.
         """
         threshold_row = np.array(
             [
@@ -531,6 +548,19 @@ class CartPole(BaseProblem):
             neg_force_mag=enp.full((), -self.force_mag),
             dt=enp.full((), self.dt),
             threshold_row=evoxc.constant(evoxc.from_numpy(threshold_row)),
+            perm_idx=evoxc.constant(
+                evoxc.from_numpy(np.array([1, 0, 3, 2], dtype=np.int32))
+            ),
+            lane_xacc=evoxc.constant(
+                evoxc.from_numpy(
+                    np.array([[False, True, False, False]], dtype=np.bool_)
+                )
+            ),
+            lane_thetaacc=evoxc.constant(
+                evoxc.from_numpy(
+                    np.array([[False, False, False, True]], dtype=np.bool_)
+                )
+            ),
             zero=enp.full((), 0.0),
             reset_scale=enp.full((), self.reset_scale),
             neg_reset_scale=enp.full((), -self.reset_scale),
@@ -560,11 +590,25 @@ class CartPole(BaseProblem):
         in the same order as the four scalar updates ``x + dt * x_dot``,
         ``x_dot + dt * xacc``, ``theta + dt * theta_dot`` and
         ``theta_dot + dt * thetaacc``, with no reassociation -- so it is
-        bit-identical to them and replaces four multiplies, four adds and a
-        four-way concatenate with one concatenate, one multiply and one add.
+        bit-identical to them and replaces four multiplies, four adds and four
+        column reads with one multiply and one add on the row.
         Nothing else about the physics may be traded for ops: precomputing a
         reciprocal or reassociating a float changes which step a chaotic
         trajectory dies on and breaks the host-numpy oracle.
+
+        The row is never split into columns and never concatenated back
+        together. A column split lowers to four copies and the reassembly to a
+        second pass of copies, and on a compiled backend each copy is a
+        serialised dispatch through the same scratch buffer: four dispatches of
+        the step block, each a ``slow_memcpy``. Instead the two angular state
+        variables are taken with static slices of one lane each (no index
+        tensor, so no baked constant), the two velocity lanes of the update are
+        assembled by rotating the row with ``perm_idx`` and overwriting the two
+        acceleration lanes with :func:`enp.where`, so the whole physics chain,
+        the rotation and both selections compile into a single elementwise
+        region. Both spellings produce the same operands in the same order, so
+        the step is bit-identical; the selections only *discard* lanes, so a
+        NaN in one lane can never leak into the arithmetic of another.
 
         The death test is folded in here because the transition already has the
         whole next row in hand: :meth:`_death_mask` reads ``x'`` and ``theta'``
@@ -579,9 +623,9 @@ class CartPole(BaseProblem):
             ``(next_obs (B, 4), dead (B,))`` -- the Euler step and the death
             mask of the *resulting* state.
         """
-        # ``x`` itself needs no read any more: the fused update adds
-        # ``dt * x_dot`` to the whole row, position column included.
-        _x, x_dot, theta, theta_dot = enp.split(obs, _OBS_DIM, axis=1)
+        rows = obs.shape[0]
+        theta = evoxc.slice(obs, (0, 2), (rows, 1))
+        theta_dot = evoxc.slice(obs, (0, 3), (rows, 1))
         cos = enp.cos(theta)
         sin = enp.sin(theta)
         temp = (
@@ -592,7 +636,14 @@ class CartPole(BaseProblem):
             * (consts.four_thirds - consts.masspole * enp.square(cos) / consts.total_mass)
         )
         xacc = temp - consts.polemass_length * thetaacc * cos / consts.total_mass
-        deriv = enp.concatenate((x_dot, xacc, theta_dot, thetaacc), axis=1)
+        # Lanes 0 and 2 now hold the row's own ``x_dot``/``theta_dot``; lanes 1
+        # and 3 hold ``x``/``theta`` and are replaced by the two accelerations.
+        rotated = evoxc.gather(obs, consts.perm_idx, axis=1)
+        deriv = enp.where(
+            consts.lane_xacc,
+            xacc,
+            enp.where(consts.lane_thetaacc, thetaacc, rotated),
+        )
         next_obs = obs + consts.dt * deriv
         return next_obs, self._death_mask(next_obs, consts)
 
