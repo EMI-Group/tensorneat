@@ -4,7 +4,7 @@
 Mutation, crossover and compatibility distance as batch-first kernels over the split gene payload (`node_keys`, `node_attrs`, `conn_keys`, `conn_attrs`), population on axis 0, every shape static at build time.
 This node also owns the structural invariants that keep the execution schedule valid: `max_nodes`, `max_conns` and `genome.max_in_degree` are hard caps and a refused operation is a no-op for that individual, never a silent repair.
 Operators never allocate RNG keys or structural keys: the algorithm draws `key` and allocates `new_node_keys`/`new_conn_keys`, so a `(seed, config, shape)` triple reproduces a run.
-- It is the shared operator layer between `genome/` (which forwards into it) and the three families `./mutation/`, `./crossover/` and `./distance/`, and it owns the one homologue implementation (`alignment.py` host / `alignment_accelerator.py` accelerator) that crossover and distance both consume.
+It is the shared operator layer between `genome/` (which forwards into it) and the three families `./mutation/`, `./crossover/` and `./distance/`, and it owns the one homologue implementation (`alignment.py` host / `alignment_accelerator.py` accelerator) that crossover and distance both consume.
 
 ## Call contract (binding for `genome/base.py` and `algorithm/`)
 - `BaseMutation.__call__(state, genome, key, node_keys, node_attrs, conn_keys, conn_attrs, new_node_keys (P,), new_conn_keys (P, 3)) -> GenomeTensors` — validates the two key shapes (`ConfigError`), then splits the key per stage and runs the structural stages before the value stage.
