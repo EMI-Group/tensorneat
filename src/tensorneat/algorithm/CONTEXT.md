@@ -30,7 +30,7 @@ The setup-time initialisation graph gets the same treatment through `NEAT._stati
 Both passes read the **state**, and the three entries are part of `Pipeline._shape_signature` (`host_payload._formulation_signature`, defaulted to `"tiled"`/`"merge"`/`"host"` for a state no `setup` produced) next to the payload geometry, the substrate statics and the tiled-evaluate chunk budget, so updating any of them forces exactly one rebuild; `show_config()["pipeline"]` renders all three.
 A missing entry is never an error — the kernels default to `"tiled"`/`"merge"`/`"host"` (`_validation.distance_centre_mode`, `common.schedule_accelerator.kernel_mode`, the genome's `distance_formulation` reader), which is what a bare `State()` and every committed test get.
 `distance_centre` sets the width of every speciation centre payload here; `kernel_mode` selects the speciation body set (`_kernels.speciate` → `_scan_accelerator`), the distance grouping (`grouped.group_size`) and the schedule's scatter-free formulation; `distance_formulation` is read inside `genome/operations/distance`, not here.
-Every accelerator formulation is bit-identical to the host route, generation for generation; no committed test selects the statics, so this subtree's evidence is hand-run verification.
+Every accelerator formulation is bit-identical to the host route, generation for generation; the statics are pinned on the numpy leg by `test/unit/algorithm/test_scan_accelerator.py` and `test/unit/algorithm/test_distance_accelerator.py`, while bit identity on a compiled backend stays a hand-run verification.
 
 ## BaseAlgorithm Protocol (`base.py`)
 `setup(self, state=None) -> State` registers the algorithm's tensors and is host-side, running after the genome's and the problem's on the same threaded `State`: `NEAT.setup` builds and runs one `genome.initialize` graph, so it must never be called inside an active trace.
@@ -151,7 +151,7 @@ The others sit at or inside the baseline with no room left: `neat/_kernels.py` e
 ## Test Strategy
 Tests live in the sibling `./../../test` tree (read-only from here): `test/unit/algorithm/` for the spawn/selection/stagnation algebra on fixed keys and the speciation scans, `test/parity/algorithm/` against `benchmarks/legacy_jax` (the divergences above are the only allowed mismatches), `test/integration/` for a full XOR run reaching its target with a reproducible seed.
 Every kernel must be deterministic given `(seed, state)`: no dict ordering, no host RNG, no float-to-int conversion without an explicit mask.
-The accelerator spellings have no committed test — their bit-identity to the host route is a hand run, and a `test/backends` cell building a gated pop-100 graph in that mode is the missing regression guard.
+The accelerator spellings are pinned on the numpy leg by `test/unit/algorithm/test_scan_accelerator.py` and `test/unit/algorithm/test_distance_accelerator.py`; a `test/backends` cell building a gated pop-100 graph in that mode is the remaining regression gap.
 The speciate rewrite is verified by whole-run bit-identity (`fitness_history`, the four payload arrays, all ten `SpeciesState` leaves, `randkey`, `generation`, compared with `tobytes()` equality because padding NaNs defeat `np.array_equal`) at pop 100, 500 and 1000 — 144 arrays, zero mismatches.
 
 ## Routing Table

@@ -68,24 +68,36 @@ No timing is quoted here on purpose: each belongs to a record file that states
 its own protocol and names the tree it was measured on.
 
 * ``benchmarks/PERF_NUMPY.md`` -- the hand-maintained numpy per-generation
-  record of the two post-fix performance passes (op count, then the tiled
-  func-fit evaluate plus RL rollout hoist), with each before/after pair, its
-  protocol, peak RSS and reproduce commands: the current numpy cost evidence.
-* ``benchmarks/RESULTS.md`` -- the *generated* old-vs-new harness report,
-  rendered from ``benchmarks/results/authoritative.json``; it predates the
-  performance and search-quality work, so its new-side rows are pre-fix
-  evidence only and only ``benchmarks/run_benchmark.py`` may re-render it.
+  record of three measured passes (op count, the tiled func-fit evaluate plus
+  RL rollout hoist, and the ``evoxc`` interpreter A/B), each with its own
+  before/after pair, protocol, peak RSS and reproduce commands: the current
+  numpy cost evidence.
+* ``benchmarks/RESULTS.md`` -- the *generated* full-matrix old-vs-new harness
+  report, rendered only by ``benchmarks/run_benchmark.py`` from
+  ``benchmarks/results/authoritative.json``.
+  Its committed record was measured on the merged tree ``63f0fc67`` (3 repeats,
+  seeds 42/43/44, 150 generations), so every row describes that tree and that
+  session, and only a full harness re-run may replace it.
+  Its verdict is ``FAIL``, and the remaining CPU gap on ``xor_p100``,
+  ``xor3d_*`` and ``custom_pagie_p500`` is the documented ``evoxc`` interpreter
+  overhead the pinned ``v0.1.1`` tag still carries
+  (``benchmarks/PERF_NUMPY.md`` pass 3), not a kernel cost.
 * ``benchmarks/BACKENDS.md`` -- the measured ``numpy`` vs ``iree`` (llvm-cpu)
   per-generation table, its protocol and the per-gate portability fix record.
-* ``benchmarks/results/xor3d_quality_2026-11-04.md`` -- the post-fix
-  search-quality record.
+* ``benchmarks/results/xor3d_quality_2026-11-04.md`` -- the narrower xor3d and
+  Pagie quality record, superseded by the matrix record's quality rows.
 
 Structurally, the numpy reference interpreter pays per traced op *and* per
 element while the legacy baseline was the same work fused by XLA, so executed
-op count and element volume -- not micro-tuning -- are the levers there; and no
-compiled backend is claimed to beat the numpy interpreter on this hardware, so
-``"numpy"`` stays the default while ``backend=`` is forwarded verbatim to
-``evoxc.build``.
+op count and element volume -- not micro-tuning -- are the levers there.
+No CPU compiled backend beats the numpy interpreter on this hardware
+(``benchmarks/BACKENDS.md``), so ``"numpy"`` stays the default -- it also needs
+no optional dependency -- while ``backend=`` is forwarded verbatim to
+``evoxc.build``.  A device is the other case: every measured case is faster on
+``device="rocm"`` than on the interpreter, on both compiled paths
+(``benchmarks/GPU.md``), so ``device=`` is a real placement request, honoured
+end to end by :meth:`Pipeline._place_state` and never a hint a kernel silently
+ignores.
 
 The build is one-off and *per shape*: a wider genome
 (``max_nodes``/``max_conns``) or a bigger population is a separate compile, which
