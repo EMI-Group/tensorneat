@@ -32,6 +32,7 @@ Bit identity
 Both formulations are **exactly** equal to the host ones, not merely close, because they consume
 the same sanitized integer cells the table would be addressed with
 (:func:`~tensorneat.common.tensorization._key_indices`) rather than the raw keys:
+
 * ``key_slot_table`` writes a visible node's *slot* at cell ``key``; duplicate cells resolve in
   flat traversal order, so the cell ends up holding the **highest** slot that names it.
   :func:`key_template` takes ``reduce_max`` of ``select(match, slot, -1)``, i.e. the same highest
