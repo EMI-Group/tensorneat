@@ -11,8 +11,7 @@ All evolution, speciation and `randkey` consumption stay in `../neat`; the subst
 `__init__.py` re-exports `HyperNEAT`, `HyperNEATFeedForward`, `SubstrateSchedule`, `HyperNEATNode`, `HyperNEATConn` and the four substrate classes; `../__init__.py` re-exports only the two algorithms.
 `HyperNEAT.__init__(substrate, neat, weight_threshold=0.3, max_weight=5.0, aggregation=AGG.sum, activation=ACT.sigmoid, activate_time=10, output_transform=ACT.sigmoid)`; `HyperNEATFeedForward.__init__` is that signature minus `activate_time`.
 `setup(state=None)` chains `neat.setup` then `hyper_genome.setup` (the substrate is stateless and has no `setup`), and `ask` returns `neat.ask(state)` untouched at zero ops.
-Protocol members: `transform(state, pop) -> SubstrateSchedule`, `forward`, `prepare_forward(state, transformed, pop=None, samples=1)`, `forward_prepared`; `tell`/`show_details` delegate to `neat`, and `pop_size` is the read-only property `neat.pop_size`.
-`num_inputs` = `substrate.num_inputs - 1` (trailing bias removed), `num_outputs` = `substrate.num_outputs`.
+Protocol members: `transform(state, pop) -> SubstrateSchedule`, `forward`, `prepare_forward(state, transformed, pop=None, samples=1)`, `forward_prepared`; `tell`/`show_details` delegate to `neat`, `pop_size` is the read-only property `neat.pop_size`, `num_inputs` = `substrate.num_inputs - 1` (trailing bias removed) and `num_outputs` = `substrate.num_outputs`.
 Subclass hooks: `_genome_cls`, `_required_connection_type` and `_genome_extra_kwargs()` (the recurrent `activate_time`); `HyperNEATFeedForward` overrides only those three plus its `__init__` signature, so the variants cannot drift.
 
 ## Decode Algebra
