@@ -100,7 +100,6 @@ Config: `DefaultGenome(num_inputs=3 (XOR3d) / 2 (XOR), num_outputs=1, max_nodes=
 The result this node must not lose: XOR3d pop 100 (seeds 0-19, shipped genome defaults) escapes **13/20** and targets **11/20** against the frozen oracle's 4/20 and 2/20 (Fisher two-sided p = 0.0095); XOR3d pop 500 / pop 1000 target 6/6 and 3/3.
 Nothing here gates the pop-100 cell: species kill, spawn starvation, elite displacement, `max_in_degree = 4` (refusing 0.00-0.04 of fired add-conn gates), `max_depth = 16` against an observed maximum node level of 6-9, and an unsaturated output row are all measured non-binding.
 The lever is genome-side and shipped: `DefaultGenome`/`RecurrentGenome` build `DefaultMutation(conn_add=0.4, conn_delete=0.05)` (an explicit `DefaultMutation()` keeps 0.2/0.2), because at equal gates an add-conn is accepted about half as often as a delete-conn and an equal-gate operator's steady state stays under-wired; the density record is in `../CONTEXT.md`.
-The cell is not distance-gated, and `survival_threshold` at 0.1 / 0.5 plus a `min(2, member_count)` survivor floor were measured and rejected: they move which seeds escape instead of removing the cell.
 
 ## Known Issues
 Both host statics are part of the executable-cache signature (`host_payload._formulation_signature`), so switching either forces exactly one rebuild.
