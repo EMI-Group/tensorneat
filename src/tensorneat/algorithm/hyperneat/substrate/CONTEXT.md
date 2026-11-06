@@ -98,7 +98,9 @@ No test in this node may build an evoxc graph or import `jax`.
 
 ## Consumer contract (`../hyperneat.py`, the parallel sibling)
 It reads `substrate.query_coors` as the CPPN's `(conns_cnt, 2*cd)` input batch (one CPPN call per connection, weights mapped then packed), `substrate.nodes` and `substrate.conn_index` into gene payload rows whose leading columns are the keys, `substrate.nodes_cnt`/`conns_cnt` as the hyper genome's `max_nodes`/`max_conns`, `substrate.num_inputs`/`num_outputs` as the phenotype's fan-in/out (bias included, so report `num_inputs - 1` upward), and `substrate.connection_type` to pick the recurrent or feedforward executor.
-It must assert `query_coors.shape[1] == neat.num_inputs` (CPPN input width) and `neat.num_outputs == 1` (scalar weight per connection).
+It validates `query_coors.shape[1] == neat.num_inputs` (CPPN input width), `neat.num_outputs == 1` (scalar weight per connection), `substrate.num_inputs >= 2` (the last input is the bias), the `query_coors`/`conn_index` row counts, `conn_index.shape == (conns_cnt, 2)`, `nodes.shape == (nodes_cnt,)` with its permutation and block order, plus `substrate.connection_type` against the executor it pairs with — every failure a `TensorNEATError` raised before any genome is constructed.
+It hands `0 .. I-1` to the executor genome as `input_keys` and `I .. I+O-1` as `output_keys`, so the phenotype's `Transformed.output_slot` names the substrate output neurons instead of the genome's default last `O` payload rows; the block order above is what makes that read-out correct.
+A `DefaultSubstrate`/`FullSubstrate` phenotype runs on the recurrent executor, which unrolls a fixed `HyperNEAT(activate_time=...)` tick count and derives no depth bound, so a mesh needing more propagation steps than `activate_time` needs a larger tick budget; an `MLPSubstrate` runs on the feedforward executor, whose `max_depth` is derived from this geometry via `host_graph.node_depth` (which raises `GraphError` for a cyclic or input-unreachable layout).
 It must never mutate the returned arrays and must not call anything in this node from inside a trace.
 
 ## Routing Table
