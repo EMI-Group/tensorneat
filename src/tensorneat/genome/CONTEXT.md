@@ -88,17 +88,18 @@ The shipped pair `(0.1, 0.1, 0.4, 0.05)` raises P(any structural change) from 0.
 - One window-reduce node step lives in `step.py::NodeStepMixin`, parameterized by the update mask, never duplicated between `default.py` and `recurrent.py`.
 - Files stay under ~1000 lines and each file is one job: `base.py` (1005) is the node's only file above that guideline, `operations/distance/base.py` (1000) sits exactly on it, `grad.py` is 582, and the rest run down from `operations/distance/digest.py` (953) to `gene/node/origin.py` (61).
 ## Measured cost (this tree)
-Per-generation wall clock, one generation per case on the benchmark geometries (`../../benchmarks/cases.py`; XOR/XOR3d at pop 100/500/1000, Pagie at pop 500, CartPole at pop 100):
+Per-generation wall clock on the benchmark geometries (`../../benchmarks/cases.py`; XOR/XOR3d at pop 100/500/1000, Pagie at pop 500, CartPole at pop 100), measured on tree `31a31328`, one process per cell, warmup 2 + 5 timed generations, seed 42, `benchmarks/gpu_measure.py run`:
 
-Measured on this tree (`9f3fd77e`), one process per cell, warmup 2 + 5 timed generations, seed 42, `benchmarks/gpu_measure.py run --no-cross-check`:
-
-| case | numpy ms/generation | iree+rocm ms/generation | numpy dispatched ops/generation | rocm build s / peak RSS MiB |
+| case | numpy ms/generation | iree+rocm ms/generation | numpy dispatched ops/generation | speed-up |
 |---|---|---|---|---|
-| `xor_p100` | 35.61 | 10.86 | — | 7.6 / 1 886 |
-| `xor_p500` | 113.11 | 12.97 | 7 592 | 7.7 / 1 904 |
-| `xor_p1000` | 171.62 | 16.40 | — | 7.9 / 1 926 |
-| `custom_pagie_p500` | 854.73 | 16.03 | — | 8.0 / 1 933 |
-| `cartpole_p100` | 252.91 | 61.05 | 30 994 | 8.3 / 1 909 |
+| `xor_p100` | 33.22 | 10.48 | — | 3.17× |
+| `xor_p500` | 113.97 | 12.65 | 7 592 | 9.01× |
+| `xor_p1000` | 168.11 | 15.60 | — | 10.77× |
+| `custom_pagie_p500` | 871.87 | 15.75 | — | 55.4× |
+| `cartpole_p100` | 253.35 | 61.65 | 30 994 | 4.11× |
+
+The ROCm leg builds 7.2–8.4 s per static shape and peaks at ≈1.9 GiB of RSS.
+Every cell passes the generation-1 cross-check against numpy; at pop 500/1000 and on Pagie the state then drifts from generation 3 (float32 ulps amplified by a discrete species-membership decision on a continuous distance), while `speciate` on one bit-identical payload returns bit-identical species leaves on both backends.
 
 The same run with the harness's numerical cross-check enabled passes on generation 1 for `cartpole_p100` (59.80 ms median in that row).
 The numpy interpreter stays the fastest leg on CPU and the default; the compiled leg is launch-bound, so it wins on the flat func-fit graphs and loses on the rollout-heavy one unless that rollout's level sweep is unrolled (`## Measured cost of the accelerator level sweep`; the `cartpole_p100` row is dominated by the sweep).
