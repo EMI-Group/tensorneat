@@ -421,11 +421,11 @@ class Pendulum(BaseProblem):
           per-query region, because the packed body slices its observation out
           of the carried row instead of selecting it out of two leaves
           (``^bb5`` 4 -> 3). Net at the reference geometry, accelerator mode:
-          ``^bb5`` 3 + 4 dispatches per level trip + ``^bb8`` 3 = **21**
-          dispatches per timestep against the host carry's 4 + 5 + 3 = 22 on
-          the same graph family, whole-graph static sites 415 -> 414. The
-          host-mode graph is untouched at 445 sites and 19 dispatches per
-          timestep.
+          ``^bb5`` 3 + 5 dispatches per level trip + ``^bb8`` 3 = **21**
+          dispatches per timestep against the same packed carry before that
+          win, 4 + 5 + 3 = 22 on the same graph family, whole-graph static
+          sites 415 -> 414. The host-mode graph is untouched at 445 sites and
+          ``4 + 4 + 3`` = 19 dispatches per timestep.
 
         Args:
             keys: One rank-0 evoxc key for the single reset draw.
