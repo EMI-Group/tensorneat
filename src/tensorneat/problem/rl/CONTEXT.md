@@ -16,7 +16,7 @@ Each one is the reference recipe for a user-defined environment: no registry, no
 - Formulation gate: `Pendulum` traces exactly one of two carries, picked on the host from the trace-time static `state.kernel_mode` (`common.schedule_accelerator.kernel_mode(state)`: `"host"` on the numpy leg, `"accelerator"` on a GPU-class device); `CartPole` and `MountainCarContinuous` consult no mode.
 - `fitness_target` is validation-only: `None` skips the check, a non-finite value or one above the environment's attained ceiling (`max_step`, `0`, `93.0`) raises, and the attribute is stored as given.
 - `evaluate(state, keys, act_fn, transformed) -> (P,)` maximizes fitness: the mean over `repeat_times` of the episode return, `finalize_fitness`-ed last.
-- `show(state, key, act_fn, transformed)`: host-side, one individual, its own graph over the single rank-0 key (`evoxc.build` + `evoxc.run`), one printed line per repeat plus the mean, built with `**problem.base.build_options(state)` so it runs on the registered backend/device/compile options and an unusable backend raises rather than falling back.
+- `show(state, key, act_fn, transformed)`: host-side, one individual, its own graph over the single rank-0 key (`evoxc.build` + `evoxc.run`) built with `**problem.base.build_options(state)`, one printed line per repeat plus the mean; an unusable backend raises rather than falling back.
 - Beyond the shared `_rollout`/`_loop_cond`/`_loop_body`/`_constants` skeleton each file only adds its own step algebra and the `_terminated` rank-1 test façade.
 
 ## Algebra
