@@ -60,8 +60,7 @@ The trailing `has_valid` select (`select(count > 0, acc, 0.0)`) is emitted only 
 `act_fns` / `agg_fns` must be **trace-time static** sequences of callables with the documented signature, which is why a test with a custom tuple binds it (`functools.partial`); an id outside `[-1, len(options))` (activation) / `[0, len(options))` (aggregation) falls back to `z` / `0.0`, where the legacy `lax.switch` clamped to the last option.
 
 ## Dtypes, NaN and sentinels
-Kernels take and return `float32`; ids arrive as integral-valued `float32` gene columns (cast to `int32`) or already-`int32` (used as is), and `NaN` is the only float sentinel here (absent node row, uncomputed value, unmatched attribute slot), propagating through every activation.
-`I_INF = int32 max` never appears in this package (the mask plus `(P, N, K)` padding already encode absence on the aggregation axis), and evoxc's missing bitcast costs nothing here because these are numerics, not payload bit-twiddling.
+Kernels take and return `float32`; ids are integral-valued `float32` gene columns (cast to `int32`) or already-`int32` (used as is); `NaN` is the only sentinel here (absent node row, uncomputed value, unmatched attribute slot) and propagates through every activation; `I_INF` never appears, because the mask plus `(P, N, K)` padding encode absence on the aggregation axis.
 
 ## Cost
 The lever is the interpreter's per-op overhead, not arithmetic: a dispatched op costs ≈19–20 µs on the numpy reference interpreter at population-sized tensors (the package-wide law in `../CONTEXT.md`), so a reduction on `(P, N, K)` is worth `K` ops on `(P, N, 1)` only when it does not buy a wider pass — the whole case for the fold: one reduce-over-`-1` at `(P, N, K) = (2000, 50, 4)` measures ≈1.4 ms per level where the `K`-plane fold of the same window measures ≈0.4 ms, as the per-op law predicts for `K + 2` ops.
