@@ -138,9 +138,9 @@ Crossover is live only for species with more than `1 / survival_threshold` membe
 ## Known Risks (evoxc)
 `evoxc.scan` de-sugars to `while` + gather/scatter, so a wide carry trips iree's affinity analysis on CUDA/ROCm; the numpy backend is the reference and packed carries are the mitigation.
 Data-dependent `while_loop` trip counts work on numpy and iree/llvm-cpu but not on iree CUDA/ROCm or tvm — the reason every loop here is fixed-length.
-`cumsum` does not export on compiler backends, hence triangular-matmul prefix sums; `evoxc.constant` warns above 1 MiB, bounding how large a substrate coordinate table may be before it must become an explicit pipeline input.
+`cumsum` does not export on compiler backends, hence triangular-matmul prefix sums.
 `evoxc` has no `io_callback`/print op, so all logging stays in `show_details` on the host side.
-`DistanceRows`' tiling is a real copy, so one population-shaped row materialises `pop_size` copies of that centre; inside `matrix`'s scan it happens once per step and is released with the region — one centre live on the host leg, `k` on the grouped accelerator leg.
+`DistanceRows`' tiling is a real copy, so one population-shaped row materialises `pop_size` copies of that centre; inside `matrix`'s scan it is released with the region — one centre live on the host leg, `k` on the grouped accelerator leg.
 
 ## Constraints
 No `jax` / `torch` / `numpy.random` import anywhere in this subtree; `import tensorneat` must stay free of them (release gate).
