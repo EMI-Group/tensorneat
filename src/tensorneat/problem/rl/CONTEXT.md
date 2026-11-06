@@ -25,7 +25,7 @@ Each one is the reference recipe for a user-defined environment: no registry, no
 `B = P * repeat_times` with `P = static_batch_size(transformed)`, **individual-major**: row `p * R + r` is repeat `r` of individual `p`, so `P = 4, R = 1` and `P = 2, R = 2` draw the same four initial states from one key and produce identical per-episode returns.
 Initial states come from **one** `evoxc.random.uniform` off the single rank-0 key, which is never threaded through the loop and never replaced by `np.random`; the trip count is always static (`step < horizon`), never "while any episode is alive".
 The return accumulator rides in the carry and the loop emits no output, because an `evoxc.scan` would carry a `(max_step, B)` stack and scatter one row per iteration.
-`returns_of` is the only place the `(P, R)` layout is assumed, and a rollout prepares its policy query once with `_common.prepared_query(act_fn, batch)`, so the genome's loop-invariant pass operands are derived once per generation (a genome-free callable exposes no `prepare` and passes through unchanged).
+`returns_of` is the only place the `(P, R)` layout is assumed, and a rollout prepares its policy query once with `_common.prepared_query(act_fn, batch)`, so the genome's loop-invariant pass operands are derived once per generation.
 
 ### CartPole (`cartpole.py`)
 Classic Gym `CartPole-v1` with Euler integration: `dt=0.02`, `g=9.8`, `masscart=1.0`, `masspole=0.1`, half-pole `length=0.5`, `force_mag=10`, dead when `|x| > 2.4` or `|theta| > 12deg` (`= 0.2095 rad`), reset `U(-0.05, 0.05)^4`.
