@@ -7,7 +7,7 @@ This node owns the decode (CPPN → weights → gene payload → schedule), the 
 
 ## API Surface
 `hyperneat.py` (930 lines): `SubstrateSchedule`, `HyperNEAT(BaseAlgorithm)` and the decode helpers; `genes.py` (297): the two gene kernels and their host-only helpers; `hyperneat_feedforward.py` (113): `HyperNEATFeedForward`, a delta file with no kernels of its own.
-`__init__.py` re-exports `HyperNEAT`, `HyperNEATFeedForward`, `SubstrateSchedule`, `HyperNEATNode`, `HyperNEATConn` and the four substrate classes; `../__init__.py` re-exports only the two algorithms.
+`__init__.py` re-exports the two algorithms, `SubstrateSchedule`, the two gene kernels and the four substrate classes, and `../__init__.py` re-exports only the two algorithms.
 `HyperNEAT.__init__(substrate, neat, weight_threshold=0.3, max_weight=5.0, aggregation=AGG.sum, activation=ACT.sigmoid, activate_time=10, output_transform=ACT.sigmoid)`; `HyperNEATFeedForward.__init__` is that signature minus `activate_time`.
 `setup(state=None)` chains `neat.setup` then `hyper_genome.setup` (the substrate is stateless and has no `setup`), and `ask` returns `neat.ask(state)` untouched at zero ops.
 Protocol members: `transform(state, pop) -> SubstrateSchedule`, `forward`, `prepare_forward(state, transformed, pop=None, samples=1)`, `forward_prepared`; `tell`/`show_details` delegate to `neat`, `pop_size` is the read-only property `neat.pop_size`, `num_inputs` = `substrate.num_inputs - 1` (trailing bias removed) and `num_outputs` = `substrate.num_outputs`.
