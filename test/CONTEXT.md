@@ -121,6 +121,7 @@ Files stay under ~1000 lines; one test module per source module, named `test_<mo
 `release_gate_no_jax.py` does not match pytest's default `python_files` patterns, so `conftest.py::pytest_collect_file` explicitly collects that one filename; do not rename it without editing the hook.
 `test_release_gate_surface.py` matches the default `test_*.py` pattern, so it needs no hook; it imports `release_gate_no_jax` for `FORBIDDEN`, the subprocess environment and the import hook, which works because `conftest.py` puts `test/` on `sys.path`.
 `FORBIDDEN` lives only in `release_gate_no_jax.py`; adding a framework there strengthens every gate at once, and the surface gate's `MIN_MODULES`/`MIN_FILES` floors are what stop an empty walk or scan from passing.
+`requires_iree` and `requires_rocm` are registered in `conftest.py` (`pyproject.toml` is read-only for this node); the ROCm availability probe lives only inside `./backends/test_rocm_pipeline.py`, so `conftest.py` never imports `iree` or touches `/dev/kfd`.
 A test may not edit `../src`, `../benchmarks` or `pyproject.toml`: cross-node needs go into the report to the parent.
 Suite output must be deterministic — a flaky test is a bug in the test, not a `pytest.retries` candidate (the plugin is not installed).
 
