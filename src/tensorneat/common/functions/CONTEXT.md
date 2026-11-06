@@ -83,7 +83,6 @@ Out-of-range ids fall back to identity / `0.0` instead of clamping to the last o
 
 ## Known Issues
 `SympyMaxabs` returns a `Piecewise` whose conditions are `Eq(Abs(t_i), Max(Abs(...)))` per node, so `Genome.sympy_func`'s closed-form substitution multiplies those branch sets layer by layer: ≈27 s at 2 hidden layers, >110 s at 3 and 0.02 s at 1 on a `maxabs` genome (interpretability only; no generation, fitness or trace path is affected). The fix is a cheaper signed-argmax formulation that keeps the first-maximum tie-break without a per-node `Piecewise` over `Max`.
-`apply_aggregation`'s docstring op counts (7 for a one-option `sum` list, 12 for `max`, 57 for the canonical list at `(100, 50, 8)`) predate the `K`-plane fold and understate a folded dispatch; `act.py`'s counts are unaffected.
 
 ## Constraints
 - No `jax`, `torch`, `numpy.random` anywhere in this package; graph code uses `evoxc` ops only, host code may use `numpy` / `sympy`.
