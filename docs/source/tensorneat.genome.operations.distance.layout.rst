@@ -9,4 +9,4 @@ tensorneat.genome.operations.distance.layout module
 .. automodule:: tensorneat.genome.operations.distance.layout
    :members:
    :show-inheritance:
-   :exclude-members: attr, attrs_rows, base, count_i32, dump_i32, fold_i64, iinf_i32, key_base_i64, offsets, offsets_plus_one, one_i64, owner, pad_centre_i64, pad_column_i64, pad_i32, row_index, table, tag_scale_i64, tail, zero_f32, zero_i32, zeros
+   :exclude-members: attr, attrs_rows, base, count_i32, dump_i32, fold_i64, iinf_i32, key_base_i64, marker_pad, offsets, offsets_plus_one, one_i64, owner, pad_centre_i64, pad_column_i64, pad_i32, row_index, table, tag_scale_i64, tail, zero_f32, zero_i32, zeros
