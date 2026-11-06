@@ -108,7 +108,6 @@ Numeric agreement (`P=100`, one key, same toy policies): iree vs numpy per-indiv
 Cross-backend fitness is therefore reproducible to float32 rounding but never bitwise, and no test may assert cross-backend trajectory equality.
 
 ## Notes for Agents
-- `CartPole.show` computes the survival length only for a finite return (`math.isfinite`), so a NaN-poisoned policy prints `survived n/a (NaN return), return nan` instead of raising from a bare `int(round(...))`; the final-state and mean-return lines print `nan` too.
 - Dead in `src/`: `_CartPoleConstants.masscart` is built but never read (only the derived `total_mass` is), and `_terminated` (`cartpole.py`, `mountaincar.py`) has no caller outside `test/unit/problem`.
 - **`evoxc.remainder` is not backend-consistent**: numpy implements floor-mod while `stablehlo.remainder` (and hence `iree`) is `fmod`, so an `angle_normalize` written with it wraps `-3pi` to `-3pi` instead of `-pi` on iree and inflates the cost by 2.4× while numpy looks perfect; the floor form is bit-identical on both, and the mismatch (`evoxc/ops/elementwise.py` documents "sign of the dividend") is worth an upstream report.
 - **MountainCarContinuous's reward is deceptive**: `a -> 0` (any small-weight policy) returns exactly `0`, an aggressive constant policy returns `-0.1*max_step`, and only a bang-bang energy-pumping policy reaches the goal (`a = sign(velocity)` at `P=8` returns **90.8**, min 89.1, at both 999 and 200 steps — which also proves the `100` bonus is paid exactly once).
