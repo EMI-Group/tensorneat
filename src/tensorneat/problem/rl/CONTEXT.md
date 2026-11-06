@@ -94,7 +94,7 @@ The per-iteration overhead costs **0** dispatches (the trip condition and counte
 - `L` (the level loop's trip count) is a **runtime** value — the population's own depth — so a per-timestep total moves by the level trip's width per `L`: instrumenting `Interpreter._run_block` over 20 `CartPole` generations reads `L` 2 at the generation after setup, 3 at the median and 4 at the deepest.
 
 ## Measured cost
-On this worktree (2026-11-06, reference geometry): one `cartpole_p100` generation costs **248.70 ms** on the numpy interpreter and executes **30 994** dispatched ops, and the same cell on `backend="iree"`, `device="rocm"` costs **150.41 ms** per generation.
+On this worktree at the reference geometry: one `cartpole_p100` generation costs **248.70 ms** on the numpy interpreter and executes **30 994** dispatched ops, and the same cell on `backend="iree"`, `device="rocm"` costs **150.41 ms** per generation.
 The compiled leg's cost law is `max(host submission, device)`: a flat graph is ≈63 µs fixed plus ≈2.2–2.5 µs per dispatch, one `while` iteration adds ≈50 µs because its condition is read back to the host, and `Tensor.to(cpu)` is ≈47–60 µs per leaf; a flat-graph numpy interpreter measurement reads ≈19–20 µs per dispatched op, so op count is the lever on either leg.
 Both legs are linear in the horizon with no quadratic term and nearly flat in the population (10× the population costs ≈1.07–1.09× at 200 steps; 10× the horizon costs ≈2.5× Pendulum / ≈5× MountainCar).
 The rollout component alone (`evaluate` traced with a genome-free toy policy) is 3.4–10.0× cheaper on iree-llvm-cpu than on numpy (a ≈0.65–0.70 s one-off build per shape), while a full compiled pipeline stays launch-bound on llvm-cpu (237.9 ms median step, 7.8–8.0 s build per shape).
