@@ -3,8 +3,7 @@
 ## Intent
 HyperNEAT evolves only a CPPN (an ordinary `../neat` network) and derives a *substrate* network from it: the CPPN is queried once per substrate connection at the coordinates of that connection's two endpoints, and its single scalar output becomes that connection's weight.
 The substrate topology is fixed at construction, so a whole CPPN population decodes into one batch-first execution schedule of a dense, identical-shaped phenotype network — no padding, no NaN rows.
-This node owns the decode (CPPN → weights → gene payload → schedule), the two variants (`HyperNEAT` recurrent, `HyperNEATFeedForward` feedforward), the two substrate gene kernels (`./genes.py`) and the host-only substrate geometry (`./substrate`).
-All evolution, speciation and `randkey` consumption stay in `../neat`; the substrate object is host-side geometry that never enters `State`.
+This node owns the decode (CPPN → weights → gene payload → schedule), the two variants, the two substrate gene kernels (`./genes.py`) and the host-only substrate geometry (`./substrate`); all evolution, speciation and `randkey` consumption stay in `../neat`, and the substrate object never enters `State`.
 
 ## API Surface
 `hyperneat.py` (930 lines): `SubstrateSchedule`, `HyperNEAT(BaseAlgorithm)` and the decode helpers; `genes.py` (297): the two gene kernels and their host-only helpers; `hyperneat_feedforward.py` (113): `HyperNEATFeedForward`, a delta file with no kernels of its own.
