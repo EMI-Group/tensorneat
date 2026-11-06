@@ -570,6 +570,22 @@ class MountainCarContinuous(BaseProblem):
         operand, and ``enp.where`` would promote the result away from ``bool``
         instead of returning the mask at its own dtype.
 
+        IREE dispatch floor: one step is **4 dispatches**, the minimum the
+        carried tree allows (static ``stream.cmd.dispatch`` count of the
+        rocm/gfx942 ``cfg.mlir`` at ``pop 100``): the ``(B, 1)``-domain physics,
+        then one dispatch per carried tensor -- ``total`` ``(B,)``, ``alive``
+        ``(B,)`` and ``obs`` ``(B, 2)``. Every carried tensor is stored to its
+        own buffer on each iteration, and the physics feeds all three roots
+        (``done`` and the penalty for the two rank-1 roots, ``next_obs`` for the
+        row), so it is materialized instead of cloned: ``cos`` is not a
+        clonable op, while the cheap comparisons are (``cmpf oge 0.45``
+        reappears inside every root's region). Formulations that reorder the
+        chain cannot beat 4 -- deriving ``alive`` first and feeding the
+        accumulator from it, recovering the terminal step with ``done & alive``,
+        and moving the whole reward chain into the column domain all measure 4
+        dispatches -- and 3 would need the carried set down to two tensors,
+        which this documented carry forbids.
+
         Args:
             query: The policy query, prepared once for the whole rollout by
                 :func:`._common.prepared_query` so the per-pass operands are not
