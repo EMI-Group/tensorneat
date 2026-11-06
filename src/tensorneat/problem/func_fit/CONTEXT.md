@@ -14,6 +14,7 @@ The dataset is baked into the compiled artifact, so its size is paid on every bu
 - `setup(state=None) -> State` — validates the budget, then delegates to `StatefulBaseClass.setup`; func fit registers no keys.
 - The budget is therefore enforced at construction, in `setup`, and again at bake time in `_dataset_constants()`, so a direct `evaluate` call (the parity harness) is guarded too; the `TensorNEATError` propagates unchanged through `evoxc.build`.
 - `evaluate(state, keys, act_fn, transformed) -> (P,)`: tiling + one `act_fn` call + reduction + `finalize_fitness`; `keys` is accepted and unused (func fit is deterministic).
+- The problem hands `act_fn` the whole `(P*S, I)` block in **one** call; the only regrouping happens inside `host_payload._NetworkActFn`, at the trace-time chunk budget (`host_payload.eval_chunk_rows`), never here.
 - `_predict_and_loss(act_fn, pop_size) -> (pred (P, S, O), loss (P,))` is the shared in-trace body behind `evaluate` and `show`.
 - `_host_dataset() -> (inputs, targets)` is the single float32 coercion, shared by `dataset_nbytes`, `validate_dataset` and `_dataset_constants`, so the budget arithmetic and the baked constants can never disagree.
 - `_dataset_footprint(inputs, targets)` is the byte sum and `_check_dataset_budget(inputs, targets)` the single raise (message carries the two shapes, the bytes, the budget and the remedy); `validate_dataset` and `_dataset_constants` both go through the latter.
