@@ -18,6 +18,11 @@ The shipped instance is `_kernels.speciate`'s gated path: `gated_row` builds one
 Species loops are fixed-length `evoxc.scan`s over `arange(species_size)` with per-slot masks; `pop_batch_size` batching is an `evoxc.scan` over the batch axis of the mutation kernel only.
 evoxc has no `.at[]`, no in-place mutation and no `cumsum`/`max(where=…)`/`sum(where=…)`/`any`/`all`/`take`/`searchsorted`/`repeat`: mask with `evoxc.select` before reducing, prefix-sum with `dot` against a static triangular ones matrix, move data with flattened `evoxc.gather`/`evoxc.scatter` (replacement-only — an accumulating update is "reduce first, scatter once").
 
+## Device & Backend Placement
+`NEAT._build_options(state)` is this subtree's only reader of `backend`/`device`/`compile_options`: `{"backend": state.backend}` when registered (else `"numpy"`), `device` only when registered and not `None`, then `compile_options` expanded last, so a `compile_options["device"]` entry overrides the registered device.
+`NEAT.setup` is the subtree's only setup-time `evoxc.build`/`evoxc.run`: a plain closure `_init_kernel` (no `@evoxc.defn` here) built with `TensorSpec((), evoxc.int64)` and run on `state.randkey`; `Pipeline.setup` registers `device=None` meanwhile, so it runs on CPU.
+`evoxc.run` moves nothing implicitly, so both run boundaries rely on their caller (`randkey` is cpu:0 by construction; the `state.pop` leaves in `_gene_counts` must already live on `executable.device`), and `show_details` is the only host-materialising surface (`to_numpy`), called by the pipeline on a `device=None` host view.
+
 ## Formulation Statics (device-derived, graph-visible configuration)
 `Pipeline.setup` derives three trace-time statics from the resolved device kind through `host_payload._formulation_statics` and registers them as plain strings: `distance_centre` (`"tiled"`|`"single"`), `distance_formulation` (`"merge"`|`"index_free"`) and `kernel_mode` (`"host"`|`"accelerator"`).
 A GPU-class kind (`rocm`, `hip`, `hips`, `cuda`, `vulkan`, `gpu`, case-insensitive) gets `("tiled", "index_free", "accelerator")`; every other kind and `None` gets `("single", "merge", "host")` — the numpy leg, value- and op-identical to a state carrying no statics.
