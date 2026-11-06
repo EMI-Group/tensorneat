@@ -97,7 +97,7 @@ Ledger: XOR3d pop 100, seeds 0-19, 150 generations, numpy backend, one process p
 | **shipped** | 0.1/0.1/0.4/0.05 | **13/20** | **11/20** | 75.0 | −4.35e-02 |
 | milder rebalance | 0.1/0.1/0.3/0.1 | 7/20 | 4/20 | 73.0 | −0.250 |
 Fisher two-sided against the in-session control: shipped **p = 0.0095**, milder 0.48 — only the sharp pair clears the pre-registered bar (escape ≥ 8/20 and ≥ 2× the control, or p ≤ 0.05).
-Composition, mean over seeds 0-19 at generations 10 / 50 / 150 (connections · present hidden · output in-degree): shipped 4.55 / 5.06 / 10.38 · 1.74 / 2.50 / 4.19 · 2.29 / 1.61 / 2.59, control 3.08 / 4.14 / 6.06 · 1.64 / 2.98 / 4.36 · 1.45 / 1.09 / 1.27.
+Composition, mean over seeds 0-19 at generation 150 (connections · present hidden · output in-degree): shipped 10.38 · 4.19 · 2.59, control 6.06 · 4.36 · 1.27.
 Regression gates, same session, shipped law: XOR3d pop 500 seeds 42-47 escape and reach the target 6/6 (control 4/6, whose seed 43 stays flat), XOR3d pop 1000 seeds 42/43/44 3/3 (control 2/3), XOR pop 100 seed 42 target at generation 41 (final −1.64e-05, control 51) and XOR pop 500 seed 42 at generation 33 (final 0.0, control 32).
 Mechanism: at equal connection gates add-conn is accepted about half as often as delete-conn (0.50 against 1.00 of fired gates), so the operator's own steady state is −0.14…−0.22 connections per individual per generation and the population stays under-wired; `0.4`/`0.05` moves that steady state to +0.15 and lifts the escape rate at equal node count (the two node gates stay at `0.1`, so the node-count trend is ≈0 net).
 
