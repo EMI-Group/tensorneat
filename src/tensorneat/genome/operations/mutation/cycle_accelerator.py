@@ -19,52 +19,44 @@ lowers ``scatter`` to **one workgroup of one thread**:
    compare plus a reduction, all parallel.  Same representative-function contract (an
    injective map key -> row; :mod:`~.cycle` proves the answer is invariant over the choice),
    same visibility law, different, deterministic representative.
-2. **Hop: a broadcast reduction, no scatter, with a static trip count.**  The reached set is
-   carried as a ``(P, N)`` slice of one ``(P, N + 1) int32`` tensor whose last column is the hop
-   counter, seeded with the destination one-hot ``equal(arange(N), dst_row)``; each hop is
-   ``live = edge_valid & gather(reach, src_flat)`` then
+2. **Hop: a broadcast reduction, no scatter.**  The reached set is carried as a plain
+   ``(P, N + 1) bool`` vector (columns ``0 .. N-1`` the reached set, column ``N`` the loop's
+   growth flag), seeded with the destination one-hot ``equal(arange(N), dst_row)``; each hop
+   is ``live = edge_valid & gather(reach, src_flat)`` then
    ``new = reduce_max(live[:, :, None] & dst_onehot, axes=1)``, so a reached edge marks its
-   destination through a reduction instead of a write.  The loop is an ``evoxc.while_loop``
-   whose condition is ``hops < node_count`` — a **static** trip count, never a data-dependent
-   one: the relaxation is monotone and each hop only adds the successors of an already-reached
-   node, so the breadth-first closure from a single source over ``node_count`` nodes saturates
-   after at most ``node_count - 1`` hops and the ``node_count``-th hop grows nothing.  The
-   reached set after the full budget is therefore bit-identical to the one the early-exiting
-   data-dependent loop reached, for every topology.
-   ``evoxc.scan`` is not an option here: it requires at least one stacked tensor output (a body
-   that only reduces is refused), and that stack would add a per-hop ``scatter`` plus a
-   ``(length, ...)`` accumulator — more dispatches and element volume than the counted region,
-   for the same static trip count.
+   destination through a reduction instead of a write.
 
 Measured on the box's MI300X VF (gfx942, ROCm 7.1, IREE 3.13) with the predicate isolated at
 the ``xor`` geometry (``max_nodes`` 50, ``max_conns`` 100, ``key_span`` 150), warmed, device ms
 per call from ``rocprofv3 --kernel-trace``: **0.769 -> 0.173 ms at pop 500** and
 **1.425 -> 0.282 ms at pop 1000**, i.e. -77 % / -80 %, with the graph's last ``scatter`` gone
-(scatters 1 -> 0).  Those numbers are the **key resolution's** (dense ``scatter`` table against
-the equality template) on the data-dependent hop loop that shipped with it, so they are not this
-spelling's per-call cost: the counted loop spends ``node_count`` hops where that loop exited at
-the payload's breadth, which only a device measurement can price.  Splitting the resolution into
-one ``(P, E, N)`` pass per key family halves the transient but adds ten dispatches and measured
-0.206 / 0.345 ms — so the single pass is the shipped form.  The numpy reference interpreter pays
-the ``(P, Q, N)`` element volume in full (it is ~6-8x the host call there), which is exactly why
-``"host"`` stays the default and this route is selected by :data:`KERNEL_MODE_KEY` on a device
-where the serialised scatters dominate.
+(traced ops 92 -> 81, scatters 1 -> 0).  Splitting the resolution into one ``(P, E, N)`` pass
+per key family halves the transient but adds ten dispatches and measured 0.206 / 0.345 ms — so
+the single pass is the shipped form.  The numpy reference interpreter pays the ``(P, Q, N)``
+element volume in full (it is ~6-8x the host call there), which is exactly why ``"host"``
+stays the default and this route is selected by :data:`KERNEL_MODE_KEY` on a device where the
+serialised scatters dominate.
 
 The switch is a **static host branch**: both spellings are plain traced helpers (never
 ``@evoxc.defn``), so a graph is exactly one of them and no backend ever sees both.
 
-**The loop carries one value, and that value is the one the answer reads** (``iree-compile``
-release gate).  A ``while_loop`` result nothing reads is dropped by ``iree-compile`` 3.13's
+**The loop carries one value, and every column of it is consumed** (``iree-compile`` release
+gate).  A ``while_loop`` result nothing reads is dropped by ``iree-compile`` 3.13's
 ``scf.while`` canonicalization together with the corresponding body block argument, while the
 yield operand and the loop operand stay, which makes the op illegal
 (``region branch point has 2 operands, but region successor needs 4 inputs``); the failure
 surfaces much later, in ``iree-stream-conversion``, and only for the **assembled** generation
-graph — the same kernel compiles and runs standalone.  A separate ``(reach, growing)`` pair
+graph — the same kernel compiles and runs standalone, and the ``"host"`` spelling escapes it
+only because its destination-passing scatter aliases the carried value, so its body reduces to
+``scf.yield %arg`` and the rewrite stays consistent.  A separate ``(reach, growing)`` pair
 therefore fails on the assembled graph even when ``growing`` is consumed by a value-identity
-``logical_not``.  So the loop here has exactly one carried tensor — the ``(P, N + 1) int32``
-reached set with the hop counter in column ``N`` — whose result is what the answer reads; the
-counter rides inside it instead of beside it, and no ``while_loop`` with an unread result belongs
-in this predicate.
+``logical_not``; what compiles is the packed form shipped here — one ``(P, N + 1) bool`` tensor
+whose columns ``0 .. N-1`` are the reached set and whose column ``N`` is the growth flag
+(broadcast over the population rows), read by ``cond``, recomputed by the body and read again
+after the loop as a convergence guard (an unreached-stable set answers ``False``, i.e. refuses
+the mutation instead of admitting a cycle).  Do not split it back into two carried values, and
+do not drop the flag column, without re-running ``iree-compile`` on a traced generation graph
+in this mode.
 
 Correctness is the host formulation's contract, unchanged: the out-of-span-key precondition,
 the duplicate-key invariance and the "a degenerate candidate answers ``False``" rule all hold
@@ -240,13 +232,11 @@ def closes_cycle_accelerator(
         both correctness arguments of :mod:`~.cycle`, are shared rather than re-derived.
         Everything the hop needs that does not depend on ``reach`` (``dst_onehot``,
         ``src_flat``, ``valid_flat``) is traced once, outside the loop region.
-        The loop carries a single ``(P, N + 1) int32`` tensor — the reached set plus its hop
-        counter in column ``N`` — and runs exactly ``node_count`` hops, a static trip count, so
-        the reached set it hands the read-back is the saturated breadth-first closure whichever
-        topology it walked (see the module note for the saturation argument and for why the
-        counter is packed into that one value).  A ``while`` result nothing reads makes
-        ``iree-compile`` produce an illegal ``scf.while`` for the assembled generation graph, so
-        the loop has one result and the answer reads it.
+        The loop carries a single ``(P, N + 1) bool`` tensor — the reached set plus its growth
+        flag in column ``N`` — and every column is consumed (``cond``, the body, and the final
+        convergence guard), because an unused ``while`` result makes ``iree-compile`` produce
+        an illegal ``scf.while`` for the assembled generation graph; the module note holds the
+        compiler evidence and the exact rewrite at fault.
     """
     pop_size, node_count = node_keys.shape
     edge_count = conn_keys.shape[1]
@@ -270,86 +260,83 @@ def closes_cycle_accelerator(
         evoxc.slice(hits, (0, 0), (pop_size, edge_count)),
         evoxc.slice(hits, (0, edge_count), (pop_size, edge_count)),
     )
-    # The carried value is one ``(P, N + 1) int32`` tensor: columns ``0 .. N-1`` are the reached
-    # set as ``0``/``1`` and column ``N`` is the hop counter, identical on every population row
-    # (one value only - see the module note on the ``while`` result the compiler drops), so the
-    # flat index of a row is its column plus these per-individual row offsets.
-    width = node_count + 1
+    # Row offsets of the ``(P, N)`` reach vector: pure static data, one constant, so a row
+    # index plus these offsets is the flat index of the reach gather.
     offsets = _static_constant(
-        np.arange(0, pop_size * width, width, dtype=np.int32).reshape(pop_size, 1)
+        np.arange(0, pop_size * node_count, node_count, dtype=np.int32).reshape(
+            pop_size, 1
+        )
     )
     positions = pop_size * edge_count
     # ``edge_src`` is clamped into ``[0, N)`` by the resolution, so this flat index always
     # addresses a real cell; an edge with an absent endpoint is masked afterwards
     # (``valid_flat``) instead of being redirected to a dump column.
     src_flat = enp.reshape(evoxc.add(edge_src, offsets), (positions,))
-    # ``0``/``1`` masks, so one hop of the ``int32`` reached set is one ``multiply`` and the
-    # ``maximum`` that applies a hop is its logical OR.
-    valid_flat = evoxc.cast(enp.reshape(edge_valid, (positions,)), evoxc.int32)
+    valid_flat = enp.reshape(edge_valid, (positions,))
     columns = enp.arange(0, node_count, dtype=evoxc.int32)
     # Loop-invariant: the destination one-hot over the node axis, ``(P, E, N)``.
-    dst_onehot = evoxc.cast(
-        evoxc.equal(enp.reshape(edge_dst, (pop_size, edge_count, 1)), columns),
-        evoxc.int32,
+    dst_onehot = evoxc.equal(
+        enp.reshape(edge_dst, (pop_size, edge_count, 1)), columns
     )
-    zero = _static_constant(np.asarray(0))
-    one = _static_constant(np.asarray(1))
-    # The hop budget is the node count.  The relaxation is monotone and a hop only ever adds
-    # the successors of an already-reached node, so a breadth-first closure from one source over
-    # ``node_count`` nodes saturates after at most ``node_count - 1`` hops and the ``node_count``
-    # -th hop grows nothing: a fixed-length loop ends on the saturated reached set for every
-    # topology, which is why the trip count is a static constant and not a growth flag.
-    hop_budget = _static_constant(np.asarray(node_count))
-
-    # Seed the reached set at the destination, hop counter ``0``.  ``dst_row`` lies in
-    # ``[0, N)`` and the ``dst_hit`` term clears an absent destination, so the seed needs no
-    # dump column and - like the host formulation - is never a ``scatter``.
-    carried = enp.concatenate(
+    # Seed the reached set at the destination.  ``dst_row`` lies in ``[0, N)`` and the
+    # ``dst_hit`` term clears an absent destination, so the seed needs no dump column and
+    # - like the host formulation - is never a ``scatter``.
+    # The carried tensor is ``(P, N + 1)``: columns ``0 .. N-1`` are the reached set and column
+    # ``N`` is the loop's growth flag, broadcast over the population rows.  The flag lives
+    # *inside* the single carried value on purpose - see the module note.
+    seed_flags = enp.broadcast_to(
+        enp.full((1, 1), True, dtype=evoxc.bool_), (pop_size, 1)
+    )
+    reach = enp.concatenate(
         [
-            evoxc.cast(
-                evoxc.logical_and(evoxc.equal(columns, dst_row), dst_hit), evoxc.int32
+            enp.reshape(
+                evoxc.logical_and(evoxc.equal(columns, dst_row), dst_hit),
+                (pop_size, node_count),
             ),
-            enp.zeros((pop_size, 1), dtype=evoxc.int32),
+            seed_flags,
         ],
         axis=1,
     )
+    flag_length = (pop_size, 1)
 
-    def cond(state):
-        """Run the whole static budget, whatever the payload's depth is."""
-        # Column ``N`` is uniform across the population rows, so one row answers for all of
-        # them; the reshape makes the predicate the rank-0 ``bool`` the region op requires.
-        hops = evoxc.reshape(evoxc.slice(state, (0, node_count), (1, 1)), ())
-        return evoxc.less(hops, hop_budget)
+    def cond(carried):
+        """Continue while the reached set gained a node (the carried flag's column)."""
+        return evoxc.reduce_max(evoxc.slice(carried, (0, node_count), flag_length))
 
-    def body(state):
+    def body(carried):
         """One hop: every live edge whose source is reached marks its destination."""
-        current = evoxc.slice(state, (0, 0), (pop_size, node_count))
+        current = evoxc.slice(carried, (0, 0), (pop_size, node_count))
         reached = evoxc.gather(
-            enp.reshape(state, (pop_size * width,)), src_flat, axis=0
+            enp.reshape(current, (pop_size * node_count,)), src_flat, axis=0
         )
-        live = evoxc.multiply(valid_flat, reached)
+        live = evoxc.logical_and(valid_flat, reached)
         marked = evoxc.reduce_max(
-            evoxc.multiply(enp.reshape(live, (pop_size, edge_count, 1)), dst_onehot),
+            evoxc.logical_and(enp.reshape(live, (pop_size, edge_count, 1)), dst_onehot),
             axes=1,
         )
-        hops = evoxc.add(evoxc.slice(state, (0, node_count), (pop_size, 1)), one)
-        return enp.concatenate([evoxc.maximum(current, marked), hops], axis=1)
+        grown = evoxc.logical_or(current, marked)
+        grew = enp.reshape(
+            evoxc.reduce_max(evoxc.not_equal(grown, current), axes=1), (pop_size, 1)
+        )
+        return enp.concatenate([grown, grew], axis=1)
 
-    carried = evoxc.while_loop(cond, body, carried)
-    # Read the reached set at the candidate source's row, in the same flat ``(P, width)``
-    # address space the hop uses - the counter column is simply never addressed.
+    carried = evoxc.while_loop(cond, body, reach)
+    reach = evoxc.slice(carried, (0, 0), (pop_size, node_count))
+    # Read the reached set at the candidate source's row.
     src_slot = enp.reshape(evoxc.add(src_row, offsets), (pop_size,))
     reached = enp.reshape(
-        evoxc.gather(enp.reshape(carried, (pop_size * width,)), src_slot, axis=0),
+        evoxc.gather(enp.reshape(reach, (pop_size * node_count,)), src_slot, axis=0),
         (pop_size, 1),
     )
-    # No convergence guard: the loop spends its full ``node_count`` hops, so the carried reached
-    # set is the saturated closure and the data-dependent spelling's "the last hop grew nothing"
-    # term (``logical_not(settled)``, the identity by that saturation argument) is gone with the
-    # flag that carried it.
+    # The carried flag is always ``False`` here - the loop's condition IS that flag, so it only
+    # exits on a hop that grew nothing - which makes this term the identity on every backend.
+    # Read it as a convergence guard: a reached set that had not stabilised answers ``False``,
+    # i.e. refuses the mutation rather than admitting a cycle.
+    settled = evoxc.slice(carried, (0, node_count), flag_length)
     return enp.reshape(
         evoxc.logical_and(
-            evoxc.logical_and(evoxc.not_equal(reached, zero), src_hit), dst_hit
+            evoxc.logical_and(evoxc.logical_and(reached, src_hit), dst_hit),
+            evoxc.logical_not(settled),
         ),
         (pop_size,),
     )
