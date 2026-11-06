@@ -38,6 +38,11 @@ class _PreparedPass(NamedTuple):
     :meth:`RecurrentGenome.prepare_pass` derives it once per payload; each
     :meth:`RecurrentGenome.forward_prepared` call then runs only the per-query half, so a
     rollout loop pays the pass prelude once instead of once per timestep.
+
+    ``values_seed`` is the ``(rows, max_nodes)`` ``NaN`` block the tick loop starts from (its
+    one broadcast constant) and ``readout`` the :class:`.step._ReadOut` of the schedule (the
+    output-slot gather index, its liveness mask and the ``NaN`` fill); both depend only on the
+    schedule and the static shapes, so no query pays their derivation.
     """
 
     node_attrs: evoxc.SymbolicTensor
@@ -46,6 +51,8 @@ class _PreparedPass(NamedTuple):
     samples: int
     pop_size: int
     max_nodes: int
+    values_seed: evoxc.SymbolicTensor
+    readout: Any
 
 
 class RecurrentGenome(BaseGenome):
@@ -181,7 +188,8 @@ class RecurrentGenome(BaseGenome):
            self._hit_conn_attrs(transformed, conn_attrs, samples)`` once, since edge attributes
            are constant over the ticks, and the attribute rows of absent nodes are rewritten to
            ``0`` in the same one-off step (``self._padding_safe_attrs``) so the node gene's
-           ``int32`` option-index cast never sees a ``NaN``.
+           ``int32`` option-index cast never sees a ``NaN``. The ``NaN`` seed itself is a
+           prepared operand (:meth:`prepare_pass`), so a query pays no constant for it.
         2. ``for _ in range(self.activate_time)`` (a Python loop, unrolled at trace time):
            re-inject the raw ``inputs`` into the input rows, then
            ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs, values,
@@ -193,9 +201,12 @@ class RecurrentGenome(BaseGenome):
            every non-input row.  ``input_transform`` is deliberately **not** applied — legacy
            parity: the pre-rewrite class fed raw inputs on every tick, which is also what
            HyperNEAT relies on when it uses this genome as a CPPN.
-        3. ``return self._output_values(transformed, values, self.output_transform)`` — the
-           rows ``transformed.output_slot`` names (here ``max_nodes-num_outputs..
-           max_nodes-1``) of the last tick, then ``output_transform``.
+        3. ``return self._output_values(transformed, values, self.output_transform,
+           prepared.readout)`` — the rows ``transformed.output_slot`` names (here
+           ``max_nodes-num_outputs..max_nodes-1``) of the last tick, then ``output_transform``.
+           The read-out's flat gather index, its liveness mask and its ``NaN`` fill come from
+           the prepared pass (:meth:`_output_readout`), so a query pays three ops — ``reshape``,
+           ``gather``, ``select`` — instead of re-deriving the eleven-op read-out per query.
 
         ``node_level`` is ignored on purpose: the schedule reports ``I_INF`` for every node on
         or downstream of a cycle, so a level-driven mask would produce an all-``NaN`` read-out.
@@ -297,6 +308,16 @@ class RecurrentGenome(BaseGenome):
             samples=samples,
             pop_size=pop_size,
             max_nodes=max_nodes,
+            # One ``NaN`` broadcast constant for the tick loop's value seed (see
+            # ``..window.fill``); the materialised block would be the kernel's only
+            # population-scaled graph constant.
+            values_seed=fill(
+                (pop_size * samples, max_nodes), float("nan"), dtype=evoxc.float32
+            ),
+            # The read-out is loop-invariant for the whole generation, so its gather index, its
+            # liveness mask and its ``NaN`` fill are derived once per pass: a query then costs
+            # ``reshape`` + ``gather`` + ``select``.
+            readout=self._output_readout(transformed, samples),
         )
 
     def forward_prepared(
@@ -308,9 +329,9 @@ class RecurrentGenome(BaseGenome):
     ) -> evoxc.SymbolicTensor:
         """Run one forward pass from ``prepared``, the per-query half of :meth:`forward`.
 
-        Emits only the ``NaN`` values seed, the Python tick loop (input re-injection plus
-        :meth:`._node_step`) and the read-out; every loop-invariant operand comes from
-        ``prepared``.
+        Emits only the Python tick loop (input re-injection plus :meth:`._node_step`) and the
+        read-out; every loop-invariant operand comes from ``prepared`` — the ``NaN`` value seed
+        included — so repeated queries on one payload pay the prelude once.
 
         Args:
             state: Host configuration container.
@@ -334,11 +355,9 @@ class RecurrentGenome(BaseGenome):
                 f"pass for pop_size={prepared.pop_size} x samples={prepared.samples} = "
                 f"{expected} row(s); prepare the pass with the samples of this batch"
             )
-        # One NaN element broadcast to the node block (see ``..window.fill``): the materialised
-        # block would be the kernel's only population-scaled graph constant.
-        values = fill(
-            (rows, prepared.max_nodes), float("nan"), dtype=evoxc.float32
-        )
+        # The ``NaN`` value seed is a prepared operand (see :meth:`prepare_pass`): one broadcast
+        # constant paid once per pass instead of once per query.
+        values = prepared.values_seed
         for _ in range(self.activate_time):
             values = evoxc.concatenate(
                 [
@@ -357,7 +376,9 @@ class RecurrentGenome(BaseGenome):
                 values,
                 prepared.update_mask,
             )
-        return self._output_values(transformed, values, self.output_transform)
+        return self._output_values(
+            transformed, values, self.output_transform, prepared.readout
+        )
 
     def sympy_func(
         self,

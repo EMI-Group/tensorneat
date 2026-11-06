@@ -3,29 +3,73 @@
 The predicate answers "would adding ``src -> dst`` close a cycle?", i.e. "is ``src`` already
 reachable from ``dst``?".  It is **one** ``evoxc.while_loop`` monotone frontier relaxation,
 not an unrolled ``max_nodes - 1`` hop relaxation: the reference interpreter pays per traced
-op, so 49 hand-unrolled hops (≈360 traced ops, each executed) cost far more than a 7-op loop
-body that runs once per *real* hop of the shallow DAGs a NEAT run produces.
+op, so 49 hand-unrolled hops cost far more than a 7-op loop body that runs once per *real*
+hop of the shallow DAGs a NEAT run produces.
 
-Key resolution is a **merge join**, not a broadcast match.
-Node keys are arbitrary ``int32`` values — the mutation operator allocates them as
-``max_node_key + 1 + arange(pop_size)``, so they routinely leave ``genome.key_span`` and grow
-without bound, which rules out any dense ``(P, key_span)`` scatter table.
-The old resolve compared the whole query block against the whole row table, an
-``(P, 2E + 2, N)`` boolean (10.1 M elements at pop 1000) that it then cast to ``int32`` and
-``argmax``-ed; that cost 21 of the predicate's 23 ms.
-The join below instead folds every key together with its payload into one injective ``int64``
-composite, sorts the ``(P, N + Q)`` merge once, and reads each query's node off the sorted
-order (``N + Q = 252`` elements per individual, a 40× volume cut).
-The low field keeps queries and nodes apart — queries occupy ``[0, Q)``, nodes ``[Q, Q + N)``
-in row order — so within a key run the queries sort first and the nodes follow in ascending row
-order: the first node at or after a query position is the *smallest row* that carries the key,
-which is exactly what ``argmax`` of the old match returned.
+Key resolution is a **dense key -> node-row table**, the same shape the execution schedule
+builds (:func:`tensorneat.common.tensorization.key_slot_table`): a ``(P, key_span + 1) int32``
+table whose column ``k`` holds the node *row* owning key ``k``, built with **one** flat
+rank-1 ``scatter`` of ``P * N`` updates and read with **one** flat rank-1 ``gather`` per
+lookup.  Both endpoints of every existing edge plus both endpoints of the candidate edge are
+resolved in a single lookup pass, so the whole predicate pays one table build and one gather.
+Anything wider than rank 1 is expensive on a compiled backend: StableHLO lowers ``scatter``
+to one workgroup of one thread, so a multi-element scatter is fully serialized, and a wide
+element type doubles the traffic of a sort.  The dense table keeps every index block flat and
+its element type ``int32``: on numpy the graph is **81 traced ops** and **3.2 / 3.5 / 3.7 ms**
+per call at pop 500 on evolved payloads of generations 1 / 5 / 10, against **127 ops** and
+**9.0 / 9.3 / 9.8 ms** for the sort-based route it replaced in the same interleaved process
+A/B (per-round ratios 0.35-0.41), which also moves ``Pipeline.step`` on ``xor_p500`` from
+164.4 to 161.1 ms per generation (median ratio 0.967 over six interleaved process pairs) and
+lowers peak RSS by 15 MiB.
+
+Static precondition (a host-side law, never a traced branch): every node key and every
+connection endpoint that must be visible lies in ``[0, key_span)``.  That is exactly the
+window the schedule's own dense key table addresses, so a key outside it is invisible to the
+phenotype as well: the predicate agrees by treating it as a miss (an edge with an out-of-span
+endpoint is invalid, a candidate endpoint there answers ``False``, i.e. the mutation is
+refused for another reason).  ``algorithm/neat/_keys.py::node_keys_for_split`` together with
+``first_free_keys`` keeps every structurally allocated key inside the window, and a census on
+measured payloads reports 0 out-of-span node keys, so the window is only reachable from an
+out-of-band caller.
+
+Duplicate node keys: two rows may carry the same key, and the table is then a function
+key -> one *representative* row whose identity is ``scatter`` write order and therefore
+undefined.  The answer is invariant, which is why the predicate may rely on it.  Write
+``phi`` for that map: every edge endpoint and both candidate endpoints are resolved through
+the same ``phi``, so the traversed graph is the key-level graph with each key identified with
+its representative, and ``phi`` is *injective* on keys — a row only ever writes its own key's
+cell, so ``phi(a) == phi(b)`` means one row carries both keys, i.e. ``a == b``.  A path in the
+row graph therefore lifts edge by edge to a key path (consecutive edges agree because the
+row-to-key inverse is a function), so "``src`` reachable from ``dst``" is one predicate for
+every representative choice.  The dump cell (column ``key_span``) is order-independent by
+construction: every out-of-span row writes the sentinel there, so it can never read back as a
+live row.
 
 The loop is a monotone set-growth relaxation on a **flat** frontier with one trailing dump
 column (``scatter`` is set-only, so a refused edge writes the dump instead of clearing a real
 node).  The frontier only ever gains bits and the node count bounds it, so the set stabilises
 within ``max_nodes + 1`` hops: the "still growing" flag alone terminates the loop, with no
 iteration counter to carry (and no hop cap to fall back on).
+
+A hop as one batched ``dot`` against a dense ``(P, N, N) float32`` adjacency — which turns the
+three serialized hop scatters into three wide matrix-vector dispatches — is decision-identical
+(it needs ``frontier | A @ frontier``, not ``A @ frontier`` alone, or ``dst`` itself leaves the
+set after the first hop) but **rejected on measurement**: +24 traced ops and 30-33 % slower per
+call on numpy (median ratio 1.30-1.31 over six interleaved rounds on each of the three evolved
+payloads), while adding a quadratic ``(P, N*N + 1)`` float32 buffer (5 MB at pop 500 /
+``max_nodes`` 50, 160 MB at pop 1000 / ``max_nodes`` 200) that no static ceiling in this file
+bounds.  The scatter hop stays.
+
+The shipped formulation is selected by ``state.kernel_mode`` (:mod:`~.cycle_accelerator`): the
+default ``"host"`` is the scatter hop above, and ``"accelerator"`` is the scatter-free spelling
+that resolves keys with an equality template (no dense table build) and carries a ``(P, N)``
+reached set marked with a broadcast reduction and one reduce over the edge axis, because a
+compiled backend lowers ``scatter`` to one workgroup of one thread (about 17-21 ns per *update*
+element, i.e. 1.05 ms per hop for the 50 000 update cells of the ``xor_p500`` case at pop 500)
+while a reduction spreads over its workgroups.  Both spellings share this module's window law
+(:func:`_in_span`) and answer the same boolean for the same payload, and the switch is a static
+read of a plain string on the configuration ``State`` — never a traced value — so a graph
+contains exactly one of them.
 
 IREE constraint (release gate): the frontier is seeded with a one-hot ``equal`` over the flat
 ``(P, width)`` index, **never** with a boolean ``scatter``.  A ``scatter`` whose result is the
@@ -39,7 +83,7 @@ import numpy as np
 import evoxc
 import evoxc.numpy as enp
 
-from ....common import I_INF
+from ....common import ConfigError
 from ...window import fill
 
 
@@ -55,198 +99,208 @@ def _static_constant(values: np.ndarray) -> evoxc.SymbolicTensor:
     return evoxc.constant(evoxc.from_numpy(np.asarray(values, dtype=np.int32)))
 
 
-def _static_wide(values: np.ndarray) -> evoxc.SymbolicTensor:
-    """Embed a host-side ``int64`` array as a single graph constant.
-
-    Args:
-        values (np.ndarray): An ``int64`` array of the shape the kernel needs.
-
-    Returns:
-        evoxc.SymbolicTensor: The same values inside the graph, one traced op.
-    """
-    return evoxc.constant(evoxc.from_numpy(np.asarray(values, dtype=np.int64)))
-
-
 __all__ = ["closes_cycle"]
 
 
-def _row_of(
-    queries: evoxc.SymbolicTensor,
-    node_keys: evoxc.SymbolicTensor,
-) -> tuple[evoxc.SymbolicTensor, evoxc.SymbolicTensor]:
-    """Resolve each queried node key to the row that carries it, by one sorted merge.
-
-    Node keys are arbitrary and a node may sit on any row, so a key can only be resolved by
-    comparing it against the row table.  Doing that comparison as a broadcast produces an
-    ``(P, Q, N)`` block; this join instead merges the two sorted key lists, so it touches
-    ``P * (N + Q)`` elements instead of ``P * Q * N`` and needs no ``argmax``.
+def _table_offsets(pop_size: int, span: int) -> evoxc.SymbolicTensor:
+    """Per-individual flat offset of a ``(P, span + 1)`` table, as one constant.
 
     Args:
-        queries: ``(P, Q) int32`` node keys to look up.
-        node_keys: ``(P, N) int32`` node key per row, ``I_INF`` padded.
+        pop_size (int): ``P``, the number of individuals.
+        span (int): ``S``, the genome's static ``key_span``.
 
     Returns:
-        ``(rows, hit)``, both ``(P, Q)``: the row of the *smallest* matching node, and the
-        match mask.  ``rows`` is in ``[0, N)`` even where ``hit`` is false (those slots are
-        unconstrained), so it is always safe to index with; every consumer must still gate on
-        ``hit``, because an unmatched key resolves to a real, unrelated row.
+        evoxc.SymbolicTensor: ``(P, 1) int32`` holding ``p * (span + 1)`` per row, so a
+        column index plus these offsets is a flat index into the table.  The whole block is
+        ``4 * P`` bytes — ``(P, 1)`` static data broadcast across the row axis rather than a
+        materialised ``(P, N)`` / ``(P, Q)`` index constant.
+    """
+    return _static_constant(
+        np.arange(0, pop_size * (span + 1), span + 1).reshape(pop_size, 1)
+    )
+
+
+def _in_span(
+    keys: evoxc.SymbolicTensor,
+    zero: evoxc.SymbolicTensor,
+    span_constant: evoxc.SymbolicTensor,
+) -> evoxc.SymbolicTensor:
+    """``0 <= key < key_span``, the window every visible key must lie in.
+
+    Args:
+        keys: ``(P, L) int32`` keys (node keys, connection endpoints, or candidate
+            endpoints).
+        zero (evoxc.SymbolicTensor): The rank-0 ``int32`` literal ``0``, shared per trace.
+        span_constant (evoxc.SymbolicTensor): The rank-0 ``int32`` literal ``key_span``,
+            shared per trace.
+
+    Returns:
+        ``(P, L) bool``: "this key is addressable".
 
     Notes:
-        A padding node key is nudged past ``I_INF`` inside the composite, so an ``I_INF`` query
-        — an absent edge endpoint — can never match a padding row and the caller needs no
-        separate padding mask.  The ``int64`` composite is ``key << bits | low`` with
-        ``2 ** (bits - 1) > N + Q - 1``, so the low field of every entry stays below one
-        period and the shift discards exactly the low field: two entries carry the same key
-        exactly when their shifted keys are equal.
+        The range test is the schedule's own ``0 <= key < key_span`` in the key's **signed**
+        dtype (:func:`tensorneat.common.tensorization._key_indices`), the two-comparison form
+        that keeps every operand an ``int32``/``bool``; the one-comparison
+        ``cast(key, uint32) < span`` alternative is not portable, because no graph in this
+        package may carry an unsigned dtype.
+        The two bound constants are operands rather than arguments so a caller tracing
+        several key blocks (:mod:`~.cycle_accelerator`) pays each ``constant`` op once; this
+        is the single spelling of the window law, shared by the dense table and the
+        equality-template resolution so the two formulations can never disagree about which
+        keys are visible.
+    """
+    return evoxc.logical_and(
+        evoxc.greater_equal(keys, zero), evoxc.less(keys, span_constant)
+    )
 
-        The node at or after each sorted position is found by its rank, i.e. the node count
-        strictly before that position; the rank is read off an inclusive suffix count of the
-        node tags, built by log2-doubling shifts because ``cumsum`` does not export to
-        StableHLO.  Every step is static: the shift width is a host-side int.
+
+def _table_cell(keys: evoxc.SymbolicTensor, span: int) -> tuple:
+    """Map keys to dense-table columns, sending every out-of-range key to the dump cell.
+
+    Args:
+        keys: ``(P, L) int32`` keys (node keys, connection endpoints, or candidate
+            endpoints).
+        span (int): ``S``, the genome's static ``key_span``.
+
+    Returns:
+        ``(cell, in_range)``: ``(P, L) int32`` columns in ``[0, span]`` — ``span`` is the
+        dump cell — and the ``(P, L) bool`` mask "this key is addressable".
+
+    Notes:
+        The range test is :func:`_in_span`, the schedule's own window law.
+    """
+    span_constant = _static_constant(np.asarray(span))
+    in_range = _in_span(keys, _static_constant(np.asarray(0)), span_constant)
+    return evoxc.select(in_range, keys, span_constant), in_range
+
+
+def _key_table(
+    node_keys: evoxc.SymbolicTensor,
+    key_span: int,
+) -> evoxc.SymbolicTensor:
+    """Build the dense key -> node-row table of one population, with one flat scatter.
+
+    Args:
+        node_keys (evoxc.SymbolicTensor): ``(P, N) int32`` node key rows (``I_INF`` padded).
+        key_span (int): ``S``, the genome's static ``key_span`` — the addressable key window.
+
+    Returns:
+        evoxc.SymbolicTensor: ``(P, S + 1) int32``; ``table[p, k]`` is the row of the node
+        whose key is ``k``, and ``N`` (the **sentinel**, never a live row index) where no row
+        holds ``k``.  Column ``S`` is the dump cell every out-of-range key resolves to.
+
+    Notes:
+        One ``scatter`` of ``P * N`` updates, flat: a row whose key is in range writes its
+        own row index at that key's cell, and a row whose key is outside ``[0, S)`` writes
+        the sentinel into the dump cell — so the dump cell is ``N`` however many rows land
+        there.  The seed is a **one-element** constant plus one ``broadcast_to``
+        (:func:`tensorneat.genome.window.fill`); a ``(P, S + 1)`` graph constant would be
+        300 kB at pop 500 and 600 kB at pop 1000.
     """
     pop_size, node_count = node_keys.shape
-    query_count = queries.shape[1]
-    total = node_count + query_count
-    bits = (total - 1).bit_length() + 1
-    low_base = 1 << bits
-    c_shift = _static_wide(np.asarray(bits))
-    c_mask = _static_constant(np.asarray(low_base - 1))
-    c_query = _static_constant(np.asarray(query_count))
-    # A padding row is nudged to I_INF + 1, a key no query can hold, so it never matches.
-    bumped = evoxc.add(
-        evoxc.cast(node_keys, evoxc.int64),
-        evoxc.cast(evoxc.equal(node_keys, _static_constant(np.asarray(I_INF))), evoxc.int64),
+    span = int(key_span)
+    sentinel = _static_constant(np.asarray(node_count))
+    cell, in_range = _table_cell(node_keys, span)
+    # The row index each row writes: its own row when its key is addressable, the sentinel
+    # otherwise, so the dump cell never holds a live row.
+    values = evoxc.select(
+        in_range,
+        _static_constant(np.arange(0, node_count).reshape(1, node_count)),
+        sentinel,
     )
-    node_enc = evoxc.add(
-        evoxc.bitwise_left_shift(bumped, c_shift),
-        _static_wide((query_count + np.arange(node_count)).astype(np.int64)),
+    flat_index = enp.reshape(
+        evoxc.add(cell, _table_offsets(pop_size, span)), (pop_size * node_count,)
     )
-    query_enc = evoxc.add(
-        evoxc.bitwise_left_shift(evoxc.cast(queries, evoxc.int64), c_shift),
-        _static_wide(np.arange(query_count).astype(np.int64)),
-    )
-    ordered = evoxc.sort(enp.concatenate([node_enc, query_enc], axis=1), axis=1)
-    # ``cast`` to int32 truncates, which already hands back the low field; the mask clears the
-    # key bits that survive above it.
-    low = evoxc.bitwise_and(evoxc.cast(ordered, evoxc.int32), c_mask)
-    # ``remaining[p]`` is the number of nodes at or after position ``p`` — an inclusive suffix
-    # count, and ``cumsum`` is a StableHLO export deferral, so it is a Hillis-Steele doubling:
-    # after the step for ``shift`` every entry holds the sum over ``[p, p + 2 * shift)``, so
-    # ``ceil(log2(total))`` static-shift steps leave the full suffix count.  Integer addition
-    # is exact, and each step is one ``pad`` plus one ``slice`` (an over-shift reads the zero
-    # tail) plus one ``add``; the shifts are host-side ints, never graph data.
-    # The count never exceeds ``node_count`` (the flags mark one node per row and queries
-    # contribute nothing), so ``int8`` is exact while ``node_count <= 127`` and the narrower
-    # element is what the per-step pad/add pays for.
-    narrow = node_count <= 127
-    scan_dtype = evoxc.int8 if narrow else evoxc.int32
-    remaining = evoxc.cast(evoxc.greater_equal(low, c_query), scan_dtype)
-    shift = 1
-    while shift < total:
-        remaining = evoxc.add(
-            remaining,
-            evoxc.slice(
-                evoxc.pad(remaining, ((0, 0), (0, shift))),
-                (0, shift),
-                (pop_size, total),
-            ),
-        )
-        shift *= 2
-    if narrow:
-        remaining = evoxc.cast(remaining, evoxc.int32)
-    # ``node_count - remaining`` is therefore the rank of the first node at or after the
-    # position.  A rank of ``node_count`` means no node follows, and clamping it to the last
-    # row is exact: that only happens when every node sorts before the query, i.e. the query's
-    # key exceeds every node key, so the read-back node carries a *different* key and the hit
-    # test below rejects it (the read-back node carries a different key).
-    # Clamping is one ``minimum``; a trailing sentinel row would need its own constant, a
-    # broadcast and a ``concatenate``.
-    rank = evoxc.minimum(
-        evoxc.subtract(_static_constant(np.asarray(node_count)), remaining),
-        _static_constant(np.asarray(node_count - 1)),
-    )
-    flat_nodes = enp.reshape(
-        evoxc.sort(node_enc, axis=1), (pop_size * node_count,)
-    )
-    offsets = _static_constant(
-        np.arange(0, pop_size * node_count, node_count).reshape(pop_size, 1)
-    )
-    pick = enp.reshape(evoxc.add(rank, offsets), (pop_size * total,))
-    node_at_rank = enp.reshape(evoxc.gather(flat_nodes, pick, axis=0), (pop_size, total))
-    # Two entries carry the same key exactly when their composites agree above the low
-    # field, so the hit test is one ``equal`` of the shifted keys: same op count as the
-    # range test it replaces and no ``int64`` difference, ``abs`` and radius constant.
-    hit = evoxc.equal(
-        evoxc.bitwise_right_shift(ordered, c_shift),
-        evoxc.bitwise_right_shift(node_at_rank, c_shift),
-    )
-    rows = evoxc.subtract(
-        evoxc.bitwise_and(evoxc.cast(node_at_rank, evoxc.int32), c_mask), c_query
-    )
-    # Scatter the answers back into query order: a hit writes its row, a miss writes -1 into
-    # the same cell, and every node position writes the trailing dump column.
-    answer = evoxc.select(hit, rows, _static_constant(np.asarray(-1)))
-    # The low field is already a per-individual cell number in ``[0, total)`` (a node's is
-    # ``query_count + row``, a query's its own index), so the store is a plain ``total``-wide
-    # row and the answers land in the query half without a clamp.
-    width = total
-    store = _static_constant(np.arange(0, pop_size * width, width).reshape(pop_size, 1))
-    written = evoxc.scatter(
-        enp.reshape(
-            fill((pop_size, width), 0, dtype=evoxc.int32), (pop_size * width,)
-        ),
-        enp.reshape(evoxc.add(low, store), (pop_size * total,)),
-        enp.reshape(answer, (pop_size * total,)),
+    table = evoxc.scatter(
+        fill((pop_size * (span + 1),), node_count, dtype=evoxc.int32),
+        flat_index,
+        enp.reshape(values, (pop_size * node_count,)),
         axis=0,
     )
-    packed = evoxc.slice(
-        enp.reshape(written, (pop_size, width)), (0, 0), (pop_size, query_count)
+    return enp.reshape(table, (pop_size, span + 1))
+
+
+def _rows_of(
+    table: evoxc.SymbolicTensor,
+    keys: evoxc.SymbolicTensor,
+    key_span: int,
+    node_count: int,
+) -> tuple:
+    """Resolve a block of keys to node rows through the dense table, with one flat gather.
+
+    Args:
+        table (evoxc.SymbolicTensor): ``(P, S + 1) int32`` output of :func:`_key_table`.
+        keys (evoxc.SymbolicTensor): ``(P, Q) int32`` keys to resolve — connection endpoints
+            or candidate endpoints.
+        key_span (int): ``S``, matching the table.
+        node_count (int): ``N``, the sentinel the table stores for a miss.
+
+    Returns:
+        ``(rows, hit)``, both ``(P, Q)``: the row owning each key (always in
+        ``[0, node_count)``, so it is safe to index with) and the "this key is a live node"
+        mask.  Every consumer must still gate on ``hit``: a missed key resolves to the last
+        row, which is a real, unrelated node.
+
+    Notes:
+        The gather is flat because a per-row gather index is the only spelling ``evoxc``
+        offers (``axis=0`` with a ``(P, Q)`` index splices the index shape *after* the axis,
+        giving ``(P, P, Q)``), so the table is flattened once and addressed by
+        ``cell + p * (S + 1)``.  ``hit`` is one ``not_equal`` against the sentinel and
+        ``rows`` one ``minimum`` clamp; no ``select`` is needed because the clamp is exact
+        (the sentinel is ``node_count``, the largest addressable row is ``node_count - 1``).
+    """
+    pop_size, width = table.shape
+    span = int(key_span)
+    if int(width) != span + 1:
+        raise ConfigError(
+            f"key table width {int(width)} does not match key_span + 1 ({span + 1})"
+        )
+    cell, _in_range = _table_cell(keys, span)
+    flat_index = enp.reshape(
+        evoxc.add(cell, _table_offsets(pop_size, span)),
+        (int(pop_size) * int(keys.shape[1]),),
     )
+    gathered = evoxc.gather(
+        enp.reshape(table, (pop_size * (span + 1),)), flat_index, axis=0
+    )
+    got = enp.reshape(gathered, tuple(keys.shape))
     return (
-        evoxc.maximum(packed, _static_constant(np.asarray(0))),
-        evoxc.greater_equal(packed, _static_constant(np.asarray(0))),
+        evoxc.minimum(got, _static_constant(np.asarray(node_count - 1))),
+        enp.not_equal(got, _static_constant(np.asarray(node_count))),
     )
 
 
-def closes_cycle(
+def _closes_cycle_host(
     node_keys: evoxc.SymbolicTensor,
     conn_keys: evoxc.SymbolicTensor,
     src_keys: evoxc.SymbolicTensor,
     dst_keys: evoxc.SymbolicTensor,
+    key_span: int,
 ) -> evoxc.SymbolicTensor:
-    """Ask whether adding one edge per individual would close a cycle.
-
-    A cycle is closed exactly when ``src`` is reachable from ``dst`` in the graph that
-    already exists, so the predicate seeds a frontier at ``dst`` and grows it along the
-    existing edges until it stops growing; a self-loop on an existing node answers ``True``.
+    """The shipped scatter hop — :func:`closes_cycle`'s default formulation.
 
     Args:
         node_keys: ``(P, N) int32`` node key rows, ``I_INF`` padded.
-        conn_keys: ``(P, E, CK) int32`` connection key rows — columns ``0``/``1`` are the
-            source and destination node keys; absent rows are ``I_INF``.
+        conn_keys: ``(P, E, CK) int32`` connection key rows.
         src_keys: ``(P,) int32`` candidate edge source node key.
         dst_keys: ``(P,) int32`` candidate edge destination node key.
+        key_span (int): ``S``, the static addressable key window.
 
     Returns:
-        ``(P,) bool`` True where the candidate edge would close a cycle.  A degenerate
-        candidate (either endpoint absent from the genome, or ``I_INF``) answers ``False``:
-        the mutation is refused for another reason, never this one.
+        ``(P,) bool``, the answer :func:`closes_cycle` documents.
 
     Raises:
         evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
+        ConfigError: when ``key_span`` does not describe the table it builds.
 
     Notes:
-        Both endpoints of every existing edge plus both endpoints of the candidate edge are
-        resolved in one :func:`_row_of` merge, so the whole predicate pays that join once.
-        One ``while_loop`` then carries the flat frontier and the "still growing" flag; its
-        body is three ``O(P*E)`` ops (gather, ``select``, ``scatter``) plus the one-op growth
-        test, and it runs once per real hop.  The absent-endpoint term is folded into the
-        gather's index once, outside the region, instead of into a per-hop ``logical_and``.
-        The batch axis is written explicitly — no ``vmap`` over the region.
+        Split out of :func:`closes_cycle` unchanged, so the formulation switch is one host
+        branch and the shipped graph keeps its exact op order and constants.
     """
     pop_size, node_count = node_keys.shape
     edge_count = conn_keys.shape[1]
     width = node_count + 1
+    table = _key_table(node_keys, key_span)
     # Both endpoints of every existing edge plus the candidate edge, in one key-match pass.
     queries = enp.concatenate(
         [
@@ -257,7 +311,7 @@ def closes_cycle(
         ],
         axis=1,
     )
-    rows, hits = _row_of(queries, node_keys)
+    rows, hits = _rows_of(table, queries, key_span, node_count)
     edge_src = evoxc.slice(rows, (0, 0), (pop_size, edge_count))
     edge_dst = evoxc.slice(rows, (0, edge_count), (pop_size, edge_count))
     src_hit = evoxc.slice(hits, (0, 2 * edge_count), (pop_size, 1))
@@ -334,3 +388,72 @@ def closes_cycle(
     return enp.reshape(
         evoxc.logical_and(evoxc.logical_and(reached, src_hit), dst_hit), (pop_size,)
     )
+
+
+def closes_cycle(
+    state,
+    node_keys: evoxc.SymbolicTensor,
+    conn_keys: evoxc.SymbolicTensor,
+    src_keys: evoxc.SymbolicTensor,
+    dst_keys: evoxc.SymbolicTensor,
+    key_span: int,
+) -> evoxc.SymbolicTensor:
+    """Ask whether adding one edge per individual would close a cycle.
+
+    A cycle is closed exactly when ``src`` is reachable from ``dst`` in the graph that
+    already exists, so the predicate seeds a frontier at ``dst`` and grows it along the
+    existing edges until it stops growing; a self-loop on an existing node answers ``True``.
+
+    Args:
+        state (Any): The trace-time configuration ``State``; its
+            :data:`~.cycle_accelerator.KERNEL_MODE_KEY` entry selects the formulation.
+        node_keys: ``(P, N) int32`` node key rows, ``I_INF`` padded.
+        conn_keys: ``(P, E, CK) int32`` connection key rows — columns ``0``/``1`` are the
+            source and destination node keys; absent rows are ``I_INF``.
+        src_keys: ``(P,) int32`` candidate edge source node key.
+        dst_keys: ``(P,) int32`` candidate edge destination node key.
+        key_span (int): ``S``, ``genome.key_span`` — the static addressable key window of the
+            dense table, the same one the execution schedule uses.  It cannot be derived from
+            any operand shape, so the caller passes it.
+
+    Returns:
+        ``(P,) bool`` True where the candidate edge would close a cycle.  A degenerate
+        candidate (either endpoint absent from the genome, ``I_INF``, or outside
+        ``[0, key_span)``) answers ``False``: the mutation is refused for another reason,
+        never this one.
+
+    Raises:
+        TensorNEATError: If the state's kernel-mode entry is not one of the documented
+            formulations.
+        evoxc.ShapeError / evoxc.BackendError: Propagated unchanged.
+        ConfigError: when ``key_span`` does not describe the table it builds (a host-side
+            configuration error, never a traced branch).
+
+    Notes:
+        Both formulations answer the same boolean — the visibility law (:func:`_in_span`) and
+        the "every endpoint goes through the same injective key -> row map" argument are
+        shared — so the caller's decision never depends on the switch: the default
+        ``"host"`` is :func:`_closes_cycle_host`, whose frontier is a flat ``(P, N + 1)``
+        vector written with one ``scatter`` per hop and whose keys come from the dense table,
+        and ``"accelerator"`` is
+        :func:`~.cycle_accelerator.closes_cycle_accelerator`, which resolves keys with an
+        equality template (no ``scatter``) and carries a ``(P, N)`` reached set marked with a
+        broadcast reduction instead of a write, because a compiled backend serialises
+        ``scatter`` (see that module's note and its measured device numbers).
+        The accelerator route runs a **static** trip count of ``node_count`` hops (a breadth-first
+        closure from one source over ``node_count`` nodes saturates inside that budget), so its
+        loop condition is a hop counter and not a growth flag; its one carried value is the
+        reached set with that counter in its last column, and the answer reads that value, because
+        an unused ``while`` result makes ``iree-compile`` emit an illegal ``scf.while`` for the
+        assembled generation graph (same module note).
+        The branch is a static host read — the entry is a plain string on the configuration
+        ``State`` — so a graph contains exactly one of the two spellings and no traced value
+        ever drives it.  The batch axis is written explicitly — no ``vmap`` over the region.
+    """
+    from . import cycle_accelerator
+
+    if cycle_accelerator.selected(state):
+        return cycle_accelerator.closes_cycle_accelerator(
+            node_keys, conn_keys, src_keys, dst_keys, key_span
+        )
+    return _closes_cycle_host(node_keys, conn_keys, src_keys, dst_keys, key_span)

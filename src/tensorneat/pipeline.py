@@ -12,8 +12,9 @@ One *generation* of NEAT is a single ``evoxc`` graph:
   entry), so no concrete ``evoxc.Tensor`` is ever captured by a trace;
 * the compiled ``evoxc.Executable`` is cached in :attr:`Pipeline._executables`
   under ``(pop_size, max_nodes, max_conns, max_in_degree, max_depth, key_span)``
-  and reused verbatim while that signature does not change, so :meth:`auto_run`
-  pays the compile cost once and then only runs;
+  plus the substrate statics and the ``(distance_centre, distance_formulation,
+  kernel_mode)`` formulation statics, and reused verbatim while that signature does
+  not change, so :meth:`auto_run` pays the compile cost once and then only runs;
 * a *different* signature builds a second executable; a population whose shape
   does not match the cached signature is rejected by ``evoxc``'s own shape check,
   which is why nothing here ever reshapes a batch to make it fit.
@@ -112,10 +113,14 @@ from .host_payload import (
     _config_value,
     _declared_shape,
     _finite_fitness,
+    _formulation_signature,
+    _formulation_statics,
     _jsonable,
     _one_individual,
     _schedule_overflow,
     _substrate_signature,
+    eval_chunk_rows,
+    materialize_payload,
 )
 from .problem import BaseProblem
 
@@ -178,6 +183,19 @@ class Pipeline(StatefulBaseClass):
             ``pop_batch_size``: chunking is fixed when ``NEAT`` is constructed (it
             changes the random stream), so the pipeline cannot inject it.
             ``None`` means "whatever the algorithm was built with". Defaults to ``None``.
+        host_payload (bool, optional): Whether :meth:`step` materialises the evaluated
+            population as host numpy arrays. ``True`` -- the honest default -- copies
+            the four gene arrays to the host every generation (one explicit
+            device-to-host transfer per array, ~0.7 ms/generation for a ``P=500``
+            payload on the GPU leg) so the returned ``previous_pop`` and everything
+            built on it (:attr:`best_genome`, the checkpoints, the problem's
+            ``show_details``) is plain numpy. ``False`` skips those copies and hands
+            back the payload **as the backend left it** -- numpy on the reference
+            interpreter, device-resident tensors on a device backend -- so a caller
+            that wants host arrays must materialise them itself with
+            ``common.tools.to_numpy``. The reporting paths still work: they copy the
+            payload only on the generations they actually need it (a new best, a
+            checkpoint, a report hook). Defaults to ``True``.
 
     Raises:
         TensorNEATError: If the problem and the algorithm disagree about the
@@ -205,6 +223,7 @@ class Pipeline(StatefulBaseClass):
         is_detailed: bool = True,
         show_problem_details: bool = False,
         pop_batch_size: Optional[int] = None,
+        host_payload: bool = True,
     ) -> None:
         self.algorithm = algorithm
         self.problem = problem
@@ -217,6 +236,18 @@ class Pipeline(StatefulBaseClass):
         self.is_save = is_save
         self.is_detailed = is_detailed
         self.show_problem_details = show_problem_details
+        self.host_payload = bool(host_payload)
+
+        # Trace-time kernel formulation statics, derived from the device *kind*
+        # this run places on (``_formulation_statics``): plain strings registered
+        # on the state and baked into the generation graph's closure, never graph
+        # inputs.  They change how the kernels are formulated, so they are part of
+        # the executable-cache key (``_shape_signature``).
+        (
+            self.distance_centre,
+            self.distance_formulation,
+            self.kernel_mode,
+        ) = _formulation_statics(self.device)
 
         self.pop_size = int(algorithm.pop_size)
         self.pop_batch_size = self._resolve_pop_batch_size(pop_batch_size)
@@ -231,6 +262,10 @@ class Pipeline(StatefulBaseClass):
         #: First failure per diagnostics hook, keyed by hook label: the
         #: reporting-only record that keeps a broken printer visible.
         self.detail_failures: dict[str, tuple[str, str]] = {}
+        #: Host-side generation number of the last :meth:`step`, read out of the same
+        #: packed host block as the fitness vector so the report never pays a second
+        #: device read for a scalar.
+        self._host_generation: Optional[int] = None
 
         # Per-shape executable cache: signature -> evoxc.Executable.
         self._executables: dict[tuple[Any, ...], Any] = {}
@@ -383,10 +418,14 @@ class Pipeline(StatefulBaseClass):
                 "backend": self.backend,
                 "device": _jsonable(self.device),
                 "compile_options": _jsonable(self.compile_options),
+                "distance_centre": self.distance_centre,
+                "distance_formulation": self.distance_formulation,
+                "kernel_mode": self.kernel_mode,
                 "is_save": self.is_save,
                 "save_dir": _jsonable(self.save_dir),
                 "is_detailed": self.is_detailed,
                 "show_problem_details": self.show_problem_details,
+                "host_payload": self.host_payload,
             },
             "algorithm": algorithm,
             "problem": problem_info,
@@ -400,7 +439,10 @@ class Pipeline(StatefulBaseClass):
         Order matters and follows the kernel contract: ``randkey`` first (the
         single source of randomness), then ``backend``/``device``/
         ``compile_options`` (every ``evoxc.build`` below reads them off the
-        state), then ``algorithm.setup`` (population, generation counter, species
+        state) together with the device-derived formulation statics
+        ``distance_centre``/``distance_formulation``/``kernel_mode`` (plain
+        strings the generation graph bakes through its static-config closure),
+        then ``algorithm.setup`` (population, generation counter, species
         table; it advances ``randkey`` once), then ``problem.setup``.
 
         Device placement: the setup-time graphs are built and run **on CPU**
@@ -431,9 +473,22 @@ class Pipeline(StatefulBaseClass):
                 requested device cannot be reached (nothing falls back to CPU).
         """
         state = State() if state is None else state
+        # Re-derive the formulation statics from the device this run actually
+        # places on (a caller may reassign ``.device`` between construction and
+        # ``setup``), and register them with the build options: they are static
+        # strings the graph's closure reads, so they must be on the state before
+        # any ``step`` -- and the setup graphs below never need them.
+        (
+            self.distance_centre,
+            self.distance_formulation,
+            self.kernel_mode,
+        ) = _formulation_statics(self.device)
         state = state.register(randkey=evoxc.random.key(self.seed))
         state = state.register(
             backend=self.backend,
+            distance_centre=self.distance_centre,
+            distance_formulation=self.distance_formulation,
+            kernel_mode=self.kernel_mode,
             # Setup graphs stay on CPU: ``algorithm.setup`` runs its
             # initialisation graph on ``randkey``, which is host memory, and a
             # CPU run cannot execute an artifact compiled for the accelerator.
@@ -454,6 +509,7 @@ class Pipeline(StatefulBaseClass):
         self.best_fitness = float("-inf")
         self.best_genome = None
         self.detail_failures = {}
+        self._host_generation = None
         self._executables = {}
         self.shape_signature = None
         self.build_seconds = 0.0
@@ -493,7 +549,15 @@ class Pipeline(StatefulBaseClass):
             max_depth, key_span)`` for the CPPN/genome payload, followed by
             :func:`~tensorneat.host_payload._substrate_signature`'s entries
             when the algorithm wraps a
-            fixed substrate -- a change in any of them forces a rebuild.
+            fixed substrate -- a change in any of them forces a rebuild --,
+            then :func:`~tensorneat.host_payload._formulation_signature`'s
+            ``(distance_centre, distance_formulation, kernel_mode)`` statics
+            (so a device/mode change can never reuse an executable formulated for
+            the other one), and last the tiled-evaluate chunk budget of the
+            device the graph runs on
+            (:func:`~tensorneat.host_payload.eval_chunk_rows`), because that
+            budget is unrolled into the graph at trace time: a CPU build must
+            never be reused for a device leg (or the other way round).
 
         Raises:
             TensorNEATError: If ``state`` carries no four-array payload (it did
@@ -514,15 +578,21 @@ class Pipeline(StatefulBaseClass):
             return int(value) if value is not None else int(fallback)
 
         node_keys, _, conn_keys, _ = tuple(pop)
+        max_nodes = static("max_nodes", node_keys.shape[1])
         payload_signature = (
             int(self.algorithm.pop_size),
-            static("max_nodes", node_keys.shape[1]),
+            max_nodes,
             static("max_conns", conn_keys.shape[1]),
             static("max_in_degree", 0),
             static("max_depth", 0),
             static("key_span", 0),
         )
-        return payload_signature + _substrate_signature(self.algorithm)
+        return (
+            payload_signature
+            + _substrate_signature(self.algorithm)
+            + _formulation_signature(state)
+            + (eval_chunk_rows(self._device_kind(), max_nodes),)
+        )
 
     def _host_build_options(self) -> Optional[dict]:
         """The compile options the CPU-only setup graphs may see.
@@ -582,6 +652,25 @@ class Pipeline(StatefulBaseClass):
         if isinstance(self.device, str):
             return evoxc.Device(self.device)
         return self.device
+
+    def _device_kind(self) -> Optional[str]:
+        """``.kind`` of the device the generation graph runs on (``None`` for CPU).
+
+        The single spelling of "which leg is this?", used by the two places that
+        must agree about it: the tiled-evaluate chunk budget the evaluate pass
+        unrolls at trace time (:func:`~tensorneat.host_payload.eval_chunk_rows`)
+        and the executable-cache signature that records it
+        (:meth:`_shape_signature`). ``device=None`` and ``device="cpu"`` both
+        resolve to the interpreter's own CPU budget, so the default path and an
+        explicit CPU placement stay byte-identical.
+
+        Returns:
+            str | None: ``"cpu"`` for :meth:`_placement_device`'s
+            ``Device("cpu", 0)``, the kind string of an accelerator device, or
+            ``None`` when no device was requested (the graph then runs wherever
+            the backend puts it -- on llvm-cpu for ``backend="iree"``).
+        """
+        return getattr(self._placement_device(), "kind", None)
 
     def _place_state(self, state: State) -> State:
         """Place every runtime tensor on :meth:`_placement_device`'s device.
@@ -676,7 +765,12 @@ class Pipeline(StatefulBaseClass):
         entries["pop_size"] = int(self.algorithm.pop_size)
         return State(**entries)
 
-    def _generation_kernel(self, config: State, species_tree: Any) -> Callable:
+    def _generation_kernel(
+        self,
+        config: State,
+        species_tree: Any,
+        device_kind: Optional[str] = None,
+    ) -> Callable:
         """Build the traced function of one whole generation.
 
         Args:
@@ -685,11 +779,15 @@ class Pipeline(StatefulBaseClass):
                 inputs stay pure tensors.
             species_tree (Any): ``evoxc.TreeSpec`` of the ``SpeciesState``
                 pytree, used to rebuild it inside the trace from its leaves.
+            device_kind (str | None, optional): ``.kind`` of the device the graph
+                runs on (:meth:`_device_kind`), threaded into the ``act_fn`` so
+                the evaluate pass picks its chunk budget at trace time.
+                Defaults to ``None`` (the CPU interpreter).
 
         Returns:
             Callable: ``kernel(randkey, node_keys, node_attrs, conn_keys,
             conn_attrs, generation, *species_leaves)`` returning the flat list
-            ``[randkey, generation, *pop, *species, fitness, max_overflow]``.
+            ``[randkey, generation, *pop, *species, packed]``.
         """
         algorithm = self.algorithm
         problem = self.problem
@@ -718,8 +816,9 @@ class Pipeline(StatefulBaseClass):
             ``next_state.pop`` is bred from it regardless of ``ask``.
 
             Returns:
-                list: ``[randkey, generation, *next_pop, *next_species, fitness,
-                max_overflow]``.
+                list: ``[randkey, generation, *next_pop, *next_species, packed]``,
+                where ``packed`` is the one ``(P + 2,)`` host block described in
+                :meth:`step`.
 
             Raises:
                 TensorNEATError: If ``tell`` changes the species leaf count,
@@ -745,6 +844,7 @@ class Pipeline(StatefulBaseClass):
                 lambda: (current, transformed, pop),
                 algorithm.forward_prepared,
                 algorithm.prepare_forward,
+                device_kind,
             )
             fitness = problem.evaluate(current, eval_key, act_fn, transformed)
             next_state = algorithm.tell(current, fitness)
@@ -761,13 +861,29 @@ class Pipeline(StatefulBaseClass):
                     f"{species_leaves} leaves in, {len(next_species)} out; the "
                     "pipeline rebuilds the state from a fixed leaf layout"
                 )
+            # One leaf instead of three: the fitness vector plus the two scalars the
+            # host bookkeeping needs, in the fitness dtype so no mixed-dtype
+            # ``concatenate`` is exported.  A device-to-host copy costs a fixed
+            # ~50 us whatever its size, so three leaves would be three syncs where
+            # this is one; both counters are exact in a float32 at any generation
+            # count a run can reach (the state already stores ``generation`` as
+            # float32, so packing cannot lose precision the state does not).
+            packed = evoxc.concatenate(
+                [
+                    fitness,
+                    evoxc.reshape(
+                        evoxc.cast(next_state.generation, fitness.dtype), (1,)
+                    ),
+                    evoxc.reshape(evoxc.cast(max_overflow, fitness.dtype), (1,)),
+                ],
+                axis=0,
+            )
             return [
                 next_state.randkey,
                 next_state.generation,
                 *next_state.pop,
                 *next_species,
-                fitness,
-                max_overflow,
+                packed,
             ]
 
         return kernel
@@ -787,7 +903,9 @@ class Pipeline(StatefulBaseClass):
                 ``evoxc.build`` -- nothing here retries elsewhere.
         """
         kernel = self._generation_kernel(
-            self._static_config(state), evoxc.tree_structure(state.species)
+            self._static_config(state),
+            evoxc.tree_structure(state.species),
+            self._device_kind(),
         )
         specs = [
             evoxc.TensorSpec(tuple(state.randkey.shape), state.randkey.dtype),
@@ -805,8 +923,10 @@ class Pipeline(StatefulBaseClass):
 
         Built on first use and then reused; the build is timed into
         :attr:`build_seconds` and counted in :attr:`builds`. A *different*
-        signature (population or genome geometry) is a second entry, so a shape
-        change can never silently reuse the previous graph.
+        signature (population or genome geometry, substrate geometry, or the
+        device-derived ``distance_centre``/``distance_formulation``/``kernel_mode``
+        statics) is a second entry, so a shape or device/mode change can never
+        silently reuse the previous graph.
         """
         signature = self._shape_signature(state)
         self.shape_signature = signature
@@ -822,19 +942,41 @@ class Pipeline(StatefulBaseClass):
 
     # ------------------------------------------------------------- one step
 
-    def step(self, state: State) -> tuple[State, GenomeTensors, np.ndarray]:
+    def step(
+        self,
+        state: State,
+        host_payload: Optional[bool] = None,
+    ) -> tuple[State, Optional[GenomeTensors], np.ndarray]:
         """Advance the search by exactly one generation (one compiled graph run).
 
         Args:
             state (State): Current state from :meth:`setup` or the previous
                 :meth:`step`.
+            host_payload (bool | None, optional): Whether to copy the evaluated
+                population to host numpy arrays. ``None`` (the default) means
+                "whatever the constructor's ``host_payload`` said"; ``True`` or
+                ``False`` overrides it for this one call, which is how
+                :meth:`auto_run` asks for the payload only on the generations it
+                reports or checkpoints.
 
         Returns:
             tuple: ``(new_state, previous_pop, fitnesses)`` -- the state of the
             *next* generation (advanced ``randkey``, incremented ``generation``,
             new population, updated species), the gene payload that was
-            evaluated (host numpy arrays, population on axis 0) and the ``(P,)``
-            host float fitness, **fitness last**.
+            evaluated (population on axis 0) and the ``(P,)`` host float fitness,
+            **fitness last**.
+
+            With ``host_payload`` in effect the payload is four **host numpy**
+            arrays (``node_keys (P, max_nodes)``, ``node_attrs (P, max_nodes, A)``,
+            ``conn_keys (P, max_conns, key_width)``, ``conn_attrs (P, max_conns,
+            W)``). Without it (``Pipeline(host_payload=False)`` and no override)
+            the payload is handed back **as the backend left it** -- numpy on the
+            reference interpreter, device-resident ``evoxc.Tensor`` leaves on a
+            device backend -- so no device-to-host copy is paid; materialise a
+            field with :func:`~tensorneat.common.tools.to_numpy` when a host
+            array is wanted. The fitness vector is always host: the generation
+            graph returns it packed together with the two scalars the loop needs
+            (see below), and that block is one copy.
 
         Raises:
             TensorNEATError: If the schedule overflowed (``edge_overflow > 0``):
@@ -853,14 +995,24 @@ class Pipeline(StatefulBaseClass):
             population is honoured for ``transform``/``evaluate``, but the
             returned ``previous_pop``, the checkpoints and ``tell`` still
             describe ``state.pop`` -- the documented reporting mismatch.
+
+            The graph returns the fitness vector and the two host-side scalars
+            (the incremented generation and the schedule's overflow maximum) as
+            one ``(P + 2,)`` block, so a generation pays **one** device-to-host
+            copy for all three instead of one per leaf; the generation number is
+            kept on :attr:`_host_generation` for the report.  The overflow test
+            raises before anything is returned, exactly as before.
         """
+        materialize = self.host_payload if host_payload is None else bool(host_payload)
         executable = self._executable_for(state)
         species_leaves = evoxc.tree_leaves(state.species)
         outputs = evoxc.run(
             executable, state.randkey, *state.pop, state.generation, *species_leaves
         )
         split = 6 + len(species_leaves)
-        max_overflow = int(to_numpy(outputs[split + 1]))
+        packed = np.asarray(to_numpy(outputs[split]))
+        fitnesses = packed[: self.pop_size]
+        max_overflow = int(packed[self.pop_size + 1])
         if max_overflow > 0:
             raise TensorNEATError(
                 f"the execution schedule dropped {max_overflow} connection(s): a "
@@ -871,6 +1023,7 @@ class Pipeline(StatefulBaseClass):
                 "pipeline will not widen it silently, and a lossy schedule is never "
                 "used"
             )
+        self._host_generation = int(packed[self.pop_size])
         new_state = state.update(
             pop=GenomeTensors(*outputs[2:6]),
             generation=outputs[1],
@@ -879,8 +1032,13 @@ class Pipeline(StatefulBaseClass):
             ),
             randkey=outputs[0],
         )
-        previous_pop = GenomeTensors(*(to_numpy(field) for field in state.pop))
-        return new_state, previous_pop, to_numpy(outputs[split])
+        if materialize:
+            previous_pop = GenomeTensors(*(to_numpy(field) for field in state.pop))
+        else:
+            # No host copy: hand the payload back exactly as the backend left it.
+            # The reporting paths materialise it themselves when they need it.
+            previous_pop = GenomeTensors(*tuple(state.pop))
+        return new_state, previous_pop, fitnesses
 
     # ------------------------------------------------------------- run loop
 
@@ -912,23 +1070,55 @@ class Pipeline(StatefulBaseClass):
             (``+inf``/``NaN`` from a custom problem) never satisfies
             ``fitness_target``; ``-inf`` is the only non-finite value selection
             ever sees.
+
+            The host payload is requested from :meth:`step` only when this loop
+            can consume it -- the constructor's ``host_payload`` (the default), a
+            checkpoint to write, the per-generation report or the problem's
+            ``show_details`` hook.  With ``Pipeline(host_payload=False)``,
+            ``is_detailed=False`` and no saving, a run therefore never pays a
+            payload copy; it still records :attr:`fitness_history` and
+            :attr:`best_fitness`, and :attr:`best_genome` stays ``None`` because
+            nothing materialised it.
         """
         self._executable_for(state)
         if self.is_detailed:
             print(f"compile finished, cost time: {self.build_seconds:.6f}s")
 
+        # The payload is only worth a device-to-host copy when something below
+        # consumes it: the opt-out flag itself, a checkpoint, the report or the
+        # problem's hook.
+        wants_payload = (
+            self.host_payload
+            or self.is_save
+            or self.is_detailed
+            or self.show_problem_details
+        )
         for _ in range(self.generation_limit):
             start = time.perf_counter()
-            state, previous_pop, fitnesses = self.step(state)
-            self._analyse(state, previous_pop, fitnesses, time.perf_counter() - start)
+            state, previous_pop, fitnesses = self.step(
+                state, host_payload=wants_payload
+            )
+            self._analyse(
+                state,
+                previous_pop,
+                fitnesses,
+                time.perf_counter() - start,
+                self._host_generation,
+            )
             if float(np.max(_finite_fitness(fitnesses))) >= self.fitness_target:
                 if self.is_detailed:
                     print("Fitness limit reached!")
                 break
         else:
-            if self.is_detailed and int(to_numpy(state.generation)) >= int(
-                self.generation_limit
-            ):
+            # The generation number comes from the last step's packed host block
+            # (no second device read); a zero-generation run has none, so fall
+            # back to the state it was given.
+            generation = (
+                self._host_generation
+                if self._host_generation is not None
+                else int(to_numpy(state.generation))
+            )
+            if self.is_detailed and generation >= int(self.generation_limit):
                 print("Generation limit reached!")
 
         if self.is_save:
@@ -938,19 +1128,30 @@ class Pipeline(StatefulBaseClass):
     def _analyse(
         self,
         state: State,
-        previous_pop: GenomeTensors,
+        previous_pop: Optional[GenomeTensors],
         fitnesses: np.ndarray,
         cost_time: float,
+        generation: Optional[int] = None,
     ) -> None:
         """Record one generation on the host: history, best, log and report.
 
-        ``state`` is the state *after* the step (its incremented generation
-        counter is what the log numbers, as in the legacy library),
-        ``previous_pop``/``fitnesses`` are the population that produced this
-        generation's fitness and ``cost_time`` its wall time in seconds.
+        ``state`` is the state *after* the step, ``previous_pop``/``fitnesses``
+        are the population that produced this generation's fitness and
+        ``cost_time`` its wall time in seconds.  ``generation`` is the host
+        number :meth:`step` read out of its packed host block (so this method
+        never pays a second device read for a scalar); ``None`` falls back to the
+        state's own counter, which only costs a copy for a caller that skipped
+        :meth:`step`.
         The best individual is stored **batch-first** -- the selected rows with a
         leading population axis of 1 added back, so :attr:`best_genome` is
         ``state.pop`` at ``P = 1``, never a set of bare rows.
+        ``previous_pop`` may be the backend's own (possibly device-resident)
+        payload when ``Pipeline(host_payload=False)`` told :meth:`step` not to
+        materialise it; the host arrays are then produced here, **only** on the
+        generations that need them -- a new best, a checkpoint, or the problem's
+        ``show_details`` hook -- and a reporting path that needs them but was
+        handed ``None`` raises a :class:`~tensorneat.common.errors.TensorNEATError`
+        naming the flag instead of silently reporting nothing.
         Both diagnostics hooks are *reporting* only, so neither can abort an
         evolution run: a failing hook is printed (never swallowed silently), the
         failure is recorded in :attr:`detail_failures` and the loop continues.
@@ -958,7 +1159,8 @@ class Pipeline(StatefulBaseClass):
         view, so a ``NaN``/``+inf`` fitness from a custom problem is logged as a
         non-finite (excluded) value and can never become :attr:`best_fitness`.
         """
-        generation = int(to_numpy(state.generation))
+        if generation is None:
+            generation = int(to_numpy(state.generation))
         valid = fitnesses[np.isfinite(fitnesses)]
         if valid.size == 0:
             max_f = min_f = mean_f = std_f = float("nan")
@@ -971,16 +1173,23 @@ class Pipeline(StatefulBaseClass):
 
         clean = _finite_fitness(fitnesses)
         max_index = int(np.argmax(clean))
-        if float(clean[max_index]) > self.best_fitness:
-            self.best_fitness = float(clean[max_index])
-            # ``previous_pop``'s fields are ``(P, ...)``, so an index gives a bare
-            # row; add the leading axis back to keep the one-individual batch.
+        # The host payload is charged once per generation it is actually needed:
+        # a new best, a checkpoint, or the problem's hook.  Everything else in
+        # this method reads ``fitnesses`` alone.
+        selected = float(clean[max_index])
+        needs_best = selected > self.best_fitness
+        needed = needs_best or self.is_save or self.show_problem_details
+        payload = materialize_payload(previous_pop) if needed else None
+        if needs_best:
+            self.best_fitness = selected
+            # ``payload``'s fields are ``(P, ...)``, so an index gives a bare row;
+            # add the leading axis back to keep the one-individual batch.
             self.best_genome = GenomeTensors(
-                *(np.asarray(field[max_index])[np.newaxis, ...] for field in previous_pop)
+                *(np.asarray(field[max_index])[np.newaxis, ...] for field in payload)
             )
 
         if self.is_save:
-            self._save_generation(generation, previous_pop, clean, max_index)
+            self._save_generation(generation, payload, clean, max_index)
             with open(os.path.join(self.save_dir, "log.txt"), "a") as handle:
                 handle.write(
                     f"{generation},{max_f},{min_f},{mean_f},{std_f},{cost_time}\n"
@@ -1013,8 +1222,8 @@ class Pipeline(StatefulBaseClass):
                 lambda: self.problem.show_details(
                     report_state,
                     report_state.randkey,
-                    self._constant_act_fn(report_state, previous_pop),
-                    self._schedule_of(report_state, previous_pop),
+                    self._constant_act_fn(report_state, payload),
+                    self._schedule_of(report_state, payload),
                 ),
             )
 

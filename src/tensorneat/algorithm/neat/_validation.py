@@ -17,11 +17,48 @@ from typing import Any
 from tensorneat.common.errors import TensorNEATError
 
 __all__ = [
+    "DISTANCE_CENTRE_KEY",
+    "DISTANCE_CENTRE_MODES",
+    "distance_centre_mode",
     "non_negative_int",
     "positive_float",
     "positive_int",
     "unit_interval",
 ]
+
+#: State entry selecting the width of every speciation distance centre payload.
+#:
+#: ``"tiled"`` hands the genome a population-shaped centre (the row repeated
+#: ``pop_size`` times), ``"single"`` a one-individual one (leading axis ``1``).
+#: The entry is a plain Python string on the trace-time configuration ``State``
+#: and outranks nothing else: a bare ``State`` gets ``"tiled"``.
+DISTANCE_CENTRE_KEY = "distance_centre"
+
+#: Accepted values of :data:`DISTANCE_CENTRE_KEY`.
+DISTANCE_CENTRE_MODES = ("tiled", "single")
+
+
+def distance_centre_mode(state: Any) -> str:
+    """Resolve :data:`DISTANCE_CENTRE_KEY` from the trace-time ``State``.
+
+    Args:
+        state (Any): The configuration ``State`` the speciation call received;
+            the entry is a host value, never a traced one.
+
+    Returns:
+        str: ``"tiled"`` when the entry is absent, else the stored mode.
+
+    Raises:
+        TensorNEATError: If the entry holds anything but the two documented
+            modes, so a typo fails loudly instead of silently picking a width.
+    """
+    mode = getattr(state, DISTANCE_CENTRE_KEY, DISTANCE_CENTRE_MODES[0])
+    if mode not in DISTANCE_CENTRE_MODES:
+        raise TensorNEATError(
+            f"state.{DISTANCE_CENTRE_KEY} must be one of "
+            f"{DISTANCE_CENTRE_MODES}, got {mode!r}"
+        )
+    return mode
 
 
 def positive_int(value: Any, name: str) -> int:

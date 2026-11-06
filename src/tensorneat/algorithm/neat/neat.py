@@ -53,6 +53,7 @@ from ...genome.utils import GenomeTensors
 from ..base import BaseAlgorithm
 from .species import SpeciesController, SpeciesState
 from ._distance import DistanceRows
+from ._kernels import scalar_f32
 from ._keys import node_keys_for_split, validate_key_space
 from ._validation import positive_int
 
@@ -87,30 +88,6 @@ def _finite_bound(dtype: Any) -> Any:
         )
     return enp.full((), np.finfo(np_dtype).max, dtype=dtype)
 
-
-def _as_scalar_f32(value: Any) -> Any:
-    """Return ``value`` as a 0-d ``float32`` tensor, adding no op when it already is.
-
-    Args:
-        value (Any): Traced tensor, typically ``state.generation``.
-
-    Returns:
-        Any: The same value cast to ``float32`` and reshaped to ``()`` -- or the
-        argument itself when its static dtype and rank already satisfy that, so
-        the ``cast``/``reshape`` are emitted only when they can do work.
-
-    Note:
-        The static check is a Python ``if`` over the trace-time dtype/shape, not a
-        predicate on tensor contents: it specializes the graph per input type, and
-        both branches produce bit-identical values.  ``state.generation`` is a 0-d
-        ``float32`` by construction (see :meth:`NEAT.setup`), so the default path
-        costs zero ops.
-    """
-    if value.dtype != evoxc.float32:
-        value = evoxc.cast(value, evoxc.float32)
-    if tuple(value.shape) != ():
-        value = evoxc.reshape(value, ())
-    return value
 
 def _sanitize_fitness(fitness: Any, pop_size: int) -> Any:
     """Map NaN and infinite fitness to ``-inf``.
@@ -598,7 +575,7 @@ class NEAT(BaseAlgorithm):
         """
         fitness = _sanitize_fitness(fitness, self._pop_size)
         generation = evoxc.add(
-            _as_scalar_f32(state.generation),
+            scalar_f32(state.generation),
             enp.full((), 1.0, evoxc.float32),
         )
         state = state.update(generation=generation)

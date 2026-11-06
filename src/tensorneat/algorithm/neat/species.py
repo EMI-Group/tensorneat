@@ -58,6 +58,7 @@ import evoxc.numpy as enp
 
 from tensorneat.common import State, StatefulBaseClass
 from tensorneat.common.errors import TensorNEATError
+from tensorneat.common.schedule_accelerator import kernel_mode
 from tensorneat.common.tools import rank_elements
 
 from . import _kernels
@@ -409,10 +410,11 @@ class SpeciesController(StatefulBaseClass):
                 the signature ``distance_fn(state, centre: GenomeTensors,
                 pop: GenomeTensors) -> distances``, where ``pop`` must be the
                 payload the digest was prepared from.  Every centre it receives is
-                **population-shaped** -- ``pop_size`` rows, row ``p`` measured
-                against population member ``p`` -- and returns one ``(pop_size,)``
-                distance row.  Slicing the centre out of the ``(S, ...)`` fields
-                and tiling it to ``pop_size`` rows is this method's job, not the
+                spelled by ``state.distance_centre``: **population-shaped** --
+                ``pop_size`` rows -- by default, or one-individual (leading axis
+                ``1``) when the entry is ``"single"``; either way the call returns
+                one ``(pop_size,)`` distance row.  Slicing the centre out of the
+                ``(S, ...)`` fields and expanding it is this method's job, not the
                 genome's; ``NEAT.tell`` builds the callable from
                 ``genome.prepare_distance`` (see :class:`._distance.DistanceRows`),
                 and ``genome.execute_distance`` no longer plugs in directly
@@ -483,36 +485,46 @@ class SpeciesController(StatefulBaseClass):
             two fields.
 
         Note:
-            **Below ``_kernels.GATED_ROWS`` both scans compute their distance row
-            lazily, behind one ``evoxc.cond`` per iteration.**  The predicate is
-            the mask that lets the iteration write -- ``live and any-pending`` for
-            scan 1, ``live or create`` for scan 2 -- so a slot that cannot claim a
-            genome (scan 1) or take a member (scan 2) never runs the
-            compatibility kernel.  The skipped branch yields zeros, which the
-            iteration's own write mask discards, so no reader ever consumes a
-            row that was not computed: the substitution is bit-identical.  A
-            sparse table (1-3 live slots of 20 at pop 8/100) would pay for the
-            rows of slots that cannot write, so the lazy path is kept there.
+            **In ``"host"`` kernel mode below ``_kernels.GATED_ROWS`` both scans
+            compute their distance row lazily, behind one ``evoxc.cond`` per
+            iteration.**  The predicate is the mask that lets the iteration write
+            -- ``live and any-pending`` for scan 1, ``live or create`` for scan 2
+            -- so a slot that cannot claim a genome (scan 1) or take a member
+            (scan 2) never runs the compatibility kernel.  The skipped branch
+            yields zeros, which the iteration's own write mask discards, so no
+            reader ever consumes a row that was not computed: the substitution is
+            bit-identical.  A sparse table (1-3 live slots of 20 at pop 8/100)
+            would pay for the rows of slots that cannot write, so the lazy path is
+            kept there.  ``_kernels.gated`` never gates in ``"accelerator"``
+            mode: there each ``cond`` reads its predicate back to the host, while
+            the extra unconditional row is nearly free in the already-launched
+            device sequence, so the accelerator leg always uses the dense form
+            below.
         Note:
-            **Above ``_kernels.GATED_ROWS`` scan 1's whole centre table is
-            measured *before* the scan** (``distance_fn.matrix``, one
+            **Above ``_kernels.GATED_ROWS`` -- and always in ``"accelerator"``
+            kernel mode, whatever the table size -- scan 1's whole centre table
+            is measured *before* the scan** (``distance_fn.matrix``, one
             population-shaped call per centre row -- run inside that method's own
             fixed-length ``scan``, so each centre's kernel transients are scoped
             to one region) and each iteration reads its own row with a
             ``gather``, while scan 2 measures its selected centre per iteration
-            -- ``pop[seed]`` for a creating slot, the post-scan-1 carry row
-            otherwise.  Scan 1's centre for slot ``i`` is the carry row ``i`` and
-            no earlier iteration can rewrite it (every ``scatter`` writes index
-            ``slot`` and each slot is visited once), so the pre-scan table holds
-            exactly the centre every iteration reads and the rows are the same
-            floats (the compatibility kernel is row-independent).  Once the
+            -- ``pop[seed]`` for a creating slot, the row of the centre table
+            rebuilt after scan 1 otherwise.  Scan 1's centre for slot ``i`` is
+            the pre-scan centre row ``i`` and no earlier iteration can rewrite it
+            (every ``scatter`` there writes index ``slot`` and each slot is
+            visited once), so the pre-scan table holds exactly the centre every
+            iteration reads and the rows are the same floats (the compatibility
+            kernel is row-independent).  Once the
             species table is full every slot is live and nothing is skippable,
-            so a lazy row's ``if`` region costs more than it saves (see
-            ``_kernels.GATED_ROWS``).  The gate is a pure static predicate, so
+            so a lazy row's ``if`` region costs more than it saves, and in
+            ``"accelerator"`` mode the per-slot host round trip costs more than
+            the row it skips (see ``_kernels.GATED_ROWS``).  The gate is a pure
+            static predicate on ``(species_size, pop_size, kernel_mode)``, so
             exactly one of the two paths reaches the graph.  The dense path
             needs the digest-backed callable (``DistanceRows.matrix``) and raises
-            ``TensorNEATError`` for any other callable -- there is no silent
-            fallback to the slower shape.
+            ``TensorNEATError`` for any other callable -- an accelerator-mode
+            state with a matrix-less callable raises instead of silently
+            re-gating, and there is no fallback to the slower shape.
         """
         population = self._population(state, pop)
         values = _kernels.speciate(
@@ -523,7 +535,9 @@ class SpeciesController(StatefulBaseClass):
             self.pop_size,
             self.species_size,
             self.compatibility_threshold,
-            _kernels.gated(self.species_size, self.pop_size),
+            _kernels.gated(
+                self.species_size, self.pop_size, kernel_mode(state)
+            ),
         )
         return state.update(species=SpeciesState(*values))
 
@@ -631,16 +645,20 @@ class SpeciesController(StatefulBaseClass):
             evoxc.logical_and(evoxc.logical_not(improved), stale),
             evoxc.logical_not(exempt),
         )
+        # One ``NaN`` constant for the four dead-slot writes: they are the same
+        # sentinel and every reader either maps it to ``-inf`` or tests it with
+        # ``isnan``, so sharing the value is bit-identical to four copies.
+        dead = _nan()
         return (
             dataclass_replace(
                 species_state,
                 species_keys=evoxc.select(
-                    killed, _nan(), species_state.species_keys
+                    killed, dead, species_state.species_keys
                 ),
-                best_fitness=evoxc.select(killed, _nan(), best_fitness),
-                last_improved=evoxc.select(killed, _nan(), last_improved),
+                best_fitness=evoxc.select(killed, dead, best_fitness),
+                last_improved=evoxc.select(killed, dead, last_improved),
                 member_count=evoxc.select(
-                    killed, _nan(), species_state.member_count
+                    killed, dead, species_state.member_count
                 ),
             ),
             evoxc.select(killed, _neg_inf(), species_fitness),
@@ -836,9 +854,9 @@ class SpeciesController(StatefulBaseClass):
 
         Both are computed without a host loop: the ``(S, P)`` mask
         ``E[i] <= p`` is a broadcast comparison of the sparse
-        block starts against the slot vector, ``loc`` is the index of the last
-        ``True`` in each column (``argmax`` over the mask reversed along the
-        species axis), and ``E[loc(p)]`` is one ``gather``.
+        block starts against the slot vector, ``loc`` is the number of
+        ``True`` entries in each column minus one (count form), and ``E[loc(p)]``
+        is one ``gather``.
 
         Args:
             spawn_number (Tensor): ``(S,)`` int32, summing to ``pop_size``;
@@ -848,8 +866,8 @@ class SpeciesController(StatefulBaseClass):
             tuple: ``(loc, idx_in_block)``, both ``(P,)`` int32.
 
         Note:
-            The ``spawn > 0`` term the ``loc`` formula used to carry is
-            redundant and is not emitted: with ``sum(spawn) == pop_size`` (the
+            The ``loc`` formula carries no ``spawn > 0`` term: with
+            ``sum(spawn) == pop_size`` (the
             residual correction of ``_kernels.spawn_from_target``) the last
             qualifying index always holds a positive spawn, while a zero-spawn
             (dead or empty) species still consumes no population slot because
@@ -858,10 +876,10 @@ class SpeciesController(StatefulBaseClass):
             The block index has to be the *last* qualifying block, not the
             *number* of qualifying blocks: after the species sort only dead
             slots are guaranteed to trail, so a live species can legitimately
-            receive ``spawn == 0`` in the middle of the table and a count would
-            point at the wrong block.  ``argmax`` returns the first maximum, so
-            the mask is reversed first and the index mapped back with
-            ``S - 1 - argmax``.
+            receive ``spawn == 0`` in the middle of the table.  The count form is
+            still exact because ``spawn >= 0`` makes ``E`` its running sum, hence
+            monotone non-decreasing: the qualifying indices form a prefix of
+            ``[0, S)``, so "count minus one" IS the last one.
             Because ``sum(spawn) == pop_size`` and ``pop_size >= 1``, at least one
             block starts at or before every slot, so ``loc`` stays in
             ``[0, S - 1]``.
@@ -870,7 +888,7 @@ class SpeciesController(StatefulBaseClass):
             behavioural change belongs in ``_kernels.py`` and this wrapper only
             keeps the spawn algebra testable without a graph.
         """
-        return _kernels.block_layout(spawn_number, self.pop_size, self.species_size)
+        return _kernels.block_layout(spawn_number, self.pop_size)
 
     # ----------------------------------------------------------- membership
 

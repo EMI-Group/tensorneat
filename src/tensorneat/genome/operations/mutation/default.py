@@ -419,7 +419,16 @@ class DefaultMutation(BaseMutation):
         if genome.network_type == "feedforward":
             allowed = evoxc.logical_and(
                 allowed,
-                evoxc.logical_not(closes_cycle(node_keys, conn_keys, in_keys, out_keys)),
+                evoxc.logical_not(
+                    closes_cycle(
+                        state,
+                        node_keys,
+                        conn_keys,
+                        in_keys,
+                        out_keys,
+                        genome.key_span,
+                    )
+                ),
             )
         return AddConnPlan(allowed, context.free_conn_row, in_keys, out_keys)
 

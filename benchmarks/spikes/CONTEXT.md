@@ -26,4 +26,5 @@ Keep the measurements that justify the rewrite's *design* (edge-proportional, de
 | `./FORMULATION.md` | Recorded numbers with conditions, the end-to-end cross-reference, how to reproduce, and what the design must achieve. |
 | `./forward_micro.py` | Runnable micro-benchmark (`--mode legacy|unrolled|all`). |
 | `./iree_probe.py` | Runnable iree-backend probes behind `../BACKENDS.md`. |
+| `./rocm` | ROCm (MI300X) evidence: the pre-3.13 abort-era report plus the current per-generation cost model (dispatch count, device-vs-host time, phase split, ceiling) — see `./rocm/CONTEXT.md`. |
 | `../CONTEXT.md` | End-to-end protocol and verdict rules (parent level). |

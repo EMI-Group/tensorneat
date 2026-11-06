@@ -59,6 +59,13 @@ Two contract details drive the implementation, both about cost rather than maths
 Nothing here is differentiable (neither operator enters the ``grad`` graph); the sort and the
 ``int32`` index arithmetic are integer ops only.
 
+A second formulation lives beside the merge in :mod:`~.alignment_accelerator`, selected by the
+trace-time static ``state.kernel_mode``: a compiled backend lowers each of the two sorts to a
+bitonic sort with one workgroup per row, so that route asks the homology question directly as
+one ``(P, M, M)`` equality table and drops both sorts.  The merge stays the default — and the
+only route the numpy reference interpreter takes, which pays the table's element volume in
+full — so ``state=None`` and a state without the entry both resolve to it.
+
 :func:`key_rows` sits beside the merge because it is the same contract's front door: the
 alignment is written against ``(P, M, K)`` key columns, so a caller with a two-dimensional
 node-key table normalises it with that one helper instead of re-deriving the rank rule.
@@ -484,7 +491,10 @@ def _confirm_rows(
 
 
 def find_homologous(
-    keys1: evoxc.SymbolicTensor, keys2: evoxc.SymbolicTensor
+    keys1: evoxc.SymbolicTensor,
+    keys2: evoxc.SymbolicTensor,
+    *,
+    state=None,
 ) -> evoxc.SymbolicTensor:
     """Locate, for every gene of parent 1, its homologous row in parent 2.
 
@@ -510,6 +520,12 @@ def find_homologous(
             ``I_INF`` padded. Both parents share ``M`` and ``K``: the payload shapes are
             static at build time (the caller validates that, see
             :meth:`~tensorneat.genome.operations.crossover.base.BaseCrossover.__call__`).
+        state (Any): The trace-time configuration ``State``, or ``None`` for a direct kernel
+            call.  Its :data:`~.alignment_accelerator.KERNEL_MODE_KEY` entry selects the
+            formulation: ``"host"`` (the default, and what ``None`` resolves to) is this
+            module's two-sort rank merge, ``"accelerator"`` is
+            :func:`~.alignment_accelerator.homologous_pair_accelerator`'s equality table.
+            Both return the same table, so the caller's decision never depends on the switch.
 
     Returns:
         evoxc.SymbolicTensor: ``(P, M)`` ``int32`` row index into ``keys2`` per gene of
@@ -547,12 +563,15 @@ def find_homologous(
         A gene family with more key columns than :data:`_PACKED_KEY_WIDTH` gets one extra
         pass (:func:`_confirm_rows`) because its identity covers only the packed prefix.
     """
-    rows, present = _homologous(keys1, keys2)
+    rows, present = _homologous(keys1, keys2, state=state)
     return _masked_rows(rows, present)
 
 
 def homologous_pair(
-    keys1: evoxc.SymbolicTensor, keys2: evoxc.SymbolicTensor
+    keys1: evoxc.SymbolicTensor,
+    keys2: evoxc.SymbolicTensor,
+    *,
+    state=None,
 ) -> tuple:
     """The two halves of :func:`find_homologous`'s answer, without the ``I_INF`` select.
 
@@ -568,6 +587,9 @@ def homologous_pair(
             ``I_INF`` padded.
         keys2 (evoxc.SymbolicTensor): ``(P, M, K)`` ``int32`` key columns of parent 2,
             ``I_INF`` padded.
+        state (Any): The trace-time configuration ``State``, or ``None``; its
+            :data:`~.alignment_accelerator.KERNEL_MODE_KEY` entry selects the formulation,
+            exactly as for :func:`find_homologous`.
 
     Returns:
         tuple: ``(rows (P, M) int32, present (P, M) bool)`` — the row of parent 2 per gene
@@ -583,19 +605,24 @@ def homologous_pair(
         cannot disagree about homology.  ``present`` is computed before the redirect, so
         the mask is exactly "parent 2 holds this key tuple".
     """
-    return _homologous(keys1, keys2)
+    return _homologous(keys1, keys2, state=state)
 
 
 def _homologous(
-    keys1: evoxc.SymbolicTensor, keys2: evoxc.SymbolicTensor
+    keys1: evoxc.SymbolicTensor,
+    keys2: evoxc.SymbolicTensor,
+    *,
+    state=None,
 ) -> tuple:
-    """The rank merge: raw successor rows plus the "has a homologue" mask.
+    """The homologue table, from the formulation ``state`` selects.
 
     Args:
         keys1 (evoxc.SymbolicTensor): ``(P, M, K)`` ``int32`` key columns of parent 1,
             ``I_INF`` padded.
         keys2 (evoxc.SymbolicTensor): ``(P, M, K)`` ``int32`` key columns of parent 2,
             ``I_INF`` padded.
+        state (Any): The trace-time configuration ``State``, or ``None`` for the host
+            formulation.
 
     Returns:
         tuple: ``(rows (P, M) int32, present (P, M) bool)`` — the row of parent 2 per gene
@@ -603,18 +630,34 @@ def _homologous(
         cannot escape, and the mask that says which genes have one.
 
     Raises:
+        TensorNEATError: If the state's kernel-mode entry is not one of the documented
+            formulations.
         evoxc.ShapeError: Propagated unchanged if the two parents' shapes differ.
 
     Notes:
         The single implementation behind :func:`find_homologous` and
         :func:`homologous_pair`, which differ only in how they spell "no homologue"
         (``I_INF`` versus a mask), so the two entry points cannot disagree about homology.
-        The successor is read as *one* gather of ``order`` (the successor's row) plus one
-        gather of ``merged`` at that row — the intermediate ``(P, 2M)`` sorted identity
-        sequence of the two-sort formulation is never materialised, and the rank
-        inversion is an encoded ``int32`` ``sort`` (:func:`_successor_ranks`) rather than a
-        second ``argsort`` or a ``scatter``.
+        The formulation is one **static host branch** on ``state.kernel_mode``
+        (:func:`~.alignment_accelerator.selected`), so a graph contains exactly one of the
+        two spellings and no traced value ever drives it:
+
+        * ``"host"`` (the default, and what ``state=None`` resolves to) is the two-sort rank
+          merge below: the successor is read as *one* gather of ``order`` (the successor's
+          row) plus one gather of ``merged`` at that row, so the intermediate ``(P, 2M)``
+          sorted identity sequence is never materialised and the rank inversion is an
+          encoded ``int32`` ``sort`` (:func:`_successor_ranks`) rather than a second
+          ``argsort`` or a ``scatter``;
+        * ``"accelerator"`` is
+          :func:`~.alignment_accelerator.homologous_pair_accelerator`'s equality table,
+          which drops both sorts because a compiled backend lowers each of them to a bitonic
+          sort, one workgroup per row.
     """
+    from . import alignment_accelerator
+
+    if alignment_accelerator.selected(state):
+        return alignment_accelerator.homologous_pair_accelerator(keys1, keys2)
+
     pop_size, count = keys1.shape[0], keys1.shape[1]
     width = keys1.shape[2]
     tag = _scalar(_TAG_PARENT_2, evoxc.int64)

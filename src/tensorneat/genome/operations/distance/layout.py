@@ -7,9 +7,9 @@ every call needs the same *static* scaffolding, whichever route it takes:
   rank-0 scalars (``I_INF``, ``0``, ``0.0``, the key-fold base and tag scale, the two
   sentinels, the attribute width, the operator's three tail weights) plus the per-individual
   flat index blocks of the merge and of the aligned-attribute gather.
-* :class:`DenseLayout` — the dense single-centre route of :mod:`.dense`: the owner table
-  base, the centre attribute table base, the centre row index, the flat reorder offsets and
-  the reorder buffer.
+* :class:`DenseLayout` — the dense single-centre route of :mod:`.dense`: the merged
+  owner/attribute table base, the centre row index, the marker padding row, the flat reorder
+  offsets and the reorder buffer.
 
 Those tensors depend only on ``(pop_size, gene count, attr width)``, so building them inside
 ``measure`` paid for them ``2 * species_size`` times — and, worse, each one is a *graph
@@ -358,17 +358,105 @@ def build_statics(
     )
 
 
+def build_grouped_statics(
+    base: MeasureStatics,
+    *,
+    rows: int,
+    count: int,
+    attr_width: int,
+    attrs: "evoxc.SymbolicTensor | None" = None,
+) -> MeasureStatics:
+    """Rebuild one family's :class:`MeasureStatics` at a grouped row count (once per generation).
+
+    Args:
+        base (MeasureStatics): The ungrouped scaffold of the same family, straight off the
+            population digest — the source of every rank-0 scalar, of the fold weights and of
+            the attribute tail.
+        rows (int): Row count of the grouped digest, ``group * pop_size``.
+        count (int): Static gene count ``M`` of the family (unchanged by the grouping).
+        attr_width (int): Static attribute width ``A``; ``0`` keeps the base's empty attribute
+            base.
+        attrs (evoxc.SymbolicTensor | None): ``(rows, M, A) float32`` *tiled* attribute block
+            whose ``(rows * M, A)`` row view the aligned-attribute gather indexes.
+
+    Returns:
+        MeasureStatics: the same scalars as ``base`` with the three rows-scaled tables built at
+        ``rows`` rows, so a ``rows``-row centre merges against a ``rows``-row digest.
+
+    Notes:
+        Only five fields depend on the row count, and only those are rebuilt:
+        ``offsets``, ``offsets_plus_one`` (both ``(rows, 1)``), ``pad_column_i64`` (``(rows, 1)``)
+        and the two attribute tables of :class:`AttrStatics`.
+        Everything else — ``iinf_i32``, ``zero_i32``, ``key_base_i64``, ``tag_scale_i64``,
+        ``one_i64``, ``pad_centre_i64``, ``fold_i64``, ``AttrStatics.zero_f32`` and
+        ``AttrStatics.tail`` — is rank 0 or ``(2, 1)``, i.e. independent of the batch, so the
+        grouped digest hands the base digest's own tensors on and emits **no** fresh
+        ``constant`` op for any of them.
+        The trailing padding column is one ``broadcast`` of the existing rank-0 sentinel (a
+        rank may be added, so no ``reshape`` is needed) rather than a
+        :func:`~tensorneat.genome.window.fill`, which would bake a second constant op for the
+        same value.
+        The two ``arange`` tables are static index blocks, not data buffers, so they keep their
+        direct ``enp.arange`` and none of them is population-scaled data.
+        Nothing here is per ``measure`` call: this runs once per generation, next to the tile it
+        belongs to (:func:`~.grouped.group_digest`), and the per-call body stays the plain
+        merge, which reads no table but the ones carried in this bundle.
+    """
+    merged_width = 2 * count + 1
+    offsets = evoxc.reshape(
+        enp.arange(0, rows * merged_width, merged_width, dtype=evoxc.int32),
+        (rows, 1),
+    )
+    return MeasureStatics(
+        base.iinf_i32,
+        base.zero_i32,
+        base.key_base_i64,
+        base.tag_scale_i64,
+        base.one_i64,
+        base.pad_centre_i64,
+        base.fold_i64,
+        evoxc.broadcast(base.pad_centre_i64, (rows, 1)),
+        offsets,
+        evoxc.add(offsets, enp.full((), 1, dtype=evoxc.int32)),
+        AttrStatics(
+            (
+                evoxc.reshape(
+                    enp.arange(0, rows * count, count, dtype=evoxc.int32), (rows, 1)
+                )
+                if attr_width
+                else base.attr.base
+            ),
+            base.attr.zero_f32,
+            (
+                evoxc.reshape(attrs, (rows * count, attr_width))
+                if attrs is not None and attr_width
+                else attrs
+            ),
+            base.attr.tail,
+        ),
+    )
+
+
 class DenseLayout(NamedTuple):
     """Static scaffold of one gene family's dense single-centre route.
 
     Attributes:
-        owner (evoxc.SymbolicTensor): ``(width + 1,) int32`` base of the owner table, every
-            cell holding the gene count — the value an unowned cell keeps, so
-            ``owner_at < count`` is the homology mask.
-        table (evoxc.SymbolicTensor): ``(width + 1, A) float32`` base of the centre attribute
-            table (zeros), empty ``(width + 1, 0)`` for a family with no attribute column.
-        row_index (evoxc.SymbolicTensor): ``(M,) int32`` centre gene row index, the scatter's
-            update block.
+        table (evoxc.SymbolicTensor): ``(width + 1, 1 + A) float32`` base of the **merged**
+            centre table: column ``0`` is the owner row index and columns ``1 .. A`` are the
+            centre's attribute columns, every cell of both holding the gene count (the value an
+            unowned cell keeps, so ``owner < count`` is the homology mask).  An unowned cell's
+            attribute columns are never read: its distance is written to the dump column and
+            sliced off.  Empty ``(0, 0)`` for a family the static gate rejected.
+        row_index (evoxc.SymbolicTensor): ``(M, 1) float32`` centre gene row index — the owner
+            column of the one scatter's update block, already cast and reshaped so a call
+            spends no op on it.  Float32 is exact here: a row index is at most ``max_nodes``,
+            far below ``2**24``.
+        marker_pad (evoxc.SymbolicTensor | None): ``(1, marker_columns) int32`` zero row
+            appended below the centre's trailing key columns, so the marker table a centre index
+            of ``count`` reads is in range.  Those cells only ever reach a slot whose owner is
+            already the gene count (never homologous), so the row's *contents* are irrelevant.
+            ``None`` for a key width that folds every column — the marker branch of
+            :func:`.dense._family_terms` is static, so no pad row and no constant is built.
         offsets (evoxc.SymbolicTensor): ``(P, 1) int32`` ``arange(0, P * (M + 1), M + 1)`` —
             the row stride of the flat reorder scatter.
         base (evoxc.SymbolicTensor): ``(P * (M + 1),) float32`` zero base of the reorder
@@ -385,9 +473,9 @@ class DenseLayout(NamedTuple):
         dump_i32 (evoxc.SymbolicTensor): rank-0 ``int32`` dump slot ``width - 1``.
     """
 
-    owner: evoxc.SymbolicTensor
     table: evoxc.SymbolicTensor
     row_index: evoxc.SymbolicTensor
+    marker_pad: "evoxc.SymbolicTensor | None"
     offsets: evoxc.SymbolicTensor
     base: evoxc.SymbolicTensor
     count_i32: evoxc.SymbolicTensor
@@ -404,6 +492,7 @@ def build(
     attr_width: int,
     width: int,
     dense: bool,
+    marker_columns: int = 0,
 ) -> DenseLayout:
     """Build one family's :class:`DenseLayout` (once per generation).
 
@@ -417,17 +506,24 @@ def build(
             span itself is *not* a layout scalar: the range test lives in
             :func:`dense_rows` and reads ``key_span`` from the payload's genome.
         dense (bool): Static gate — ``False`` builds empty placeholders, because the route is
-            unreachable for this family and the two big bases are exactly what the gate exists
+            unreachable for this family and the one big base is exactly what the gate exists
             to avoid materialising.
+        marker_columns (int): Static number of key columns past the folded prefix (``0`` for a
+            key that folds completely).  Only sizes :attr:`DenseLayout.marker_pad`.
 
     Returns:
         DenseLayout: the family's static scaffold.
 
     Notes:
-        Only the scalars are unconditional.  The owner and attribute bases are constant
-        tensors of ``width`` cells (``22 501`` connection cells at ``key_span = 150``, i.e.
+        Only the scalars are unconditional.  The merged owner/attribute base is one constant
+        tensor of ``width`` cells (``22 501`` connection cells at ``key_span = 150``, i.e.
         ~0.2 MB), which is why ``dense`` is a static argument and why the gate lives in
         :func:`.dense.enabled` rather than here.
+        The table is **one** float32 block with the owner row index in column ``0`` so a
+        ``measure`` call scatters the owner and the attributes together: two scatters at the
+        same index expression are what upstream IREE fails to legalise (see the module notes
+        in :mod:`.dense`).  The owner index therefore lives in a float that is exact for
+        every row count, not in an ``int32`` table.
     """
     count_i32 = pool.i32(count)
     pad_i32 = pool.i32(width)
@@ -435,9 +531,9 @@ def build(
     if not dense:
         empty = enp.zeros((0,), dtype=evoxc.float32)
         return DenseLayout(
-            pool.i32(count),
             enp.zeros((0, 0), dtype=evoxc.float32),
-            enp.zeros((0,), dtype=evoxc.int32),
+            enp.zeros((0, 0), dtype=evoxc.float32),
+            None,
             enp.zeros((0, 1), dtype=evoxc.int32),
             empty,
             count_i32,
@@ -446,10 +542,16 @@ def build(
             dump_i32,
         )
     stride = count + 1
+    # One constant for the whole base: the owner column *and* the attribute columns start at the
+    # gene count.  An unowned cell is never homologous, so its attribute columns are read into a
+    # distance that the reorder writes to the dump column and the caller slices off — the value
+    # there is irrelevant, which is what lets the base be a single ``enp.full`` instead of a
+    # ``full`` + ``zeros`` + ``concatenate`` triple.
+    table = enp.full((width + 1, 1 + attr_width), count, dtype=evoxc.float32)
     return DenseLayout(
-        enp.full((width + 1,), count, dtype=evoxc.int32),
-        enp.zeros((width + 1, attr_width), dtype=evoxc.float32),
-        enp.arange(0, count, dtype=evoxc.int32),
+        table,
+        evoxc.reshape(enp.arange(0, count, dtype=evoxc.float32), (count, 1)),
+        enp.zeros((1, marker_columns), dtype=evoxc.int32) if marker_columns else None,
         evoxc.reshape(
             enp.arange(0, pop_size * stride, stride, dtype=evoxc.int32), (pop_size, 1)
         ),
@@ -636,6 +738,7 @@ __all__ = [
     "MeasureStatics",
     "build",
     "build_attr_statics",
+    "build_grouped_statics",
     "build_statics",
     "dense_rows",
     "dense_slot",

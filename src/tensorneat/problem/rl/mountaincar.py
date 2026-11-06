@@ -67,9 +67,11 @@ ATTAINABLE_CEILING = 93.0
 class _MountainCarConstants(NamedTuple):
     """The physics bundle of one ``MountainCarContinuous`` configuration.
 
-    Every field is a rank-0 ``SymbolicTensor`` created inside the active trace
-    with ``enp.full((), value)``, so no Python literal (a float would
-    materialize as f64 on the stablehlo/iree path) ever reaches an op.
+    Every arithmetic field is a rank-0 ``SymbolicTensor`` created inside the
+    active trace with ``enp.full((), value)``, so no Python literal (a float
+    would materialize as f64 on the stablehlo/iree path) ever reaches an op;
+    ``position_column`` is the one row-shaped field, a boolean selector baked
+    with ``evoxc.constant`` because ``enp.full`` only fills a scalar.
 
     The bundle is built **once per rollout, outside the timestep loop**, so a
     constant the dynamics needs every step (``power``, ``three``, the ``+/-1``
@@ -88,9 +90,15 @@ class _MountainCarConstants(NamedTuple):
         three: The ``3`` of the ``cos(3 * position)`` slope factor.
         penalty: The ``0.1`` charged per step on ``a**2``.
         goal_reward: The one-time ``100`` terminus bonus.
+        position_column: The ``(1, 2)`` boolean ``[True, False]`` that selects
+            the position column when the two state columns are joined into an
+            observation row (a row constant, like ``CartPole``'s death
+            threshold, because ``enp.full`` only fills a scalar).
         zero: A float32 ``0``.
         one: A float32 ``1``, the upper action clip bound.
         neg_one: A float32 ``-1``, the lower action clip bound.
+        false: A bool ``False``, the value the alive mask is reset to once the
+            goal has been reached.
         reset_center: Centre of the reset draw, ``-0.5``.
         reset_half_width: Half-width of the reset draw, ``0.1``.
         one_step: The int32 ``1`` the loop counter advances by.
@@ -108,9 +116,11 @@ class _MountainCarConstants(NamedTuple):
     three: Any
     penalty: Any
     goal_reward: Any
+    position_column: Any
     zero: Any
     one: Any
     neg_one: Any
+    false: Any
     reset_center: Any
     reset_half_width: Any
     one_step: Any
@@ -296,7 +306,7 @@ class MountainCarContinuous(BaseProblem):
            ``p``.
         2. Initial states come from **one** draw, ``U(-1, 1)`` of shape
            ``(B, 1)``, rescaled to ``position = -0.5 + 0.1 * raw`` (i.e.
-           ``U(-0.6, -0.4)``) and concatenated with a zero velocity; the key is
+           ``U(-0.6, -0.4)``) and joined with a zero velocity column; the key is
            not threaded through the loop and ``np.random`` is never used.
         3. One ``evoxc.while_loop`` over ``max_step`` timesteps, carry
            ``(obs (B, 2), alive (B,), total (B,), step ())``: the return
@@ -483,7 +493,7 @@ class MountainCarContinuous(BaseProblem):
         built from **one** rank-0 key and one draw, ``raw ~ U(-1, 1)`` of shape
         ``(B, 1)``, rescaled column-wise to ``reset_center + reset_half_width *
         raw``; the velocity column is an exact zero block, and the two columns
-        are joined with ``enp.concatenate(axis=1)`` (a traced tensor has no
+        are joined with :meth:`_stack_state` (a traced tensor has no
         ``__getitem__``, so no indexing and no assignment).
 
         Args:
@@ -499,7 +509,7 @@ class MountainCarContinuous(BaseProblem):
         )
         position = consts.reset_center + consts.reset_half_width * raw
         velocity = enp.zeros((batch, 1), dtype=evoxc.float32)
-        return enp.concatenate((position, velocity), axis=1)
+        return self._stack_state(position, velocity, consts)
 
     def _loop_cond(self, consts: _MountainCarConstants) -> Callable:
         """Build the trip condition of the rollout loop.
@@ -551,6 +561,31 @@ class MountainCarContinuous(BaseProblem):
         operand ever meets the ``(B,)`` accumulator (numpy-style broadcasting
         would silently produce a ``(B, B)`` total).
 
+        The alive mask is retired with one ``enp.where(done, consts.false,
+        alive)`` -- the single op that says "an episode that just reached the
+        goal is no longer live" -- instead of a ``logical_not`` feeding a
+        ``logical_and`` (two ops for the same value). ``consts.false`` is the
+        in-trace rank-0 bool ``False`` from :meth:`_constants`; a Python
+        ``False`` or a numpy bool scalar is a concrete value rather than a graph
+        operand, and ``enp.where`` would promote the result away from ``bool``
+        instead of returning the mask at its own dtype.
+
+        IREE dispatch floor: one step is **4 dispatches**, the minimum the
+        carried tree allows (static ``stream.cmd.dispatch`` count of the
+        rocm/gfx942 ``cfg.mlir`` at ``pop 100``): the ``(B, 1)``-domain physics,
+        then one dispatch per carried tensor -- ``total`` ``(B,)``, ``alive``
+        ``(B,)`` and ``obs`` ``(B, 2)``. Every carried tensor is stored to its
+        own buffer on each iteration, and the physics feeds all three roots
+        (``done`` and the penalty for the two rank-1 roots, ``next_obs`` for the
+        row), so it is materialized instead of cloned: ``cos`` is not a
+        clonable op, while the cheap comparisons are (``cmpf oge 0.45``
+        reappears inside every root's region). Formulations that reorder the
+        chain cannot beat 4 -- deriving ``alive`` first and feeding the
+        accumulator from it, recovering the terminal step with ``done & alive``,
+        and moving the whole reward chain into the column domain all measure 4
+        dispatches -- and 3 would need the carried set down to two tensors,
+        which this documented carry forbids.
+
         Args:
             query: The policy query, prepared once for the whole rollout by
                 :func:`._common.prepared_query` so the per-pass operands are not
@@ -581,7 +616,7 @@ class MountainCarContinuous(BaseProblem):
             )
             reward = bonus - penalty
             total = total + enp.where(alive, reward, consts.zero)
-            alive = enp.logical_and(alive, enp.logical_not(done))
+            alive = enp.where(done, consts.false, alive)
             obs = enp.where(enp.expand_dims(alive, 1), next_obs, obs)
             return (obs, alive, total, index + consts.one_step)
 
@@ -596,8 +631,8 @@ class MountainCarContinuous(BaseProblem):
 
         The caller builds this bundle **once per rollout**, outside the timestep
         loop, so the constants the loop needs every step (``power``, ``three``,
-        ``penalty``, ``goal_reward``, ``zero``, the clip bounds) cost one
-        Constant op per run rather than one per timestep.
+        ``penalty``, ``goal_reward``, ``zero``, ``false``, the clip bounds) cost
+        one Constant op per run rather than one per timestep.
 
         ``reset_center`` and ``reset_half_width`` are derived from the module
         literals ``_RESET_LOW``/``_RESET_HIGH`` so the reset draw cannot drift
@@ -609,9 +644,10 @@ class MountainCarContinuous(BaseProblem):
             ``max_speed``, ``neg_max_speed``, ``goal_position``,
             ``goal_velocity``, ``power``, ``gravity``, ``three``, ``penalty``,
             ``goal_reward``, ``zero``, ``one``, ``neg_one``, ``reset_center``,
-            ``reset_half_width`` (all float32), plus the int32 loop scalars
-            ``one_step`` and ``horizon`` -- so neither the reset draw nor the
-            trip condition ever sees an f64 constant.
+            ``reset_half_width`` (all float32), the bool ``false`` the alive mask
+            is reset to, plus the int32 loop scalars ``one_step`` and ``horizon``
+            -- so neither the reset draw nor the trip condition ever sees an f64
+            constant.
         """
         return _MountainCarConstants(
             min_position=enp.full((), self.min_position),
@@ -625,9 +661,13 @@ class MountainCarContinuous(BaseProblem):
             three=enp.full((), 3.0),
             penalty=enp.full((), 0.1),
             goal_reward=enp.full((), 100.0),
+            position_column=evoxc.constant(
+                evoxc.from_numpy(np.asarray([[True, False]]))
+            ),
             zero=enp.full((), 0.0),
             one=enp.full((), 1.0),
             neg_one=enp.full((), -1.0),
+            false=enp.zeros((), dtype=evoxc.bool_),
             reset_center=enp.full((), 0.5 * (_RESET_LOW + _RESET_HIGH)),
             reset_half_width=enp.full((), 0.5 * (_RESET_HIGH - _RESET_LOW)),
             one_step=enp.full((), 1, dtype=evoxc.int32),
@@ -642,7 +682,7 @@ class MountainCarContinuous(BaseProblem):
         is expected to emit a raw logit (``output_transform`` unset).
 
         The returned action is the **pre-clip** action, which is what Gym
-        charges the ``0.1 * a**2`` penalty on; :meth:`_advance` clips it to
+        charges the ``0.1 * a**2`` penalty on; :meth:`_transition` clips it to
         ``[-1, 1]`` before it becomes a force, which ``|tanh| <= 1`` makes a
         no-op kept for faithfulness with the reference implementation.
 
@@ -672,6 +712,11 @@ class MountainCarContinuous(BaseProblem):
         ``position'`` and ``velocity'`` in hand: testing them separately would
         split the same observation row a second time per timestep.
 
+        This is the row-shaped face the unit tests drive: it splits the row
+        into the two ``(B, 1)`` columns, runs :meth:`_transition` on them and
+        rejoins the result with :meth:`_stack_state`, which is one elementwise
+        op instead of the two column copies a ``concatenate`` costs on iree.
+
         Args:
             obs: Current observations of shape ``(B, 2)``.
             action: Pre-clip actions of shape ``(B, 1)``.
@@ -683,6 +728,35 @@ class MountainCarContinuous(BaseProblem):
             the ``(B,)`` accumulator.
         """
         position, velocity = enp.split(obs, _OBS_DIM, axis=1)
+        next_position, next_velocity, done = self._transition(
+            position, velocity, action, consts
+        )
+        return self._stack_state(next_position, next_velocity, consts), done
+
+    def _transition(
+        self,
+        position: Any,
+        velocity: Any,
+        action: Any,
+        consts: Any,
+    ) -> tuple[Any, Any, Any]:
+        """Integrate one Euler step on the two ``(B, 1)`` state columns.
+
+        The algebra of :meth:`_advance`, op for op: no term is precomputed, no
+        float32 expression is reassociated and the ordering is Gym's, so the
+        transition is bit-identical to the float32 host oracle.
+
+        Args:
+            position: Car positions of shape ``(B, 1)``.
+            velocity: Car velocities of shape ``(B, 1)``.
+            action: Pre-clip actions of shape ``(B, 1)``.
+            consts: The bundle from :meth:`_constants`.
+
+        Returns:
+            ``(next_position (B, 1), next_velocity (B, 1), done (B,))`` -- the
+            goal mask of the *resulting* state, already rank-1 so it can be
+            combined with the ``(B,)`` accumulator.
+        """
         # ``enp.clip`` is ``maximum(minimum(x, a_max), a_min)``, so the symbolic
         # bundle scalars are legal bounds: no Python literal and no f64 constant
         # is involved, and NaN propagates through both ops (what the NaN policy
@@ -707,14 +781,36 @@ class MountainCarContinuous(BaseProblem):
             consts.zero,
             next_velocity,
         )
-        next_obs = enp.concatenate((next_position, next_velocity), axis=1)
         done = enp.reshape(
-            self._goal_mask(next_position, next_velocity, consts), (obs.shape[0],)
+            self._goal_mask(next_position, next_velocity, consts),
+            (position.shape[0],),
         )
-        return next_obs, done
+        return next_position, next_velocity, done
+
+    def _stack_state(
+        self, position: Any, velocity: Any, consts: Any
+    ) -> Any:
+        """Join the two ``(B, 1)`` state columns into an ``(B, 2)`` observation row.
+
+        ``where(position_column, position, velocity)`` with the ``(1, 2)`` mask
+        ``[True, False]``: both operands are ``(B, 1)`` and the mask broadcasts
+        them into column 0 and column 1, which is exactly
+        ``concatenate((position, velocity), axis=1)`` -- one elementwise op in
+        the observation row's own domain instead of the two column copies iree
+        forms for a ``concatenate``, and it fuses with what consumes the row.
+
+        Args:
+            position: Car positions of shape ``(B, 1)``.
+            velocity: Car velocities of shape ``(B, 1)``.
+            consts: The bundle from :meth:`_constants`.
+
+        Returns:
+            ``(B, 2)`` observations ``(position, velocity)``.
+        """
+        return enp.where(consts.position_column, position, velocity)
 
     def _goal_mask(self, position: Any, velocity: Any, consts: Any) -> Any:
-        """The goal predicate shared by ``_advance`` and ``_terminated``.
+        """The goal predicate shared by ``_transition`` and ``_terminated``.
 
         An episode is done when ``position >= goal_position`` **and**
         ``velocity >= goal_velocity``, both non-strict, exactly as Gym's

@@ -1,13 +1,14 @@
 """``DefaultGenome``: depth-adaptive, level-synchronous feedforward evaluation.
 
-The forward pass seeds the input rows once, then walks the depth levels in one
-``evoxc.while_loop`` whose trip count is derived from the schedule's ``node_level`` — an evolved
-network is usually 2-4 levels deep, so the ``max_depth`` ceiling would otherwise spend most of
-its unrolled passes on rows that cannot update. The loop body is the shared window reduce of
-:class:`.base.BaseGenome` (:meth:`._node_step`), so the graph holds one copy of the level step
-inside a region op instead of one copy per level.
+The forward pass seeds the input rows once, then walks the depth levels — in one
+``evoxc.while_loop`` whose trip count is derived from the schedule's ``node_level`` on the host
+leg, or as a statically unrolled ``level = 1 .. max_depth`` sweep on the accelerator leg, where
+a data-dependent loop bound costs a host readback per iteration. An evolved network is usually
+2-4 levels deep, so the ``max_depth`` ceiling would otherwise spend most of a counted pass on
+rows that cannot update. Both spellings run the shared window reduce of
+:class:`.base.BaseGenome` (:meth:`._node_step`), so the level step exists once.
 
-That region op is safe *here* because this forward is never differentiated: ``evoxc.grad``
+A region op is safe *here* because this forward is never differentiated: ``evoxc.grad``
 cannot differentiate ``while_loop``, and ``BaseGenome.grad`` deliberately builds its own dense
 graph in ``grad.py`` instead of differentiating this one.
 Everything is batch-first (population on axis 0); the shared window reduce lives in
@@ -23,8 +24,15 @@ import evoxc.numpy as enp
 import numpy as np  # host-only: layout rotation and the ``forward_func`` read-out
 import sympy as sp  # host-only: code generation
 
-from ..common import State, TensorNEATError, find_useful_nodes, topological_sort
+from ..common import (
+    State,
+    TensorNEATError,
+    find_useful_nodes,
+    kernel_mode,
+    topological_sort,
+)
 from ..common.functions import ACT, AGG
+from ..common.schedule_accelerator import is_accelerator
 from ..common.tensorization import Transformed
 from .base import BaseGenome
 from .gene import BaseConn, BaseNode, DefaultConn, DefaultNode
@@ -41,7 +49,7 @@ from .operations.mutation.default import (
     DEFAULT_GENOME_CONN_DELETE,
 )
 from .utils import GenomeTensors
-from .window import _iinf, by_samples, fill
+from .window import SeedPad, _i32, _iinf, by_samples, seed_pad, seed_values
 
 
 class _PreparedPass(NamedTuple):
@@ -50,15 +58,30 @@ class _PreparedPass(NamedTuple):
     :meth:`DefaultGenome.prepare_pass` derives it once per payload; each
     :meth:`DefaultGenome.forward_prepared` call then runs only the per-query half, so a rollout
     loop pays the pass prelude once instead of once per timestep.
+
+    ``readout`` is the :class:`.step._ReadOut` of the schedule (the output-slot gather index,
+    its liveness mask and the ``NaN`` fill), ``one`` the rank-0 ``int32`` the level loop counts
+    with, and ``seed_pad`` the :class:`.window.SeedPad` plan of the value seed's ``NaN`` block
+    (no block at all when the network has no non-input row). All three depend only on the
+    schedule and the static shapes, so no query pays their derivation or their constants.
+
+    ``sweep`` selects the level spelling: ``True`` is the accelerator's statically unrolled
+    sweep on a non-tiled pass, which reads no depth bound and no counter, so ``limit`` and
+    ``one`` are ``None`` there; every other pass (the host leg, and any tiled batch) keeps both
+    and walks them in one ``evoxc.while_loop``.
     """
 
     node_attrs: evoxc.SymbolicTensor
     statics: Any
-    limit: evoxc.SymbolicTensor
+    limit: evoxc.SymbolicTensor | None
     node_level: evoxc.SymbolicTensor
     samples: int
     pop_size: int
     max_nodes: int
+    readout: Any
+    one: evoxc.SymbolicTensor | None
+    seed_pad: SeedPad
+    sweep: bool
 
 
 class DefaultGenome(BaseGenome):
@@ -188,7 +211,9 @@ class DefaultGenome(BaseGenome):
            input rows (``0..num_inputs-1``) — only those rows hold a number. The seed is
            assembled as ``concatenate([seed, NaN (rows, N - num_inputs)], axis=1)``: one op
            that leaves every other row at the ``NaN`` padding value, instead of a
-           ``(rows, N)`` mask.
+           ``(rows, N)`` mask. The ``NaN`` block itself is a loop-invariant operand, so
+           :meth:`prepare_pass` derives it once and a query pays only the ``concatenate``
+           (and nothing at all when ``N == num_inputs``).
         2. ``hit_conn_attrs = self._hit_conn_attrs(transformed, conn_attrs, samples)``
            **once**: edge attributes are constant during a forward pass, so the per-slot gather
            is hoisted out of the loop, derived at the schedule's ``P`` rows and expanded to the
@@ -201,6 +226,8 @@ class DefaultGenome(BaseGenome):
            ``evoxc.while_loop(cond, body, (1, values))`` walks ``level = 1 .. limit`` with
            ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs, values,
            update_mask=(node_level == level))``, ``node_level`` expanded once outside the loop.
+           The accelerator leg instead unrolls the same step over ``level = 1 .. max_depth``
+           (:meth:`._level_sweep`) and derives neither ``limit`` nor the counter.
            The two further terms the pre-rewrite formulation ANDed in are both implied:
            ``node_exists`` because the schedule stores ``I_INF`` in ``node_level`` on every
            absent (and every unreachable) row, and the static ``reduce_sum(in_valid, axis=-1)
@@ -208,9 +235,12 @@ class DefaultGenome(BaseGenome):
            "at least one *live* slot" term is ANDed in inside ``_node_step``, so a node whose
            sources are all NaN keeps NaN and its descendants lose their only live source: the
            legacy NaN poisoning, reproduced exactly.
-        4. ``return self._output_values(transformed, values, self.output_transform)`` — the
-           rows ``transformed.output_slot`` names (here ``max_nodes-num_outputs..
-           max_nodes-1``), then ``output_transform``.
+        4. ``return self._output_values(transformed, values, self.output_transform,
+           prepared.readout)`` — the rows ``transformed.output_slot`` names (here
+           ``max_nodes-num_outputs..max_nodes-1``), then ``output_transform``. The read-out's
+           flat gather index, its liveness mask and its ``NaN`` fill come from the prepared
+           pass (:meth:`_output_readout`), so a query pays three ops — ``reshape``, ``gather``,
+           ``select`` — instead of re-deriving the eleven-op read-out per timestep.
 
         Cost is ``O(depth x N x K)`` elementwise work: proportional to the *real* depth and the
         real in-degree, never ``max_nodes**2`` per node and never ``max_depth`` levels of typed
@@ -261,7 +291,9 @@ class DefaultGenome(BaseGenome):
 
         Everything :meth:`forward` computes once — the padding-safe node attributes, the
         ``_StepStatics`` of the value window (with its node operand bundle forced here, so the
-        level loop never traces it), the depth bound and the expanded ``node_level`` — so
+        level loop never traces it), the depth bound and the level loop's rank-0 counter (both
+        host-leg only: the accelerator sweep reads neither), the expanded ``node_level``, the
+        read-out of the schedule and the ``NaN`` block of the value seed — so
         :meth:`forward_prepared` can run once per query on the same payload.
 
         Args:
@@ -300,17 +332,41 @@ class DefaultGenome(BaseGenome):
         # Force the node operand bundle here so it is traced in this block instead of inside
         # the loop body, where the region would re-evaluate it on every iteration.
         statics.node_operands(self, prepared_attrs)
+        # The value seed's ``NaN`` block: planned here (one broadcast of a rank-0 constant in
+        # the host formulation) so a query pays only the splice of the input rows into it --
+        # and no op at all when the network has no non-input row.
+        pad = max_nodes - self.num_inputs
+        # The level spelling is one host-side read of two statics: the accelerator leg unrolls
+        # the sweep statically, so it needs neither the depth bound (a ``reduce_max`` dispatch
+        # only the loop consumes) nor the loop's counter -- but only for a non-tiled pass.
+        # ``samples == 1`` is the discriminator: a rollout queries one payload ``max_step``
+        # times per generation, so the loop's per-level host readback is paid per query, while a
+        # tiled dataset is queried once per generation and amortises that readback away.
+        # Meanwhile the unrolled sweep multiplies a tiled pass by ``max_depth``: at
+        # ``P * samples = 250 000`` rows (func-fit) that measured 16.0 -> 51.0 ms/generation on
+        # iree+rocm, so a tiled batch keeps the ``while_loop`` verbatim -- do not "simplify" this
+        # gate to the formulation static alone.
+        sweep = is_accelerator(kernel_mode(state)) and samples == 1
         return _PreparedPass(
             node_attrs=prepared_attrs,
             statics=statics,
             # One level per loop iteration, bounded by the *real* depth of this batch instead
             # of the static ``max_depth`` ceiling: it is a loop bound derived from the schedule
             # alone, not data.
-            limit=self._depth_limit(transformed),
+            limit=None if sweep else self._depth_limit(transformed),
             node_level=by_samples(transformed.node_level, samples, pop_size),
             samples=samples,
             pop_size=pop_size,
             max_nodes=max_nodes,
+            # The read-out is loop-invariant for the whole generation, so its gather index, its
+            # liveness mask and its ``NaN`` fill are derived once per pass: a query then costs
+            # ``reshape`` + ``gather`` + ``select``.
+            readout=self._output_readout(transformed, samples),
+            one=None if sweep else enp.full((), 1, dtype=evoxc.int32),
+            seed_pad=seed_pad(
+                kernel_mode(state), self.num_inputs, max_nodes, pop_size * samples
+            ),
+            sweep=sweep,
         )
 
     def forward_prepared(
@@ -322,9 +378,11 @@ class DefaultGenome(BaseGenome):
     ) -> evoxc.SymbolicTensor:
         """Run one forward pass from ``prepared``, the per-query half of :meth:`forward`.
 
-        Emits only the input seed, the level ``while_loop`` and the read-out; every
-        loop-invariant operand comes from ``prepared``, so repeated queries on one payload pay
-        the prelude once.
+        Emits only the input seed, the level sweep and the read-out; every loop-invariant
+        operand comes from ``prepared`` — including the seed's ``NaN`` block, the loop's rank-0
+        counter (host leg only) and the read-out's gather index/mask/fill — so repeated queries
+        on one payload pay the prelude once. ``prepared.sweep`` picks the spelling: the host
+        leg's data-dependent ``evoxc.while_loop`` or the accelerator's static unroll.
 
         Args:
             state: Host configuration container.
@@ -349,19 +407,39 @@ class DefaultGenome(BaseGenome):
                 f"{expected} row(s); prepare the pass with the samples of this batch"
             )
         seed = inputs if self.input_transform is None else self.input_transform(inputs)
-        pad = prepared.max_nodes - self.num_inputs
-        # One NaN constant element broadcast to the node block (see ``..window.fill``): a
-        # materialised ``(rows, max_nodes - num_inputs)`` NaN block is the largest graph
-        # constant of this kernel at every population.
-        values = (
-            evoxc.concatenate(
-                [seed, fill((rows, pad), float("nan"), dtype=evoxc.float32)],
-                axis=1,
-            )
-            if pad
-            else seed
+        # The ``NaN`` block of the seed is a prepared plan (see :meth:`prepare_pass`): the
+        # query pays only the splice of its input rows, and none at all when the network has no
+        # non-input row.
+        values = seed_values(seed, prepared.seed_pad)
+        sweep = self._level_sweep if prepared.sweep else self._level_loop
+        values = sweep(state, transformed, prepared, values)
+        return self._output_values(
+            transformed, values, self.output_transform, prepared.readout
         )
-        one = enp.full((), 1, dtype=evoxc.int32)
+
+    def _level_loop(
+        self,
+        state: State,
+        transformed: Transformed,
+        prepared: _PreparedPass,
+        values: evoxc.SymbolicTensor,
+    ) -> evoxc.SymbolicTensor:
+        """Host spelling of the level sweep: one ``evoxc.while_loop`` over ``level = 1 .. limit``.
+
+        The trip count is data-dependent (``prepared.limit`` is a rank-0 device tensor), which
+        the numpy interpreter handles for free and a compiled device charges a host readback per
+        iteration for.
+
+        Args:
+            state: Host configuration container.
+            transformed: Execution schedule the pass was prepared with.
+            prepared: Result of :meth:`prepare_pass` with ``sweep=False``.
+            values: ``(rows, max_nodes) float32`` seeded node values, ``NaN`` off the input rows.
+
+        Returns:
+            ``(rows, max_nodes) float32`` values after ``1 .. limit`` level steps.
+        """
+        one = prepared.one
 
         def cond(carry) -> evoxc.SymbolicTensor:
             """Keep iterating while the next unvisited level is still within the depth."""
@@ -387,7 +465,66 @@ class DefaultGenome(BaseGenome):
             return evoxc.add(level, one), updated
 
         _level, values = evoxc.while_loop(cond, body, (one, values))
-        return self._output_values(transformed, values, self.output_transform)
+        return values
+
+    def _level_sweep(
+        self,
+        state: State,
+        transformed: Transformed,
+        prepared: _PreparedPass,
+        values: evoxc.SymbolicTensor,
+    ) -> evoxc.SymbolicTensor:
+        """Accelerator spelling of the level sweep: ``level = 1 .. max_depth``, unrolled.
+
+        One :meth:`._node_step` per level, traced at Python trace time, so the graph holds
+        ``max_depth`` copies of the level step and *no* region op at all: nothing is read back
+        to the host while the pass runs. That is the whole point — on a compiled device a
+        ``while_loop`` costs a pinned host allocation, a device-to-host copy and the event churn
+        per trip (~157-263 us measured, against ~57 us for a statically counted iteration),
+        while extra unrolled device work is nearly free (the per-iteration cost of a fused body
+        saturates from 20 to 60 ops). On the dispatch-bound numpy interpreter the trade is the
+        other way round, which is why ``kernel_mode`` gates it, and so is the trade on a tiled
+        batch: the sweep is selected only for a non-tiled (``samples == 1``) pass on the
+        accelerator leg, whereas a tiled dataset keeps the loop because its rows are
+        ``P * samples`` (each unrolled level would cost that many rows: 16.0 -> 51.0
+        ms/generation at ``P * samples = 250 000``) and its per-level readback is amortised over
+        one query per generation instead of one per rollout timestep.
+
+        Same values as :meth:`_level_loop`, bit for bit:
+
+        * level ``0`` (the input rows) is never updated by either spelling — both start at
+          ``1``;
+        * absent, unreachable and cyclic rows carry ``I_INF`` in ``node_level``, which matches
+          no level of ``1 .. max_depth``, so they are never written either way;
+        * a batch whose real depth is ``d < max_depth`` sees an all-``False`` update mask on
+          levels ``d + 1 .. max_depth``, so the ``select(update, z, values)`` inside
+          :meth:`._node_step` returns ``values`` unchanged — including the NaN poisoning of a
+          node with no live source, because ``update`` is ``node_level == level`` ANDed with
+          ``any_slot(live)``, and both spellings recompute it per level;
+        * a row deeper than ``max_depth`` is never visited by either spelling and keeps its
+          ``NaN`` seed (the documented depth limit; ``max_depth`` is a genome static already in
+          the pipeline's executable-cache signature, so raising it is a rebuild, not a silent
+          change).
+
+        Args:
+            state: Host configuration container.
+            transformed: Execution schedule the pass was prepared with.
+            prepared: Result of :meth:`prepare_pass` with ``sweep=True``.
+            values: ``(rows, max_nodes) float32`` seeded node values, ``NaN`` off the input rows.
+
+        Returns:
+            ``(rows, max_nodes) float32`` values after ``max_depth`` level steps.
+        """
+        for level in range(1, self.max_depth + 1):
+            values = self._node_step(
+                state,
+                transformed,
+                prepared.node_attrs,
+                prepared.statics,
+                values,
+                evoxc.equal(prepared.node_level, _i32(level)),
+            )
+        return values
 
     def _depth_limit(self, transformed: Transformed) -> evoxc.SymbolicTensor:
         """Deepest level this batch can reach, as a rank-0 loop bound in ``[1, max_depth]``.

@@ -13,9 +13,12 @@ The tiled batch itself is *not* built here: a problem hands the network ``P * S`
 while the schedule and the payload stay at ``P``, and the genome expands the difference
 internally (:func:`tensorneat.genome.window.by_samples`), because every operand a forward
 derives is sample-invariant.
-A batch wider than :data:`EVAL_CHUNK_ROWS` is walked in row groups so the interpreter's
-per-block live set stays bounded; the trees it slices are declared population-major, and a
-leaf whose population axis cannot be established raises instead of being sliced silently.
+A batch wider than the chunk budget is walked in row groups so the interpreter's
+per-block live set stays bounded; the budget is :data:`EVAL_CHUNK_ROWS` on the CPU
+interpreter and the larger :func:`eval_chunk_rows` window cap on a non-CPU device,
+where the unrolled group loop's *dispatch count* rather than its live set is the
+cost.  The trees it slices are declared population-major, and a leaf whose
+population axis cannot be established raises instead of being sliced silently.
 """
 
 from __future__ import annotations
@@ -32,27 +35,78 @@ from .genome.utils import GenomeTensors
 
 __all__ = [
     "EVAL_CHUNK_ROWS",
+    "DEVICE_EVAL_CHUNK_BYTES",
     "_NetworkActFn",
     "_config_value",
     "_declared_shape",
+    "_formulation_signature",
+    "_formulation_statics",
     "_jsonable",
     "_object_config",
     "_one_individual",
     "_prepared_query",
     "_schedule_overflow",
     "_slice_batch",
+    "eval_chunk_rows",
+    "materialize_payload",
 ]
 
 #: The four payload field names, in ``GenomeTensors`` order.
 _PAYLOAD_NAMES: tuple[str, ...] = ("node_keys", "node_attrs", "conn_keys", "conn_attrs")
 
-#: Target rows per tiled-evaluate chunk.  A problem tiles its dataset/rollout over the
-#: population axis, so a ``CustomFuncFit(num_samples=500)`` generation at pop 500 asks for
-#: 250 000 rows at once; slicing the batch into groups of at most this many rows keeps
-#: each forward pass inside cache and caps the interpreter's per-block live set.
-#: The value is the measured optimum on ``custom_pagie_p500`` (25 individuals per chunk);
-#: the XOR/RL cases stay under it and take the unchunked path unchanged.
+#: Target rows per tiled-evaluate chunk on a **CPU** device (``device=None`` or
+#: ``"cpu"``).  A problem tiles its dataset/rollout over the population axis, so a
+#: ``CustomFuncFit(num_samples=500)`` generation at pop 500 asks for 250 000 rows at
+#: once; slicing the batch into groups of at most this many rows keeps each forward
+#: pass inside cache and caps the interpreter's per-block live set.
+#: The value is the measured optimum on ``custom_pagie_p500`` (25 individuals per
+#: chunk); the XOR/RL cases stay under it and take the unchunked path unchanged.
 EVAL_CHUNK_ROWS = 12_500
+
+#: Per-chunk device-memory budget, in bytes, for a **non-CPU** device: one
+#: ``(rows, max_nodes) float32`` forward window must stay under this, so a device
+#: gets ``DEVICE_EVAL_CHUNK_BYTES // (4 * max_nodes)`` rows per chunk instead of
+#: :data:`EVAL_CHUNK_ROWS`.  The CPU budget is a cache/live-set bound (the numpy
+#: interpreter is memory-bandwidth bound), while a device's cost is *dispatch
+#: sequence length*: the chunk loop is unrolled at trace time, so 20 chunks are 20
+#: copies of the forward's dispatch sequence and a bigger tile is nearly free.
+#: 1 GiB is an order-of-magnitude guard, not a measured optimum: the real window
+#: also carries the ``max_in_degree`` axis and the interpreter's live set, so the
+#: budget stays a *cap* and the shipped func-fit cases (250 000 rows at
+#: ``max_nodes=50``, i.e. ~50 MB per level) take the single unchunked pass.
+DEVICE_EVAL_CHUNK_BYTES = 1 << 30
+
+
+def eval_chunk_rows(device_kind: Optional[str], max_nodes: int) -> int:
+    """Rows per tiled-evaluate chunk for one device kind.
+
+    The chunk budget is a *host-side* static: it decides at trace time how many
+    unrolled group passes a tiled ``act_fn`` emits, so it is part of the compiled
+    graph and belongs in the executable-cache signature
+    (:meth:`tensorneat.pipeline.Pipeline._shape_signature`), never a per-run
+    choice.
+
+    Args:
+        device_kind (str | None): ``.kind`` of the device the generation graph
+            runs on -- ``None`` and ``"cpu"`` are the interpreter's own budget.
+        max_nodes (int): The genome's static node-row count, i.e. the width of one
+            ``(rows, max_nodes)`` forward window.
+
+    Returns:
+        int: :data:`EVAL_CHUNK_ROWS` on CPU; on a non-CPU device the larger row
+        count that keeps one ``(rows, max_nodes) float32`` window under
+        :data:`DEVICE_EVAL_CHUNK_BYTES`, never below the CPU budget (so the
+        device leg is never *more* chunked than the CPU one).
+
+    Notes:
+        Read at trace time like :data:`EVAL_CHUNK_ROWS` itself, so a monkeypatched
+        budget reaches both legs; a shipped func-fit batch (250 000 rows) fits
+        inside the device budget and therefore becomes one unchunked pass.
+    """
+    if device_kind is None or str(device_kind) == "cpu":
+        return EVAL_CHUNK_ROWS
+    per_row = 4 * max(1, int(max_nodes))
+    return max(EVAL_CHUNK_ROWS, int(DEVICE_EVAL_CHUNK_BYTES) // per_row)
 
 #: How deep :func:`_object_config` follows nested records before emitting the class path.
 _MAX_CONFIG_DEPTH = 6
@@ -305,6 +359,47 @@ def _slice_batch(tree: Any, start: int, stop: int, pop_size: int) -> Any:
     return evoxc.tree_map(take, tree)
 
 
+def materialize_payload(payload: Any) -> GenomeTensors:
+    """Host numpy arrays for a payload a backend may still hold on the device.
+
+    :meth:`tensorneat.pipeline.Pipeline.step` hands the evaluated payload back
+    **as the backend left it** when the run was built with
+    ``Pipeline(host_payload=False)`` -- numpy on the reference interpreter,
+    device-resident ``evoxc.Tensor`` leaves on a device backend -- so every
+    reporting path goes through this helper to materialise it, and a caller that
+    opted out can use it on the payload it received.  Materialisation is
+    :func:`~tensorneat.common.tools.to_numpy`, the single explicit
+    device-to-host step, applied per field; a payload that is already host numpy
+    passes through untouched, which is the reference interpreter's case.
+
+    Args:
+        payload (Any): A ``GenomeTensors`` (or any four-element sequence) with the
+            population on axis 0, or ``None`` when the step was told not to
+            materialise it.
+
+    Returns:
+        GenomeTensors: Four host numpy arrays, population on axis 0.
+
+    Raises:
+        TensorNEATError: If ``payload`` is ``None``: a report that needs the host
+            payload cannot be produced without it, and saying so names the flag
+            that turned it off instead of reporting nothing.
+    """
+    if payload is None:
+        raise TensorNEATError(
+            "this report needs the host gene payload of the generation just "
+            "stepped, but the step was told not to materialise it "
+            "(Pipeline(host_payload=False)). Build the pipeline with "
+            "host_payload=True (the default) when checkpoints, best-genome "
+            "tracking or show_details are wanted, or call "
+            "step(state, host_payload=True) for the generations that need it"
+        )
+    fields = tuple(payload)
+    if all(isinstance(field, np.ndarray) for field in fields):
+        return payload if isinstance(payload, GenomeTensors) else GenomeTensors(*fields)
+    return GenomeTensors(*(np.asarray(to_numpy(field)) for field in fields))
+
+
 def _finite_fitness(fitnesses: Any) -> np.ndarray:
     """A host view of ``fitnesses`` with every non-finite entry set to ``-inf``.
 
@@ -327,6 +422,97 @@ def _finite_fitness(fitnesses: Any) -> np.ndarray:
     """
     values = np.asarray(fitnesses)
     return np.where(np.isfinite(values), values, -np.inf)
+
+
+#: Device kinds whose kernels take the GPU-friendly formulation: the GPU admits
+#: wide batches far better than it admits the merge/sort expansion of the
+#: compatibility distance, so these kinds ask for an index-free kernel over the
+#: population-shaped centre batch.
+_GPU_DEVICE_KINDS: tuple[str, ...] = ("rocm", "hip", "hips", "cuda", "vulkan", "gpu")
+
+#: The three trace-time statics a GPU-class kind registers, in registration order:
+#: ``(distance_centre, distance_formulation, kernel_mode)``.
+_GPU_FORMULATION: tuple[str, str, str] = ("tiled", "index_free", "accelerator")
+
+#: The triple every other kind registers -- the host leg where the merge kernel is
+#: the measured winner, one centre per call keeps element volume down and every
+#: kernel takes its legacy formulation.
+_HOST_FORMULATION: tuple[str, str, str] = ("single", "merge", "host")
+
+#: What a *missing* formulation static means: the kernels themselves fall back to
+#: these values, so a hand-built ``State`` (one no ``Pipeline.setup`` produced)
+#: keeps the legacy contract.
+_DEFAULT_DISTANCE_CENTRE = "tiled"
+_DEFAULT_DISTANCE_FORMULATION = "merge"
+_DEFAULT_KERNEL_MODE = "host"
+
+
+def _device_kind(device: Any) -> Optional[str]:
+    """The resolved *kind* of ``device``, spelled the way ``evoxc`` resolves it.
+
+    ``Pipeline._placement_device`` maps ``None`` to "no device", a kind string to
+    ``evoxc.Device(kind)`` and an ``evoxc.Device`` to itself; the kind is
+    therefore the string itself or the device's ``kind`` field.  A value carrying
+    no string kind is reported as ``None`` (the non-GPU default) instead of
+    raising: the placement itself hands such a value to ``evoxc``'s own
+    ``Tensor.to``, whose ``TypeError`` names the real problem.
+    """
+    if device is None:
+        return None
+    if isinstance(device, str):
+        return device
+    kind = getattr(device, "kind", None)
+    return kind if isinstance(kind, str) else None
+
+
+def _formulation_statics(device: Any) -> tuple[str, str, str]:
+    """The trace-time kernel statics ``device`` selects, as one triple.
+
+    These are trace-time kernel selections, not tensors: they are registered on the
+    state as plain strings and baked into the generation graph by the pipeline's
+    static-config pass.  They all follow from one decision -- whether the resolved
+    kind is GPU-class (:data:`_GPU_DEVICE_KINDS`) -- so they are derived here once
+    rather than by each kernel table lookup: a GPU-class kind gets
+    :data:`_GPU_FORMULATION` (index-free distance over the population-shaped centre
+    batch, accelerator formulations elsewhere), every other kind -- including
+    ``None`` -- :data:`_HOST_FORMULATION`.  The comparison is case-insensitive
+    because ``evoxc`` stores a kind string verbatim.
+
+    Args:
+        device (Any): The pipeline's device selection: ``None``, a kind string or
+            an ``evoxc.Device``.
+
+    Returns:
+        tuple: ``(distance_centre, distance_formulation, kernel_mode)`` --
+        ``("tiled" | "single", "index_free" | "merge", "accelerator" | "host")``.
+    """
+    kind = _device_kind(device)
+    if isinstance(kind, str) and kind.lower() in _GPU_DEVICE_KINDS:
+        return _GPU_FORMULATION
+    return _HOST_FORMULATION
+
+
+def _formulation_signature(state: Any) -> tuple[str, str, str]:
+    """The formulation statics of ``state``, defaulted to the legacy contract.
+
+    Part of the executable-cache key: the triple changes which kernels the graph
+    formulates, so reusing an executable across a device/mode change would run the
+    wrong formulation.  A state no ``Pipeline.setup`` produced falls back to the
+    same values the kernels themselves fall back to
+    (:data:`_DEFAULT_DISTANCE_CENTRE` / :data:`_DEFAULT_DISTANCE_FORMULATION` /
+    :data:`_DEFAULT_KERNEL_MODE`).
+
+    Args:
+        state (Any): A state carrying the statics, or any object without them.
+
+    Returns:
+        tuple: ``(distance_centre, distance_formulation, kernel_mode)``.
+    """
+    return (
+        getattr(state, "distance_centre", _DEFAULT_DISTANCE_CENTRE),
+        getattr(state, "distance_formulation", _DEFAULT_DISTANCE_FORMULATION),
+        getattr(state, "kernel_mode", _DEFAULT_KERNEL_MODE),
+    )
 
 
 def _substrate_signature(algorithm: Any) -> tuple[Any, ...]:
@@ -390,6 +576,11 @@ class _NetworkActFn:
     ``source()`` returns ``(state, transformed, payload)`` inside the active trace,
     ``forward`` is ``algorithm.forward_prepared`` and ``prepare`` is
     ``algorithm.prepare_forward``.
+
+    ``device_kind`` is the *static* ``.kind`` of the device the surrounding graph
+    runs on, so :func:`_prepared_query` can pick the chunk budget at trace time
+    (:func:`eval_chunk_rows`).  It stays ``None`` for a host-reporting
+    ``act_fn``, which always evaluates on the CPU side-channel.
     """
 
     def __init__(
@@ -397,6 +588,7 @@ class _NetworkActFn:
         source: Callable[[], tuple[State, Any, GenomeTensors]],
         forward: Callable[..., Any],
         prepare: Callable[..., Any],
+        device_kind: Optional[str] = None,
     ) -> None:
         """Store the trace-time source and the algorithm's prepared-pass pair.
 
@@ -405,10 +597,14 @@ class _NetworkActFn:
                 called once per :meth:`prepare`, always inside the active trace.
             forward: ``algorithm.forward_prepared``.
             prepare: ``algorithm.prepare_forward``.
+            device_kind (str | None, optional): ``.kind`` of the device the graph
+                this ``act_fn`` belongs to runs on (``None`` = CPU).  Defaults to
+                ``None``.
         """
         self._source = source
         self._forward = forward
         self._prepare = prepare
+        self._device_kind = device_kind
 
     def __call__(self, inputs: Any) -> Any:
         """Query the network once on ``inputs``, preparing a pass for exactly its batch.
@@ -442,6 +638,7 @@ class _NetworkActFn:
             transformed,
             payload,
             int(batch_rows),
+            device_kind=self._device_kind,
         )
 
 
@@ -452,6 +649,7 @@ def _prepared_query(
     transformed: Any,
     payload: GenomeTensors,
     batch_rows: int,
+    device_kind: Optional[str] = None,
 ) -> Callable[[Any], Any]:
     """Prepare one forward pass for ``batch_rows`` tiled rows and return its query.
 
@@ -461,7 +659,7 @@ def _prepared_query(
     emitted here and nothing has to be kept in step with a ``forward``'s read set.
 
     The one regrouping that remains is a chunk budget: a tiled block wider than
-    :data:`EVAL_CHUNK_ROWS` rows is evaluated in groups of individuals whose own block
+    :func:`eval_chunk_rows` rows is evaluated in groups of individuals whose own block
     fits that budget, the group passes are prepared **once at trace time**, and the
     group outputs are concatenated in row order.  This is bit-identical because every
     op of a ``forward`` is row-local -- ``gather`` / ``multiply`` / a reduce over the
@@ -470,6 +668,13 @@ def _prepared_query(
     *maximum*: a group's maximum never exceeds the global one and does bound each of
     its own rows, so the only level a row can miss is one beyond the static
     ``max_depth``, exactly as in the unchunked pass.
+
+    ``device_kind`` selects that budget at trace time, because the budget is a
+    *compiled* property: on the CPU interpreter the groups bound the per-block live
+    set (memory bandwidth is the cost), so :data:`EVAL_CHUNK_ROWS` stays exactly the
+    measured optimum; on a non-CPU device the unrolled group loop is a *dispatch
+    sequence*, so the budget becomes the larger :func:`eval_chunk_rows` window cap
+    and a shipped func-fit batch is one unchunked pass.
 
     The groups are a Python loop, so every group's entry-block intermediates stay alive
     until the generation returns; that is the interpreter's per-block live set, and
@@ -480,6 +685,16 @@ def _prepared_query(
     Both trees handed to :func:`_slice_batch` are declared population-major, so every
     non-scalar leaf must carry ``pop_size`` on axis 0; a leaf whose axis cannot be
     established raises there instead of being silently shared or mis-sliced.
+
+    Args:
+        state (State): Configuration state of the active trace.
+        forward (Callable[..., Any]): ``algorithm.forward_prepared``.
+        prepare (Callable[..., Any]): ``algorithm.prepare_forward``.
+        transformed (Any): The population-major schedule at ``P`` rows.
+        payload (GenomeTensors): The population-major payload at ``P`` rows.
+        batch_rows (int): Tiled rows the returned query will be asked for, ``P * S``.
+        device_kind (str | None, optional): ``.kind`` of the device the graph runs
+            on (``None`` = CPU).  Defaults to ``None``.
 
     Raises:
         TensorNEATError: If ``batch_rows`` is not a positive multiple of ``P``, or if a
@@ -509,11 +724,11 @@ def _prepared_query(
                 "prepare a new pass for a different row count"
             )
 
-    chunk = (
-        row_count
-        if row_count * factor <= EVAL_CHUNK_ROWS
-        else max(1, EVAL_CHUNK_ROWS // factor)
-    )
+    # ``max_nodes`` is the node-row width of one ``(rows, max_nodes)`` forward window,
+    # i.e. what the device budget is expressed in.  Read at trace time so a
+    # monkeypatched budget reaches both legs.
+    budget = eval_chunk_rows(device_kind, int(payload.node_keys.shape[1]))
+    chunk = row_count if row_count * factor <= budget else max(1, budget // factor)
     if chunk >= row_count:
         prepared = prepare(state, transformed, payload, factor)
 

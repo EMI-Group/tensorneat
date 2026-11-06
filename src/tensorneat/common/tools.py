@@ -35,8 +35,11 @@ Why this module exists (validated evoxc facts that shape every signature):
   rank 1 for ``iree_linalg_ext.scatter`` through a materialization it cannot
   legalize while a second scatter still consumes the rank-2 value, and fails
   with ``failed to legalize unresolved materialization``. Two payloads that
-  write the *same* cells (e.g. ``in_conn`` and ``in_src``) therefore go into
-  one wider buffer and one scatter, never into two calls.
+  write the *same* cells therefore go into one wider buffer and one scatter,
+  never into two calls (no shipped kernel needs that spelling today: the
+  schedule's two scatters each write one payload, and where a cell block is
+  cheaper to *read* than to write, the gather is the better formulation — see
+  :func:`flat_scatter_prepared`).
 * ``argsort`` returns ``int64`` and requires ``stable=True`` wherever
   tie-breaking must be deterministic (group ranks).
 
@@ -47,6 +50,14 @@ Sentinel contract (shared with :mod:`~tensorneat.common.tensorization`):
   in the same array.
 * ``NaN`` in a **float** array means "absent row" (``isnan(x[:, 0])``) or
   "not computed yet".
+
+Sentinel **constants are hoistable**: every sentinel is emitted as a rank-0
+``constant`` op (never a bare Python scalar — it would be weakly promoted and
+change the result dtype), so a helper called from inside a ``scan``/``cond``
+body would pay one such op per iteration. :func:`fetch_first` and
+:func:`argmin_with_mask` therefore also accept a pre-built constant, which is
+used verbatim; build it once at trace time and close over it. Helpers that do
+not offer that spelling yet are listed in ``common/CONTEXT.md``.
 
 Public surface without a production caller: :func:`hash_rows`,
 :func:`fetch_random`, :func:`mutate_float` and :func:`mutate_int` are exported
@@ -175,6 +186,51 @@ def _scalar_constant(value, dtype):
         A rank-0 ``SymbolicTensor`` inside the active trace.
     """
     return enp.full((), value, dtype=dtype)
+
+
+def _sentinel_constant(value, fallback, dtype):
+    """Resolve a sentinel argument into a rank-0 graph constant, or pass it on.
+
+    The single resolver behind the hoistable sentinels of :func:`fetch_first` and
+    :func:`argmin_with_mask`. Every call emits one ``constant`` op, so a caller
+    whose helper call sits inside a ``scan``/``cond`` body pays that op once per
+    iteration; building the constant **once** at trace time (``enp.full((),
+    value, dtype=...)``, the same expression used here) and passing it in makes
+    the body close over an enclosing SSA value instead, which costs zero ops per
+    iteration.
+
+    Args:
+        value: The caller's argument. ``None`` builds ``fallback``; a Python or
+            NumPy number is built as a rank-0 constant of ``dtype``; anything
+            else is treated as an already-built graph constant.
+        fallback: The static sentinel ``None`` selects (``+inf`` for the masked
+            ``argmin``, ``I_INF`` for a "no candidate" index).
+        dtype: ``evoxc``/NumPy dtype a *built* constant is pinned to.
+
+    Returns:
+        A rank-0 ``SymbolicTensor`` of ``dtype``, or a supplied tensor
+        **verbatim** — no cast, no reshape, so the caller's own pinning holds.
+
+    Raises:
+        tensorneat.common.errors.ConfigError: If a supplied tensor's dtype is
+            not ``dtype``. ``evoxc.select`` promotes instead of rejecting, so
+            without this check a ``float64`` filler would silently widen the
+            ``argmin`` input and a ``float64``/``int64`` default would change
+            the returned index's dtype. Checked at trace time on a static
+            dtype, never on a value.
+    """
+    if value is None:
+        value = fallback
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return _scalar_constant(value, dtype)
+    got = getattr(value, "dtype", None)
+    if got is not None and np.dtype(got) != np.dtype(dtype):
+        raise ConfigError(
+            "a supplied sentinel constant must have dtype "
+            f"{np.dtype(dtype)}, got {np.dtype(got)}; build it with "
+            "enp.full((), value, dtype=...)"
+        )
+    return value
 
 
 # --------------------------------------------------------------------------- #
@@ -471,7 +527,11 @@ def flat_scatter_prepared(x, flat_idx, updates):
         ``flat_idx`` emit two scatters sharing one index value, which
         ``iree-compile`` rejects (see the module docstring). Two payloads that
         write the same cells go through one call on a buffer wide enough to
-        hold both (``tensorization._window_pair`` is the worked example).
+        hold both — and where the cells are cheap to *read* instead of write,
+        a gather is the better formulation: ``evoxc`` lowers ``scatter`` to one
+        workgroup of one thread on ROCm (~16-21 ns per updated cell), while
+        ``gather`` is parallel (``tensorization.incoming_table`` is the worked
+        example of replacing a write with a read).
     """
     pop_size, row_len = _flat_shape(x)
     out = evoxc.scatter(
@@ -540,24 +600,39 @@ def fetch_first(mask, default=I_INF):
         mask: ``(P, L)`` ``bool`` tensor.
         default: ``int32`` value returned where ``mask`` has no ``True``
             entry; ``I_INF`` by default (``None`` also selects that
-            sentinel, so "unset" and "no candidate" read the same).
+            sentinel, so "unset" and "no candidate" read the same). A
+            pre-built ``int32`` graph constant (``enp.full((), v,
+            dtype=evoxc.int32)``) may be passed instead of an ``int``: it is
+            used **verbatim** (no cast, no reshape), which is how a caller inside a
+            ``scan``/``cond`` body hoists the sentinel out of the loop. Any
+            Python/NumPy number keeps the original behaviour: one rank-0
+            ``int32`` constant pinned to ``int32``.
 
     Returns:
         ``(P,)`` ``int32`` tensor of indices in ``[0, L)``, or ``default``.
 
     Raises:
         evoxc.ShapeError: Propagated unchanged if ``mask`` is not 2-D.
+        tensorneat.common.errors.ConfigError: If a supplied constant's dtype is
+            not ``int32`` (``evoxc.select`` would promote silently).
 
     Notes:
         Computed as ``argmax`` of the boolean mask followed by
         ``evoxc.select(mask_selected, idx, default)`` — no ``where`` (evoxc has
         none), no ``cumsum`` (a StableHLO export deferral).
+
+        The sentinel is a **tensor, not a bare scalar**, to pin the result dtype
+        (a bare Python int would be weakly promoted to ``int64`` against the
+        ``int32`` index); passing a pre-built one leaves the dtype pinning to
+        the caller's constant. ``algorithm/neat/_kernels.py::speciate`` calls
+        this from inside its two ``scan`` bodies and is the intended hoister —
+        the constant it supplies must be built at trace time, outside the loop.
     """
     if default is None:  # "unset" -> the documented I_INF sentinel
         default = I_INF
     hit = evoxc.reduce_max(mask, axes=-1)
     first = evoxc.cast(evoxc.argmax(mask, axis=-1), evoxc.int32)
-    return evoxc.select(hit, first, _scalar_constant(default, evoxc.int32))
+    return evoxc.select(hit, first, _sentinel_constant(default, I_INF, evoxc.int32))
 
 
 def fetch_random(key, mask, default=I_INF):
@@ -630,19 +705,31 @@ def rank_elements(x, reverse=False):
     return evoxc.cast(inverse, evoxc.int32)
 
 
-def argmin_with_mask(arr, mask):
+def argmin_with_mask(arr, mask, *, filler=None, default=None):
     """Index of the smallest selectable element, per batch row.
 
     Args:
         arr: ``(P, L)`` ``float32`` tensor of scores.
         mask: ``(P, L)`` ``bool`` tensor; ``False`` entries are not selectable.
+        filler: ``+inf`` of ``arr.dtype`` by default (``None``) — the value the
+            masked-out entries are replaced with before the ``argmin``. A
+            pre-built graph constant of ``arr.dtype`` may be passed instead of
+            a number; it is used **verbatim** (no cast, no reshape). Must stay
+            *above* every real score, or a masked entry wins the ``argmin``.
+        default: ``I_INF`` by default (``None``), i.e. the returned index for a
+            row whose mask has no ``True`` entry. An ``int`` is built as a
+            rank-0 ``int32`` constant; a pre-built ``int32`` graph constant is
+            used verbatim.
 
     Returns:
         ``(P,)`` ``int32`` tensor: the index of the minimal element among the
-        ``True`` positions, or ``I_INF`` when a row has no ``True`` position.
+        ``True`` positions, or ``default`` when a row has no ``True`` position.
 
     Raises:
         evoxc.ShapeError: Propagated unchanged if the shapes disagree.
+        tensorneat.common.errors.ConfigError: If a supplied constant's dtype is
+            not ``arr.dtype`` (``filler``) / ``int32`` (``default``) — a wider
+            or narrower constant would change the ``select``'s result dtype.
 
     Notes:
         Masked-out entries are replaced by ``+inf`` (``evoxc.select``) before
@@ -650,11 +737,22 @@ def argmin_with_mask(arr, mask):
         ``initial=``. Returning ``I_INF`` for an empty mask is a deliberate
         sentinel: the legacy JAX helper silently returned slot ``0``, which is
         a real individual, so callers of this port must test for ``I_INF``.
+
+        Both sentinels are **tensors, not bare scalars**, to pin the result
+        dtypes (``filler`` must keep ``arr.dtype``, ``default`` must stay
+        ``int32``). Each one costs a ``constant`` op, so a caller inside a
+        ``scan``/``cond`` body passes constants built once at trace time
+        (``enp.full((), float("inf"), dtype=evoxc.float32)`` / ``... I_INF ...
+        evoxc.int32``) and the loop body closes over them instead of re-emitting
+        them per iteration — ``algorithm/neat/_kernels.py::speciate`` is that
+        caller. ``None`` keeps the one-shot behaviour unchanged, op for op.
     """
-    scored = evoxc.select(mask, arr, _scalar_constant(float("inf"), arr.dtype))
+    scored = evoxc.select(
+        mask, arr, _sentinel_constant(filler, float("inf"), arr.dtype)
+    )
     hit = evoxc.reduce_max(mask, axes=-1)
     smallest = evoxc.cast(evoxc.argmin(scored, axis=-1), evoxc.int32)
-    return evoxc.select(hit, smallest, _scalar_constant(I_INF, evoxc.int32))
+    return evoxc.select(hit, smallest, _sentinel_constant(default, I_INF, evoxc.int32))
 
 
 def mutate_float(key, val, init_mean, init_std, mutate_power, mutate_rate, replace_rate):

@@ -51,8 +51,23 @@ class _CartPoleConstants(NamedTuple):
         neg_force_mag: ``-force_mag``, the push-left force (precomputed so the
             loop never negates a constant).
         dt: Euler integration step.
-        x_threshold: ``|x|`` limit.
-        theta_threshold: ``|theta|`` limit in **radians**.
+        threshold_row: The ``(1, 4)`` limit row aligned with an observation
+            row, ``(x_threshold, +inf, theta_threshold, +inf)``: the two
+            velocity columns are not tested, and no finite or infinite value
+            can beat an ``+inf`` limit, so they can never fail the comparison.
+        perm_idx: The ``(4,)`` int32 lane rotation ``(1, 0, 3, 2)`` applied to
+            an observation row: lane 0 receives ``x_dot`` and lane 2 receives
+            ``theta_dot``, exactly the two Euler derivatives that are the
+            row's own velocity columns. Lanes 1 and 3 receive ``x`` and
+            ``theta`` and are then overwritten by the two accelerations, so
+            the rotation is the whole row assembly -- no column split, which
+            is what makes the step one fused compile region instead of four
+            copies.
+        lane_xacc: The ``(1, 4)`` boolean row selecting lane 1, the
+            ``x_dot`` derivative slot.
+        lane_thetaacc: The ``(1, 4)`` boolean row selecting lane 3, the
+            ``theta_dot`` derivative slot.
+        zero: A float32 ``0``, the split point of the death slack.
         reset_scale: Half-width of the uniform reset distribution.
         neg_reset_scale: ``-reset_scale``, the lower bound of the reset draw.
         four_thirds: The ``4/3`` of the pole-moment denominator.
@@ -70,8 +85,11 @@ class _CartPoleConstants(NamedTuple):
     force_mag: Any
     neg_force_mag: Any
     dt: Any
-    x_threshold: Any
-    theta_threshold: Any
+    threshold_row: Any
+    perm_idx: Any
+    lane_xacc: Any
+    lane_thetaacc: Any
+    zero: Any
     reset_scale: Any
     neg_reset_scale: Any
     four_thirds: Any
@@ -84,7 +102,7 @@ class CartPole(BaseProblem):
     """Classic Gym ``CartPole-v1`` with Euler integration, written in evoxc ops.
 
     No simulator is imported: the dynamics are the algebra below, executed as one
-    ``evoxc.scan`` over a fixed horizon. Because a dead episode's state is
+    ``evoxc.while_loop`` over a fixed horizon. Because a dead episode's state is
     frozen, an individual's return is exactly its survival time, so ``max_step``
     is a hard fitness ceiling and ``fitness_target`` must be ``<= max_step``.
 
@@ -136,7 +154,7 @@ class CartPole(BaseProblem):
         it enters the trace, so the kernel only ever compares radians.
 
         Args:
-            max_step: Fixed scan horizon; also the fitness ceiling.
+            max_step: Fixed rollout horizon; also the fitness ceiling.
             repeat_times: Independent initial states averaged per individual.
             gravity: Gravity constant.
             masscart: Cart mass.
@@ -237,11 +255,13 @@ class CartPole(BaseProblem):
         4. Step body: forward the policy, convert the two logits into a
            ``(B, 1)`` ``+/-force_mag`` force, add ``alive`` to ``total``
            **before** the transition (the failing step still scores, as in
-           Gym), integrate with Euler, mark death on ``|x| > x_threshold or
-           |theta| > theta_threshold``, then freeze the state with
-           ``enp.where(enp.expand_dims(alive, 1), next_obs, obs)`` (a traced
-           tensor has no ``__getitem__``, so the rank-1 mask is broadcast with
-           ``expand_dims``).
+           Gym), integrate the whole row with the fused Euler step of
+           :meth:`_advance` (``obs + dt * (x_dot, xacc, theta_dot,
+           thetaacc)``), mark death by comparing that next row against
+           ``(x_threshold, +inf, theta_threshold, +inf)``, then freeze the
+           state with ``enp.where(enp.expand_dims(alive, 1), next_obs, obs)``
+           (a traced tensor has no ``__getitem__``, so the rank-1 mask is
+           broadcast with ``expand_dims``).
         5. Fitness = mean over the ``repeat_times`` axis of the episode return
            (a count in ``[0, max_step]`` per episode), then
            ``finalize_fitness``.
@@ -498,12 +518,25 @@ class CartPole(BaseProblem):
             A structure holding ``gravity``, ``masscart``, ``masspole``,
             ``polemass_length`` (``masspole * length``), ``total_mass``
             (``masscart + masspole``), ``length``, ``force_mag``,
-            ``neg_force_mag``, ``dt``, ``x_threshold``, ``theta_threshold`` (in
-            radians), ``reset_scale``, ``neg_reset_scale``, ``four_thirds``,
-            ``nan`` (all float32), plus the int32 loop scalars ``one_step`` and
-            ``horizon`` -- so neither the reset draw nor the trip condition ever
-            sees an f64 constant.
+            ``neg_force_mag``, ``dt``, the ``(1, 4)`` ``threshold_row`` (with
+            ``theta_threshold`` in radians), the row-assembly lanes
+            ``perm_idx``/``lane_xacc``/``lane_thetaacc`` and ``zero``,
+            ``reset_scale``, ``neg_reset_scale``, ``four_thirds``, ``nan`` (all
+            float32), plus the int32 loop scalars ``one_step`` and ``horizon``
+            -- so neither the reset draw nor the trip condition ever sees an
+            f64 constant.
         """
+        threshold_row = np.array(
+            [
+                [
+                    self.x_threshold,
+                    np.inf,
+                    np.deg2rad(self.theta_threshold),
+                    np.inf,
+                ]
+            ],
+            dtype=np.float32,
+        )
         return _CartPoleConstants(
             gravity=enp.full((), self.gravity),
             masscart=enp.full((), self.masscart),
@@ -514,8 +547,21 @@ class CartPole(BaseProblem):
             force_mag=enp.full((), self.force_mag),
             neg_force_mag=enp.full((), -self.force_mag),
             dt=enp.full((), self.dt),
-            x_threshold=enp.full((), self.x_threshold),
-            theta_threshold=enp.full((), float(np.deg2rad(self.theta_threshold))),
+            threshold_row=evoxc.constant(evoxc.from_numpy(threshold_row)),
+            perm_idx=evoxc.constant(
+                evoxc.from_numpy(np.array([1, 0, 3, 2], dtype=np.int32))
+            ),
+            lane_xacc=evoxc.constant(
+                evoxc.from_numpy(
+                    np.array([[False, True, False, False]], dtype=np.bool_)
+                )
+            ),
+            lane_thetaacc=evoxc.constant(
+                evoxc.from_numpy(
+                    np.array([[False, False, False, True]], dtype=np.bool_)
+                )
+            ),
+            zero=enp.full((), 0.0),
             reset_scale=enp.full((), self.reset_scale),
             neg_reset_scale=enp.full((), -self.reset_scale),
             four_thirds=enp.full((), 4.0 / 3.0),
@@ -529,18 +575,44 @@ class CartPole(BaseProblem):
 
         With ``c = cos(theta)``, ``s = sin(theta)`` and
         ``temp = (force + polemass_length * theta_dot**2 * s) / total_mass``,
-        the four updates are
+        the two accelerations are
 
         - ``thetaacc = (gravity * s - c * temp) /
           (length * (4/3 - masspole * c**2 / total_mass))``
         - ``xacc = temp - polemass_length * thetaacc * c / total_mass``
-        - ``x' = x + dt * x_dot``, ``theta' = theta + dt * theta_dot``
-        - ``x_dot' = x_dot + dt * xacc``, ``theta_dot' = theta_dot + dt *
-          thetaacc``
 
-        The death test is folded in here because the transition already has
-        ``x'`` and ``theta'`` in hand: testing them separately would split the
-        same observation row a second time per timestep.
+        and the four Euler updates are **one** affine op on the whole row:
+
+            ``next_obs = obs + dt * (x_dot, xacc, theta_dot, thetaacc)``
+
+        Element ``j`` of that expression is literally ``obs_j + dt * deriv_j``
+        for ``deriv = (x_dot, xacc, theta_dot, thetaacc)`` -- the same operands
+        in the same order as the four scalar updates ``x + dt * x_dot``,
+        ``x_dot + dt * xacc``, ``theta + dt * theta_dot`` and
+        ``theta_dot + dt * thetaacc``, with no reassociation -- so it is
+        bit-identical to them and replaces four multiplies, four adds and four
+        column reads with one multiply and one add on the row.
+        Nothing else about the physics may be traded for ops: precomputing a
+        reciprocal or reassociating a float changes which step a chaotic
+        trajectory dies on and breaks the host-numpy oracle.
+
+        The row is never split into columns and never concatenated back
+        together. A column split lowers to four copies and the reassembly to a
+        second pass of copies, and on a compiled backend each copy is a
+        serialised dispatch through the same scratch buffer: four dispatches of
+        the step block, each a ``slow_memcpy``. Instead the two angular state
+        variables are taken with static slices of one lane each (no index
+        tensor, so no baked constant), the two velocity lanes of the update are
+        assembled by rotating the row with ``perm_idx`` and overwriting the two
+        acceleration lanes with :func:`enp.where`, so the whole physics chain,
+        the rotation and both selections compile into a single elementwise
+        region. Both spellings produce the same operands in the same order, so
+        the step is bit-identical; the selections only *discard* lanes, so a
+        NaN in one lane can never leak into the arithmetic of another.
+
+        The death test is folded in here because the transition already has the
+        whole next row in hand: :meth:`_death_mask` reads ``x'`` and ``theta'``
+        out of it instead of splitting the same row a second time.
 
         Args:
             obs: Current observations of shape ``(B, 4)``.
@@ -551,7 +623,9 @@ class CartPole(BaseProblem):
             ``(next_obs (B, 4), dead (B,))`` -- the Euler step and the death
             mask of the *resulting* state.
         """
-        x, x_dot, theta, theta_dot = enp.split(obs, _OBS_DIM, axis=1)
+        rows = obs.shape[0]
+        theta = evoxc.slice(obs, (0, 2), (rows, 1))
+        theta_dot = evoxc.slice(obs, (0, 3), (rows, 1))
         cos = enp.cos(theta)
         sin = enp.sin(theta)
         temp = (
@@ -562,47 +636,60 @@ class CartPole(BaseProblem):
             * (consts.four_thirds - consts.masspole * enp.square(cos) / consts.total_mass)
         )
         xacc = temp - consts.polemass_length * thetaacc * cos / consts.total_mass
-        next_x = x + consts.dt * x_dot
-        next_theta = theta + consts.dt * theta_dot
-        next_obs = enp.concatenate(
-            (
-                next_x,
-                x_dot + consts.dt * xacc,
-                next_theta,
-                theta_dot + consts.dt * thetaacc,
-            ),
-            axis=1,
+        # Lanes 0 and 2 now hold the row's own ``x_dot``/``theta_dot``; lanes 1
+        # and 3 hold ``x``/``theta`` and are replaced by the two accelerations.
+        rotated = evoxc.gather(obs, consts.perm_idx, axis=1)
+        deriv = enp.where(
+            consts.lane_xacc,
+            xacc,
+            enp.where(consts.lane_thetaacc, thetaacc, rotated),
         )
-        dead = enp.reshape(
-            self._death_mask(next_x, next_theta, consts), (obs.shape[0],)
-        )
-        return next_obs, dead
+        next_obs = obs + consts.dt * deriv
+        return next_obs, self._death_mask(next_obs, consts)
 
-    def _death_mask(self, x: Any, theta: Any, consts: Any) -> Any:
+    def _death_mask(self, obs: Any, consts: Any) -> Any:
         """The failure predicate shared by ``_advance`` and ``_terminated``.
 
         An episode is dead when ``|x| > x_threshold`` or ``|theta| >
         theta_threshold`` (radians), both strict.
 
+        The test is one row comparison against
+        :attr:`_CartPoleConstants.threshold_row` --
+        ``(x_threshold, +inf, theta_threshold, +inf)``, so the two velocity
+        columns can never fail, exactly like the two comparisons it replaces --
+        followed by a fold of the four columns into one. The fold is a
+        ``reduce_max`` of the *signed slack* ``|obs| - threshold`` rather than a
+        boolean ``logical_or`` chain: a boolean fold needs two slices plus an
+        extraction (three ops) where the reduce is one, and the strict
+        inequality survives the subtraction exactly (``|obs_j| - t > 0`` iff
+        ``|obs_j| > t`` in IEEE, ``+inf`` included).
+
+        One corner differs from two independent comparisons: a velocity column
+        that overflowed to ``+-inf`` makes its own slack ``NaN`` (``inf -
+        inf``), and a ``NaN`` in the folded maximum reports *alive* even when
+        ``|x|`` or ``|theta|`` is over its limit. That state is unreachable
+        from a bounded rollout -- the reset draw is
+        ``U(-reset_scale, reset_scale)`` and the force is never non-finite, so
+        a frozen episode's observation stays finite -- and a genuinely ``NaN``
+        observation is reported alive by both spellings.
+
         Args:
-            x: Cart position of shape ``(B, 1)``.
-            theta: Pole angle in radians of shape ``(B, 1)``.
+            obs: Observations of shape ``(B, 4)``.
             consts: The bundle from ``_constants``.
 
         Returns:
-            ``(B, 1)`` boolean mask, ``True`` where the episode has failed.
+            ``(B,)`` boolean mask, ``True`` where the episode has failed.
         """
-        too_far = enp.greater(enp.abs(x), consts.x_threshold)
-        too_tilted = enp.greater(enp.abs(theta), consts.theta_threshold)
-        return enp.logical_or(too_far, too_tilted)
+        slack = enp.max(enp.abs(obs) - consts.threshold_row, axis=1)
+        return enp.greater(slack, consts.zero)
 
     def _terminated(self, obs: Any, consts: Any) -> Any:
         """Return the death mask of an observation.
 
         An episode is dead when ``|x| > x_threshold`` or ``|theta| >
         theta_threshold`` (radians). The rollout does not call this on its own
-        transitions -- :meth:`_advance` tests the components it already has --
-        but the predicate stays available (and rank-1, as documented) for
+        transitions -- :meth:`_advance` tests the row it just produced -- but
+        the predicate stays available (and rank-1, as documented) for
         host-side introspection and tests.
 
         Args:
@@ -612,10 +699,7 @@ class CartPole(BaseProblem):
         Returns:
             ``(B,)`` boolean mask, ``True`` where the episode has failed.
         """
-        x, _, theta, _ = enp.split(obs, _OBS_DIM, axis=1)
-        return enp.reshape(
-            self._death_mask(x, theta, consts), (obs.shape[0],)
-        )
+        return self._death_mask(obs, consts)
 
     def _force_from_logits(self, logits: Any, consts: Any) -> Any:
         """Turn two logits per row into a signed force.
