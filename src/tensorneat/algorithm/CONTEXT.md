@@ -35,8 +35,7 @@ A missing entry is never an error — the kernels default to `"tiled"`/`"merge"`
 Every accelerator formulation is bit-identical to the host route, generation for generation; no committed test selects the statics, so this subtree's evidence is hand-run verification.
 
 ## BaseAlgorithm Protocol (`base.py`)
-`setup(self, state=None) -> State` registers the algorithm's tensors; `None` builds `State()` in the body because a `State()` default argument would be evaluated at import time and break `import tensorneat`.
-`setup` is host-side and runs after the genome's and the problem's on the same threaded `State`: `NEAT.setup` builds and runs one `genome.initialize` graph, so it must never be called inside an active trace.
+`setup(self, state=None) -> State` registers the algorithm's tensors and is host-side, running after the genome's and the problem's on the same threaded `State`: `NEAT.setup` builds and runs one `genome.initialize` graph, so it must never be called inside an active trace.
 `ask(state) -> pop` hands out the population to evaluate (the `GenomeTensors` payload, zero ops); `transform(state, pop) -> Transformed` decodes the **whole** population into one batch-first schedule; `forward(state, transformed, inputs) -> outputs` runs it at `inputs (P, *input_shape)`.
 `prepare_forward(state, transformed, pop=None, samples=1) -> prepared` derives one pass's loop-invariant operands and `forward_prepared(state, transformed, prepared, inputs) -> outputs` runs one query from them; `forward` is exactly the two back to back, bit for bit.
 That pair's signature is **uniform** across algorithms (`pop=None`, `samples` = the static tiling factor of the `P * samples` queried rows), so the pipeline needs no arity adapter, unlike `forward`.
