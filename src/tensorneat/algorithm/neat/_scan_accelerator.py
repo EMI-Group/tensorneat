@@ -67,19 +67,18 @@ it is; the levers below turn them into multi-workgroup work or delete them.
    ``gather`` of its row disappears (the block is closed over).  The gated path
    has no table to close over -- its row is a lazily built ``cond`` -- so it
    keeps the per-slot form.
-5. **Scan 2's seed reduction is gated on a loop-invariant liveness scalar.**
-   ``seed`` is only *used* by a dead slot (``create = not live and the
-   population still has an unassigned genome``), and a species key never
-   changes inside the scan, so "some slot is dead" is a top-level scalar read
-   off the pre-scan ``species_keys``.  When no slot is dead the body's
-   ``(P,)``-axis-0 index reduction is computed and discarded on every one of the
-   ``species_size`` iterations; :func:`_seed` wraps it in one ``evoxc.cond``
-   whose predicate is that scalar, so the all-live case launches no reduction at
-   all.  Both branches are built statically and the predicate is a **top-level
-   rank-0** value -- never a population-shaped reduce used as a scan ``cond``
-   predicate, which is the shape that crashes ``iree-compile`` (item 1).
-   ``absent``/``create`` stay exact because the false branch returns the
-   ``I_INF`` sentinel, which is a dead slot's "nothing to seed from".
+5. **Scan 2's seed reduction stays unconditional (a rejection).**  ``seed`` is
+   only *used* by a dead slot (``create = not live and the population still has
+   an unassigned genome``), and "some slot is dead" is a loop-invariant scalar
+   off the pre-scan ``species_keys``, so wrapping the body's ``(P,)``-axis-0
+   index reduction in one ``evoxc.cond`` on that scalar is the obvious next
+   removal -- and it is measured **slower**: on the MI300X it costs
+   +2.2 ms/generation at ``P = 500`` (14.19/14.15 -> 16.59/16.35 over two
+   interleaved rounds) and +2.2 ms at ``P = 1000`` (17.31/16.91 ->
+   19.00/19.33), i.e. the ``if`` region in front of the body's distance kernel
+   is dearer than the reduction it skips.  It also wins no dispatch count (the
+   region *adds* one ``if`` per body).  So the reduction stays where the host
+   spelling has it and the removal is recorded, not shipped.
 
 Bit identity
 ------------
@@ -120,11 +119,9 @@ Every value is the same number, not merely close:
   would have computed for that slot in that iteration.  Only the iteration's own
   row is read; the other rows' values are discarded, which is why the algebra is
   shared and only the reduction axis differs.
-* The all-live scan 2 pass is bit-identical, not merely equivalent: the false
-  branch returns the ``I_INF`` sentinel, so ``absent`` is ``True``, ``create``
-  is ``False`` on every slot (a live slot can never create), and the raw record
-  the step stacks is never read -- ``created`` is ``~live & (record != I_INF)``
-  against pre-scan liveness, which is empty when nothing is dead.
+* Scan 2's seed reduction is the host body's own ``fetch_first``: the lowest
+  index over the unassigned positions, ``I_INF`` when there is none, which is
+  exactly ``reduce_min(select(unassigned, pop_index, I_INF))``.
 
 Correctness envelope
 --------------------
@@ -242,48 +239,6 @@ def _block_min_index(
     return evoxc.gather(closest, slot, axis=0)
 
 
-def _first_unassigned(unassigned: Any, operands: ScanOperands) -> Any:
-    """The first still-unassigned genome's index, ``iinf`` when there is none."""
-    return evoxc.reduce_min(
-        evoxc.select(unassigned, operands.pop_index, operands.iinf), axes=0
-    )
-
-
-def any_dead(operands: ScanOperands) -> Any:
-    """0-d ``bool``: at least one species slot is dead, i.e. could create one.
-
-    Read off the **pre-scan** ``species_keys``, which scan 2 never rewrites, so
-    it is loop-invariant and is built once at the top level instead of once per
-    iteration.  ``species_size`` elements, so the reduction is cheap whatever it
-    costs.
-    """
-    live = evoxc.logical_not(evoxc.isnan(operands.keys))
-    return evoxc.equal(
-        evoxc.reduce_min(evoxc.cast(live, evoxc.int32), axes=0), operands.zero_i32
-    )
-
-
-def _seed(unassigned: Any, operands: ScanOperands, creations_possible: Any) -> Any:
-    """Scan 2's seed, skipping its reduction when no slot could ever create.
-
-    ``create`` requires a dead slot (:func:`any_dead`), so with none the
-    reduction's answer is never read (``created`` is empty) and the false branch
-    returns the sentinel, launching no reduction at all.  The predicate is
-    rank-0 and built at the top level -- the population-shaped reduce that
-    crashes ``iree-compile`` as a scan predicate is a different shape and is not
-    recreated here.
-    """
-    def take(candidates: Any) -> Any:
-        """A dead slot exists: the first unassigned index, or the sentinel."""
-        return _first_unassigned(candidates, operands)
-
-    def skip(_candidates: Any) -> Any:
-        """No dead slot: nothing can create, so nothing addresses a row."""
-        return operands.iinf
-
-    return evoxc.cond(creations_possible, take, skip, unassigned)
-
-
 def reserve_carry(pop_size: int, gated: bool) -> tuple:
     """The initial scan-1 carry: the assignment/distance pair, plus the counter.
 
@@ -398,11 +353,7 @@ def assign_step(
         rows are rebuilt once after the scan from the stacked ``y`` and the
         counter's final value.  The predicate ``live | create`` needs no
         population reduction, so the gated path keeps it as it stands.
-        ``creations_possible`` is :func:`any_dead`, built here -- at trace time,
-        outside the region -- so it costs one cheap population-*slot* reduction
-        per generation instead of one population-shaped reduction per iteration.
     """
-    creations_possible = any_dead(operands)
 
     def step(carry: tuple, slot: Any) -> tuple:
         """One scan-2 iteration."""
@@ -410,7 +361,14 @@ def assign_step(
         key_slot = evoxc.gather(operands.keys, slot, axis=0)
         live = evoxc.logical_not(evoxc.isnan(key_slot))
         unassigned = evoxc.isnan(assign)
-        seed = _seed(unassigned, operands, creations_possible)
+        # The first unassigned index, ``iinf`` when there is none.  Gating this
+        # on a trace-time "some slot is dead" scalar is a measured regression
+        # (module docstring, item 5): the ``if`` region costs more than the
+        # reduction it skips, because it sits in front of the body's distance
+        # kernel.
+        seed = evoxc.reduce_min(
+            evoxc.select(unassigned, operands.pop_index, operands.iinf), axes=0
+        )
         absent = evoxc.equal(seed, operands.iinf)
         create = evoxc.logical_and(evoxc.logical_not(live), evoxc.logical_not(absent))
         # ``centre_for_slot`` gathers ``pop[seed]`` unconditionally, so the

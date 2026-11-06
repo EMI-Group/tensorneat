@@ -882,7 +882,6 @@ def speciate(
         # and hands scan 1 the dense path's pre-measured table (``None`` when
         # gated) so it reduces every row at once: row ``slot`` of that block is
         # the row its per-iteration gather would have produced.
-        live_slots = evoxc.logical_not(evoxc.isnan(species_state.species_keys))
         operands = _scan_accelerator.ScanOperands(
             keys=species_state.species_keys,
             pop_index=pop_index,
@@ -895,6 +894,7 @@ def speciate(
             gated=gate,
             block=rows1,
         )
+        live_slots = evoxc.logical_not(evoxc.isnan(species_state.species_keys))
         carry, closest_table = evoxc.scan(
             _scan_accelerator.reserve_step(operands, reserve_row),
             _scan_accelerator.reserve_carry(pop_size, gate),
