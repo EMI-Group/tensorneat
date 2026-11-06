@@ -69,7 +69,7 @@ Files stay well under ~1000 lines (`base.py` 611, `default.py` 444, `bias.py` 30
 ## Coverage notes
 The `attr_width == 0` branches (`column_of`'s default, `_option_ids`' constant id, `_attr_row`'s empty row, `OriginNode`'s empty-spec guard) are unreachable in-tree: every shipped node family declares 2, 3 or 4 columns.
 No test asserts `BiasNode`'s `repr` / `to_dict` / `sympy_func` or its identity row; its shipped callers are the `examples/rl` and `examples/func_fit` forward paths plus `examples/interpret_visualize` for the host hooks.
-`OriginNode.crossover`'s distribution is pinned only through the crossover test matrix, never by a node-specific oracle.
+`OriginNode.crossover` is never executed by a test: every crossover assertion runs the per-attribute `DefaultNode` path, and only `examples/func_fit/xor_origin.py` drives the whole-gene pick.
 
 ## Routing Table
 | Path | Responsibility |
