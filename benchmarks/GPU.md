@@ -464,9 +464,8 @@ The record's `meta.report_title` is the tool's default (`numpy / iree llvm-cpu /
 ## Reproduce
 
 ```bash
-# 0. environment: the compiled-backend extra, the ROCm runtime, and the PJRT plugin the xla rows drive
-uv sync --extra iree
-uv pip install --no-deps jax-rocm7-pjrt-0.10.2-py3-none-manylinux_2_27_x86_64.whl   # ships jax_plugins/xla_rocm7/xla_rocm_plugin.so (480.1 MiB)
+# 0. environment: the compiled-backend and PJRT-plugin extras, the ROCm runtime
+uv sync --extra iree --extra xla-rocm   # xla-rocm pins jax-rocm7-pjrt==0.10.2: ships jax_plugins/xla_rocm7/xla_rocm_plugin.so (480.1 MiB)
 export EVOXC_PJRT_PLUGIN=$PWD/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so
 /opt/rocm/.info/version && rocm-smi --showproductname --showdriverversion   # 7.1.0 / MI300X VF / driver 6.16.6 here
 
@@ -493,7 +492,7 @@ uv run --extra iree python benchmarks/gpu_measure.py render \
 
 Step 3 is the exact argv the record stores, with the recording worker's absolute interpreter path replaced by the portable `uv run --extra iree python` and the plugin path given as the variable it was read from.
 It is a 6 min 11 s job on this box (18 rows, of which the twelve trajectory legs are 121.9 s, the six `iree-compile`s 50.7 s and the six XLA compiles 13.9 s), so run it in the background rather than under a short foreground timeout.
-`uv pip install --no-deps` matters twice: the wheel has no dependency metadata worth resolving (it carries the plugin and nothing else), and a plain `uv sync` afterwards prunes it, so install it *after* the sync — the same recipe the `xla` backend needs anywhere, since no PyPI package ships a CPU plugin at all.
+The plugin comes from the `xla-rocm` extra, not from a hand install: `uv sync --extra iree --extra xla-rocm` resolves and keeps the locked `jax-rocm7-pjrt==0.10.2` wheel. A wheel installed instead with `uv pip install --no-deps` is untracked, so a later `uv sync` prunes it and the `xla` rows become `error` rows with the named `PluginError`; that one-off recipe is only for a retargeted wheel (e.g. `jax-cuda12-pjrt` on an NVIDIA box), which needs the extra pointed at it and a `uv lock`. No CPU PJRT plugin is pip-installable at all.
 `matrix` exits 0 only when every planned row is `ok` and 1 as soon as any row is `error` (it prints a `BLOCKED: …` line per blocked row); this matrix exited 0 with 18/18 `ok`, which is the state the block below records.
 `render` and `matrix --out` replace only the interior of this file's two markers (exactly one of each in the file) and exit 2 with a named error on a missing marker, an unreadable record, a wrong schema or a missing `records` list.
 A single row is cheap on the numpy leg (0.283–0.805 s build) and pays the compile on a compiled leg (2.149–2.672 s XLA, 8.017–9.027 s `iree-compile`), so budget a compiled row at its compile plus its timed region, and a traced row at that plus `N × (accelerated + numpy generation)`.

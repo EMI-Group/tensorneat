@@ -11,12 +11,14 @@ plain data, never as a code path --
 ``iree-rocm``
     iree with ``device="rocm"`` and ``target_backends=["rocm"]``.
 ``xla-rocm``
-    evoxc's ``xla`` adapter, ``device="rocm"``, driving a **user-supplied PJRT
-    C API plugin** (``.so`` exporting ``GetPjRtApi``) named by
-    ``--pjrt-plugin PATH`` or the ``EVOXC_PJRT_PLUGIN`` environment variable; no
-    pip package provides one. Nothing is guessed: an unresolved plugin raises
-    :class:`PluginError` naming both sources, so an ``xla-rocm`` row is either a
-    real measurement or a loud ``error`` row, never a fallback to another backend.
+    evoxc's ``xla`` adapter, ``device="rocm"``, driving a PJRT C API plugin
+    (``.so`` exporting ``GetPjRtApi``) named by ``--pjrt-plugin PATH`` or the
+    ``EVOXC_PJRT_PLUGIN`` environment variable; the ``xla-rocm`` extra of
+    ``pyproject.toml`` installs the AMD one (``uv sync --extra xla-rocm``), since
+    no CPU plugin is pip-installable. Nothing is guessed: an unresolved plugin
+    raises :class:`PluginError` naming both sources, so an ``xla-rocm`` row is
+    either a real measurement or a loud ``error`` row, never a fallback to
+    another backend.
 
 Why the environment variable matters
 ------------------------------------
@@ -150,8 +152,8 @@ def plugin_for(
         raise PluginError(
             f"target {target_name!r} drives the xla adapter and needs a PJRT C API "
             f"plugin library (.so exporting GetPjRtApi): pass {PJRT_FLAG} PATH or set "
-            f"{PJRT_ENV_VAR}=PATH (neither named one) — no pip package provides a "
-            "plugin, and there is no fallback to another backend"
+            f"{PJRT_ENV_VAR}=PATH (neither named one) — `uv sync --extra xla-rocm` "
+            "installs the AMD plugin, and there is no fallback to another backend"
         )
     return resolved
 
@@ -184,8 +186,9 @@ def require_plugin(
         raise PluginError(
             f"the planned targets include {needed}, which drive the xla adapter and "
             f"need a PJRT C API plugin library (.so exporting GetPjRtApi): pass "
-            f"{PJRT_FLAG} PATH or set {PJRT_ENV_VAR}=PATH (neither named one) — no pip "
-            "package provides a plugin, and there is no fallback to another backend"
+            f"{PJRT_FLAG} PATH or set {PJRT_ENV_VAR}=PATH (neither named one) — "
+            "`uv sync --extra xla-rocm` installs the AMD plugin, and there is no "
+            "fallback to another backend"
         )
     return resolved, fingerprint_plugin(resolved)
 

@@ -17,10 +17,11 @@ A *target* is a named way to build the ``Pipeline`` (data in
 :data:`benchmarks.gpu_targets.TARGETS`): ``numpy`` -> backend numpy, no device, no
 options; ``iree-llvm-cpu`` -> iree with ``target_backends=["llvm-cpu"]``;
 ``iree-rocm`` -> iree with ``device="rocm"`` and ``target_backends=["rocm"]``;
-``xla-rocm`` -> evoxc's ``xla`` adapter with ``device="rocm"``, driving a
-user-supplied PJRT C API plugin (``--pjrt-plugin PATH`` or ``$EVOXC_PJRT_PLUGIN``;
-no pip package ships one). Raw passthrough flags override a named target's
-defaults, for hardware this file does not name: ``--device KIND`` with
+``xla-rocm`` -> evoxc's ``xla`` adapter with ``device="rocm"``, driving the PJRT
+C API plugin named by ``--pjrt-plugin PATH`` or ``$EVOXC_PJRT_PLUGIN`` (the
+``xla-rocm`` extra installs the AMD ``jax-rocm7-pjrt`` wheel, so
+``uv sync --extra xla-rocm`` supplies it). Raw passthrough flags override a named
+target's defaults, for hardware this file does not name: ``--device KIND`` with
 ``--device-index N`` (together they build ``evoxc.Device(KIND, N)``; an index alone
 re-indexes the target's own device kind), ``--target-backends a,b``,
 ``--rocm-target ARCH`` (appends ``--iree-rocm-target=ARCH`` to the
@@ -127,8 +128,9 @@ Usage
 Requires ``tensorneat`` (installed, or importable from ``../src``) and ``numpy``; the
 ``iree`` targets additionally need the optional ``iree`` extra
 (``uv sync --extra iree``) plus, for ``iree-rocm``, a working ROCm runtime; the
-``xla-rocm`` target needs no extra at all, only a PJRT C API plugin ``.so`` built
-against the PJRT C API header (``--pjrt-plugin``/``$EVOXC_PJRT_PLUGIN``).
+``xla-rocm`` target additionally needs the ``xla-rocm`` extra
+(``uv sync --extra xla-rocm``), which installs the pinned ``jax-rocm7-pjrt`` plugin
+wheel for ``--pjrt-plugin``/``$EVOXC_PJRT_PLUGIN`` to name.
 
 Notes
 -----
@@ -907,7 +909,8 @@ def list_command(args: argparse.Namespace) -> int:
     print()
     print("passthrough overrides (apply to every matrix row, by target name):")
     print("  --pjrt-plugin PATH                 the PJRT C API plugin the xla targets drive")
-    print(f"  (or export {PJRT_ENV_VAR}=PATH; the flag wins, no pip package ships one)")
+    print(f"  (or export {PJRT_ENV_VAR}=PATH; the flag wins, `uv sync --extra xla-rocm`")
+    print("   installs the AMD one)")
     print("  --device KIND / --device-index N   build evoxc.Device(KIND, N)")
     print("  --target-backends a,b              replace target_backends")
     print("  --rocm-target ARCH                 append --iree-rocm-target=ARCH")

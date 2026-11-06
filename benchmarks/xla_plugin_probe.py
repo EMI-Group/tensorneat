@@ -13,8 +13,10 @@ yes/no question and returns a shell exit code.
 On this box that plugin is the ROCm 7 plugin bundled in the
 ``jax-rocm7-pjrt==0.10.2`` wheel (``jax_plugins/xla_rocm7/xla_rocm_plugin.so``,
 503 453 288 bytes, sha256 ``8e8319b48fcc…``), driving an AMD Instinct MI300X
-(``gfx942``) under ROCm 7.1. No pip package ships a plugin for this adapter, so
-the plugin is always a user-supplied ``.so``.
+(``gfx942``) under ROCm 7.1. That wheel is the ``xla-rocm`` extra of
+``pyproject.toml``, so ``uv sync --extra xla-rocm`` installs it and every later
+sync that asks for the extra keeps it; the plugin is always a ``.so`` named by the
+caller, because no CPU PJRT plugin is pip-installable.
 
 Protocol
 --------
@@ -60,8 +62,8 @@ Exit codes
 
 Usage
 -----
-    # the plugin comes from the jax-rocm7-pjrt wheel (install it after a sync,
-    # which prunes it) or any XLA build exporting GetPjRtApi
+    # the plugin comes from the xla-rocm extra (`uv sync --extra xla-rocm`),
+    # i.e. its jax-rocm7-pjrt wheel, or any XLA build exporting GetPjRtApi
     uv run python benchmarks/xla_plugin_probe.py \\
         --pjrt-plugin /path/to/xla_rocm7/xla_rocm_plugin.so
     EVOXC_PJRT_PLUGIN=/path/to/xla_rocm_plugin.so \\
@@ -144,7 +146,8 @@ def resolve_plugin(
         raise PluginError(
             f"no PJRT C API plugin named: pass {PJRT_FLAG} PATH or set "
             f"{PJRT_ENV_VAR}=PATH (neither named one) -- the xla adapter needs a "
-            ".so exporting GetPjRtApi and nothing provides one on its own"
+            ".so exporting GetPjRtApi (`uv sync --extra xla-rocm` installs the AMD "
+            "one)"
         )
     path = Path(candidate).expanduser()
     if not path.is_file():
