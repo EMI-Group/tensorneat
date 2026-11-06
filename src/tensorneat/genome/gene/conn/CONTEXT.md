@@ -35,7 +35,7 @@ The message stays a pure elementwise function of `(attrs, source_values)`.
 `BaseConn.from_attrs(state, in_keys, out_keys, attrs=None, historical_marker=None) -> (conn_keys, conn_attrs)` builds the pair from pre-built columns — `conn_keys (*shape, key_width) int32`, `conn_attrs (*shape, attr_width) float32`; the payload is never one packed row because evoxc has no bitcast.
 Keys are cast to int32 and stacked by the inherited `gene/base.py::_key_array`, which concatenates on `axis=len(shape)` (never `-1`) because the StableHLO exporter forwards the axis as a non-negative dimension.
 The attribute part goes through the inherited `_normalize_attrs`, which narrows to float32 and broadcasts rather than validating value ranges.
-`attrs` accepts `(*shape, attr_width)` rows, a `(*shape,)` per-connection scalar broadcast over the attribute axis (the dense-substrate weight table of `algorithm/hyperneat`), or `None` for zeros.
+`attrs` accepts `(*shape, attr_width)` rows, a `(*shape,)` per-connection scalar broadcast over the attribute axis (the spelling a dense-substrate weight table would take), or `None` for zeros.
 `historical_marker` is accepted only by families that declare the column; omitted (`OriginConn`) it is filled with the flat row index `0..prod(shape)-1` reshaped to `shape` (`_row_index_keys`), supplied it is cast to int32 and stacked as column 2.
 Passing `historical_marker` to a family without that column, destination keys of a different shape than the source keys, or attribute rows of an unusable shape raises `common.errors.ConfigError`.
 `algorithm/hyperneat` builds its dense substrate payload with exactly this pair (`node_gene.from_attrs(keys)`, `conn_gene.from_attrs(in_keys, out_keys, weights)`).
