@@ -80,7 +80,7 @@ The hop is a `scatter` on a **flat** `(P, N + 1) bool` frontier: `gather(frontie
 The frontier only gains bits and the node count bounds it, so the loop carries `(frontier, growing)` and `growing` alone terminates it: no iteration counter, no hop cap, no int32 seed.
 The seed is a one-hot `equal(arange(width), dst_row) & dst_hit` — **an IREE release gate, not a style choice**: a boolean `scatter` as the `while_loop` init SIGSEGVs `iree-compile` (IREE 3.11, llvm-cpu) on the assembled generation graph while the same scatter inside the body and the same kernel standalone both compile, so only `pytest test/backends` catches a regression.
 The final read is one flat gather of the frontier at `src_row`, `logical_and`-ed with `src_hit`/`dst_hit`, so a self-loop on an existing node answers `True` from the seed alone.
-Cost: **81 traced ops / 2 scatters**, 3.2 / 3.5 / 3.7 ms per call at pop 500 on generation-1/5/10 payloads (the merge-join route it replaced measured 127 ops / 9.0–9.8 ms and moved `Pipeline.step` on `xor_p500` by −2…−3 %).
+Cost: **81 traced ops / 2 scatters**, 3.2 / 3.5 / 3.7 ms per call at pop 500 on generation-1/5/10 payloads.
 A hop as one batched `dot` against a dense `(P, N, N) float32` adjacency is decision-identical but **rejected**: +24 traced ops, 1.30–1.31× slower per call on numpy and a quadratic buffer no static ceiling here bounds.
 
 ### Accelerator formulation (`cycle_accelerator.closes_cycle_accelerator`)
