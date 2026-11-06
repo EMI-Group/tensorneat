@@ -157,7 +157,7 @@ The **capacity gate** is a soak: `Pipeline.step` on `OriginNode`/`OriginConn`, p
 **StableHLO portability** (`evoxc.backends.stablehlo.export`, with every payload leaf passed as a `TensorSpec` and the rank-0 key built inside the trace): the four-stage mutation graph exports at **207 699 bytes / 2 143 op uses over 29 distinct ops** (12 `scatter`s and one `while` among them), passing the gate — no deferred op, no unsigned element type, every `dimension =` attribute non-negative.
 Only `pytest test/backends` proves the assembled generation graph, since per-kernel compilation does not.
 
-## Graph constants
+## Graph constants (one element plus broadcast)
 `ghost`/`never` sentinels, the identity/zero rows, the "no write" row and the cycle predicate's scatter targets are all `window.fill(...)` (one element plus `broadcast_to`), not materialised `(pop_size, …)` fills.
 The host cycle predicate's constants are its `(P, 1)` int32 row-offset blocks, the `(1, N)` node-row index, the `(width,)` one-hot seed index and the miss sentinel (`graph_constant` data plus one rank-0 constant), while its table seed stays one element plus `broadcast_to`.
 The four `EditContext` rebuilds are what re-materialise the population-scaled index blocks, so a shared context (legal only where a stage cannot move a row) is the lever on that budget as well as on the op count.
