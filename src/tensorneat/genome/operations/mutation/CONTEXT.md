@@ -133,7 +133,7 @@ Mechanism: at equal connection gates add-conn is accepted about half as often as
 - Files ≤ ~1000 lines (this node's largest is `base.py` at 874); each file is one job, per the Routing Table.
 
 ## Measured cost (numpy reference interpreter, this node's own measurements)
-Reference payload: `DefaultGenome(num_inputs=2, num_outputs=1, max_nodes=50, max_conns=100, mutation=DefaultMutation(), crossover=DefaultCrossover(), distance=DefaultDistance(), output_transform=ACT.sigmoid)`, the population at generation 5 of the XOR seed-42 run, build excluded, one fresh process per cell; traced ops counted recursively over `module.functions[*].entry_block` and every `op.regions[*].blocks[*]` body with terminators excluded.
+Reference payload: the cost-table genome (`DefaultGenome(2→1, max_nodes=50, max_conns=100, mutation=DefaultMutation(), output_transform=ACT.sigmoid)` plus its default crossover/distance), the population at generation 5 of the XOR seed-42 run, build excluded, one fresh process per cell; traced ops counted recursively over every block body with terminators excluded.
 - `execute_mutation` at pop 500: **536 traced ops / 18.3 ms** per call.
 - Per-stage increments at pop 500 (that probability `1.0`, the rest `0.0`, cumulative): base 98 · add-node +137 · delete-node +67 · add-conn +186 (includes the 81-op cycle predicate) · delete-conn +48 — exactly additive, and independent of the probability values (all four stages stay traced unless a probability is `0`).
 - Recurrent cells at pop 1000 on a six-round-evolved payload: `RecurrentGenome` + `DefaultMutation` **452 ops / 16.3 ms**, `RecurrentMutation(p_recur=0.0)` **481 / 20.5** (region elided, the +29 is the recurrent attempt tableau), `RecurrentMutation(p_recur=0.1)` **570 / 23.1**.
