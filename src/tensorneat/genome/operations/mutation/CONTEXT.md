@@ -122,6 +122,7 @@ Mechanism: at equal connection gates add-conn is accepted about half as often as
 - A device-specific formulation is a host-string branch, never a traced value: an unknown `kernel_mode` raises `TensorNEATError` naming both accepted values, and nothing falls back silently.
 - Zero-width attribute tables (`attr_width == 0`) work: `_scatter_slots` early-returns on `width == 0` and the write path uses row-index selects, so nothing builds a `0`-stride arange.
 - Errors: configuration problems raise `ConfigError` (`TensorNEATError`); `evoxc` shape/backend errors propagate unchanged.
+- Rank-0 constants and static index blocks are built once per stage and shared, and population-scaled seeds stay one element plus `broadcast_to` (`window.fill`) instead of a materialised `(pop_size, …)` fill; `fill` is a real traced broadcast, so its shape must be exact where it feeds `reshape`/`scatter` while symmetric-broadcast consumers may grow it.
 - Files ≤ ~1000 lines (this node's largest is `base.py` at 874); each file is one job, per the Routing Table.
 
 ## Measured cost (numpy reference interpreter, this node's own measurements)
