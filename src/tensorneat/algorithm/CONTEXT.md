@@ -130,7 +130,6 @@ The XOR3d pop-100 cell is the algorithm's tightest and no algorithm-side knob ga
 `evoxc.scan` peels step 0 and traces its body again, so each scan body is traced twice, and `DistanceRows.__call__`'s batch-`pop_size` branch and batch-width rejection, `_check_population`'s payload rejection and the idle centre mode's tiling branch are unexercised in-package.
 Crossover is live only for species with more than `1 / survival_threshold` members (200 at the example 0.01): below that the survivor prefix is one genome and every non-elite child is a mutated copy of it.
 `SpeciesController._block_layout`/`_prefix_sum_exclusive` are maintained **test seams** (only caller `test/unit/algorithm/conftest.py::raw_kernel`); production goes through `_kernels.block_layout`/`prefix_sum_exclusive`, so a behavioural change belongs in `_kernels.py`.
-`evoxc.scan` peels step 0 and traces its body again, so each scan body is traced twice, and `DistanceRows.__call__`'s batch-`pop_size` branch, its batch-width rejection, `_check_population`'s payload rejection and the idle centre mode's tiling branch are unexercised inside the package.
 
 ## Known Risks (evoxc)
 `evoxc.scan` de-sugars to `while` + gather/scatter, so a wide carry trips iree's affinity analysis on CUDA/ROCm; the numpy backend is the reference and packed carries are the mitigation.
