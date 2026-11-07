@@ -71,8 +71,12 @@ Gene configuration lives on the instance, so no `State` entry — a formulation 
 
 ## Graph constants
 Every population-scaled fill here is one element plus `../window.fill`'s `broadcast_to`, never a materialised `enp.full`: `column_constant` for a per-column constant, `_parameter_table` for a non-uniform per-column clip table (a uniform one is a pooled rank-0 constant), and the `_ScalarPool` rank-0 scalars.
-A static `(1, N)` table, a rank-0 literal and the `(attr_width,)` identity/zero row keep their direct `evoxc.constant`/`enp.full` (`static_row` bakes one `evoxc.constant` of the row, or an empty `(0,)` row).
-The choice is measured: at `P=1000`, `max_nodes=50`, `attr_width=4` the materialised block is 4.03 MB against 31 935 B baked by the broadcast form at the same per-generation time inside the box's ±30 % drift.
+A static `(1, N)` table, a rank-0 literal and the `(attr_width,)` identity/zero row keep their direct `evoxc.constant`/`enp.full` (`static_row` bakes one `evoxc.constant` of the row, or an empty `(0,)` row); `../window.fill` keeps that direct `enp.full` for a fill that is already tiny (a rank-0 scalar, a `(1, W)` row, an `(N,)` column table).
+The forward pass's rank-0 values do not come from here: `genome/step.py::_PreparedScalars` materialises one `0.0` and one `1.0` per pass in the entry block, and every shipped aggregation option (`AGG.sum`/`product`/`max`/`min`/`maxabs`/`mean`) plus `common/functions/act.py::sigmoid` declares a `scalars` parameter, so `node/base.py::_takes_scalars` answers `True` for them and each option's neutral element / sigmoid's `1.0` **is** that pass's prepared tensor — one `constant` per pass, none per unrolled level.
+`node/base.py::BaseNode.aggregate`/`forward` hand each option of that kind the mapping `{0.0: zero, 1.0: one}`, and a pass's `zero` is also the cascade's "no option matched" value and the `NodeOperands` zero, so one graph constant serves all three readers.
+The fallback holds for an option that declares no `scalars` parameter: it keeps the exact call shape it always had and its own literal (the shipped activation kernels other than `sigmoid` declare none).
+A kernel that accepts the mapping reads it with `scalars.get(value)`, so a pass whose bundle lacks that value also falls back to its Python literal and still traces.
+The choice of fill spelling is measured: at `P=1000`, `max_nodes=50`, `attr_width=4` the materialised block is 4.03 MB against 31 935 B baked by the broadcast form at the same per-generation time inside the box's ±30 % drift.
 
 ## Hooks other nodes rely on
 `genome/base.py::initialize` uses `new_random_attrs` only; `genome/operations/mutation/base.py` uses `new_identity_attrs` (the add-node split and its identity edge) and `new_zero_attrs` (add-conn).
