@@ -585,7 +585,11 @@ class Pipeline(StatefulBaseClass):
             then :func:`~tensorneat.host_payload._formulation_signature`'s
             ``(distance_centre, distance_formulation, kernel_mode)`` statics
             (so a device/mode change can never reuse an executable formulated for
-            the other one), and last the tiled-evaluate chunk budget of the
+            the other one), then the effective ``backend`` -- the level spelling
+            reads it at trace time (``DefaultGenome._static_sweep``: ``iree``
+            keeps the unrolled sweep, ``xla`` takes the data-dependent loop), so
+            a backend change must rebuild rather than reuse the other spelling
+            -- and last the tiled-evaluate chunk budget of the
             device the graph runs on
             (:func:`~tensorneat.host_payload.eval_chunk_rows`), because that
             budget is unrolled into the graph at trace time: a CPU build must
@@ -619,11 +623,16 @@ class Pipeline(StatefulBaseClass):
             static("max_depth", 0),
             static("key_span", 0),
         )
+        # The effective backend is baked into the trace (``_static_config`` keeps
+        # the registered string) and selects the level spelling, so it belongs in
+        # the cache key just like the formulation statics.
+        registered = state.registered_keys()
+        backend = state.backend if "backend" in registered else self.backend
         return (
             payload_signature
             + _substrate_signature(self.algorithm)
             + _formulation_signature(state)
-            + (eval_chunk_rows(self._device_kind(), max_nodes),)
+            + (backend, eval_chunk_rows(self._device_kind(), max_nodes))
         )
 
     def _host_backend(self) -> str:
@@ -1025,10 +1034,10 @@ class Pipeline(StatefulBaseClass):
 
         Built on first use and then reused; the build is timed into
         :attr:`build_seconds` and counted in :attr:`builds`. A *different*
-        signature (population or genome geometry, substrate geometry, or the
-        device-derived ``distance_centre``/``distance_formulation``/``kernel_mode``
-        statics) is a second entry, so a shape or device/mode change can never
-        silently reuse the previous graph.
+        signature (population or genome geometry, substrate geometry, the
+        trace-time formulation statics, the effective backend or the evaluate
+        chunk budget) is a second entry, so a shape, device/mode or backend
+        change can never silently reuse the previous graph.
         """
         signature = self._shape_signature(state)
         self.shape_signature = signature
