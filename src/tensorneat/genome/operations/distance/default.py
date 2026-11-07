@@ -105,9 +105,10 @@ class DefaultDistance(BaseDistance):
                 :meth:`~.base.BaseDistance.measure` validates that precondition on the host
                 (the digest's ``node_oor``/``conn_oor`` and the centre's own present keys) and
                 raises ``TensorNEATError`` when host data breaks it; inside a trace the check
-                cannot run, and the pipeline never selects this route (its centres are
-                population-shaped), so only a direct host ``measure_distance`` call with a
-                batch-1 centre sees it.
+                cannot run, and the mode a pipeline registers decides the centre's batch: a CPU
+                pipeline registers ``distance_centre="single"``, so the batch-1 centre and this
+                route are the live CPU body, while a GPU-class kind registers ``"tiled"`` and
+                hands ``measure`` a population-shaped centre.
 
         Raises:
             ConfigError: If either weight is negative or not finite (a ``ConfigError`` is a

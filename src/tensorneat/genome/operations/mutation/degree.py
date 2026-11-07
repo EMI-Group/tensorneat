@@ -18,7 +18,7 @@ have to derive it:
   destination's present row count), and no example or benchmark reaches this module.
 - **Not in the generation path.**  Its ``(P, N, E)`` equality intermediate is much larger
   than any op the operators emit, so wiring it into a generation would cost real time for a
-  quantity the guards already bound.  The kernels are small — ``in_degree`` traces 15 ops,
+  quantity the guards already bound.  The kernels are small — ``in_degree`` traces 14 ops,
   ``max_in_degree`` 16 and ``violation`` 20 on a ``(P, N)``/``(P, E, 2)`` payload — which is
   a diagnostic budget, not a generation one.
 - **Untested.**  No test in ``test/`` imports this module:
@@ -76,7 +76,7 @@ def in_degree(
     Notes:
         A public **audit** helper: no kernel in ``src/`` calls it — ``execute_mutation``
         enforces the same ceiling inline at the written payload state — and no test imports
-        it (the module docstring states that test gap).  ``15`` traced ops, every one of
+        it (the module docstring states that test gap).  ``14`` traced ops, every one of
         them over the ``(P, N, E)`` equality block the docstring above describes.
     """
     pop_size, node_count = node_keys.shape
@@ -113,7 +113,7 @@ def max_in_degree(
     Notes:
         A public **audit** helper with no caller in ``src/`` and no test in ``test/``: the
         operators compare each destination's present row count against ``max_in_degree``
-        inline instead.  ``16`` traced ops in all — :func:`in_degree`'s table plus one
+        inline instead.  ``15`` traced ops in all — :func:`in_degree`'s table plus one
         axis-1 ``reduce_max``.
     """
     return evoxc.reduce_max(in_degree(node_keys, conn_keys), axes=1)
@@ -144,7 +144,7 @@ def violation(
         A public **audit** helper with no caller in ``src/`` and no test in ``test/``; the
         assertion it exists for is "this payload is clean": ``violation(node_keys,
         conn_keys, genome.max_in_degree) == 0`` on the payload ``execute_mutation``
-        returned.  ``20`` traced ops in all — :func:`in_degree`'s table, the threshold
+        returned.  ``19`` traced ops in all — :func:`in_degree`'s table, the threshold
         constant, one ``greater``, the boolean cast and the axis-1 ``reduce_sum``.
     """
     counts = in_degree(node_keys, conn_keys)

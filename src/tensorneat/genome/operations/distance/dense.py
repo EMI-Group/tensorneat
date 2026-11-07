@@ -152,7 +152,8 @@ def measure_centre(
     Notes:
         The two families' tail inputs are **stacked on a leading axis** and handed to
         :meth:`~.default.DefaultDistance._scalar_distance` in one call, so a ``measure`` pays
-        for the scalar formula (eleven traced ops) once instead of once per family.  The
+        for the scalar formula (13 executed ops from a fresh pool, fewer once the pool already
+        holds the constants) once instead of once per family.  The
         elementwise ops of the tail are shape-agnostic, and the final combine is a
         ``reduce_sum`` over the two-row axis, which is exactly the ``add`` the pair-wise route
         performs: the accumulator starts at ``0`` and ``0 + x`` is ``x`` for every distance
