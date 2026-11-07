@@ -2,7 +2,8 @@
 
 This module is the small, genuinely generic part of the environment recipe: the
 ``evoxc.Tensor`` accessor ``show`` needs, the constructor validators every
-environment repeats verbatim, and the ``(B,) -> (P, R)`` return layout.
+environment repeats verbatim, the fixed-horizon trip condition every rollout loop
+shares, and the ``(B,) -> (P, R)`` return layout.
 
 Every validator is a **configuration** check, so it raises
 ``TensorNEATError`` and nothing else: a non-numeric knob (a string, a list, a
@@ -24,13 +25,13 @@ Two rules keep it honest:
   would break ``import tensorneat``); they are only legal inside a helper that
   the caller invokes while a trace is active.
 
-``returns_of`` and ``prepared_query`` are therefore the two traced helpers here --
-they are inlined into the caller's graph exactly like
+``horizon_cond``, ``returns_of`` and ``prepared_query`` are therefore the three
+traced helpers here -- they are inlined into the caller's graph exactly like
 ``problem.base.finalize_fitness`` -- while every other name runs on the host only.
 """
 
 import math
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -40,6 +41,7 @@ import evoxc.numpy as enp
 from ...common.errors import TensorNEATError
 
 __all__ = [
+    "horizon_cond",
     "prepared_query",
     "require_finite",
     "require_non_negative",
@@ -171,6 +173,43 @@ def require_non_negative(owner: str, name: str, value: Any) -> float:
     if number < 0.0:
         raise TensorNEATError(f"{owner}: {name} must be non-negative, got {number}")
     return number
+
+
+def horizon_cond(consts: Any, step_index: int = 3) -> Callable:
+    """Build the trip condition of an environment's rollout loop.
+
+    Must be called inside the active trace (``enp.less`` is a graph op), exactly
+    like :func:`returns_of`. The horizon is static config, so every rollout runs
+    exactly ``max_step`` iterations: the condition counts up from ``0`` against
+    ``consts.horizon`` instead of testing a terminal flag ("is any episode still
+    alive"), which would make the cost depend on the population's behaviour and
+    would let a ``NaN`` logit arriving after every episode finished escape the
+    accumulator.
+
+    Args:
+        consts: The environment's constant bundle; its ``horizon`` field is the
+            int32 ``max_step`` the counter is compared against.
+        step_index (int, optional): Position of the loop counter in the carry --
+            ``3`` for the four-leaf ``(obs, alive, total, step)`` carry the three
+            shipped environments share, ``1`` for ``Pendulum``'s packed
+            ``(row, step)`` accelerator carry. Defaults to ``3``.
+
+    Returns:
+        ``cond(carry) -> () bool`` -- true while ``step < max_step``.
+    """
+
+    def cond(carry):
+        """Test the loop counter against the static horizon.
+
+        Args:
+            carry: The rollout carry; its entry ``step_index`` is the counter.
+
+        Returns:
+            The rank-0 boolean ``step < max_step``.
+        """
+        return enp.less(carry[step_index], consts.horizon)
+
+    return cond
 
 
 def prepared_query(act_fn: Any, batch: int) -> Any:

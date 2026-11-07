@@ -12,6 +12,7 @@ from ..base import BaseProblem, build_options, finalize_fitness, static_batch_si
 from ...common.errors import TensorNEATError
 from ...common.schedule_accelerator import kernel_mode
 from ._common import (
+    horizon_cond,
     prepared_query,
     require_finite,
     require_positive,
@@ -458,8 +459,12 @@ class Pendulum(BaseProblem):
             enp.zeros((batch, 1), dtype=evoxc.float32),
             enp.zeros((), dtype=evoxc.int32),
         )
+        # The trip condition is the shared fixed-horizon rule of
+        # ``._common.horizon_cond`` at the host carry's counter slot: exactly
+        # ``max_step`` iterations, counted up from ``0`` rather than tested
+        # against a terminal flag (Pendulum has none).
         theta, theta_dot, total, _ = evoxc.while_loop(
-            self._loop_cond(consts),
+            horizon_cond(consts),
             self._loop_body(query, consts),
             init,
         )
@@ -508,8 +513,10 @@ class Pendulum(BaseProblem):
             ),
             enp.zeros((), dtype=evoxc.int32),
         )
+        # Same fixed-horizon trip condition, at the packed ``(row, step)``
+        # carry's counter slot.
         row, _ = evoxc.while_loop(
-            self._loop_cond(consts, packed=True),
+            horizon_cond(consts, 1),
             self._loop_body_packed(query, consts, batch),
             init,
         )
@@ -550,43 +557,6 @@ class Pendulum(BaseProblem):
             high=consts.one,
         )
         return raw * consts.reset_scale
-
-    def _loop_cond(
-        self,
-        consts: _PendulumConstants,
-        packed: bool = False,
-    ) -> Callable:
-        """Build the trip condition of the rollout loop.
-
-        The horizon is static config, so the loop runs exactly ``max_step``
-        iterations: the condition counts up from ``0`` instead of testing a
-        terminal flag, which Pendulum does not have anyway.
-
-        Args:
-            consts: The bundle from :meth:`_constants`.
-            packed (bool, optional): Which carry the condition guards -- the
-                packed ``(row, step)`` of the accelerator formulation when
-                ``True``, the four-leaf host carry otherwise. Defaults to
-                ``False``.
-
-        Returns:
-            ``cond(carry) -> () bool`` -- true while ``step < max_step``.
-        """
-        index = 1 if packed else 3
-
-        def cond(carry):
-            """Test the loop counter against the static horizon.
-
-            Args:
-                carry: ``(row, step)`` when packed, else
-                    ``(theta, theta_dot, total, step)``.
-
-            Returns:
-                The rank-0 boolean ``step < max_step``.
-            """
-            return enp.less(carry[index], consts.horizon)
-
-        return cond
 
     def _loop_body(
         self,

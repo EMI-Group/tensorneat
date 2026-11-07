@@ -11,6 +11,7 @@ import evoxc.numpy as enp
 from ..base import BaseProblem, build_options, finalize_fitness, static_batch_size
 from ...common.errors import TensorNEATError
 from ._common import (
+    horizon_cond,
     prepared_query,
     require_finite,
     require_non_negative,
@@ -474,8 +475,11 @@ class MountainCarContinuous(BaseProblem):
             enp.zeros((batch,), dtype=evoxc.float32),
             enp.zeros((), dtype=evoxc.int32),
         )
+        # The trip condition is the shared fixed-horizon rule of
+        # ``._common.horizon_cond``: exactly ``max_step`` iterations, counted up
+        # from ``0`` rather than tested against "is any episode still alive".
         obs, _, total, _ = evoxc.while_loop(
-            self._loop_cond(consts),
+            horizon_cond(consts),
             self._loop_body(query, consts),
             init,
         )
@@ -510,35 +514,6 @@ class MountainCarContinuous(BaseProblem):
         position = consts.reset_center + consts.reset_half_width * raw
         velocity = enp.zeros((batch, 1), dtype=evoxc.float32)
         return self._stack_state(position, velocity, consts)
-
-    def _loop_cond(self, consts: _MountainCarConstants) -> Callable:
-        """Build the trip condition of the rollout loop.
-
-        The horizon is static config, so the loop runs exactly ``max_step``
-        iterations: the condition counts up from ``0`` instead of testing
-        whether any episode is still alive, which would make the cost depend on
-        the population's behaviour and would let a NaN logit arriving after
-        every episode finished escape the accumulator.
-
-        Args:
-            consts: The bundle from :meth:`_constants`.
-
-        Returns:
-            ``cond(carry) -> () bool`` -- true while ``step < max_step``.
-        """
-
-        def cond(carry):
-            """Test the loop counter against the static horizon.
-
-            Args:
-                carry: ``(obs, alive, total, step)``.
-
-            Returns:
-                The rank-0 boolean ``step < max_step``.
-            """
-            return enp.less(carry[3], consts.horizon)
-
-        return cond
 
     def _loop_body(
         self, query: Callable, consts: _MountainCarConstants

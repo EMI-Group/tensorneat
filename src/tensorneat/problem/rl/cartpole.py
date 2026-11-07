@@ -11,6 +11,7 @@ import evoxc.numpy as enp
 from ..base import BaseProblem, build_options, finalize_fitness, static_batch_size
 from ...common.errors import TensorNEATError
 from ._common import (
+    horizon_cond,
     prepared_query,
     require_finite,
     require_non_negative,
@@ -42,7 +43,6 @@ class _CartPoleConstants(NamedTuple):
 
     Attributes:
         gravity: Gravity constant.
-        masscart: Cart mass.
         masspole: Pole mass.
         polemass_length: ``masspole * length``.
         total_mass: ``masscart + masspole``.
@@ -72,12 +72,14 @@ class _CartPoleConstants(NamedTuple):
         neg_reset_scale: ``-reset_scale``, the lower bound of the reset draw.
         four_thirds: The ``4/3`` of the pole-moment denominator.
         nan: A float32 NaN, the poison value accumulated into the return.
+        false: A bool ``False``, the value the alive mask is reset to once an
+            episode has died (the same one-op spelling ``MountainCarContinuous``
+            uses).
         one_step: The int32 ``1`` the loop counter advances by.
         horizon: The int32 ``max_step`` the loop counter is compared against.
     """
 
     gravity: Any
-    masscart: Any
     masspole: Any
     polemass_length: Any
     total_mass: Any
@@ -94,6 +96,7 @@ class _CartPoleConstants(NamedTuple):
     neg_reset_scale: Any
     four_thirds: Any
     nan: Any
+    false: Any
     one_step: Any
     horizon: Any
 
@@ -264,7 +267,10 @@ class CartPole(BaseProblem):
            broadcast with ``expand_dims``).
         5. Fitness = mean over the ``repeat_times`` axis of the episode return
            (a count in ``[0, max_step]`` per episode), then
-           ``finalize_fitness``.
+           ``finalize_fitness``. The shipped ``repeat_times=1`` already makes
+           ``total`` one return per individual, so that path skips the
+           ``returns_of`` reshape and the mean entirely (two ops on the
+           identity); only ``repeat_times > 1`` pays them.
 
         A NaN logit still acts as "push left" inside the rollout (``enp.greater``
         is false against NaN), but the step accumulates a NaN into ``total``
@@ -293,6 +299,13 @@ class CartPole(BaseProblem):
         """
         pop_size = static_batch_size(transformed)
         total, _ = self._rollout(keys, act_fn, pop_size)
+        if self.repeat_times == 1:
+            # ``repeat_times`` is host-side config, so this is a trace-time
+            # branch and never a branch on a traced value: with one repeat
+            # ``total`` already holds one return per individual, and the
+            # ``returns_of`` reshape plus the mean would be two ops on the
+            # identity.
+            return finalize_fitness(total)
         return finalize_fitness(
             enp.mean(returns_of(total, pop_size, self.repeat_times), axis=1)
         )
@@ -415,41 +428,15 @@ class CartPole(BaseProblem):
             enp.zeros((batch,), dtype=evoxc.float32),
             enp.zeros((), dtype=evoxc.int32),
         )
+        # The trip condition is the shared fixed-horizon rule of
+        # ``._common.horizon_cond``: exactly ``max_step`` iterations, counted up
+        # from ``0`` rather than tested against "is any episode still alive".
         obs, _, total, _ = evoxc.while_loop(
-            self._loop_cond(consts),
+            horizon_cond(consts),
             self._loop_body(query, consts),
             init,
         )
         return total, obs
-
-    def _loop_cond(self, consts: _CartPoleConstants) -> Callable:
-        """Build the trip condition of the rollout loop.
-
-        The horizon is static config, so the loop runs exactly ``max_step``
-        iterations: the condition counts up from ``0`` instead of testing
-        whether any episode is still alive, which would make the cost depend on
-        the population's behaviour and the reported per-horizon numbers
-        meaningless.
-
-        Args:
-            consts: The bundle from :meth:`_constants`.
-
-        Returns:
-            ``cond(carry) -> () bool`` -- true while ``step < max_step``.
-        """
-
-        def cond(carry):
-            """Test the loop counter against the static horizon.
-
-            Args:
-                carry: ``(obs, alive, total, step)``.
-
-            Returns:
-                The rank-0 boolean ``step < max_step``.
-            """
-            return enp.less(carry[3], consts.horizon)
-
-        return cond
 
     def _loop_body(
         self, query: Callable, consts: _CartPoleConstants
@@ -496,7 +483,11 @@ class CartPole(BaseProblem):
                 enp.astype(alive, evoxc.float32),
             )
             total = total + reward
-            alive = enp.logical_and(alive, enp.logical_not(dead))
+            # One op, not ``logical_and(alive, logical_not(dead))``: the mask is
+            # only ever retired, so a select against the bundle's ``false`` is
+            # the whole update (the spelling ``MountainCarContinuous`` uses for
+            # its own terminal flag).
+            alive = enp.where(dead, consts.false, alive)
             obs = enp.where(enp.expand_dims(alive, 1), next_obs, obs)
             return (obs, alive, total, index + consts.one_step)
 
@@ -515,16 +506,16 @@ class CartPole(BaseProblem):
         run rather than one per timestep.
 
         Returns:
-            A structure holding ``gravity``, ``masscart``, ``masspole``,
+            A structure holding ``gravity``, ``masspole``,
             ``polemass_length`` (``masspole * length``), ``total_mass``
             (``masscart + masspole``), ``length``, ``force_mag``,
             ``neg_force_mag``, ``dt``, the ``(1, 4)`` ``threshold_row`` (with
             ``theta_threshold`` in radians), the row-assembly lanes
             ``perm_idx``/``lane_xacc``/``lane_thetaacc`` and ``zero``,
             ``reset_scale``, ``neg_reset_scale``, ``four_thirds``, ``nan`` (all
-            float32), plus the int32 loop scalars ``one_step`` and ``horizon``
-            -- so neither the reset draw nor the trip condition ever sees an
-            f64 constant.
+            float32), the bool ``false`` the alive mask is reset to, plus the
+            int32 loop scalars ``one_step`` and ``horizon`` -- so neither the
+            reset draw nor the trip condition ever sees an f64 constant.
         """
         threshold_row = np.array(
             [
@@ -539,7 +530,6 @@ class CartPole(BaseProblem):
         )
         return _CartPoleConstants(
             gravity=enp.full((), self.gravity),
-            masscart=enp.full((), self.masscart),
             masspole=enp.full((), self.masspole),
             polemass_length=enp.full((), self.masspole * self.length),
             total_mass=enp.full((), self.masscart + self.masspole),
@@ -566,6 +556,7 @@ class CartPole(BaseProblem):
             neg_reset_scale=enp.full((), -self.reset_scale),
             four_thirds=enp.full((), 4.0 / 3.0),
             nan=enp.full((), float("nan")),
+            false=enp.zeros((), dtype=evoxc.bool_),
             one_step=enp.full((), 1, dtype=evoxc.int32),
             horizon=enp.full((), self.max_step, dtype=evoxc.int32),
         )
