@@ -36,6 +36,38 @@ from .window import (
 )
 
 
+class _PreparedScalars:
+    """Rank-0 ``float32`` scalars of one forward pass, materialised once in the entry block.
+
+    ``evoxc`` has no constant common-subexpression elimination, and the option kernels of a
+    node gene build their own literals: ``agg.sum`` needs one ``0.0`` (the neutral padding of
+    the masked window *and* the seed of its ``K``-plane fold) and ``act.sigmoid`` needs two
+    ``1.0``. An unrolled pass would then pay one ``constant`` op per literal per level. This
+    record materialises the two distinct values once per pass and hands them, as a
+    ``float -> tensor`` mapping, to every option callable that declares a ``scalars``
+    parameter (see :func:`..gene.node.base._takes_scalars`), so the whole pass shares one
+    ``0.0`` tensor and one ``1.0`` tensor.
+
+    This is a plain trace-local Python object, never a graph input or output: it holds the
+    tensors of the trace that created it, and it is not a pytree container, so
+    :func:`..window.by_samples` and ``evoxc.tree_map`` pass it through as an opaque leaf.
+
+    Attributes:
+        zero: Rank-0 ``float32`` ``0.0``.
+        one: Rank-0 ``float32`` ``1.0``.
+        mapping: ``{0.0: zero, 1.0: one}`` — the ``scalars`` argument of an option callable; a
+            kernel missing a key keeps its own literal.
+    """
+
+    __slots__ = ("zero", "one", "mapping")
+
+    def __init__(self) -> None:
+        """Materialise this pass's two rank-0 constants (one ``constant`` op each)."""
+        self.zero = enp.full((), 0.0, dtype=evoxc.float32)
+        self.one = enp.full((), 1.0, dtype=evoxc.float32)
+        self.mapping = {0.0: self.zero, 1.0: self.one}
+
+
 class _StepStatics:
     """Loop-invariant operands of one forward pass, built once by ``_hit_conn_attrs``.
 
@@ -66,6 +98,9 @@ class _StepStatics:
         node_attrs: The attribute tensor the prepared ``node`` was built from, so a second
             forward pass cannot silently reuse it.
         node: ``NodeOperands`` of ``node_attrs``; ``None`` until the first step.
+        scalars: :class:`_PreparedScalars` of this pass — the rank-0 ``0.0``/``1.0`` every
+            option callable that accepts a ``scalars`` mapping reuses instead of building its
+            own per-level literal.
     """
 
     __slots__ = (
@@ -77,6 +112,7 @@ class _StepStatics:
         "mask",
         "node_attrs",
         "node",
+        "scalars",
     )
 
     def __init__(
@@ -107,6 +143,9 @@ class _StepStatics:
         self.mask = output_rows
         self.node_attrs = None
         self.node = None
+        # The pass's rank-0 float constants, materialised here (the entry block of the pass)
+        # so no level and no repeated query pays a ``constant`` op for them.
+        self.scalars = _PreparedScalars()
 
     def node_operands(
         self, genome: "BaseGenome", node_attrs: evoxc.SymbolicTensor
@@ -117,6 +156,11 @@ class _StepStatics:
         to the evaluated row count: a column read, an option-id cast and an option mask are all
         row-local, so tiled row ``p * samples + j`` reads the copy of individual ``p`` and the
         level/tick loop still receives exactly the operands it used to prepare for itself.
+
+        The pass's :class:`_PreparedScalars` are passed through
+        :func:`..window.by_samples` with the rest of the bundle: the record carries no
+        ``shape``, so that expansion returns it untouched and the rank-0 constants stay the
+        single pair the whole pass reuses.
 
         Args:
             genome: The genome whose node gene reads the attributes.
@@ -133,7 +177,7 @@ class _StepStatics:
         if self.node is None:
             self.node_attrs = node_attrs
             pop_size = int(node_attrs.shape[0])
-            prepared = genome.node_gene.prepare(node_attrs, self.mask)
+            prepared = genome.node_gene.prepare(node_attrs, self.mask, self.scalars)
             self.node = evoxc.tree_map(
                 lambda leaf: by_samples(leaf, self.samples, pop_size), prepared
             )

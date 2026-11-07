@@ -76,6 +76,14 @@ class _PreparedPass(NamedTuple):
     capture-eligible body, which reads no depth bound and no counter, so ``limit`` and ``one``
     are ``None`` there; every other pass (the host leg, any tiled batch, and any ``xla`` pass)
     keeps both and walks them in one ``evoxc.while_loop``.
+
+    ``level_masks`` is the sweep's per-level update mask, one ``(rows, N) bool``
+    ``node_level == level`` comparison per unrolled ``level = 1 .. max_depth``, compared against
+    the expanded ``node_level`` of this very pass. They are prepared here — once per pass, in
+    the entry block — so a repeated query (a rollout asks one payload ``max_step`` times) pays
+    no ``equal`` and no ``int32`` level constant per level; the loop leg derives its mask from
+    the carried rank-0 counter instead, which is genuinely per iteration, so there it is the
+    empty tuple ``()``.
     """
 
     node_attrs: evoxc.SymbolicTensor
@@ -89,6 +97,7 @@ class _PreparedPass(NamedTuple):
     one: evoxc.SymbolicTensor | None
     seed_pad: SeedPad
     sweep: bool
+    level_masks: tuple
 
 
 #: Backends that must not carry the statically unrolled sweep. The ``xla`` leg's compiler
@@ -359,9 +368,11 @@ class DefaultGenome(BaseGenome):
         Everything :meth:`forward` computes once — the padding-safe node attributes, the
         ``_StepStatics`` of the value window (with its node operand bundle forced here, so the
         level loop never traces it), the depth bound and the level loop's rank-0 counter (both
-        loop-leg only: the sweep reads neither), the expanded ``node_level``, the
-        read-out of the schedule and the ``NaN`` block of the value seed — so
-        :meth:`forward_prepared` can run once per query on the same payload.
+        loop-leg only: the sweep reads neither), the expanded ``node_level``, the read-out of
+        the schedule, the ``NaN`` block of the value seed and (sweep only) the per-level update
+        masks — so :meth:`forward_prepared` can run once per query on the same payload.
+        Nothing a query reads is derived per query: the sweep's level masks are the
+        ``node_level == level`` comparisons of this pass, hoisted out of the unrolled body.
 
         Args:
             state: Host configuration container.
@@ -417,6 +428,8 @@ class DefaultGenome(BaseGenome):
         # asks for the loop even at ``samples == 1`` -- as the least-bad spelling, not as a fix
         # (it still crashes in 2 of 3 trials).
         sweep = _static_sweep(state, samples)
+        # The schedule's levels at the evaluated row count: the sweep's comparison base.
+        node_level = by_samples(transformed.node_level, samples, pop_size)
         return _PreparedPass(
             node_attrs=prepared_attrs,
             statics=statics,
@@ -424,7 +437,7 @@ class DefaultGenome(BaseGenome):
             # of the static ``max_depth`` ceiling: it is a loop bound derived from the schedule
             # alone, not data.
             limit=None if sweep else self._depth_limit(transformed),
-            node_level=by_samples(transformed.node_level, samples, pop_size),
+            node_level=node_level,
             samples=samples,
             pop_size=pop_size,
             max_nodes=max_nodes,
@@ -437,6 +450,17 @@ class DefaultGenome(BaseGenome):
                 kernel_mode(state), self.num_inputs, max_nodes, pop_size * samples
             ),
             sweep=sweep,
+            # The sweep's update masks, compared once per pass instead of once per query (the
+            # same comparison on the same operand); the loop leg reads ``()`` and derives its
+            # mask from the carried counter.
+            level_masks=(
+                tuple(
+                    evoxc.equal(node_level, _i32(level))
+                    for level in range(1, self.max_depth + 1)
+                )
+                if sweep
+                else ()
+            ),
         )
 
     def forward_prepared(
@@ -559,7 +583,10 @@ class DefaultGenome(BaseGenome):
         """Accelerator spelling of the level sweep: ``level = 1 .. max_depth``, unrolled.
 
         One :meth:`._node_step` per level, traced at Python trace time, so the graph holds
-        ``max_depth`` copies of the level step and *no* region op at all. On IREE that is what
+        ``max_depth`` copies of the level step and *no* region op at all. The level's update
+        mask is not derived here either: :meth:`prepare_pass` compared ``node_level`` against
+        every level once per pass, so a query re-reads ``prepared.level_masks[level - 1]`` and
+        emits neither the ``equal`` nor its int32 level constant. On IREE that is what
         keeps the pass on the device: a dispatch-bearing ``stablehlo.while`` is lowered to a
         host ``cf`` loop with one submission per trip, and a nested region re-stages its bound
         on every enclosing iteration, whereas this body is a single capture-eligible basic
@@ -610,7 +637,7 @@ class DefaultGenome(BaseGenome):
                 prepared.node_attrs,
                 prepared.statics,
                 values,
-                evoxc.equal(prepared.node_level, _i32(level)),
+                prepared.level_masks[level - 1],
             )
         return values
 
