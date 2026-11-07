@@ -19,8 +19,8 @@ run, so the plain and the grouped route refuse a mismatched centre with one word
 The route is the **accelerator leg's** shape and the host leg's rejected one: :func:`group_size`
 answers ``k = 1`` for a state whose ``kernel_mode`` is ``"host"``, so :func:`for_state` hands the
 numpy pipeline its plain digest unchanged and the CPU leg's dispatch count, wall time and peak
-RSS do not move, while a device leg groups at :data:`ACCELERATOR_GROUP` and halves the per-call
-launch count.
+RSS do not move, while a device leg groups up to :data:`ACCELERATOR_GROUP` centre rows per call
+and cuts the per-call launch count by up to that factor.
 The reason is the two legs' cost laws, not a preference: ``measure`` is *sort/bandwidth* bound on
 the reference interpreter, where the ``k``-times wider ``(k * P, 2M + 1)`` merge intermediates
 cost more than the dispatches they save (``CONTEXT.md``, ``## Grouped route``), and
@@ -202,11 +202,16 @@ def _repeat(block: evoxc.SymbolicTensor, group: int) -> evoxc.SymbolicTensor:
     return evoxc.concatenate((block,) * group, axis=0)
 
 
-#: Centre batches one grouped ``measure`` call covers on the accelerator leg: two halves the
-#: call count, and each launch then carries twice the rows, while the tiled digest grows only
-#: ``k`` times on the population axis — the trade a launch-bound device pays for and a
-#: bandwidth-bound one does not.
-ACCELERATOR_GROUP = 2
+#: Centre rows one grouped ``measure`` call covers on the accelerator leg: a call spanning up to
+#: eight of them cuts the per-call launch count to an eighth, which is the lever on a backend
+#: that charges every dispatch a fixed floor however little work it does, while the tiled digest
+#: grows only ``k`` times on the population axis — the trade a launch-bound device pays for and
+#: a bandwidth-bound one does not.
+#: The two other caps still bound the ``k * P`` centre width, and with it peak memory:
+#: ``k = max(1, min(ACCELERATOR_GROUP, GROUP_ROW_BUDGET // pop_size, species_size))``, so a
+#: 20-slot table with 20 species is two grouped calls plus a ``< 8``-row tail at ``pop <= 512``
+#: and five grouped calls at pop 1000, where ``4096 // 1000 = 4`` binds.
+ACCELERATOR_GROUP = 8
 #: Rows one grouped call may carry.  The grouping amortises a per-launch cost, never a per-element
 #: one, so a population wide enough that ``k`` batches would double the intermediates keeps
 #: today's dispatch count instead (:func:`group_size` then answers ``1``).
@@ -224,8 +229,11 @@ def group_size(state, pop_size: int, species_size: int | None = None) -> int:
             than slots would measure nothing, so the answer is capped at it.
 
     Returns:
-        int: ``1`` on the host leg (the plain route, unchanged), else at most
-        :data:`ACCELERATOR_GROUP` and at most ``GROUP_ROW_BUDGET // pop_size``.
+        int: ``1`` on the host leg (the plain route, unchanged), else
+        ``max(1, min(ACCELERATOR_GROUP, GROUP_ROW_BUDGET // pop_size, species_size))`` — ``8``
+        at pop 100 (where the constant binds, ``4096 // 100 = 40``), ``8`` at pop 500 (where the
+        row budget binds at exactly 8) and ``4`` at pop 1000 (``4096 // 1000``), i.e. 800 /
+        4 000 / 4 000 centre rows for a 20-slot table.
 
     Raises:
         ConfigError: If ``pop_size`` is not a positive ``int``, or if ``species_size`` is neither
@@ -239,9 +247,11 @@ def group_size(state, pop_size: int, species_size: int | None = None) -> int:
         and is a pure function of statics, so a caller can hoist it above its scan.
         ``k == 1`` is exactly today's route — :func:`for_state` then hands the caller the plain
         digest, so no op and no byte is added on the host leg.
-        The cap is what keeps the trade honest on a wide population: at ``pop_size >=
-        GROUP_ROW_BUDGET`` the grouped form would double the per-launch element volume to save a
-        launch, which is the losing direction.
+        The two caps are what keep the trade honest on a wide population: ``GROUP_ROW_BUDGET //
+        pop_size`` bounds the ``k * P`` centre width (and with it the ``(k * P, 2M + 1)`` merge
+        intermediates and the tiled digest's memory), and ``species_size`` bounds it by the slots
+        the caller can actually fill, so a slot count of ``1`` degenerates to ``1`` and a
+        population at or above ``GROUP_ROW_BUDGET`` keeps a single ``P``-row call.
     """
     if isinstance(pop_size, bool) or not isinstance(pop_size, int) or pop_size <= 0:
         raise ConfigError(
