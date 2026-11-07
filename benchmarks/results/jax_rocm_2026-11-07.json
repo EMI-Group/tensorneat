@@ -44,11 +44,11 @@
       "iree-rocm"
     ],
     "new_source": {
-      "path": "benchmarks/results/gpu_rocm_xla_2026-11-07.json",
-      "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+      "path": "benchmarks/results/gpu_rocm_xla_2026-11-07_grouped.json",
+      "git_commit": "03368c1ea03ce64749738ccfacda0e27b8c5b6a5",
       "session_utc": {
-        "start": "2026-11-07T10:29:06+00:00",
-        "end": "2026-11-07T10:32:39+00:00"
+        "start": "2026-11-07T13:58:25+00:00",
+        "end": "2026-11-07T14:02:04+00:00"
       }
     },
     "forward_sources": {
