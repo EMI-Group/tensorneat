@@ -9,4 +9,4 @@ tensorneat.genome.gene.node.base module
 .. automodule:: tensorneat.genome.gene.node.base
    :members:
    :show-inheritance:
-   :exclude-members: activation_ids, activation_masks, aggregation_ids, aggregation_masks, columns, zero
+   :exclude-members: activation_ids, activation_masks, aggregation_ids, aggregation_masks, columns, scalars, zero
