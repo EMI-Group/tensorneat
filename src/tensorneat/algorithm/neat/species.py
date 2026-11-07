@@ -417,8 +417,8 @@ class SpeciesController(StatefulBaseClass):
                 ``(S, ...)`` fields and expanding it is this method's job, not the
                 genome's; ``NEAT.tell`` builds the callable from
                 ``genome.prepare_distance`` (see :class:`._distance.DistanceRows`),
-                and ``genome.execute_distance`` no longer plugs in directly
-                because it re-sorts the population for every centre.
+                and ``genome.execute_distance`` cannot plug in directly because it
+                re-sorts the population for every centre.
             pop (Any, optional): The current population payload.  Defaults to the
                 payload read from ``state`` -- the ``POP_KEY`` entry, or the four
                 split ``SPLIT_POP_KEYS`` arrays; an explicit argument wins so a
