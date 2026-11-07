@@ -3,14 +3,16 @@
 The forward pass seeds the input rows once, then walks the depth levels — in one
 ``evoxc.while_loop`` whose trip count is derived from the schedule's ``node_level``, or as a
 statically unrolled ``level = 1 .. max_depth`` sweep. Which spelling a graph is traced with is
-:func:`._static_sweep`'s decision: the sweep on a non-tiled pass whose backend lowers it as one
-capture-eligible body with no host involvement (iree), the loop everywhere else — on IREE a
-``stablehlo.while`` carrying dispatches is lowered to a host ``cf`` loop with one submission per
-trip, and the ``xla`` leg is unreliable with either spelling: its compiler captures the sweep's
-single basic block as a HIP graph and SIGSEGVs inside ``libhsa-runtime64`` after one generation,
-while the loop's nested ``while`` is not capture-eligible and merely crashes less often (1 of 3
-trials survives at 21.45 ms/generation). An evolved network is usually 2-4 levels deep, so the
-``max_depth`` ceiling would otherwise spend most of a counted pass on rows that cannot update.
+:func:`._static_sweep`'s decision: the sweep on a non-tiled accelerator pass whose backend lowers
+it as one capture-eligible body (iree, and xla under the shipped
+``XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE`` workaround), the loop on the numpy
+interpreter and on every tiled batch. On IREE a ``stablehlo.while`` carrying dispatches is
+lowered to a host ``cf`` loop with one submission per trip, so the sweep is the faster spelling
+there; on xla the sweep's single basic block is captured as a HIP graph whose replay SIGSEGVs
+inside ``libhsa-runtime64`` unless command-buffer capture is restricted to ``WHILE``, which is
+why that backend keeps the loop by default (see :func:`._static_sweep`). An evolved network is
+usually 2-4 levels deep, so the ``max_depth`` ceiling would otherwise spend most of a counted
+pass on rows that cannot update.
 Both spellings run the shared window reduce of
 :class:`.base.BaseGenome` (:meth:`._node_step`), so the level step exists once.
 
@@ -100,15 +102,16 @@ class _PreparedPass(NamedTuple):
     level_masks: tuple
 
 
-#: Backends that must not carry the statically unrolled sweep. The ``xla`` leg's compiler
+#: Backends that must not carry the statically unrolled sweep. On ``xla`` the ROCm plugin
 #: captures the sweep's rollout body — one capture-eligible basic block — as a HIP graph and
 #: replays it through ``hipGraphLaunch``, which SIGSEGVs inside ``libhsa-runtime64`` after one
-#: completed generation (2 of 2 trials; the launch budget shrinks with the captured body's
-#: command count and a smaller ``max_depth`` does not help). The loop spelling's nested ``while``
-#: is not capture-eligible, which makes it *less* crash-prone rather than safe: 21.45
-#: ms/generation and 5 generations in 1 of 3 trials, exit 139 after 4 generations in the other
-#: two. Only ``XLA_FLAGS=--xla_gpu_enable_command_buffer=`` makes that leg reliable, so the loop
-#: is selected here as the least-bad spelling, never as a fix.
+#: completed generation (observed on an earlier tree and evoxc snapshot, intermittent since).
+#: The shipped workaround is ``XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE``, which takes
+#: FUSION capture away from that body and costs no measurable forward-pass time; ``=FUSION``
+#: still crashes, ``=""`` also completes on this tree, and the committed 2026-11-07 accelerator
+#: record is an 18/18 green matrix with the ``WHILE`` value. The gate keeps the loop as the
+#: ``xla`` default so the leg cannot be a crash lottery; ``iree`` is not here because its
+#: compiler never captures the sweep as a graph.
 _SWEEP_UNSAFE_BACKENDS = ("xla",)
 
 
@@ -131,12 +134,12 @@ def _static_sweep(state: Any, samples: int) -> bool:
       (``max_step=200``, pop 100) at the shipped ``max_depth=16``. A hybrid static prefix plus a
       data-dependent tail is rejected, not shipped: 4 static levels plus the tail loop measures
       73.05 ms, *worse* than the pure sweep's 60.48, because the nested tail loop re-stages its
-      bound on every enclosing iteration. On ``xla`` the sweep is a hard crash — its captured
-      HIP graph SIGSEGVs after one completed generation (2 of 2 trials, at any ``max_depth``) —
-      and the loop, whose nested ``while`` is not capture-eligible, is only the *least-bad*
-      spelling there: 21.45 ms/generation and 5 generations in 1 of 3 trials, with the other two
-      crashing after 4. ``XLA_FLAGS=--xla_gpu_enable_command_buffer=`` is the only reliable fix,
-      so no working ``xla`` leg is claimed.
+      bound on every enclosing iteration. On ``xla`` this same capture-eligible body is replayed
+      as a HIP graph that SIGSEGVs inside ``libhsa-runtime64`` after one completed generation
+      unless command-buffer capture is restricted to ``WHILE``, so that backend takes the loop
+      by default: the shipped ``XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE`` workaround
+      costs no measurable time and the committed 2026-11-07 accelerator record is an 18/18 green
+      matrix with it (``=FUSION`` still crashes; ``=""`` also completes on this tree).
 
     A state that carries no ``backend`` entry — a bare ``State()`` in a unit test — is not the
     ``xla`` leg and therefore keeps the sweep, as does every backend other than ``xla``.
@@ -424,9 +427,9 @@ class DefaultGenome(BaseGenome):
         # ``P * samples = 250 000`` rows (func-fit) on iree+rocm, so a tiled batch keeps the
         # ``while_loop`` verbatim -- do not "simplify" this gate away. The backend is the
         # other: ``xla`` captures the sweep's basic block as a HIP graph and SIGSEGVs after one
-        # generation, while the loop's nested ``while`` is not capture-eligible, so that backend
-        # asks for the loop even at ``samples == 1`` -- as the least-bad spelling, not as a fix
-        # (it still crashes in 2 of 3 trials).
+        # generation unless command-buffer capture is restricted to ``WHILE``, so that backend
+        # keeps the loop by default (the shipped ``XLA_FLAGS`` workaround is described on
+        # ``_SWEEP_UNSAFE_BACKENDS``).
         sweep = _static_sweep(state, samples)
         # The schedule's levels at the evaluated row count: the sweep's comparison base.
         node_level = by_samples(transformed.node_level, samples, pop_size)
@@ -530,11 +533,10 @@ class DefaultGenome(BaseGenome):
         the inner bound is re-staged (``queue.alloca`` + ``queue.copy`` + fence wait + load) on
         every enclosing iteration even when the inner loop then runs zero trips (~230 us per
         query end to end). That is why a non-tiled accelerator pass prefers
-        :meth:`_level_sweep`. On the ``xla`` leg the sweep's captured HIP graph SIGSEGVs after
-        one generation (2 of 2 trials) and this loop's nested ``while`` is not
-        capture-eligible, so the loop is the least-bad spelling there — 21.45 ms/generation, and
-        it still SIGSEGVs in 2 of 3 trials, the third surviving 5 generations (see
-        :func:`._static_sweep`).
+        :meth:`_level_sweep`. On the ``xla`` leg the sweep's captured HIP graph SIGSEGVs inside
+        ``libhsa-runtime64`` unless command-buffer capture is restricted to ``WHILE``, so this
+        loop is that backend's default spelling; the shipped ``XLA_FLAGS`` workaround is
+        described on :data:`_SWEEP_UNSAFE_BACKENDS` (see also :func:`._static_sweep`).
 
         Args:
             state: Host configuration container.
@@ -600,10 +602,10 @@ class DefaultGenome(BaseGenome):
         cost that many rows: 16.0 -> 51.0 ms/generation at ``P * samples = 250 000``, iree+rocm)
         queried once per generation, where the loop runs the batch's real depth. On ``xla`` this
         same capture-eligible body is replayed as a HIP graph by the ROCm plugin and SIGSEGVs
-        inside ``libhsa-runtime64`` after one completed generation (2 of 2 trials, at any
-        ``max_depth``), so that backend selects the loop as the least-bad spelling: 21.45
-        ms/generation and 5 generations in 1 of 3 trials, the other two crashing after 4 (all
-        four facts in :func:`._static_sweep`).
+        inside ``libhsa-runtime64`` after one completed generation unless command-buffer capture
+        is restricted to ``WHILE``, so that backend keeps the loop by default and the shipped
+        ``XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE`` workaround is what makes the sweep
+        safe there (see :data:`_SWEEP_UNSAFE_BACKENDS` and :func:`._static_sweep`).
 
         Same values as :meth:`_level_loop`, bit for bit:
 
