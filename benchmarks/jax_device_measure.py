@@ -69,7 +69,9 @@ Subcommands
 one ``run`` per case strictly sequentially in a fresh process, writes one document
 (``schema``, ``meta``, ``records``) and with ``--out REPORT`` refreshes that report's
 marked block (exit 0 all ok / 1 any error / 2 unrenderable); ``render`` re-renders the
-block from an existing record without measuring; ``--list`` prints the platforms, cases,
+block from an existing record without measuring, and with ``--persist-sources`` stores the
+source records it resolved in that record's ``meta`` (verified to change nothing else), so
+a later bare render reproduces the block; ``--list`` prints the platforms, cases,
 sources and defaults on a numpy-free interpreter.
 
     python3 benchmarks/jax_device_measure.py --list
@@ -699,6 +701,55 @@ def _read_sources(paths: dict[str, Path]) -> dict[str, Any]:
     }
 
 
+def _persist_sources(path: Path, document: dict[str, Any], blocks: dict[str, Any]) -> str | None:
+    """Store the resolved source blocks in ``meta``; return an error message or ``None``.
+
+    ``records`` and every number stay byte-identical: only ``meta.new_source`` and
+    ``meta.forward_sources`` are written, and the write is verified by re-reading the file
+    and comparing every other top-level key against what was loaded and the two stored
+    blocks against what was resolved. A failed verification leaves the file as written and
+    refuses to render, because a record whose rows moved is not the measurement it was any
+    more.
+    """
+    meta = document.get("meta")
+    meta = dict(meta) if isinstance(meta, dict) else {}
+    meta["new_source"] = blocks["new_source"]
+    meta["forward_sources"] = blocks["forward_sources"]
+    updated = dict(document)
+    updated["meta"] = meta
+    path.write_text(json.dumps(updated, indent=2) + "\n", encoding="utf-8")
+    try:
+        reloaded = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return (f"--persist-sources wrote {display_path(path)} but it cannot be re-read: "
+                f"{type(exc).__name__}: {exc}")
+    before = {key: value for key, value in document.items() if key != "meta"}
+    after = {key: value for key, value in reloaded.items() if key != "meta"}
+    if before != after:
+        changed = sorted(
+            key for key in set(before) | set(after) if before.get(key) != after.get(key)
+        )
+        return (
+            f"--persist-sources changed more than meta in {display_path(path)} (top-level "
+            f"keys {changed}); the record is no longer the measurement it was — restore it "
+            "from git and do not render it"
+        )
+    stored = reloaded.get("meta") if isinstance(reloaded.get("meta"), dict) else {}
+    missed = [name for name in ("new_source", "forward_sources")
+              if stored.get(name) != blocks[name]]
+    if missed:
+        return (
+            f"--persist-sources did not store the resolved sources in the meta of "
+            f"{display_path(path)} (keys {missed}); the record is no longer the measurement "
+            "it was — restore it from git and do not render it"
+        )
+    print(
+        f"persisted meta.new_source/meta.forward_sources in {display_path(path)}: only meta "
+        "changed, records/numbers untouched"
+    )
+    return None
+
+
 # --- The document -----------------------------------------------------------------------
 
 
@@ -1098,7 +1149,7 @@ def _comparability_section(document: dict[str, Any]) -> list[str]:
         "`PRNGKey` versus evoxc splitmix64), so their search trajectories differ by design "
         "and fitness is never compared here (`test/parity/` owns numerical fidelity).",
         f"- Not a lockstep comparison: the new-side columns come from `{display_path(new_path)}`"
-        " — an earlier session on the same device at a different tree — so each ratio is a "
+        " — a different session on the same device at a different tree — so each ratio is a "
         "per-generation ratio of two sessions, not one interleaved run.",
         "- One repeat per row: the per-row `min – max` is the uncertainty measure and the "
         "medians are point estimates, so a small ratio difference is noise, not a result.",
@@ -1156,11 +1207,21 @@ def render_block(
 
 
 def render_command(args: argparse.Namespace) -> int:
-    """``render``: re-render the measured block from a record (no measurement, no probe)."""
+    """``render``: re-render the measured block from a record (no measurement, no probe).
+
+    ``--persist-sources`` first writes the resolved source blocks into the record's ``meta``
+    (nothing else), so a later bare render reproduces this block against the same records
+    instead of the defaults.
+    """
     try:
         document = read_document(args.json)
         paths = _resolve_paths(args.new_record, args.forward_old, args.forward_new,
                                document.get("meta") or {})
+        if args.persist_sources:
+            error = _persist_sources(args.json, document, _read_sources(paths)["blocks"])
+            if error:
+                raise RenderError(error)
+            document = read_document(args.json)
         splice_block(args.out, render_block(document, record_path=args.json, paths=paths),
                      begin_marker=BEGIN_MARKER, end_marker=END_MARKER)
     except RenderError as exc:
@@ -1489,6 +1550,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     render.add_argument("--out", type=Path, default=DEFAULT_REPORT, metavar="REPORT",
                         help="report whose marked block is replaced (default: %(default)s)")
     _add_source_arguments(render, defaults=False)
+    render.add_argument(
+        "--persist-sources", action="store_true",
+        help="store the resolved source records in the record's meta (`new_source`, "
+             "`forward_sources`) before rendering — verified to change nothing but meta — so "
+             "a later bare render reproduces this block against the same records")
 
     subparsers.add_parser("list", help="print the platforms, the cases and the defaults")
 
