@@ -44,7 +44,7 @@ Read statically, never by running a device: count `stream.cmd.dispatch` per `cf`
 Reference geometry `pop 100`, `species_size=20`, `survival_threshold=0.01`, `max_nodes=50`, `max_conns=100`, seed 42; one timestep is `^bb5` (the genome's per-query prelude) + `^bb7`·L (its level body) + `^bb8` (this node's step).
 `CartPole` costs **21 dispatches per timestep** at `L = 3` (`^bb5` 3 + `^bb7` 4 + `^bb8` **6**), i.e. **4 200** rollout dispatches per generation at `max_step=200`, in a graph of **446** static sites.
 `^bb8`'s 6: the genome's logit read-out materialised inside the step, one fused row region (slices, physics, rotation, lane selects, Euler add, force select, reward chain), the death fold, the NaN row sum with its `i1` compare, and the freeze select — a floor, because a reduction cannot fuse into another iteration space, the `i1` compare feeds the fused region, and `alive`/`reward` are loop-carried values written first.
-numpy control: 30 994 executed IR ops per generation (the three baked row-assembly constants add 3) and no wall-time or peak-RSS change — 253.35 ms per generation.
+numpy control: 30 792 executed IR ops per generation (the three baked row-assembly constants add 3) and no change outside build noise in wall time or peak RSS.
 
 ### Pendulum (`pendulum.py`)
 Gym `Pendulum-v1`, where `theta=0` is **upright**, so the cost is smallest exactly at the unstable equilibrium.
