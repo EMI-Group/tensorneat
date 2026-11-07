@@ -34,9 +34,10 @@ must stay aligned.
 The xla target's plugin (``--pjrt-plugin``, forwarded by ``matrix`` to every row)
 -------------------------------------------------------------------------------
 The plugin path goes into ``compile_options["plugin_path"]`` **and** into
-``EVOXC_PJRT_PLUGIN``, because the adapter's availability probe reads only the
-variable (resolution, fingerprint and that rule live in
-``benchmarks/gpu_targets.py``). Resolution order is ``--pjrt-plugin`` then
+``EVOXC_PJRT_PLUGIN``: the compile option is what loads it, and the variable pins
+the same ``.so`` for any option-less discovery call (evoxc itself would also find
+an installed ``jax_plugins/*/*_plugin.so``; resolution, fingerprint and that rule
+live in ``benchmarks/gpu_targets.py``). Resolution order is ``--pjrt-plugin`` then
 ``$EVOXC_PJRT_PLUGIN``; without one an xla row is a named ``error`` row and
 ``matrix`` exits 2 before measuring -- never a fallback, never a made-up number.
 
@@ -629,8 +630,8 @@ def measure_row(args: argparse.Namespace) -> dict[str, Any]:
         the failure. Never raises for a measurement failure. A target of
         :data:`gpu_targets.PJRT_TARGETS` resolves its PJRT plugin first -- the path
         goes into the plan's ``compile_options["plugin_path"]`` *and* into
-        :data:`gpu_targets.PJRT_ENV_VAR`, which is what the adapter's
-        ``check_available`` probe reads -- and an unresolvable plugin is a named
+        :data:`gpu_targets.PJRT_ENV_VAR`, which pins the same ``.so`` for any
+        option-less discovery call -- and an unresolvable plugin is a named
         ``error`` row, never a fallback to another backend.
 
         The row also records the ``XLA_FLAGS`` value it ran with
@@ -664,7 +665,7 @@ def measure_row(args: argparse.Namespace) -> dict[str, Any]:
         # Nothing was measured and nothing fell back: the message is the record.
         return {**record, "status": "error", "error": str(exc), "plugin_error": True}
     if plugin is not None:
-        os.environ[PJRT_ENV_VAR] = plugin  # read by the adapter's check_available probe
+        os.environ[PJRT_ENV_VAR] = plugin  # pins option-less discovery to the same .so
         record["pjrt_plugin"] = fingerprint_plugin(plugin)
     plan = _target_plan(args.target, args, plugin)
     record.update(
@@ -777,9 +778,9 @@ def _child_command(
 def _child_environment(plugin: str | None, xla_flags: str | None) -> dict[str, str]:
     """The environment of a row subprocess: this one, plus the resolved plugin.
 
-    The child re-resolves the plugin from its own ``--pjrt-plugin`` argv, but the
-    variable is exported too because ``XlaBackend.check_available`` reads it during
-    backend registration and never sees the build's compile options.
+    The child re-resolves the plugin from its own ``--pjrt-plugin`` argv, and the
+    variable is exported too so any option-less discovery call in that process pins
+    the same ``.so`` the row fingerprints.
 
     ``xla_flags`` applies the workaround rule (:func:`_effective_xla_flags`): the
     value is exported as ``XLA_FLAGS`` for an xla target, an empty value removes the
@@ -1059,7 +1060,8 @@ def _add_measurement_arguments(parser: argparse.ArgumentParser) -> None:
         "--pjrt-plugin", default=None, metavar="PATH",
         help=(f"PJRT C API plugin .so (exporting GetPjRtApi) that the xla targets "
               f"drive: it becomes compile_options['plugin_path'] and is exported as "
-              f"{PJRT_ENV_VAR} for the adapter's availability probe. Resolution order: "
+              f"{PJRT_ENV_VAR}, which pins it for option-less discovery calls. Resolution "
+              f"order: "
               f"this flag, then ${PJRT_ENV_VAR}; an xla target with neither is a named "
               "error, never a fallback to another backend"))
     parser.add_argument(

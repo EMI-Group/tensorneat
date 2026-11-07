@@ -20,14 +20,16 @@ plain data, never as a code path --
     either a real measurement or a loud ``error`` row, never a fallback to
     another backend.
 
-Why the environment variable matters
-------------------------------------
-``evoxc.backends.registry.get("xla")`` runs ``XlaBackend.check_available()``,
-which calls ``_load_plugin()`` with **no options** and therefore reads only
-``EVOXC_PJRT_PLUGIN`` (and the well-known paths). The ``plugin_path`` compile
-option takes precedence in every later discovery call but cannot satisfy that
-first probe, so the caller must wire **both**: ``compile_options["plugin_path"]``
-for the build and ``EVOXC_PJRT_PLUGIN`` in the measuring process's environment.
+Why the environment variable is wired anyway
+--------------------------------------------
+``evoxc`` resolves a PJRT plugin at ``compile``/``load`` with the precedence
+``plugin_path`` -> ``EVOXC_PJRT_PLUGIN`` -> fixed well-known paths -> an installed
+``jax_plugins/<platform>/<name>_plugin.so`` (``EVOXC_PJRT_PLUGIN_DISCOVERY=0``
+opts out of the last step), and registering the ``xla`` backend probes nothing —
+so ``compile_options["plugin_path"]`` alone is enough to build and run a row.
+This harness still exports ``EVOXC_PJRT_PLUGIN`` beside it: the variable pins the
+same ``.so`` for any option-less discovery call, so a row cannot silently measure
+a plugin other than the one it fingerprints.
 
 The ROCm command-buffer workaround (``XLA_WORKAROUND_FLAGS``)
 ------------------------------------------------------------

@@ -37,21 +37,18 @@ copied back with an explicit ``.to(Device("cpu", 0))`` -- evoxc never moves data
 across the run boundary by itself. Agreement is the maximum absolute difference
 over every output leaf; a graph *matches* when that value is ``<= --tolerance``.
 
-The load-bearing gotcha
------------------------
-``XlaBackend.check_available()`` is called on every backend lookup and takes
-**no options**: it calls ``_load_plugin()`` with no argument, so it reads only
-``EVOXC_PJRT_PLUGIN`` (or a well-known path under ``/usr/local/lib`` etc.), never
-``compile_options["plugin_path"]``. A build that sets only that option therefore
-still raises::
-
-    evoxc.core.errors.BackendError: the xla adapter requires a PJRT C API
-    plugin library (.so exporting GetPjRtApi) and none was found. ...
-
-This probe therefore exports ``EVOXC_PJRT_PLUGIN`` from the resolved
-``--pjrt-plugin`` value *and* passes the same path as ``plugin_path`` for
-compile/load. Nothing falls back to another backend, and no path is invented.
-
+Why the variable is wired here
+------------------------------
+``evoxc`` resolves a PJRT plugin at ``compile``/``load`` with the precedence
+``plugin_path`` -> ``EVOXC_PJRT_PLUGIN`` -> fixed well-known paths -> an installed
+``jax_plugins/<platform>/<name>_plugin.so`` (``EVOXC_PJRT_PLUGIN_DISCOVERY=0``
+opts out of the last step), and registering the ``xla`` backend probes nothing,
+so ``compile_options["plugin_path"]`` alone drives the xla targets.
+This probe also exports ``EVOXC_PJRT_PLUGIN`` from the resolved ``--pjrt-plugin``
+value: the environment pin keeps every option-less discovery call on the plugin
+this tool fingerprints, so a run that names neither source exits 2 instead of
+measuring whichever ``.so`` happens to be installed. Nothing falls back to
+another backend, and no path is invented.
 Exit codes
 ----------
 0 -- both graphs match within ``--tolerance`` (usable as a smoke gate).
@@ -87,7 +84,7 @@ import numpy as np
 
 import evoxc
 
-#: The environment variable the adapter's ``check_available()`` probe reads.
+#: The environment variable that pins the plugin for option-less discovery calls.
 PJRT_ENV_VAR = "EVOXC_PJRT_PLUGIN"
 #: The flag that names the plugin for this probe (wins over the environment).
 PJRT_FLAG = "--pjrt-plugin"
@@ -253,8 +250,8 @@ def max_abs_difference(
 
 def run_probe(args: argparse.Namespace, plugin: str) -> int:
     """Run both graphs on both legs, print one line each, and return the exit code."""
-    # The load-bearing wiring: the availability probe reads only this variable,
-    # so it must carry the same plugin that ``plugin_path`` names.
+    # The extra wiring: the variable pins the same plugin that ``plugin_path``
+    # names, for any discovery call that runs without compile options.
     os.environ[PJRT_ENV_VAR] = plugin
     fingerprint = fingerprint_plugin(plugin)
 
@@ -330,8 +327,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             f"the plugin is also taken from ${PJRT_ENV_VAR}; {PJRT_FLAG} wins. "
-            "The adapter's availability probe reads only the environment "
-            "variable, so this tool exports it from the resolved path."
+            "The resolved path is exported into the environment too, so no "
+            "discovery call can pick a different .so."
         ),
     )
     parser.add_argument(

@@ -1,10 +1,10 @@
 # numpy reference backend — per-generation cost across the three measured passes
 
 > **Hand-maintained record** of three measured passes on the `numpy` reference interpreter.
-> Pass 1 is the op-count pass (`a697531` → the tree the pass was recorded on, `f619f46`), pass 2 is the tiled func-fit evaluate plus the RL rollout hoist (`ce5bb88` → `90d97b4`), and pass 3 is the dependency-side A/B of the pinned `evoxc` tag against the numpy-interpreter performance pass on the evoxc task branch (`fe85a534`), measured at `3437e556` whose `src/` is byte-identical to `63f0fc67`; each pass keeps its own measured pair, its own commits and its own protocol below.
-> `RESULTS.md` is the *generated* old-vs-new harness report rendered from `results/authoritative.json`, re-measured on the merged tree at `63f0fc67` on 2026-11-06, so its new-side rows carry pass 1, pass 2 and the search-quality fixes and are no longer stale.
+> Pass 1 is the op-count pass (`a697531` → the tree the pass was recorded on, `f619f46`), pass 2 is the tiled func-fit evaluate plus the RL rollout hoist (`ce5bb88` → `90d97b4`), and pass 3 is the dependency-side A/B of the pre-pass `evoxc` revision (git tag `v0.1.1`, `be145ee`) against the numpy-interpreter performance pass the tree now pins (`fe85a534`, upstream `main`'s tip), measured at `3437e556` whose `src/` is byte-identical to `63f0fc67`; each pass keeps its own measured pair, its own commits and its own protocol below.
+> `RESULTS.md` is the *generated* old-vs-new harness report rendered from `results/authoritative.json`, re-measured on the merged tree at `63f0fc67` on 2026-11-06, so its new-side rows carry pass 1, pass 2 and the search-quality fixes and are no longer stale — on the pre-pass `evoxc` revision, which is the pin that record names and therefore 1.07–2.25× slower per generation than this tree's.
 > This file is not a re-verdict: it holds the measured before/after pair of each pass — pass 1 and pass 3 with both cells taken in one session, alternating trees so drift cancels, pass 2 with an interleaved same-session no-regression control beside a cross-session `before` column that is labelled indicative.
-> Pass 3's headline is the reverse of a null result: the same graph, at the same executed op count, runs **1.07–2.25× faster per generation** (1.56–2.25× on the three dispatch-bound cases) on the post-pass interpreter at **12–37 % lower peak RSS**, and the win lives on an evoxc task branch, so it needs an evoxc release beyond the pinned `v0.1.1` before a `uv sync` user sees it.
+> Pass 3's headline is the reverse of a null result: the same graph, at the same executed op count, runs **1.07–2.25× faster per generation** (1.56–2.25× on the three dispatch-bound cases) on the post-pass interpreter at **12–37 % lower peak RSS**, and that pass is on upstream `evoxc` `main`, which `[tool.uv.sources]` pins at `fe85a534` (`4852ebed`), so a `uv sync` user gets this leg's numbers.
 
 ## Which tree each record belongs to
 
@@ -301,17 +301,17 @@ such rounds.
 - `RESULTS.md` / `results/authoritative.json` held the `ebeaf1f8` record, which predates this pass, while this pass was measured; they have since been re-measured on the merged tree (`63f0fc67`, 2026-11-06), a tree that includes this pass, so the current committed report supersedes the `before` column above instead of repeating it.
 - `results/fix_after.json` is git-ignored scratch, not committed evidence.
 
-## Pass 3 — dependency side (pinned `v0.1.1` tag vs the numpy-interpreter pass at `fe85a534`)
+## Pass 3 — dependency side (pre-pass `v0.1.1` revision vs the pinned numpy-interpreter pass `fe85a534`)
 
 Protocol: `3437e556` in the worktree (`src/`, `benchmarks/cases.py` and `benchmarks/harness/` are byte-identical to `63f0fc67`, so this is the merged tree), `backend="numpy"`, new side only, one fresh process per cell, `--generations 150 --warmup 3 --repeats 1` at seed 42, `--threads 0`, cells strictly sequential, and per case the cell order **A B B A** so each leg is measured on both sides of the other (round 1 = A then B, round 2 = B then A).
-The box was idle for three of the four cases (per-run `loadavg_start` 0.28–1.97); the `xor_p500` window ran under outside load of 2–3 and both legs sat inside it, the pinned cells reading `loadavg_start`/`loadavg_end` 0.56/3.05 and 2.35/1.97 against the pass cells' 3.05/2.60 and 2.60/2.35.
+The box was idle for three of the four cases (per-run `loadavg_start` 0.28–1.97); the `xor_p500` window ran under outside load of 2–3 and both legs sat inside it, the pre-pass cells reading `loadavg_start`/`loadavg_end` 0.56/3.05 and 2.35/1.97 against the post-pass cells' 3.05/2.60 and 2.60/2.35.
 Each leg owns a venv over one shared base (identical CPython 3.12.3 and numpy 2.5.4, the lock's 3.12 numpy), installed from a `git archive` copy of its tree with `uv pip install --no-deps --reinstall`:
-**leg A** is the pinned dependency `[tool.uv.sources]` resolves — `evoxc` git tag `v0.1.1` (`be145ee`, what `uv.lock` records); **leg B** is the numpy-interpreter performance pass — evoxc task-branch tip `fe85a534` (`v0.1.1-127-gfe85a53`, 127 commits past `v0.1.1` and 93 past `main`, carrying `3c3c8e0` per-block dispatch plans + flat value store + static-result fast path + dead-value release, `5deca1b` the concrete-int dim fast path, `dda3ec0` the kernel hot path and `51d5829` the shared `Device('cpu', 0)`); **leg C** (control only) is `main` at `474bf72` (`v0.1.1-34-g474bf72`), the newest pure-`main` tree, measured here as the control that makes the pinned tag's number legible: a `main`-based checkout is exactly what a tag-versus-`HEAD` A/B of this dependency compares.
-All three dists report `evoxc 0.1.0` in their metadata, so each leg is identified by a sha256 over every `*.py` under the installed package: **`d0d1f4b4b7777f1b`** (150 files) pinned, **`5498cbc31b361688`** (153 files) branch tip, **`90b801c7bbc89a8d`** (151 files) `main`, and the recipe is below.
+**leg A** is the pre-pass revision — `evoxc` git tag `v0.1.1` (`be145ee`), which is what `[tool.uv.sources]` resolved when this pass ran; **leg B** is the numpy-interpreter performance pass — `fe85a534` (`v0.1.1-127-gfe85a53`, 127 commits past `v0.1.1`, upstream `main`'s tip and the revision the tree pins since `4852ebed`, carrying `3c3c8e0` per-block dispatch plans + flat value store + static-result fast path + dead-value release, `5deca1b` the concrete-int dim fast path, `dda3ec0` the kernel hot path and `51d5829` the shared `Device('cpu', 0)`); **leg C** (control only) is `474bf72` (`v0.1.1-34-g474bf72`), the `main` tip this session found, measured here as the control that makes the pre-pass revision's number legible: an up-to-date `main` as it stood that day is exactly what a tag-versus-`HEAD` A/B of this dependency compares.
+All three dists report `evoxc 0.1.0` in their metadata, so each leg is identified by a sha256 over every `*.py` under the installed package: **`d0d1f4b4b7777f1b`** (150 files) pre-pass, **`5498cbc31b361688`** (153 files) post-pass, **`90b801c7bbc89a8d`** (151 files) the older `main`, and the recipe is below.
 
 ### Headline
 
-| case | leg A — pinned `v0.1.1`<br>A1 · A2 (ms/gen) | leg B — branch tip `fe85a534`<br>B1 · B2 (ms/gen) | matched pairs<br>A1/B1 · A2/B2 | leg A mean / leg B mean | peak RSS A / B (MiB) | build A / B (s) | trajectory |
+| case | leg A — pre-pass `v0.1.1` (`be145ee`)<br>A1 · A2 (ms/gen) | leg B — pinned `fe85a534`<br>B1 · B2 (ms/gen) | matched pairs<br>A1/B1 · A2/B2 | leg A mean / leg B mean | peak RSS A / B (MiB) | build A / B (s) | trajectory |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `xor_p100` | 42.52 · 42.12 | 19.36 · 19.46 | 2.20× · 2.16× | **2.18×** (42.32 → 19.41) | 108.8 / 95.8–96.0 | 0.305–0.308 / 0.290–0.295 | bit-identical |
 | `xor_p500` | 115.06 · 114.52 | 73.03 · 74.08 | 1.58× · 1.55× | **1.56×** (114.79 → 73.56) | 191.3–191.5 / 119.4–120.5 | 0.467–0.487 / 0.380–0.387 | bit-identical |
@@ -319,24 +319,24 @@ All three dists report `evoxc 0.1.0` in their metadata, so each leg is identifie
 | `custom_pagie_p500` | 1250.56 · 1201.60 | 1119.99 · 1165.43 | 1.12× · 1.03× | **1.07×** (1226.08 → 1142.71) | 1293.1–1294.9 / 888.6–894.3 | 1.515–1.571 / 1.442–1.470 | bit-identical |
 
 **The dependency side carries 1.07–2.25× of this backend's per-generation cost — 1.56–2.25× wherever the graph is dispatch-bound.** Nothing in this repository changed between the cells — same `src/`, same seed, same case config, same 150 generations — so every millisecond in that column is the interpreter loop.
-The pass moves wall clock, peak RSS and build time in the same direction on every case, and the two rounds reverse the order without moving the verdict: the pinned tag's own three `xor_p100` cells (42.52, 42.12 and 41.31 in the control round below) span 3 % and `main` adds a fourth at 42.65, while the pass leg sits at 19.36–19.46.
+The pass moves wall clock, peak RSS and build time in the same direction on every case, and the two rounds reverse the order without moving the verdict: the pre-pass revision's own three `xor_p100` cells (42.52, 42.12 and 41.31 in the control round below) span 3 % and the older `main` adds a fourth at 42.65, while the post-pass leg sits at 19.36–19.46.
 The size of the win tracks how much of an op is *dispatch* rather than arithmetic: `xor_p100` and `cartpole_p100` are thousands of small tensor ops per generation and gain 54–56 %, `xor_p500` gains 36 %, and `custom_pagie_p500` — whose ops run on 250 000-row arrays — gains only 7 % even though it executes the same kind of graph.
 Peak RSS follows the pass's dead-value release rather than its dispatch plans: −12 % on the two pop-100 cases, −37 % on `xor_p500` (191.3 → 120.5 MiB) and −31 % on `custom_pagie_p500` (1293.1 → 888.6 MiB), i.e. the cases that keep the most live SSA values gain the most memory.
-Build time falls too (0.487 → 0.380 s on `xor_p500`, 1.571 → 1.442 s on pagie, 0.441 → 0.336 s on cartpole): the branch also removed a per-op `Device('cpu', 0)` allocation on the `Tensor` path.
+Build time falls too (0.487 → 0.380 s on `xor_p500`, 1.571 → 1.442 s on pagie, 0.441 → 0.336 s on cartpole): the pass also removed a per-op `Device('cpu', 0)` allocation on the `Tensor` path.
 
-### The control: why a tag-vs-`main` A/B reads null
+### The control: why a tag-vs-`main` A/B read null while the pass was unreleased
 
-Leg C is the tree the newest pure-`main` commit provides (`474bf72`, 34 commits past the tag) and it carries **none** of the pass: `dispatch_plan`/`_BlockPlan`, the flat `_values` store and the dead-value release first appear at `fe85a534`, 93 commits further up the task branch.
+Leg C is the tree `main`'s tip provided that day (`474bf72`, 34 commits past the tag) and it carries **none** of the pass: `dispatch_plan`/`_BlockPlan`, the flat `_values` store and the dead-value release first appear at `fe85a534`, 93 commits further up the one line of history that has since become `main`'s tip.
 Measured in this same session, minutes apart, with `xor_p100` and `xor_p500` in both orders:
 
-| control pair (cell order) | pinned `v0.1.1` | `main` `474bf72` | `main` vs pinned |
+| control pair (cell order) | pre-pass `v0.1.1` | `main` `474bf72` | `main` vs pre-pass |
 | --- | --- | --- | --- |
 | `xor_p100` (C1 then A3) | 41.31 (A3) · 42.52 (A1) | 42.65 | +0.3 % vs A1, +3.2 % vs A3 |
 | `xor_p500` (A3 then C1) | 112.70 (A3) | 112.93 | +0.2 % |
 
-So `main` and the pinned tag are the same speed within run-to-run drift, and both are 1.5–2.2× slower than the branch tip on the same box.
-That is the trap in a tag-versus-checkout reading: `git describe` of `main` promises 34 commits of post-tag work and not one of them touches the numpy path, so a diff taken against it reports the dependency as inert while the pass exists one branch away — with the same `evoxc 0.1.0` metadata on both sides.
-`main` is not stale for this purpose in general (it is the newest tree by date); it simply does not contain the numpy-interpreter work, which lives on the task branch until it is released.
+So `main`'s tip and the pre-pass tag were the same speed within run-to-run drift, and both are 1.5–2.2× slower than `fe85a534` on the same box.
+That is the trap in a tag-versus-checkout reading: `git describe` of that `main` tip promises 34 commits of post-tag work and not one of them touches the numpy path, so a diff taken against it reports the dependency as inert while the pass sat 93 commits ahead on the same history — with the same `evoxc 0.1.0` metadata on both sides.
+The lesson held only for the day it was measured: `main` was not stale in general, it simply did not contain the numpy-interpreter work yet, and the pass has since landed on `main` and become the pinned revision.
 
 ### Where the gain sits: identical op counts, lower per-op cost
 
@@ -350,7 +350,7 @@ Executed interpreter kernels per generation, counted on both legs for all four c
 | `custom_pagie_p500` | 11 227 | 109.21 | 101.78 | **−7 %** |
 
 The op counts are a property of this repository's graphs, so the two legs dispatch exactly the same work; what changed is what one dispatch costs.
-That is the branch's own stated mechanism (`3c3c8e0`): the plan resolves each op's kernel and its operand/result value ids once per block instead of walking an env stack per operand per execution, the flat value store drops the env-stack push/pop, the static-result fast path replaces a symbolic shape evaluation per result with one `(dtype, shape)` compare, and the dead-value release bounds the live set.
+That is the pass's own stated mechanism (`3c3c8e0`): the plan resolves each op's kernel and its operand/result value ids once per block instead of walking an env stack per operand per execution, the flat value store drops the env-stack push/pop, the static-result fast path replaces a symbolic shape evaluation per result with one `(dtype, shape)` compare, and the dead-value release bounds the live set.
 The µs/op column also explains pagie: at ~110 µs per op the Python-side dispatch cost is noise next to the numpy kernel body, so the same pass buys 7 % there and 54 % on XOR.
 `xor_p100`'s 3 505 dispatches at pop 100 versus `xor_p500`'s 7 922 confirm the fixed cost is per-shape, not per-individual: the population scales the arrays, the op count scales with the schedule.
 
@@ -358,14 +358,14 @@ The µs/op column also explains pagie: at ~110 µs per op the Python-side dispat
 
 Both legs reproduce the same search exactly: the per-generation `best_fitness` / `mean_fitness` / `valid_count` curves (152 entries each), `final_best_fitness` and `generations_to_target` are equal element-for-element across all four cells of all four cases — `xor_p100` ends on `-1.636888373468537e-05` (target at generation 40), `xor_p500` on `-0.0` (32), `custom_pagie_p500` on `-0.006567014846950769` (95) and `cartpole_p100` on `200.0` (no informative target, `gens_to_target=False`).
 That is what the design predicts: the dependency supplies the interpreter loop and the splitmix64 stream over this repository's own numpy kernels, and the pass changes how an op executes — never which ops run, in which order, or with which RNG words.
-It is also what the branch's own record claims ("bit-identical fitness trajectories, unchanged executed op counts"), measured here from this side of the dependency.
+It is also what the pass's own record claims ("bit-identical fitness trajectories, unchanged executed op counts"), measured here from this side of the dependency.
 
 ### What this means for the pin
 
-`pyproject.toml` and `uv.lock` keep `evoxc` on tag `v0.1.1`, and this pass does not change that: the pin is a released tag, and the improvement is on an **unreleased task branch**.
-Concretely, a `uv sync` user today gets leg A's numbers; moving the pin is what would hand them 2.18× on `xor_p100`, 1.56× on `xor_p500`, 2.25× on `cartpole_p100` and 1.07× on `custom_pagie_p500`, at 12–37 % lower peak RSS — and it needs an evoxc release that contains `3c3c8e0`, `5deca1b`, `dda3ec0` and `51d5829`, not a checkout pointer.
-Any such move is a protocol change with a measurement attached: the new-side rows of `RESULTS.md` (and of every committed record whose new side is `numpy`) would land 1.07–2.25× faster, so the report is regenerated in the same commit that moves the pin.
-Until then this section is evidence *about a candidate dependency*, not about the shipped one, and the pinned leg is the number a user actually gets.
+`pyproject.toml` and `uv.lock` keep `evoxc` on `fe85a534` — upstream `main`'s tip, which carries `3c3c8e0`, `5deca1b`, `dda3ec0` and `51d5829` — moved there by `4852ebed`, so a `uv sync` user today gets leg B's numbers.
+Those numbers are 2.18× on `xor_p100`, 1.56× on `xor_p500`, 2.25× on `cartpole_p100` and 1.07× on `custom_pagie_p500` against leg A, at 12–37 % lower peak RSS, and the cells were measured before the move (this pass priced the pin, it did not set it).
+Every new-side `numpy` row of a committed record measured before `4852ebed` — `RESULTS.md` at `63f0fc67`, passes 1 and 2 here, `BACKENDS.md` at `6869a13`, the CPU legs of the 2026-11-05 and 2026-11-06 accelerator records — is therefore a leg A number, comparable only with a row measured at that same pin.
+Re-measuring any of them on this tree is a protocol change with a measurement attached: the new-side rows would land 1.07–2.25× faster per generation, so the report is regenerated in the commit that re-measures it, never reinterpreted across pins.
 
 ### How to reproduce
 
@@ -374,9 +374,9 @@ Three venvs over one base interpreter, so all legs exist at once and a cell is a
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 mkdir -p $TMPDIR/evoxc-pinned $TMPDIR/evoxc-pass $TMPDIR/evoxc-main
-git -C /root/evoxc archive v0.1.1  | tar -x -C $TMPDIR/evoxc-pinned   # leg A — the pinned tag
-git -C /root/evoxc archive fe85a534 | tar -x -C $TMPDIR/evoxc-pass    # leg B — task-branch tip
-git -C /root/evoxc archive 474bf72  | tar -x -C $TMPDIR/evoxc-main    # leg C — main (control)
+git -C /root/evoxc archive v0.1.1  | tar -x -C $TMPDIR/evoxc-pinned   # leg A — the pre-pass tag
+git -C /root/evoxc archive fe85a534 | tar -x -C $TMPDIR/evoxc-pass    # leg B — the pinned revision
+git -C /root/evoxc archive 474bf72  | tar -x -C $TMPDIR/evoxc-main    # leg C — the older main tip
 uv venv $TMPDIR/venvA --python 3.12
 uv pip install --python $TMPDIR/venvA/bin/python numpy networkx matplotlib sympy
 uv pip install --python $TMPDIR/venvA/bin/python --no-deps --reinstall $TMPDIR/evoxc-pinned
@@ -404,12 +404,12 @@ for f in sorted(pkg.rglob("*.py")):
     h.update(f.read_bytes())
 print(md.version("evoxc"), len(list(pkg.rglob("*.py"))), h.hexdigest()[:16])
 PY
-# pinned tag (v0.1.1)                    0.1.0 150 d0d1f4b4b7777f1b
-# task-branch tip (v0.1.1-127-gfe85a53)  0.1.0 153 5498cbc31b361688
-# main (v0.1.1-34-g474bf72)              0.1.0 151 90b801c7bbc89a8d
+# pre-pass tag (v0.1.1)                  0.1.0 150 d0d1f4b4b7777f1b
+# pinned revision (v0.1.1-127-gfe85a53)  0.1.0 153 5498cbc31b361688
+# older main tip (v0.1.1-34-g474bf72)    0.1.0 151 90b801c7bbc89a8d
 ```
 
-Executed ops per generation come from wrapping `KERNEL_TABLE` **after** the build and **before** the first `run` (a v0.1.1 dispatcher reads the table per op; the post-pass interpreter caches the kernels into its block plan at the plan's first build, so a wrapper installed later is never called):
+Executed ops per generation come from wrapping `KERNEL_TABLE` **after** the build and **before** the first `run` (the pre-pass dispatcher reads the table per op; the post-pass interpreter caches the kernels into its block plan at the plan's first build, so a wrapper installed later is never called):
 
 ```python
 from evoxc.backends.numpy import kernels
@@ -425,24 +425,24 @@ total = sum(counts.values())
 ```
 
 Quality identity is checked from the records themselves: load two cells' JSON and compare `runs[0].quality.{best_fitness,mean_fitness,valid_count,final_best_fitness,generations_to_target}` element-for-element (all 152 entries agree, on every pair of cells of every case).
-Never `uv run` a leg: `uv run` performs an implicit sync that reverts to the pinned tag in `.venv`, which silently measures leg A twice — drive the venv interpreter directly.
+Never `uv run` a leg: `uv run` performs an implicit sync that reverts `.venv` to this tree's own `[tool.uv.sources]` revision (leg A when this pass was measured), which silently measures one leg twice — drive the venv interpreter directly.
 Every leg record is a git-ignored scratch file written to `$TMPDIR`, with `--out` beside it, so no committed report is touched.
 
 ### Caveats
 
-- One repeat per seed per leg: each cell is one 150-generation curve, so the uncertainty is the spread between the two reversed rounds, not a repeat distribution. That spread is small (pinned `xor_p100` 42.52 / 42.12 / 42.65 / 41.31 across four cells, i.e. 3 %) and the leg gap is 54 %, but no cell carries a confidence interval.
+- One repeat per seed per leg: each cell is one 150-generation curve, so the uncertainty is the spread between the two reversed rounds, not a repeat distribution. That spread is small (pre-pass `xor_p100` 42.52 / 42.12 / 42.65 / 41.31 across four cells, i.e. 3 %) and the leg gap is 54 %, but no cell carries a confidence interval.
 - A single run's own 150 sample spread is far wider than the leg medians: leg A's generation samples span 32.5–73.2 ms on `xor_p100` (15.4–25.9 ms on leg B), so only medians are quoted and a per-sample comparison would be meaningless.
-- `custom_pagie_p500` is the least resolved cell: 7 % on the two-cell means, its matched pairs reading 1.12× and 1.03×, while the pinned leg's own two cells differ by 4 % (1250.56 vs 1201.60). The direction is consistent in both orders; the magnitude is not resolved by two cells.
-- The `xor_p500` window ran under outside load (load average 2–3, one pinned cell ending on 3.05) with both legs interleaved inside it; each leg's two cells stayed within 1 % of each other (pinned 115.06 / 114.52, pass 73.03 / 74.08), so the load did not produce the gap.
-- Leg C is a diagnostic, not a third A/B arm: one cell per case, enough to show `main` ≈ pinned and not enough to resolve a difference between them.
+- `custom_pagie_p500` is the least resolved cell: 7 % on the two-cell means, its matched pairs reading 1.12× and 1.03×, while the pre-pass leg's own two cells differ by 4 % (1250.56 vs 1201.60). The direction is consistent in both orders; the magnitude is not resolved by two cells.
+- The `xor_p500` window ran under outside load (load average 2–3, one pre-pass cell ending on 3.05) with both legs interleaved inside it; each leg's two cells stayed within 1 % of each other (pre-pass 115.06 / 114.52, post-pass 73.03 / 74.08), so the load did not produce the gap.
+- Leg C is a diagnostic, not a third A/B arm: one cell per case, enough to show the older `main` tip ≈ the pre-pass tag and not enough to resolve a difference between them.
 - The legs are `git archive` copies installed with `--no-deps --reinstall`, not editable installs: the fingerprint proves which bytes ran and the venvs share one base interpreter and one numpy build, but both trees are pure Python, so nothing here depends on compile flags.
 - The op-count column is a dispatch count, never a proxy for wall time — and that is exactly the pass's shape: the count does not move at all (3 505 / 7 922 / 21 638 / 11 227 on *both* legs) while wall time halves, so the entire win is per-dispatch cost.
-- This pass changes no code and no dependency here: `pyproject.toml`/`uv.lock` keep `v0.1.1`, and the measurement's job is to price the *next* pin, not to move it.
+- This pass changes no code here, and it set no dependency: `pyproject.toml`/`uv.lock` moved to leg B's revision separately (`4852ebed`), so these cells are the measurement behind that move rather than a record of it.
 - Numerical identity between the legs is expected and observed, and says nothing about the frozen oracle — `test/parity/` owns fidelity against `benchmarks/legacy_jax`.
 
 ## Rules the performance passes establish
 
-**Rule A — the interpreter's blocks are the unit of memory.** The pinned numpy interpreter keeps every
+**Rule A — the interpreter's blocks are the unit of memory.** The pre-pass numpy interpreter keeps every
 SSA result of an interpreter block alive until that block returns, so bound the row group a problem asks
 the network to evaluate (pass 2's `EVAL_CHUNK_ROWS` tiling) and never hoist a kernel out of a
 `while`/`scan` without measuring peak RSS (pass 1's speciation table paid +74 % RSS for exactly that
@@ -465,10 +465,11 @@ the fitness and payload arrays against the tree it replaced.
 31 604 and still banked only 1.25×, so every change is validated end to end on wall time, peak RSS and
 the identity checks, in one session with the trees interleaved.
 **Rule C — a dependency A/B measures a commit, never a branch name.** A tag-versus-`HEAD` diff of a
-dependency is only as good as the tree that `HEAD` happens to point at: here `main` was 34 commits past
-the tag, carried no interpreter work at all, and measured within ±3 % of the pinned tag, while the pass
-that halves dispatch-bound generations sat 93 commits further up a task branch — same repository, same
-version metadata (`0.1.0`), a 2.18× difference in wall time. Name the commit and fingerprint the bytes
+dependency is only as good as the tree that `HEAD` happens to point at: here `main`'s tip was 34 commits
+past the tag, carried no interpreter work at all, and measured within ±3 % of the pre-pass tag, while the
+pass that halves dispatch-bound generations sat 93 commits further along the same history — same
+repository, same version metadata (`0.1.0`), a 2.18× difference in wall time, and the commit the tree
+pins today. Name the commit and fingerprint the bytes
 (`d0d1f4b4b7777f1b` / `5498cbc31b361688` / `90b801c7bbc89a8d` here), and read a null result as "these
 two trees are the same tree for this purpose", not as "this dependency has nothing to give".
 Pass 3 also sharpens the standing caveat from the other side: executed op count says nothing about wall

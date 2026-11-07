@@ -5,7 +5,7 @@ The problem classes exercised on iree are `XOR`, `XOR3d`, `CustomFuncFit`, `Cart
 These are IREE **3.13.0** numbers (`iree-base-compiler`/`iree-base-runtime`, what `uv sync --extra iree` now resolves); the 3.11.0 session this file used to record is superseded and only git holds it.
 `xla` had no plugin in this session: the evoxc xla adapter needs a PJRT C API plugin `.so` (`EVOXC_PJRT_PLUGIN`, unset here) and the session's search found none, so this file measures `iree` on **llvm-cpu** only and carries no accelerator row. That absence is no longer a property of this box — `jax-rocm7-pjrt`'s `jax_plugins/xla_rocm7/xla_rocm_plugin.so` is now installed and the `xla` leg is measured end to end on ROCm in `GPU.md` (`## IREE vs XLA on the same device`), which is a separate accelerator artifact of its own session, not a row of this file. `tvm` was not attempted.
 The CPU performance contract therefore stays on the numpy backend (`RESULTS.md`, the generated record of the old-vs-new matrix re-measured on the merged tree at `63f0fc67` — the provenance of every report in this directory is tabulated in `CONTEXT.md`).
-The ROCm accelerator leg is a **different artifact**: `GPU.md` + `benchmarks/results/gpu_rocm_xla_2026-11-06.json` (the block it renders; the earlier two-target `benchmarks/results/gpu_rocm_2026-11-05.json` is superseded as its source). No GPU number is folded into this file.
+The ROCm accelerator leg is a **different artifact**: `GPU.md` + `benchmarks/results/gpu_rocm_xla_2026-11-07.json` (the block it renders; the earlier `benchmarks/results/gpu_rocm_xla_2026-11-06.json` and the two-target `benchmarks/results/gpu_rocm_2026-11-05.json` are superseded as its source). No GPU number is folded into this file.
 
 ## Provenance: which tree these numbers describe
 
@@ -31,7 +31,7 @@ That failure was real and is fixed at its source in `src/` (section "The five ga
 | `nproc` | 20 |
 | Platform | `Linux-6.8.0-146-generic-x86_64-with-glibc2.39` |
 | Python | 3.12.3 |
-| evoxc | 0.1.0 (installed distribution metadata; `pyproject.toml` resolves it from the `v0.1.1` git tag via `[tool.uv.sources]`, so the metadata version is below the tag) |
+| evoxc | 0.1.0 (installed distribution metadata; this session resolved it from the `v0.1.1` git tag through `[tool.uv.sources]`, and the tree pins the upstream `main` commit `fe85a534` since `4852ebed`, so the metadata version identifies neither revision) |
 | numpy | 2.5.4 |
 | iree-base-compiler / iree-base-runtime | 3.13.0 / 3.13.0 (`importlib.metadata.version`; `iree.compiler.version.VERSION` = `3.13.0rc20261016`) |
 | sympy / networkx / matplotlib / pytest | 1.14.0 / 3.7 / 3.11.2 / 9.2.0 |
@@ -42,7 +42,7 @@ That failure was real and is fixed at its source in `src/` (section "The five ga
 | backend | install | what runs | compile needed |
 |---|---|---|---|
 | `numpy` | always available | everything | 0.30–0.45 s per generation graph (the evoxc interpreter build) |
-| `iree` (llvm-cpu) | `uv sync --extra iree` (without uv: `pip install "evoxc[iree] @ git+https://github.com/EMI-Group/evoxc@v0.1.1"`; `pyproject.toml`'s `iree` extra names the IREE wheels directly, `iree-base-compiler>=3.13,<3.14` + `iree-base-runtime>=3.13,<3.14`) | `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum`, `MountainCarContinuous`, `RecurrentGenome`, `HyperNEAT` — one full generation each, verified (see the coverage note above) | 7.2–9.6 s per generation graph, one-off per static shape |
+| `iree` (llvm-cpu) | `uv sync --extra iree` (without uv: `pip install "evoxc[iree] @ git+https://github.com/EMI-Group/evoxc@fe85a534192f749a97b2f6e3b13b0800f69b8d90"`, the revision `pyproject.toml`'s `[tool.uv.sources]` pins; this session installed the then-pinned `v0.1.1` tag, `be145ee`. `pyproject.toml`'s `iree` extra names the IREE wheels directly, `iree-base-compiler>=3.13,<3.14` + `iree-base-runtime>=3.13,<3.14`) | `XOR`, `XOR3d`, `CustomFuncFit`, `CartPole`, `Pendulum`, `MountainCarContinuous`, `RecurrentGenome`, `HyperNEAT` — one full generation each, verified (see the coverage note above) | 7.2–9.6 s per generation graph, one-off per static shape |
 | `xla` | plugin `.so` required | nothing | not reached: `the xla adapter requires a PJRT C API plugin library (.so exporting GetPjRtApi) and none was found` (searched `/usr/local/lib`, `/usr/lib`, `/root/.local/lib`, `./`) |
 | `tvm` | extra | not attempted | — |
 
@@ -55,7 +55,7 @@ at pop 1000 the two trajectories separate at `1e-08`-scale and land on `-0.05333
 
 Each gate below was reproduced verbatim on this machine at the time it was found, then removed **at its source in `src/`**, never by editing evoxc (the `evoxc` checkout used for the investigation is a read-only foreign repo).
 The offending op's location is `op.location` in the traced evoxc IR, which is why the errors name a TensorNEAT `file:line`.
-All five constraints still hold in the installed evoxc (evoxc 0.1.0 metadata, `v0.1.1` tag) on IREE 3.13.0: gates 1, 2, 4 and 5 were re-fired this session with minimal graphs, and gate 3 was re-read from the installed `DEFERRED_OPS`/`status()`. Nothing in `src/` was changed by this session.
+All five constraints still hold in the evoxc this session installed (0.1.0 metadata, then the `v0.1.1` tag `be145ee`) on IREE 3.13.0: gates 1, 2, 4 and 5 were re-fired this session with minimal graphs, and gate 3 was re-read from the installed `DEFERRED_OPS`/`status()`. Nothing in `src/` was changed by this session.
 
 ### Gate 1 — rank-3 `scatter` (15 sites, export-time)
 
@@ -199,8 +199,8 @@ Per-generation cost is dominated by the graph's dense `gather`/`argsort`/`scatte
 ## What a user must know to run `backend="iree"`
 
 - `uv sync --extra iree` pulls `iree-base-compiler` + `iree-base-runtime` (3.13.x on this tree); then `Pipeline(..., backend="iree")` just works for the shipped problems.
-  Without uv, install the same extra from the pinned tag: `pip install "evoxc[iree] @ git+https://github.com/EMI-Group/evoxc@v0.1.1"`, plus `pip install --no-deps .` for tensorneat itself.
-  Plain `pip install "evoxc[iree]"` is not supported: PyPI only ships `evoxc` 0.1.0, while `pyproject.toml` resolves the git tag `v0.1.1` through `[tool.uv.sources]` (and its `evoxc >= 0.1.1` floor cannot be satisfied from PyPI).
+  Without uv, install the same extra from the `[tool.uv.sources]` pin: `pip install "evoxc[iree] @ git+https://github.com/EMI-Group/evoxc@fe85a534192f749a97b2f6e3b13b0800f69b8d90"`, plus `pip install --no-deps .` for tensorneat itself.
+  Plain `pip install "evoxc[iree]"` is not supported: PyPI only ships `evoxc` 0.1.0, while `pyproject.toml` resolves the upstream commit `fe85a534` through `[tool.uv.sources]` (and its `evoxc >= 0.1.1` floor cannot be satisfied from PyPI).
 - **Compile is one-off per static shape**: population, `max_nodes`, `max_conns` are baked into the graph, so a shape change re-compiles (~8–10 s here). `Pipeline` caches the executable per shape, and the build is charged to no generation.
 - **Kernel rules the exporter and iree impose** (all enforced by construction in `src/` today, and documented in `src/tensorneat/common/CONTEXT.md`, `src/tensorneat/algorithm/neat/CONTEXT.md`, `src/tensorneat/algorithm/hyperneat/CONTEXT.md`, `src/tensorneat/genome/CONTEXT.md` and `src/tensorneat/genome/operations/CONTEXT.md`):
   1. `scatter` must be rank-1 `axis=0` or a rank-2 row/column write — no rank ≥ 3 operand.
@@ -215,7 +215,7 @@ Per-generation cost is dominated by the graph's dense `gather`/`argsort`/`scatte
 
 ## Still deferred by the evoxc v1 exporter (would bite other users)
 
-Straight from the installed evoxc (`v0.1.1` tag, 0.1.0 metadata), re-probed this session, not inferred:
+Straight from the evoxc this session installed (`v0.1.1` tag `be145ee`, 0.1.0 metadata), re-probed this session, not inferred:
 - `evoxc/backends/stablehlo/ops.py:235 DEFERRED_OPS` — 30 names: `runtime_call`, `external_call`, `block_call`, `rank`, `world_size`, `erf`, `gelu`, `diagonal`, `cholesky`, `qr`, `matrix_rank`, `svd`, `matrix_exp`, `random_multinomial`, plus the 16 `sparse_*`/`dense_dot_sparse` ops (`sparse_from_dense`, `sparse_to_dense`, `sparse_coo_to_csr`, `sparse_csr_to_coo`, `sparse_coo_to_csc`, `sparse_csc_to_coo`, `sparse_negate`, `sparse_add`, `sparse_multiply`, `sparse_multiply_dense`, `sparse_reduce_sum`, `sparse_transpose`, `sparse_reshape`, `sparse_concatenate`, `sparse_dot_sparse`, `dense_dot_sparse`).
 - Names with no v1 mapping at all (`status(...) == "deferred"` but absent from that set): `cumsum`, `cumprod`, `flip`, `tril`, `triu`, `where`, `scan`, `convolution`, `solve`.
 - Collectives are the opposite case: every `evoxc.dist` op **exports** (`evoxc.dist.broadcast` is the op name `broadcast_collective`, mapped to `stablehlo.collective_broadcast`), but `iree-compile` cannot legalize `stablehlo.collective_broadcast` for llvm-cpu and the runtime wheels ship no channel provider, so the adapter declares `collectives=False` and `lower()` rejects them explicitly.
@@ -328,5 +328,5 @@ The minimal reproducers for gates 1–5 are ~20 lines of `evoxc` each (a rank-3 
 
 `RESULTS.md` is generated evidence for the old-vs-new CPU contract, measured on the numpy backend and still not hand-edited; it was regenerated since this session by a full harness re-run at `63f0fc67` (2026-11-06), which is a tree later than the one measured here.
 `benchmarks/results/iree.json` + `benchmarks/iree.md` remain the historical pre-fix record (8/8 `error`); the numbers above supersede them for the code as of this session, which is the tree the ratios in this file belong to.
-`PERF_NUMPY.md` remains the numpy-interpreter performance record, and `GPU.md` + `benchmarks/results/gpu_rocm_xla_2026-11-06.json` remain the accelerator record — neither was re-measured or edited here.
+`PERF_NUMPY.md` remains the numpy-interpreter performance record, and `GPU.md` + `benchmarks/results/gpu_rocm_xla_2026-11-07.json` remain the accelerator record — neither was re-measured or edited here.
 Every row above describes the stamped tree `6869a131` and nothing later: the optimizer and structure work has since landed in `src/tensorneat`, so these llvm-cpu numbers predate it, and the commands in "Reproduce" must be re-run before quoting them for a newer tree.

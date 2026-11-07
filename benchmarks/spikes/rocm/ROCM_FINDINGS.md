@@ -4,7 +4,8 @@ Environment measured 2026-11-05, one box: AMD Instinct MI300X VF, ROCm 7.1, IREE
 (`iree.runtime.get_driver("hip").query_available_devices()` → one device, `device_id 1`;
 `evoxc.Device("rocm", 0)` maps to it). Python 3.12 via `uv`, local `evoxc` checkout
 (`uv pip install -e /root/evoxc --no-deps`, the ROCm staging fixes are there; the
-committed tree stays on the pinned v0.1.1 API).
+committed tree pinned the `v0.1.1` tag then and pins `fe85a534` today, and nothing below
+is re-measured against either).
 
 Reproduce everything:
 

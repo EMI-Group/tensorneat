@@ -636,9 +636,9 @@ def measure_row(args: argparse.Namespace) -> dict[str, Any]:
     Never raises for a measurement failure: the ``error`` row carries the full
     traceback plus whatever was measured before the failure. A PJRT target resolves its
     plugin first -- the path goes into ``compile_options["plugin_path"]`` *and* into
-    ``$EVOXC_PJRT_PLUGIN``, which is what the adapter's availability probe reads -- and
-    an unresolvable plugin is a named ``error`` row, never a fallback to another
-    backend. The row also records the ``XLA_FLAGS`` value it ran with
+    ``$EVOXC_PJRT_PLUGIN``, which pins the same ``.so`` for any option-less discovery
+    call -- and an unresolvable plugin is a named ``error`` row, never a fallback to
+    another backend. The row also records the ``XLA_FLAGS`` value it ran with
     (``record["xla_flags"]``; ``None`` for a target that does not use XLA) and exports
     it into :data:`os.environ` before the graph is built, because XLA reads the
     variable at backend init.
@@ -663,7 +663,7 @@ def measure_row(args: argparse.Namespace) -> dict[str, Any]:
     except PluginError as exc:
         return {**record, "status": "error", "error": str(exc), "plugin_error": True}
     if plugin is not None:
-        os.environ[PJRT_ENV_VAR] = plugin  # read by the adapter's check_available probe
+        os.environ[PJRT_ENV_VAR] = plugin  # pins option-less discovery to the same .so
         record["pjrt_plugin"] = fingerprint_plugin(plugin)
     if base["impl"] == "old":  # before any jax import: the client reads it at creation
         try:
@@ -1356,8 +1356,9 @@ def _add_measurement_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--pjrt-plugin", default=None, metavar="PATH",
         help=(f"PJRT C API plugin .so (exporting GetPjRtApi) the xla targets drive: it "
-              f"becomes compile_options['plugin_path'] and is exported as {PJRT_ENV_VAR} "
-              "for the adapter's availability probe. Resolution order: this flag, then "
+              f"becomes compile_options['plugin_path'] and is exported as {PJRT_ENV_VAR}, "
+              "which pins it for option-less discovery calls. Resolution order: this "
+              "flag, then "
               f"${PJRT_ENV_VAR}; an xla target with neither is a named error, never a "
               "fallback to another backend"))
     parser.add_argument(

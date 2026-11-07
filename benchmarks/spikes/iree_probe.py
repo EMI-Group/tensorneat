@@ -72,8 +72,8 @@ def _evoxc():
     except ModuleNotFoundError as exc:  # pragma: no cover - environment guard
         raise SystemExit(
             f"{exc}: these probes need evoxc plus its iree extra "
-            "(`uv sync --extra iree`, or `pip install "
-            "\"evoxc[iree] @ git+https://github.com/EMI-Group/evoxc@v0.1.1\"`)"
+            "(`uv sync --extra iree`, which resolves evoxc from the "
+            "`[tool.uv.sources]` pin in `pyproject.toml`)"
         ) from exc
     return evoxc
 
