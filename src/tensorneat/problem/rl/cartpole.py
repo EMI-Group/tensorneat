@@ -587,10 +587,10 @@ class CartPole(BaseProblem):
         together. A column split lowers to four copies and the reassembly to a
         second pass of copies, and on a compiled backend each copy is a
         serialised strided copy rather than a fused region. Instead the two
-        angular state
-        variables are taken with static slices of one lane each (no index
-        tensor, so no baked constant), the two velocity lanes of the update are
-        assembled by rotating the row with ``perm_idx`` and overwriting the two
+        angular state variables are taken with static slices of one lane each
+        (no index tensor, so no baked constant), the two velocity lanes of the
+        update are assembled by rotating the row with ``perm_idx`` and
+        overwriting the two
         acceleration lanes with :func:`enp.where`, so the whole physics chain,
         the rotation and both selections compile into a single elementwise
         region. Both spellings produce the same operands in the same order, so
