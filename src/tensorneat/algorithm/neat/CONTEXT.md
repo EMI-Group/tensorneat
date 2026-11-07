@@ -65,7 +65,7 @@ Both phases need one `(P,)` row per species slot and the population is measured 
 `matrix` measures its rows inside one fixed-length `evoxc.scan` on both spellings, so no `K * P` batch is ever formed and a region's environment is popped per iteration.
 Grouping needs `kernel_mode="accelerator"` **and** `distance_centre="tiled"`: `grouped.for_state(state, digest, species_size=K)` answers `k > 1` only for an accelerator state, with `k = max(1, min(ACCELERATOR_GROUP = 8, GROUP_ROW_BUDGET // pop_size = 8192 // P, the slot count))`, and `matrix` takes the grouped branch only when the centre spelling is `"tiled"` too.
 One iteration gathers the `k` centre rows of its group, merges them with `grouped.centre_batch`, makes one `measure_distance` call against the `k`-times tiled digest and returns the flat `(k * P,)` step value (a `(k, P)` `y` would be a rank-3 write the exporter rejects); at most `K % k` trailing rows are then measured singly against the plain digest and concatenated in row order.
-With the shipped 20 slots that is `k = 8` at `P = 100`/`500` (2 grouped calls of 800/4 000 rows plus a 4-row tail), `k = 4` at `P = 1000` (5 grouped calls of 4 000 rows, no tail) and `k = K` for a table of at most 8 slots (one grouped call, no tail).
+With the shipped 20 slots that is `k = 8` at `P = 100`/`500`/`1000` (2 grouped calls of 800/4 000/8 000 rows plus a 4-row tail) and `k = K` for a table of at most 8 slots (one grouped call, no tail).
 `k = 1` everywhere else, so the numpy pipeline traces exactly the ungrouped calls; and there the interpreter is charged by element volume, not dispatch, so the `k`-times wider `(k · P, 2 · max_conns)` intermediates cost more than the dispatches they save.
 
 ## StableHLO Export Rules (binding for every kernel here)
