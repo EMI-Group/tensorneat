@@ -1,11 +1,17 @@
 """``DefaultGenome``: depth-adaptive, level-synchronous feedforward evaluation.
 
 The forward pass seeds the input rows once, then walks the depth levels — in one
-``evoxc.while_loop`` whose trip count is derived from the schedule's ``node_level`` on the host
-leg, or as a statically unrolled ``level = 1 .. max_depth`` sweep on the accelerator leg, where
-a data-dependent loop bound costs a host readback per iteration. An evolved network is usually
-2-4 levels deep, so the ``max_depth`` ceiling would otherwise spend most of a counted pass on
-rows that cannot update. Both spellings run the shared window reduce of
+``evoxc.while_loop`` whose trip count is derived from the schedule's ``node_level``, or as a
+statically unrolled ``level = 1 .. max_depth`` sweep. Which spelling a graph is traced with is
+:func:`._static_sweep`'s decision: the sweep on a non-tiled pass whose backend lowers it as one
+capture-eligible body with no host involvement (iree), the loop everywhere else — on IREE a
+``stablehlo.while`` carrying dispatches is lowered to a host ``cf`` loop with one submission per
+trip, and the ``xla`` leg is unreliable with either spelling: its compiler captures the sweep's
+single basic block as a HIP graph and SIGSEGVs inside ``libhsa-runtime64`` after one generation,
+while the loop's nested ``while`` is not capture-eligible and merely crashes less often (1 of 3
+trials survives at 21.45 ms/generation). An evolved network is usually 2-4 levels deep, so the
+``max_depth`` ceiling would otherwise spend most of a counted pass on rows that cannot update.
+Both spellings run the shared window reduce of
 :class:`.base.BaseGenome` (:meth:`._node_step`), so the level step exists once.
 
 A region op is safe *here* because this forward is never differentiated: ``evoxc.grad``
@@ -65,10 +71,11 @@ class _PreparedPass(NamedTuple):
     (no block at all when the network has no non-input row). All three depend only on the
     schedule and the static shapes, so no query pays their derivation or their constants.
 
-    ``sweep`` selects the level spelling: ``True`` is the accelerator's statically unrolled
-    sweep on a non-tiled pass, which reads no depth bound and no counter, so ``limit`` and
-    ``one`` are ``None`` there; every other pass (the host leg, and any tiled batch) keeps both
-    and walks them in one ``evoxc.while_loop``.
+    ``sweep`` selects the level spelling (see :func:`._static_sweep`): ``True`` is the
+    statically unrolled sweep of a non-tiled pass whose backend lowers it as one
+    capture-eligible body, which reads no depth bound and no counter, so ``limit`` and ``one``
+    are ``None`` there; every other pass (the host leg, any tiled batch, and any ``xla`` pass)
+    keeps both and walks them in one ``evoxc.while_loop``.
     """
 
     node_attrs: evoxc.SymbolicTensor
@@ -82,6 +89,65 @@ class _PreparedPass(NamedTuple):
     one: evoxc.SymbolicTensor | None
     seed_pad: SeedPad
     sweep: bool
+
+
+#: Backends that must not carry the statically unrolled sweep. The ``xla`` leg's compiler
+#: captures the sweep's rollout body — one capture-eligible basic block — as a HIP graph and
+#: replays it through ``hipGraphLaunch``, which SIGSEGVs inside ``libhsa-runtime64`` after one
+#: completed generation (2 of 2 trials; the launch budget shrinks with the captured body's
+#: command count and a smaller ``max_depth`` does not help). The loop spelling's nested ``while``
+#: is not capture-eligible, which makes it *less* crash-prone rather than safe: 21.45
+#: ms/generation and 5 generations in 1 of 3 trials, exit 139 after 4 generations in the other
+#: two. Only ``XLA_FLAGS=--xla_gpu_enable_command_buffer=`` makes that leg reliable, so the loop
+#: is selected here as the least-bad spelling, never as a fix.
+_SWEEP_UNSAFE_BACKENDS = ("xla",)
+
+
+def _static_sweep(state: Any, samples: int) -> bool:
+    """Whether this pass takes the statically unrolled level sweep instead of the loop.
+
+    Three host-side statics decide it, all read off the trace-time ``State`` and never as
+    traced values, so a graph contains exactly one of the two spellings:
+
+    * ``kernel_mode`` must be ``"accelerator"``: the dispatch-bound numpy interpreter reads the
+      trade the other way round (extra unrolled device work is not free there), so it keeps the
+      loop.
+    * ``samples`` must be ``1``. A rollout queries one payload ``max_step`` times per
+      generation, which is where the unrolling pays; a tiled dataset is one query whose batch
+      is ``P * samples`` rows, and every unrolled level would cost that whole batch — 16.0 ->
+      51.0 ms/generation at ``P * samples = 250 000`` (func-fit, iree+rocm) — while the loop
+      runs only the batch's real depth once.
+    * the backend must not be ``xla`` (see :data:`_SWEEP_UNSAFE_BACKENDS`). On iree the sweep
+      is the faster spelling: 60.48 against 145.47 ms/generation for ``cartpole_p100``
+      (``max_step=200``, pop 100) at the shipped ``max_depth=16``. A hybrid static prefix plus a
+      data-dependent tail is rejected, not shipped: 4 static levels plus the tail loop measures
+      73.05 ms, *worse* than the pure sweep's 60.48, because the nested tail loop re-stages its
+      bound on every enclosing iteration. On ``xla`` the sweep is a hard crash — its captured
+      HIP graph SIGSEGVs after one completed generation (2 of 2 trials, at any ``max_depth``) —
+      and the loop, whose nested ``while`` is not capture-eligible, is only the *least-bad*
+      spelling there: 21.45 ms/generation and 5 generations in 1 of 3 trials, with the other two
+      crashing after 4. ``XLA_FLAGS=--xla_gpu_enable_command_buffer=`` is the only reliable fix,
+      so no working ``xla`` leg is claimed.
+
+    A state that carries no ``backend`` entry — a bare ``State()`` in a unit test — is not the
+    ``xla`` leg and therefore keeps the sweep, as does every backend other than ``xla``.
+
+    Args:
+        state: Host configuration container (``kernel_mode`` and, when the pipeline registered
+            it, ``backend``).
+        samples: Static tiling factor of the evaluated batch.
+
+    Returns:
+        bool: ``True`` for the unrolled sweep, ``False`` for the data-dependent loop.
+    """
+    if not is_accelerator(kernel_mode(state)):
+        return False
+    if samples != 1:
+        return False
+    backend = getattr(state, "backend", None)
+    if isinstance(backend, str) and backend.strip().lower() in _SWEEP_UNSAFE_BACKENDS:
+        return False
+    return True
 
 
 class DefaultGenome(BaseGenome):
@@ -226,8 +292,9 @@ class DefaultGenome(BaseGenome):
            ``evoxc.while_loop(cond, body, (1, values))`` walks ``level = 1 .. limit`` with
            ``values = self._node_step(state, transformed, node_attrs, hit_conn_attrs, values,
            update_mask=(node_level == level))``, ``node_level`` expanded once outside the loop.
-           The accelerator leg instead unrolls the same step over ``level = 1 .. max_depth``
-           (:meth:`._level_sweep`) and derives neither ``limit`` nor the counter.
+           The sweep spelling instead unrolls the same step over
+           ``level = 1 .. max_depth`` (:meth:`._level_sweep`) and derives neither ``limit``
+           nor the counter.
            The two further terms the pre-rewrite formulation ANDed in are both implied:
            ``node_exists`` because the schedule stores ``I_INF`` in ``node_level`` on every
            absent (and every unreachable) row, and the static ``reduce_sum(in_valid, axis=-1)
@@ -292,7 +359,7 @@ class DefaultGenome(BaseGenome):
         Everything :meth:`forward` computes once — the padding-safe node attributes, the
         ``_StepStatics`` of the value window (with its node operand bundle forced here, so the
         level loop never traces it), the depth bound and the level loop's rank-0 counter (both
-        host-leg only: the accelerator sweep reads neither), the expanded ``node_level``, the
+        loop-leg only: the sweep reads neither), the expanded ``node_level``, the
         read-out of the schedule and the ``NaN`` block of the value seed — so
         :meth:`forward_prepared` can run once per query on the same payload.
 
@@ -336,17 +403,20 @@ class DefaultGenome(BaseGenome):
         # the host formulation) so a query pays only the splice of the input rows into it --
         # and no op at all when the network has no non-input row.
         pad = max_nodes - self.num_inputs
-        # The level spelling is one host-side read of two statics: the accelerator leg unrolls
-        # the sweep statically, so it needs neither the depth bound (a ``reduce_max`` dispatch
-        # only the loop consumes) nor the loop's counter -- but only for a non-tiled pass.
-        # ``samples == 1`` is the discriminator: a rollout queries one payload ``max_step``
-        # times per generation, so the loop's per-level host readback is paid per query, while a
-        # tiled dataset is queried once per generation and amortises that readback away.
-        # Meanwhile the unrolled sweep multiplies a tiled pass by ``max_depth``: at
-        # ``P * samples = 250 000`` rows (func-fit) that measured 16.0 -> 51.0 ms/generation on
-        # iree+rocm, so a tiled batch keeps the ``while_loop`` verbatim -- do not "simplify" this
-        # gate to the formulation static alone.
-        sweep = is_accelerator(kernel_mode(state)) and samples == 1
+        # The level spelling is one host-side read of the pass's statics (_static_sweep): the
+        # unrolled sweep needs neither the depth bound (a ``reduce_max`` dispatch only the loop
+        # consumes) nor the loop's counter, but only a non-tiled pass on a backend that lowers
+        # it as one capture-eligible body. ``samples == 1`` is one discriminator: a rollout
+        # queries one payload ``max_step`` times per generation, which is where the unrolling
+        # pays, while a tiled dataset is a single query and the unrolled form would multiply
+        # its ``P * samples`` rows by ``max_depth`` -- 16.0 -> 51.0 ms/generation at
+        # ``P * samples = 250 000`` rows (func-fit) on iree+rocm, so a tiled batch keeps the
+        # ``while_loop`` verbatim -- do not "simplify" this gate away. The backend is the
+        # other: ``xla`` captures the sweep's basic block as a HIP graph and SIGSEGVs after one
+        # generation, while the loop's nested ``while`` is not capture-eligible, so that backend
+        # asks for the loop even at ``samples == 1`` -- as the least-bad spelling, not as a fix
+        # (it still crashes in 2 of 3 trials).
+        sweep = _static_sweep(state, samples)
         return _PreparedPass(
             node_attrs=prepared_attrs,
             statics=statics,
@@ -380,9 +450,10 @@ class DefaultGenome(BaseGenome):
 
         Emits only the input seed, the level sweep and the read-out; every loop-invariant
         operand comes from ``prepared`` — including the seed's ``NaN`` block, the loop's rank-0
-        counter (host leg only) and the read-out's gather index/mask/fill — so repeated queries
-        on one payload pay the prelude once. ``prepared.sweep`` picks the spelling: the host
-        leg's data-dependent ``evoxc.while_loop`` or the accelerator's static unroll.
+        counter (loop leg only) and the read-out's gather index/mask/fill — so repeated queries
+        on one payload pay the prelude once. ``prepared.sweep`` picks the spelling: the
+        data-dependent ``evoxc.while_loop`` or the statically unrolled sweep
+        (:func:`._static_sweep`).
 
         Args:
             state: Host configuration container.
@@ -424,11 +495,22 @@ class DefaultGenome(BaseGenome):
         prepared: _PreparedPass,
         values: evoxc.SymbolicTensor,
     ) -> evoxc.SymbolicTensor:
-        """Host spelling of the level sweep: one ``evoxc.while_loop`` over ``level = 1 .. limit``.
+        """Loop spelling of the level sweep: one ``evoxc.while_loop`` over ``level = 1 .. limit``.
 
-        The trip count is data-dependent (``prepared.limit`` is a rank-0 device tensor), which
-        the numpy interpreter handles for free and a compiled device charges a host readback per
-        iteration for.
+        The trip count is data-dependent (``prepared.limit`` is a rank-0 device tensor). On the
+        numpy interpreter that is free. On a compiled device it is not: IREE does not run a
+        dispatch-bearing ``stablehlo.while`` as one device command buffer — it hands the loop to
+        the host as a ``cf`` loop, one ``stream.cmd.execute`` submission per trip, so a
+        device-tensor predicate costs a blocking ``hal.fence.await`` plus a ``hal.buffer.load``
+        per trip (~157 us measured). Nested inside an enclosing loop it is worse still, because
+        the inner bound is re-staged (``queue.alloca`` + ``queue.copy`` + fence wait + load) on
+        every enclosing iteration even when the inner loop then runs zero trips (~230 us per
+        query end to end). That is why a non-tiled accelerator pass prefers
+        :meth:`_level_sweep`. On the ``xla`` leg the sweep's captured HIP graph SIGSEGVs after
+        one generation (2 of 2 trials) and this loop's nested ``while`` is not
+        capture-eligible, so the loop is the least-bad spelling there — 21.45 ms/generation, and
+        it still SIGSEGVs in 2 of 3 trials, the third surviving 5 generations (see
+        :func:`._static_sweep`).
 
         Args:
             state: Host configuration container.
@@ -477,18 +559,24 @@ class DefaultGenome(BaseGenome):
         """Accelerator spelling of the level sweep: ``level = 1 .. max_depth``, unrolled.
 
         One :meth:`._node_step` per level, traced at Python trace time, so the graph holds
-        ``max_depth`` copies of the level step and *no* region op at all: nothing is read back
-        to the host while the pass runs. That is the whole point — on a compiled device a
-        ``while_loop`` costs a pinned host allocation, a device-to-host copy and the event churn
-        per trip (~157-263 us measured, against ~57 us for a statically counted iteration),
-        while extra unrolled device work is nearly free (the per-iteration cost of a fused body
-        saturates from 20 to 60 ops). On the dispatch-bound numpy interpreter the trade is the
-        other way round, which is why ``kernel_mode`` gates it, and so is the trade on a tiled
-        batch: the sweep is selected only for a non-tiled (``samples == 1``) pass on the
-        accelerator leg, whereas a tiled dataset keeps the loop because its rows are
-        ``P * samples`` (each unrolled level would cost that many rows: 16.0 -> 51.0
-        ms/generation at ``P * samples = 250 000``) and its per-level readback is amortised over
-        one query per generation instead of one per rollout timestep.
+        ``max_depth`` copies of the level step and *no* region op at all. On IREE that is what
+        keeps the pass on the device: a dispatch-bearing ``stablehlo.while`` is lowered to a
+        host ``cf`` loop with one submission per trip, and a nested region re-stages its bound
+        on every enclosing iteration, whereas this body is a single capture-eligible basic
+        block with no host involvement — 60.48 against 145.47 ms/generation for
+        ``cartpole_p100`` (max_step 200, ``max_depth=16``) on iree+rocm. A hybrid static prefix
+        plus a data-dependent tail is rejected, not shipped: 73.05 ms at 4 static levels is
+        *worse* than the pure sweep's 60.48, because the tail loop is nested inside the rollout
+        body and pays the bound re-staging per enclosing iteration. ``kernel_mode`` gates the
+        sweep because the dispatch-bound numpy interpreter reads the trade the other way round,
+        and ``samples`` because a tiled pass is ``P * samples`` rows (each unrolled level would
+        cost that many rows: 16.0 -> 51.0 ms/generation at ``P * samples = 250 000``, iree+rocm)
+        queried once per generation, where the loop runs the batch's real depth. On ``xla`` this
+        same capture-eligible body is replayed as a HIP graph by the ROCm plugin and SIGSEGVs
+        inside ``libhsa-runtime64`` after one completed generation (2 of 2 trials, at any
+        ``max_depth``), so that backend selects the loop as the least-bad spelling: 21.45
+        ms/generation and 5 generations in 1 of 3 trials, the other two crashing after 4 (all
+        four facts in :func:`._static_sweep`).
 
         Same values as :meth:`_level_loop`, bit for bit:
 
