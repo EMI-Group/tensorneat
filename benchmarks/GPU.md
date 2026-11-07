@@ -118,7 +118,7 @@ The trace is part of the record (`trajectory` per row, `protocol.trajectory_gene
 
 | Item | Value |
 |---|---|
-| Date / session (UTC) | 2026-11-07T10:28:40+00:00 – 2026-11-07T10:28:41+00:00 |
+| Date / session (UTC) | 2026-11-07T10:29:06+00:00 – 2026-11-07T10:32:39+00:00 |
 | GPU model (gfx version) | AMD Instinct MI300X VF (gfx942) |
 | HIP devices (IREE runtime query) | device_id=1 AMD Instinct MI300X VF |
 | ROCm version | 7.1.0 |
@@ -133,8 +133,8 @@ The trace is part of the record (`trajectory` per row, `protocol.trajectory_gene
 | CPU model / count | INTEL(R) XEON(R) PLATINUM 8568Y+ / 20 logical |
 | Memory | 241611 MiB |
 | Threads | runtime defaults (nothing exported; inherited environment recorded) |
-| Git commit | `fc20a91ea277` (clean — generated report artifacts are not counted) |
-| Load average (1/5/15 min, document build) | 5.05 / 3.72 / 7.15 |
+| Git commit | `93ce3cac122f` (clean — generated report artifacts are not counted) |
+| Load average (1/5/15 min, document build) | 4.54 / 4.17 / 6.54 |
 
 ## Measured: numpy vs iree-rocm vs xla-rocm
 
@@ -142,24 +142,24 @@ One row per planned `(case, target)`; `n/a` marks a metric the row does not have
 
 | Case | Target | Backend | Status | setup (s) | build (s) | ms/gen median | ms/gen mean | ms/gen min–max | gens/s | peak RSS (MiB) | final max fitness | cross-check |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| xor_p100 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p100 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p100 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p500 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p500 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p500 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p1000 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p1000 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p1000 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor3d_p500 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor3d_p500 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor3d_p500 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| custom_pagie_p500 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| custom_pagie_p500 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| custom_pagie_p500 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| cartpole_p100 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| cartpole_p100 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| cartpole_p100 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p100 | `numpy` | `numpy` | ok | 0.015 | 0.280 | 18.767 | 18.694 | 15.515 – 21.715 | 53.493 | 143.6 | -0.176966 | skipped (target is the numpy reference) |
+| xor_p100 | `iree-rocm` | `iree` | ok | 1.186 | 7.799 | 10.633 | 10.588 | 9.814 – 11.068 | 94.444 | 1891.0 | -0.184767 | gen 1 pass; final-state drift (node_keys) |
+| xor_p100 | `xla-rocm` | `xla` | ok | 4.014 | 2.034 | 3.825 | 3.845 | 3.741 – 3.978 | 260.106 | 9358.2 | -0.176966 | pass (gen 1) |
+| xor_p500 | `numpy` | `numpy` | ok | 0.016 | 0.313 | 72.983 | 73.092 | 68.448 – 77.273 | 13.681 | 167.6 | -0.147786 | skipped (target is the numpy reference) |
+| xor_p500 | `iree-rocm` | `iree` | ok | 1.218 | 8.017 | 12.744 | 12.835 | 12.636 – 13.937 | 77.915 | 1914.7 | -0.112459 | gen 1 pass; final-state drift (node_keys) |
+| xor_p500 | `xla-rocm` | `xla` | ok | 4.019 | 2.244 | 4.033 | 4.055 | 3.929 – 4.231 | 246.590 | 9396.2 | -0.140949 | gen 1 pass; final-state drift (node_keys) |
+| xor_p1000 | `numpy` | `numpy` | ok | 0.017 | 0.375 | 132.185 | 132.150 | 126.273 – 136.785 | 7.567 | 198.0 | -0.053339 | skipped (target is the numpy reference) |
+| xor_p1000 | `iree-rocm` | `iree` | ok | 1.258 | 8.193 | 15.203 | 15.314 | 14.784 – 16.048 | 65.299 | 1937.6 | -0.136390 | gen 1 pass; final-state drift (node_keys) |
+| xor_p1000 | `xla-rocm` | `xla` | ok | 4.084 | 2.354 | 4.968 | 4.977 | 4.877 – 5.061 | 200.940 | 9402.0 | -0.053339 | gen 1 pass; final-state drift (node_keys) |
+| xor3d_p500 | `numpy` | `numpy` | ok | 0.016 | 0.316 | 87.598 | 86.238 | 75.244 – 91.674 | 11.596 | 180.0 | -0.223466 | skipped (target is the numpy reference) |
+| xor3d_p500 | `iree-rocm` | `iree` | ok | 1.220 | 8.063 | 12.910 | 13.018 | 12.742 – 14.581 | 76.820 | 1916.2 | -0.250000 | gen 1 pass; final-state drift (node_keys) |
+| xor3d_p500 | `xla-rocm` | `xla` | ok | 4.053 | 2.211 | 4.153 | 4.134 | 4.037 – 4.219 | 241.896 | 9408.0 | -0.223466 | gen 1 pass; final-state drift (node_keys) |
+| custom_pagie_p500 | `numpy` | `numpy` | ok | 0.015 | 0.786 | 887.256 | 887.815 | 812.595 – 966.154 | 1.126 | 933.9 | -0.032613 | skipped (target is the numpy reference) |
+| custom_pagie_p500 | `iree-rocm` | `iree` | ok | 1.204 | 8.406 | 15.873 | 15.980 | 14.420 – 22.298 | 62.579 | 1944.1 | -0.046049 | gen 1 pass; final-state drift (node_keys) |
+| custom_pagie_p500 | `xla-rocm` | `xla` | ok | 3.048 | 2.607 | 5.891 | 5.969 | 5.624 – 6.401 | 167.529 | 4880.9 | -0.032613 | gen 1 pass; final-state drift (node_keys) |
+| cartpole_p100 | `numpy` | `numpy` | ok | 0.016 | 0.266 | 95.952 | 105.252 | 94.413 – 153.009 | 9.501 | 142.4 | 200.000000 | skipped (target is the numpy reference) |
+| cartpole_p100 | `iree-rocm` | `iree` | ok | 1.215 | 8.658 | 67.202 | 65.513 | 58.912 – 70.199 | 15.264 | 1939.0 | 200.000000 | pass (gen 1) |
+| cartpole_p100 | `xla-rocm` | `xla` | ok | 4.159 | 2.236 | 23.567 | 24.927 | 23.101 – 33.047 | 40.117 | 9385.7 | 200.000000 | gen 1 pass; final-state drift (fitness) |
 
 ## Numerical cross-check
 
@@ -167,47 +167,26 @@ Each non-numpy row is compared against a fresh `backend="numpy"` run of the same
 
 | Case | Target | Generation 1 | Keys (gen 1) | Attr max abs diff (gen 1) | Fitness max abs diff | Mask mismatches | Final state | Keys (final) | Attr max abs diff (final) | Fitness max abs diff (final) | Mask mismatches (final) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| xor_p100 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p100 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p500 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p500 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p1000 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor_p1000 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor3d_p500 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| xor3d_p500 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| custom_pagie_p500 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| custom_pagie_p500 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| cartpole_p100 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| cartpole_p100 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p100 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000238; conn_attrs 0.000000238 | 0.000000060 | 0 | fail | node_keys 189 mismatch(es); conn_keys 686 mismatch(es) | node_attrs 1.492010832; conn_attrs 4.826976299 | 0.131897777 | 1080 |
+| xor_p100 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000000; conn_attrs 0.000000000 | 0.000000060 | 0 | pass | node_keys exact; conn_keys exact | node_attrs 0.000000149; conn_attrs 0.000000238 | 0.000000045 | 0 |
+| xor_p500 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000294 | 0.000000060 | 0 | fail | node_keys 734 mismatch(es); conn_keys 3545 mismatch(es) | node_attrs 2.440064669; conn_attrs 7.131760120 | 0.266454309 | 4278 |
+| xor_p500 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000000; conn_attrs 0.000000000 | 0.000000060 | 0 | fail | node_keys 857 mismatch(es); conn_keys 3765 mismatch(es) | node_attrs 2.720985651; conn_attrs 7.074343204 | 0.230899110 | 5990 |
+| xor_p1000 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000298 | 0.000000089 | 0 | fail | node_keys 1687 mismatch(es); conn_keys 8767 mismatch(es) | node_attrs 3.298459530; conn_attrs 6.690523148 | 0.420150518 | 7554 |
+| xor_p1000 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000000; conn_attrs 0.000000000 | 0.000000060 | 0 | fail | node_keys 1527 mismatch(es); conn_keys 7624 mismatch(es) | node_attrs 4.058683395; conn_attrs 6.799370766 | 0.418266296 | 9380 |
+| xor3d_p500 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000298 | 0.000000060 | 0 | fail | node_keys 976 mismatch(es); conn_keys 4456 mismatch(es) | node_attrs 4.066220284; conn_attrs 4.489749908 | 0.153934240 | 7562 |
+| xor3d_p500 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000000; conn_attrs 0.000000000 | 0.000000060 | 0 | fail | node_keys 959 mismatch(es); conn_keys 4229 mismatch(es) | node_attrs 4.066220284; conn_attrs 4.200792313 | 0.152276725 | 4512 |
+| custom_pagie_p500 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000294 | 0.000000238 | 0 | fail | node_keys 507 mismatch(es); conn_keys 2853 mismatch(es) | node_attrs 3.389557362; conn_attrs 3.321706295 | 0.095183104 | 5962 |
+| custom_pagie_p500 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000000; conn_attrs 0.000000000 | 0.000000060 | 0 | fail | node_keys 237 mismatch(es); conn_keys 1458 mismatch(es) | node_attrs 3.406351328; conn_attrs 2.775112629 | 0.112810448 | 1896 |
+| cartpole_p100 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000294 | 0.000000000 | 0 | pass | node_keys exact; conn_keys exact | node_attrs 0.000000119; conn_attrs 0.000000238 | 0.000000000 | 0 |
+| cartpole_p100 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000000; conn_attrs 0.000000000 | 0.000000000 | 0 | fail | node_keys exact; conn_keys exact | node_attrs 0.000000119; conn_attrs 0.000000238 | 1.000000000 | 0 |
 
 ## Blocked rows
 
-The full traceback of every row below stays in the record; the cell prints its last non-empty line.
-
-| Case | Target | Error (last non-empty line) |
-|---|---|---|
-| xor_p100 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| xor_p100 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| xor_p100 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| xor_p500 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| xor_p500 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| xor_p500 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| xor_p1000 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| xor_p1000 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| xor_p1000 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| xor3d_p500 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| xor3d_p500 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| xor3d_p500 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| custom_pagie_p500 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| custom_pagie_p500 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| custom_pagie_p500 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| cartpole_p100 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| cartpole_p100 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
-| cartpole_p100 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+No row was blocked: every planned row is `ok`.
 
 ## Provenance of this block
 
-This block is rendered from `benchmarks/results/gpu_rocm_xla_2026-11-07.json`: 18 record(s), 0 ok and 18 error, measured in the session 2026-11-07T10:28:40+00:00 – 2026-11-07T10:28:41+00:00 (UTC) at git `fc20a91ea277` (clean — generated report artifacts are not counted).
+This block is rendered from `benchmarks/results/gpu_rocm_xla_2026-11-07.json`: 18 record(s), 18 ok and 0 error, measured in the session 2026-11-07T10:29:06+00:00 – 2026-11-07T10:32:39+00:00 (UTC) at git `93ce3cac122f` (clean — generated report artifacts are not counted).
 `benchmarks/results/gpu_rocm_xla_2026-11-07.json` is committed evidence (it is in the re-include list of `benchmarks/results/.gitignore`), so every cell above is traceable to the committed record.
 Nothing here is a statement about HEAD: every number belongs to that record and to the tree its fingerprint names.
 Every xla row of this record runs with `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (the XLA+ROCm command-buffer workaround, stored in `meta.xla_flags`), one fresh process per row, on the tree this record's fingerprint names; its per-generation numbers are not comparable with the FUSION-capture xla rows of `gpu_rocm_xla_2026-11-06.json` or with any earlier evoxc revision.

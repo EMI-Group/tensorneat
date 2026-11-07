@@ -4,10 +4,10 @@
     "command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python benchmarks/gpu_measure.py matrix --cases xor_p100,xor_p500,xor_p1000,xor3d_p500,custom_pagie_p500,cartpole_p100 --targets numpy,iree-rocm,xla-rocm --warmup 3 --generations 20 --seed 42 --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --json benchmarks/results/gpu_rocm_xla_2026-11-07.json --out benchmarks/GPU.md --report-title 'TensorNEAT accelerator measurement \u2014 numpy reference vs iree rocm vs xla rocm on one MI300X VF (2026-11-07)' --report-note 'Every xla row of this record runs with `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (the XLA+ROCm command-buffer workaround, stored in `meta.xla_flags`), one fresh process per row, on the tree this record'\"'\"'s fingerprint names; its per-generation numbers are not comparable with the FUSION-capture xla rows of `gpu_rocm_xla_2026-11-06.json` or with any earlier evoxc revision.'",
     "report_title": "TensorNEAT accelerator measurement \u2014 numpy reference vs iree rocm vs xla rocm on one MI300X VF (2026-11-07)",
     "report_note": "Every xla row of this record runs with `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (the XLA+ROCm command-buffer workaround, stored in `meta.xla_flags`), one fresh process per row, on the tree this record's fingerprint names; its per-generation numbers are not comparable with the FUSION-capture xla rows of `gpu_rocm_xla_2026-11-06.json` or with any earlier evoxc revision.",
-    "created_utc": "2026-11-07T10:28:40+00:00",
+    "created_utc": "2026-11-07T10:29:06+00:00",
     "session_utc": {
-      "start": "2026-11-07T10:28:40+00:00",
-      "end": "2026-11-07T10:28:41+00:00"
+      "start": "2026-11-07T10:29:06+00:00",
+      "end": "2026-11-07T10:32:39+00:00"
     },
     "protocol": {
       "one_configuration_per_process": true,
@@ -61,11 +61,11 @@
         "XLA_FLAGS": null
       },
       "loadavg": [
-        5.05,
-        3.72,
-        7.15
+        4.54,
+        4.17,
+        6.54
       ],
-      "git_commit": "fc20a91ea277f11c3279b440d1aa2d3a77e7aa29",
+      "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
       "git_dirty": false,
       "git_dirty_paths": [],
       "probe_error": null,
@@ -101,11 +101,13 @@
     {
       "case": "xor_p100",
       "target": "numpy",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor_p100 --target numpy --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_001.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "numpy",
+      "device": null,
+      "device_index": null,
+      "compile_options": null,
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -125,16 +127,173 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:40+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:29:07+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          4.67,
+          3.74,
+          7.06
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "numpy",
+        "backend": "numpy",
+        "device": null,
+        "device_index": null,
+        "compile_options": null,
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 0.015204,
+      "first_step_s": 0.298477,
+      "build_s": 0.279659,
+      "peak_rss_mib": 143.64,
+      "ms_per_generation": {
+        "mean": 18.6942,
+        "median": 18.7672,
+        "min": 15.5152,
+        "max": 21.7154,
+        "samples": [
+          15.8776,
+          16.353,
+          17.2461,
+          16.4513,
+          15.5164,
+          15.5152,
+          17.3375,
+          18.5727,
+          18.4681,
+          18.6621,
+          19.1481,
+          20.9365,
+          18.8724,
+          19.5268,
+          20.2679,
+          19.7982,
+          20.5745,
+          21.4038,
+          21.6401,
+          21.7154
+        ]
+      },
+      "generations_per_second": 53.4926,
+      "final_generation": 24,
+      "final_max_fitness": -0.17696590721607208,
+      "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "xor_p100",
       "target": "iree-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor_p100 --target iree-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_002.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "iree",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "rocm"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -154,16 +313,284 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:40+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:29:08+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          4.67,
+          3.74,
+          7.06
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-rocm",
+        "backend": "iree",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "rocm"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 1.186004,
+      "first_step_s": 7.826543,
+      "build_s": 7.798818,
+      "peak_rss_mib": 1890.95,
+      "ms_per_generation": {
+        "mean": 10.5883,
+        "median": 10.6333,
+        "min": 9.8142,
+        "max": 11.0675,
+        "samples": [
+          10.6029,
+          10.5818,
+          10.6636,
+          11.0675,
+          10.9295,
+          10.7284,
+          10.6739,
+          10.5815,
+          10.932,
+          10.7751,
+          10.9108,
+          10.552,
+          10.723,
+          10.5375,
+          10.5907,
+          9.8142,
+          10.4805,
+          9.8249,
+          10.021,
+          10.7753
+        ]
+      },
+      "generations_per_second": 94.4439,
+      "final_generation": 24,
+      "final_max_fitness": -0.18476685881614685,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.384185791015625e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.384185791015625e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 5.960464477539063e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "node_keys",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 189,
+              "status": "fail"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 686,
+              "status": "fail"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 344,
+              "non_finite_mismatches": 344,
+              "max_abs_diff": 1.4920108318328857,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 192,
+              "non_finite_mismatches": 192,
+              "max_abs_diff": 4.826976299285889,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 4,
+              "non_finite_mismatches": 4,
+              "max_abs_diff": 0.13189777731895447,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.293936
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "xor_p100",
       "target": "xla-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor_p100 --target xla-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_003.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "xla",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
       "protocol": {
         "one_configuration_per_process": true,
@@ -183,16 +610,286 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:40+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:29:19+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          3.94,
+          3.62,
+          6.97
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "xla-rocm",
+        "backend": "xla",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 4.014357,
+      "first_step_s": 2.116041,
+      "build_s": 2.033664,
+      "peak_rss_mib": 9358.23,
+      "ms_per_generation": {
+        "mean": 3.8446,
+        "median": 3.8246,
+        "min": 3.7411,
+        "max": 3.9777,
+        "samples": [
+          3.9777,
+          3.9359,
+          3.9426,
+          3.8086,
+          3.7872,
+          3.7594,
+          3.8083,
+          3.7744,
+          3.7411,
+          3.7872,
+          3.8015,
+          3.8,
+          3.8406,
+          3.863,
+          3.7996,
+          3.8482,
+          3.8945,
+          3.9395,
+          3.9118,
+          3.8707
+        ]
+      },
+      "generations_per_second": 260.1056,
+      "final_generation": 24,
+      "final_max_fitness": -0.17696593701839447,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "pass",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 5.960464477539063e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 1.4901161193847656e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.384185791015625e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 4.470348358154297e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "reference_build_s": 0.283738
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "xor_p500",
       "target": "numpy",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor_p500 --target numpy --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_004.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "numpy",
+      "device": null,
+      "device_index": null,
+      "compile_options": null,
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -212,16 +909,173 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:40+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:29:27+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          3.78,
+          3.59,
+          6.94
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "numpy",
+        "backend": "numpy",
+        "device": null,
+        "device_index": null,
+        "compile_options": null,
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 0.015505,
+      "first_step_s": 0.385462,
+      "build_s": 0.313251,
+      "peak_rss_mib": 167.61,
+      "ms_per_generation": {
+        "mean": 73.0917,
+        "median": 72.9834,
+        "min": 68.448,
+        "max": 77.2729,
+        "samples": [
+          68.448,
+          70.9482,
+          72.6537,
+          73.038,
+          72.667,
+          72.261,
+          75.6676,
+          72.9289,
+          73.2448,
+          73.7559,
+          73.8537,
+          72.5666,
+          73.2067,
+          77.2729,
+          72.9176,
+          72.0015,
+          70.627,
+          73.2087,
+          74.407,
+          76.159
+        ]
+      },
+      "generations_per_second": 13.6814,
+      "final_generation": 24,
+      "final_max_fitness": -0.14778593182563782,
+      "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "xor_p500",
       "target": "iree-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor_p500 --target iree-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_005.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "iree",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "rocm"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -241,16 +1095,284 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:40+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:29:30+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          4.84,
+          3.81,
+          7.0
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-rocm",
+        "backend": "iree",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "rocm"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 1.21805,
+      "first_step_s": 8.048709,
+      "build_s": 8.016582,
+      "peak_rss_mib": 1914.66,
+      "ms_per_generation": {
+        "mean": 12.8346,
+        "median": 12.7441,
+        "min": 12.636,
+        "max": 13.937,
+        "samples": [
+          12.6735,
+          13.1677,
+          12.9306,
+          12.7458,
+          12.6718,
+          12.7376,
+          12.6901,
+          12.636,
+          12.7644,
+          12.8229,
+          12.8064,
+          12.8166,
+          12.9882,
+          12.6864,
+          12.7424,
+          12.6633,
+          12.7382,
+          13.937,
+          12.771,
+          12.7018
+        ]
+      },
+      "generations_per_second": 77.9145,
+      "final_generation": 24,
+      "final_max_fitness": -0.11245877295732498,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 4.76837158203125e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.9383227229118347e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 5.960464477539063e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "node_keys",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 734,
+              "status": "fail"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 3545,
+              "status": "fail"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 1284,
+              "non_finite_mismatches": 1284,
+              "max_abs_diff": 2.4400646686553955,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 840,
+              "non_finite_mismatches": 840,
+              "max_abs_diff": 7.131760120391846,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 15,
+              "non_finite_mismatches": 15,
+              "max_abs_diff": 0.2664543092250824,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.327978
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "xor_p500",
       "target": "xla-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor_p500 --target xla-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_006.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "xla",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
       "protocol": {
         "one_configuration_per_process": true,
@@ -270,16 +1392,286 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:40+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:29:42+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          4.41,
+          3.75,
+          6.94
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "xla-rocm",
+        "backend": "xla",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 4.019044,
+      "first_step_s": 2.320538,
+      "build_s": 2.244182,
+      "peak_rss_mib": 9396.23,
+      "ms_per_generation": {
+        "mean": 4.0553,
+        "median": 4.0327,
+        "min": 3.9291,
+        "max": 4.2308,
+        "samples": [
+          3.9455,
+          3.9985,
+          3.9871,
+          3.948,
+          3.9291,
+          4.0098,
+          4.0324,
+          4.1055,
+          4.0829,
+          4.2172,
+          4.1886,
+          4.0789,
+          4.2308,
+          4.2052,
+          4.1384,
+          4.0494,
+          4.0331,
+          3.9788,
+          3.9966,
+          3.9504
+        ]
+      },
+      "generations_per_second": 246.5899,
+      "final_generation": 24,
+      "final_max_fitness": -0.14094853401184082,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 5.960464477539063e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "node_keys",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 857,
+              "status": "fail"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 3765,
+              "status": "fail"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 1980,
+              "non_finite_mismatches": 1980,
+              "max_abs_diff": 2.7209856510162354,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 1000,
+              "non_finite_mismatches": 1000,
+              "max_abs_diff": 7.074343204498291,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 15,
+              "non_finite_mismatches": 15,
+              "max_abs_diff": 0.23089911043643951,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.326497
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "xor_p1000",
       "target": "numpy",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor_p1000 --target numpy --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_007.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "numpy",
+      "device": null,
+      "device_index": null,
+      "compile_options": null,
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -299,16 +1691,173 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:40+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:29:52+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          3.88,
+          3.66,
+          6.88
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "numpy",
+        "backend": "numpy",
+        "device": null,
+        "device_index": null,
+        "compile_options": null,
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p1000",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 1000,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 0.016966,
+      "first_step_s": 0.502656,
+      "build_s": 0.375222,
+      "peak_rss_mib": 197.96,
+      "ms_per_generation": {
+        "mean": 132.1498,
+        "median": 132.1848,
+        "min": 126.2728,
+        "max": 136.7848,
+        "samples": [
+          128.2479,
+          131.3677,
+          134.8038,
+          126.2728,
+          126.97,
+          131.2763,
+          132.2058,
+          132.1087,
+          132.4724,
+          134.0767,
+          131.1948,
+          131.1649,
+          132.1639,
+          135.4627,
+          133.127,
+          133.6431,
+          136.7848,
+          135.6616,
+          129.7049,
+          134.2871
+        ]
+      },
+      "generations_per_second": 7.5672,
+      "final_generation": 24,
+      "final_max_fitness": -0.0533391535282135,
+      "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "xor_p1000",
       "target": "iree-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor_p1000 --target iree-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_008.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "iree",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "rocm"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -328,16 +1877,284 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:40+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:29:56+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          5.09,
+          3.92,
+          6.94
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-rocm",
+        "backend": "iree",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "rocm"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p1000",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 1000,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 1.25756,
+      "first_step_s": 8.227734,
+      "build_s": 8.193423,
+      "peak_rss_mib": 1937.59,
+      "ms_per_generation": {
+        "mean": 15.3141,
+        "median": 15.2025,
+        "min": 14.7845,
+        "max": 16.0481,
+        "samples": [
+          15.4508,
+          16.0481,
+          15.901,
+          15.8716,
+          15.8539,
+          15.6583,
+          15.5197,
+          15.6997,
+          15.2273,
+          15.1778,
+          14.8633,
+          14.9048,
+          15.0645,
+          14.7845,
+          14.9365,
+          14.832,
+          15.6472,
+          15.0294,
+          14.977,
+          14.8343
+        ]
+      },
+      "generations_per_second": 65.2994,
+      "final_generation": 24,
+      "final_max_fitness": -0.13638955354690552,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 4.76837158203125e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.980232238769531e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 8.940696716308594e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "node_keys",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 1687,
+              "status": "fail"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 8767,
+              "status": "fail"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 2128,
+              "non_finite_mismatches": 2128,
+              "max_abs_diff": 3.298459529876709,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 1620,
+              "non_finite_mismatches": 1620,
+              "max_abs_diff": 6.690523147583008,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 29,
+              "non_finite_mismatches": 29,
+              "max_abs_diff": 0.4201505184173584,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.370695
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "xor_p1000",
       "target": "xla-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor_p1000 --target xla-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_009.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "xla",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
       "protocol": {
         "one_configuration_per_process": true,
@@ -357,16 +2174,286 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:40+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:30:10+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          4.25,
+          3.79,
+          6.85
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "xla-rocm",
+        "backend": "xla",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor_p1000",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 1000,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 4.084003,
+      "first_step_s": 2.436017,
+      "build_s": 2.353663,
+      "peak_rss_mib": 9402.03,
+      "ms_per_generation": {
+        "mean": 4.9766,
+        "median": 4.9675,
+        "min": 4.8767,
+        "max": 5.0608,
+        "samples": [
+          5.0187,
+          5.0608,
+          4.9725,
+          5.0003,
+          4.9608,
+          4.9444,
+          4.8767,
+          4.9407,
+          4.9948,
+          5.015,
+          4.9455,
+          4.9659,
+          4.9674,
+          4.9536,
+          4.9672,
+          5.03,
+          4.9676,
+          5.009,
+          4.959,
+          4.982
+        ]
+      },
+      "generations_per_second": 200.9405,
+      "final_generation": 24,
+      "final_max_fitness": -0.053339146077632904,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 5.960464477539063e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "node_keys",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 1527,
+              "status": "fail"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 7624,
+              "status": "fail"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 2824,
+              "non_finite_mismatches": 2824,
+              "max_abs_diff": 4.058683395385742,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 1832,
+              "non_finite_mismatches": 1832,
+              "max_abs_diff": 6.799370765686035,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 34,
+              "non_finite_mismatches": 34,
+              "max_abs_diff": 0.41826629638671875,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.396603
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "xor3d_p500",
       "target": "numpy",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor3d_p500 --target numpy --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_010.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "numpy",
+      "device": null,
+      "device_index": null,
+      "compile_options": null,
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -386,16 +2473,169 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:41+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:30:22+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          3.75,
+          3.7,
+          6.79
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "numpy",
+        "backend": "numpy",
+        "device": null,
+        "device_index": null,
+        "compile_options": null,
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor3d_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.05,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR3d",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 0.015557,
+      "first_step_s": 0.397169,
+      "build_s": 0.316072,
+      "peak_rss_mib": 180.02,
+      "ms_per_generation": {
+        "mean": 86.2384,
+        "median": 87.5977,
+        "min": 75.244,
+        "max": 91.6742,
+        "samples": [
+          75.244,
+          76.2084,
+          83.6617,
+          82.1976,
+          80.152,
+          84.863,
+          86.8861,
+          86.6717,
+          91.4057,
+          87.6964,
+          87.1597,
+          87.7982,
+          87.499,
+          90.0744,
+          88.1417,
+          88.2809,
+          91.0313,
+          89.4321,
+          88.6891,
+          91.6742
+        ]
+      },
+      "generations_per_second": 11.5958,
+      "final_generation": 24,
+      "final_max_fitness": -0.22346556186676025,
+      "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "xor3d_p500",
       "target": "iree-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor3d_p500 --target iree-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_011.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "iree",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "rocm"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -415,16 +2655,280 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:41+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:30:25+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          4.81,
+          3.92,
+          6.84
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-rocm",
+        "backend": "iree",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "rocm"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor3d_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.05,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR3d",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 1.219939,
+      "first_step_s": 8.095458,
+      "build_s": 8.063487,
+      "peak_rss_mib": 1916.19,
+      "ms_per_generation": {
+        "mean": 13.0175,
+        "median": 12.9097,
+        "min": 12.7415,
+        "max": 14.5812,
+        "samples": [
+          12.7542,
+          12.8024,
+          12.8695,
+          12.8475,
+          12.7854,
+          12.7807,
+          12.7415,
+          12.8211,
+          12.7453,
+          13.2574,
+          13.1442,
+          12.9032,
+          13.1143,
+          13.0065,
+          13.0978,
+          12.9163,
+          12.9561,
+          14.5812,
+          13.1003,
+          13.1254
+        ]
+      },
+      "generations_per_second": 76.8196,
+      "final_generation": 24,
+      "final_max_fitness": -0.2499999850988388,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 4.76837158203125e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.980232238769531e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 5.960464477539063e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "node_keys",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 976,
+              "status": "fail"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 4456,
+              "status": "fail"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 2236,
+              "non_finite_mismatches": 2236,
+              "max_abs_diff": 4.066220283508301,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 1518,
+              "non_finite_mismatches": 1518,
+              "max_abs_diff": 4.489749908447266,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 27,
+              "non_finite_mismatches": 27,
+              "max_abs_diff": 0.15393424034118652,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.32519
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "xor3d_p500",
       "target": "xla-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case xor3d_p500 --target xla-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_012.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "xla",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
       "protocol": {
         "one_configuration_per_process": true,
@@ -444,16 +2948,282 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:41+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:30:37+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          4.38,
+          3.85,
+          6.79
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "xla-rocm",
+        "backend": "xla",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "xor3d_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.05,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR3d",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 4.052972,
+      "first_step_s": 2.291861,
+      "build_s": 2.210525,
+      "peak_rss_mib": 9407.97,
+      "ms_per_generation": {
+        "mean": 4.134,
+        "median": 4.1534,
+        "min": 4.0372,
+        "max": 4.2188,
+        "samples": [
+          4.0841,
+          4.0372,
+          4.0895,
+          4.0926,
+          4.1334,
+          4.1484,
+          4.168,
+          4.1781,
+          4.1733,
+          4.1878,
+          4.2188,
+          4.1584,
+          4.2052,
+          4.1966,
+          4.1664,
+          4.1593,
+          4.1134,
+          4.0426,
+          4.0419,
+          4.085
+        ]
+      },
+      "generations_per_second": 241.8961,
+      "final_generation": 24,
+      "final_max_fitness": -0.22346557676792145,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 5.960464477539063e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "node_keys",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 959,
+              "status": "fail"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 4229,
+              "status": "fail"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 1344,
+              "non_finite_mismatches": 1344,
+              "max_abs_diff": 4.066220283508301,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 895,
+              "non_finite_mismatches": 895,
+              "max_abs_diff": 4.20079231262207,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 17,
+              "non_finite_mismatches": 17,
+              "max_abs_diff": 0.15227672457695007,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.321021
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "custom_pagie_p500",
       "target": "numpy",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case custom_pagie_p500 --target numpy --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_013.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "numpy",
+      "device": null,
+      "device_index": null,
+      "compile_options": null,
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -473,16 +3243,180 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:41+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:30:48+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          4.41,
+          3.88,
+          6.77
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "numpy",
+        "backend": "numpy",
+        "device": null,
+        "device_index": null,
+        "compile_options": null,
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "custom_pagie_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.01,
+        "seed": 42,
+        "notes": "per-impl divergence: the legacy side seeds the global numpy RNG and vmaps a jax-typed func; the new side samples from default_rng(seed) with a numpy func \u2014 same distribution, different draws",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "CustomFuncFit",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "CustomFuncFit",
+          "method": "sample",
+          "num_samples": 500,
+          "low_bounds": [
+            -1.0,
+            -1.0
+          ],
+          "upper_bounds": [
+            1.0,
+            1.0
+          ],
+          "func": "pagie"
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 0.015338,
+      "first_step_s": 1.492275,
+      "build_s": 0.785908,
+      "peak_rss_mib": 933.91,
+      "ms_per_generation": {
+        "mean": 887.8147,
+        "median": 887.256,
+        "min": 812.5945,
+        "max": 966.1537,
+        "samples": [
+          824.5015,
+          866.7491,
+          812.5945,
+          857.2892,
+          823.5856,
+          830.5127,
+          869.0579,
+          940.3758,
+          892.9076,
+          917.5659,
+          918.1751,
+          881.6045,
+          921.4707,
+          847.157,
+          866.7276,
+          907.8799,
+          940.3252,
+          966.1537,
+          927.2055,
+          944.4554
+        ]
+      },
+      "generations_per_second": 1.1264,
+      "final_generation": 24,
+      "final_max_fitness": -0.03261268883943558,
+      "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "custom_pagie_p500",
       "target": "iree-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case custom_pagie_p500 --target iree-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_014.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "iree",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "rocm"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -502,16 +3436,291 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:41+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:31:10+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          4.85,
+          4.05,
+          6.75
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-rocm",
+        "backend": "iree",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "rocm"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "custom_pagie_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.01,
+        "seed": 42,
+        "notes": "per-impl divergence: the legacy side seeds the global numpy RNG and vmaps a jax-typed func; the new side samples from default_rng(seed) with a numpy func \u2014 same distribution, different draws",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "CustomFuncFit",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "CustomFuncFit",
+          "method": "sample",
+          "num_samples": 500,
+          "low_bounds": [
+            -1.0,
+            -1.0
+          ],
+          "upper_bounds": [
+            1.0,
+            1.0
+          ],
+          "func": "pagie"
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 1.204479,
+      "first_step_s": 8.437584,
+      "build_s": 8.406106,
+      "peak_rss_mib": 1944.11,
+      "ms_per_generation": {
+        "mean": 15.9798,
+        "median": 15.8734,
+        "min": 14.4202,
+        "max": 22.2979,
+        "samples": [
+          15.8847,
+          15.862,
+          15.8988,
+          22.2979,
+          15.7639,
+          17.8286,
+          15.8897,
+          15.8498,
+          15.996,
+          16.1109,
+          15.6103,
+          14.4615,
+          14.5098,
+          14.4924,
+          14.5726,
+          16.9912,
+          14.8702,
+          15.9517,
+          16.3337,
+          14.4202
+        ]
+      },
+      "generations_per_second": 62.579,
+      "final_generation": 24,
+      "final_max_fitness": -0.04604867845773697,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 4.76837158203125e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.9383227229118347e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.384185791015625e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "node_keys",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 507,
+              "status": "fail"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 2853,
+              "status": "fail"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 1876,
+              "non_finite_mismatches": 1876,
+              "max_abs_diff": 3.389557361602783,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 1099,
+              "non_finite_mismatches": 1099,
+              "max_abs_diff": 3.3217062950134277,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 6,
+              "non_finite_mismatches": 6,
+              "max_abs_diff": 0.0951831042766571,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.760367
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "custom_pagie_p500",
       "target": "xla-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case custom_pagie_p500 --target xla-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_015.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "xla",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
       "protocol": {
         "one_configuration_per_process": true,
@@ -531,16 +3740,293 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:41+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:31:41+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          4.6,
+          4.09,
+          6.68
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "xla-rocm",
+        "backend": "xla",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "custom_pagie_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.01,
+        "seed": 42,
+        "notes": "per-impl divergence: the legacy side seeds the global numpy RNG and vmaps a jax-typed func; the new side samples from default_rng(seed) with a numpy func \u2014 same distribution, different draws",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "CustomFuncFit",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "CustomFuncFit",
+          "method": "sample",
+          "num_samples": 500,
+          "low_bounds": [
+            -1.0,
+            -1.0
+          ],
+          "upper_bounds": [
+            1.0,
+            1.0
+          ],
+          "func": "pagie"
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 3.047506,
+      "first_step_s": 2.686909,
+      "build_s": 2.606948,
+      "peak_rss_mib": 4880.92,
+      "ms_per_generation": {
+        "mean": 5.9691,
+        "median": 5.8915,
+        "min": 5.6241,
+        "max": 6.4006,
+        "samples": [
+          5.7341,
+          5.7161,
+          5.9573,
+          6.4006,
+          5.8637,
+          6.1051,
+          5.8904,
+          5.8614,
+          5.8145,
+          5.8227,
+          5.8841,
+          5.8926,
+          5.9929,
+          5.6241,
+          6.0132,
+          6.3325,
+          6.2809,
+          5.7252,
+          6.2355,
+          6.2355
+        ]
+      },
+      "generations_per_second": 167.529,
+      "final_generation": 24,
+      "final_max_fitness": -0.032612692564725876,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 5.960464477539063e-08,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "node_keys",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 237,
+              "status": "fail"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 1458,
+              "status": "fail"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 492,
+              "non_finite_mismatches": 492,
+              "max_abs_diff": 3.406351327896118,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 452,
+              "non_finite_mismatches": 452,
+              "max_abs_diff": 2.7751126289367676,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 4,
+              "non_finite_mismatches": 4,
+              "max_abs_diff": 0.11281044781208038,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.762632
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "cartpole_p100",
       "target": "numpy",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case cartpole_p100 --target numpy --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_016.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "numpy",
+      "device": null,
+      "device_index": null,
+      "compile_options": null,
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -560,16 +4046,169 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:41+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:32:09+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          3.97,
+          3.98,
+          6.56
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "numpy",
+        "backend": "numpy",
+        "device": null,
+        "device_index": null,
+        "compile_options": null,
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "cartpole_p100",
+        "family": "rl",
+        "impls": [
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": 180.0,
+        "seed": 42,
+        "notes": "new-only: the legacy library has no equivalent problem",
+        "gens_to_target": false,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "CartPole",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 4,
+          "num_outputs": 2,
+          "max_nodes": 50,
+          "max_conns": 100
+        },
+        "problem_config": {
+          "class": "CartPole",
+          "max_step": 200,
+          "repeat_times": 1
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 0.015784,
+      "first_step_s": 0.336873,
+      "build_s": 0.266268,
+      "peak_rss_mib": 142.4,
+      "ms_per_generation": {
+        "mean": 105.2525,
+        "median": 95.952,
+        "min": 94.4135,
+        "max": 153.0091,
+        "samples": [
+          95.5455,
+          94.4135,
+          95.4172,
+          127.7915,
+          95.6949,
+          96.9934,
+          124.6628,
+          95.9465,
+          99.6934,
+          95.8251,
+          95.5344,
+          95.6098,
+          96.3664,
+          129.725,
+          95.0001,
+          96.1423,
+          95.9207,
+          95.9576,
+          129.8005,
+          153.0091
+        ]
+      },
+      "generations_per_second": 9.501,
+      "final_generation": 24,
+      "final_max_fitness": 200.0,
+      "cross_check": {
+        "status": "skipped",
+        "reason": "target is the numpy reference"
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "cartpole_p100",
       "target": "iree-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case cartpole_p100 --target iree-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_017.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "iree",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "target_backends": [
+          "rocm"
+        ]
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": null,
       "protocol": {
         "one_configuration_per_process": true,
@@ -589,16 +4228,280 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:41+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:32:13+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          3.97,
+          3.98,
+          6.56
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "iree-rocm",
+        "backend": "iree",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "target_backends": [
+            "rocm"
+          ]
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "cartpole_p100",
+        "family": "rl",
+        "impls": [
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": 180.0,
+        "seed": 42,
+        "notes": "new-only: the legacy library has no equivalent problem",
+        "gens_to_target": false,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "CartPole",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 4,
+          "num_outputs": 2,
+          "max_nodes": 50,
+          "max_conns": 100
+        },
+        "problem_config": {
+          "class": "CartPole",
+          "max_step": 200,
+          "repeat_times": 1
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 1.215287,
+      "first_step_s": 8.736579,
+      "build_s": 8.658295,
+      "peak_rss_mib": 1939.04,
+      "ms_per_generation": {
+        "mean": 65.5127,
+        "median": 67.2021,
+        "min": 58.9117,
+        "max": 70.199,
+        "samples": [
+          61.8441,
+          60.6503,
+          62.6188,
+          60.4734,
+          58.9117,
+          70.199,
+          67.479,
+          68.1127,
+          68.4667,
+          67.0361,
+          68.1069,
+          67.505,
+          67.3953,
+          63.9585,
+          67.7638,
+          64.3517,
+          68.087,
+          67.368,
+          63.2486,
+          66.6767
+        ]
+      },
+      "generations_per_second": 15.2642,
+      "final_generation": 24,
+      "final_max_fitness": 200.0,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "pass",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 4.76837158203125e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.9383227229118347e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 1.1920928955078125e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.384185791015625e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "reference_build_s": 0.286995
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     },
     {
       "case": "cartpole_p100",
       "target": "xla-rocm",
-      "status": "error",
-      "error": "the child process exited 2 without writing a record\n\n--- child stderr tail ---\nusage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
-      "returncode": 2,
-      "child_command": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A34/benchmarks/gpu_measure.py run --case cartpole_p100 --target xla-rocm --warmup 3 --generations 20 --seed 42 --json /tmp/gpu_measure_7j34wcnf/row_018.json --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --xla-flags --xla_gpu_enable_command_buffer=WHILE",
-      "stderr_tail": "usage: gpu_measure.py run [-h]\n                          [--case {xor_p100,xor_p500,xor_p1000,xor3d_p100,xor3d_p500,xor3d_p1000,custom_pagie_p500,cartpole_p100}]\n                          [--target {numpy,iree-llvm-cpu,iree-rocm,xla-rocm}]\n                          [--warmup WARMUP] [--generations GENERATIONS]\n                          [--seed SEED] [--no-cross-check] [--trace N]\n                          [--device KIND] [--pjrt-plugin PATH]\n                          [--device-index N] [--target-backends a,b]\n                          [--rocm-target ARCH] [--iree-compile-arg FLAG]\n                          [--xla-flags TEXT] [--json row.json]\ngpu_measure.py run: error: argument --xla-flags: expected one argument",
+      "backend": "xla",
+      "device": "rocm",
+      "device_index": null,
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "warmup_generations": 3,
+      "timed_generations": 20,
       "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
       "protocol": {
         "one_configuration_per_process": true,
@@ -618,7 +4521,271 @@
         "float_atol": 1e-06,
         "errors": "recorded as status='error' rows carrying the traceback, never dropped"
       },
-      "timestamp_utc": "2026-11-07T10:28:41+00:00"
+      "status": "ok",
+      "error": null,
+      "timestamp_utc": "2026-11-07T10:32:28+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          5.26,
+          4.28,
+          6.61
+        ],
+        "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_info": {
+        "name": "xla-rocm",
+        "backend": "xla",
+        "device": "rocm",
+        "device_index": null,
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A34/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "case_config": {
+        "name": "cartpole_p100",
+        "family": "rl",
+        "impls": [
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": 180.0,
+        "seed": 42,
+        "notes": "new-only: the legacy library has no equivalent problem",
+        "gens_to_target": false,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "CartPole",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 4,
+          "num_outputs": 2,
+          "max_nodes": 50,
+          "max_conns": 100
+        },
+        "problem_config": {
+          "class": "CartPole",
+          "max_step": 200,
+          "repeat_times": 1
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 4.159031,
+      "first_step_s": 2.336512,
+      "build_s": 2.236486,
+      "peak_rss_mib": 9385.72,
+      "ms_per_generation": {
+        "mean": 24.9273,
+        "median": 23.5672,
+        "min": 23.1006,
+        "max": 33.0475,
+        "samples": [
+          23.2835,
+          23.2354,
+          23.4665,
+          27.9594,
+          23.2865,
+          23.413,
+          28.5684,
+          24.1788,
+          23.8902,
+          23.6195,
+          23.1635,
+          24.6381,
+          23.1006,
+          27.6876,
+          23.5149,
+          23.4482,
+          23.323,
+          23.6771,
+          28.0445,
+          33.0475
+        ]
+      },
+      "generations_per_second": 40.1166,
+      "final_generation": 24,
+      "final_max_fitness": 200.0,
+      "cross_check": {
+        "reference": "numpy",
+        "steps": 24,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "trajectory_note": "Both legs draw the same evoxc splitmix64 stream from one seed and one graph, so generation 1 must match exactly on the integer keys and within rtol=1e-05/atol=1e-06 on the float payload. Beyond it a float-reassociation difference between the backends can reorder a near-tied selection, so a final-state key mismatch is search-trajectory drift, not necessarily a kernel defect.",
+        "status": "fail",
+        "generation_1": {
+          "status": "pass",
+          "first_failing_field": null,
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 0.0,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            }
+          }
+        },
+        "final_state": {
+          "status": "fail",
+          "first_failing_field": "fitness",
+          "fields": {
+            "node_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "conn_keys": {
+              "kind": "int-keys",
+              "shape_match": true,
+              "mismatching_entries": 0,
+              "status": "pass"
+            },
+            "node_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 1.1920928955078125e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "conn_attrs": {
+              "kind": "float-attrs",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 2.384185791015625e-07,
+              "allclose": true,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "pass"
+            },
+            "fitness": {
+              "kind": "float-fitness",
+              "shape_match": true,
+              "nan_mask_mismatches": 0,
+              "neginf_mask_mismatches": 0,
+              "non_finite_mismatches": 0,
+              "max_abs_diff": 1.0,
+              "allclose": false,
+              "rtol": 1e-05,
+              "atol": 1e-06,
+              "status": "fail"
+            }
+          }
+        },
+        "reference_build_s": 0.287897
+      },
+      "trajectory": {
+        "steps": 0,
+        "rtol": 1e-05,
+        "atol": 1e-06,
+        "note": "Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.",
+        "status": "skipped",
+        "reason": "--trace 0 (off)"
+      }
     }
   ]
 }
