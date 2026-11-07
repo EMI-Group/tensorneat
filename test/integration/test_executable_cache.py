@@ -20,6 +20,16 @@ here:
   ``device=None`` (``_device_kind() is None``) and ``device="cpu"``
   (``_device_kind() == "cpu"``) both yield the same last element, so the default
   path and an explicit CPU placement stay byte-identical.
+* **The effective backend keys the cache too, immediately before the budget.**
+  It selects the level spelling at trace time (``iree`` keeps the unrolled
+  sweep, ``xla`` takes the data-dependent loop), so a backend switch must
+  rebuild; the test switches ``state.update(backend="xla")``, asserts the
+  signature differs in that one slot only, that a ``step`` rebuilds exactly once
+  and a second ``step`` reuses it — and that the backend term therefore sits
+  *before* the trailing budget, keeping the ``shape_signature[-1]`` pin below
+  valid. ``"xla"`` is chosen because naming it needs no optional dependency; the
+  build site is spied and redirected to the reference interpreter, so no PJRT
+  artifact is compiled.
 * **Changing the budget mid-run is a rebuild, and the rebuilt graph is neutral.**
   A same-seed run patched only on its second generation shows the signature tail
   ``12500, 24, 12500, 12500`` and ``builds`` ``1, 2, 2, 2``: the new budget is a
@@ -46,8 +56,9 @@ Budgets (measured, never asserted)
 (unreachable: XOR fitness is ``-mse <= 0``), so the whole budget is consumed.
 XOR tiles four samples, so the tiled width is ``16 * 4 = 64`` rows and a budget
 of ``24`` becomes ``24 // 4 = 6`` individuals per group, three groups. Every run
-compiles once (the patched run twice); the module is a few seconds on the numpy
-reference interpreter and never reads a clock.
+compiles once (the patched run and the backend-switched run twice each); the
+module is a few seconds on the numpy reference interpreter and never reads a
+clock.
 
 A note on reachability
 ----------------------
@@ -278,6 +289,112 @@ def test_an_explicit_cpu_device_keeps_the_same_last_signature_element(tn, tiny_p
         'the last signature element must be identical for device=None and '
         f'device="cpu" (12500), got {default._shape_signature(default_state)[-1]!r} '
         f"and {placed._shape_signature(placed_state)[-1]!r}"
+    )
+
+
+def test_the_backend_is_a_cache_key_element_before_the_chunk_budget(
+    tn, tiny_pipeline, monkeypatch
+):
+    """The effective ``backend`` keys the executable cache, ahead of the chunk budget.
+
+    The backend is not a flavour of the same graph: ``DefaultGenome._static_sweep``
+    reads it at trace time and selects the level spelling (an ``iree`` build keeps
+    the unrolled sweep, an ``xla`` build takes the data-dependent loop), so
+    reusing one backend's executable for the other would run a graph traced with
+    the wrong spelling. It therefore sits in the signature immediately *before*
+    the trailing chunk budget.
+
+    Oracle: the signature ``setup()`` produced (the ``numpy`` pipeline and its
+    build count), and the comparison is positional — everything before the
+    backend term must be unchanged, so a backend switch cannot perturb the
+    payload, substrate or formulation entries, and the chunk budget itself must
+    not move either.
+
+    ``state.update(backend="xla")`` is the switch because ``"xla"`` needs no
+    optional dependency to be *named* and is the backend whose spelling differs.
+    A real ``xla`` build would compile a PJRT artifact, so the spy records the
+    requested backend and hands the build to the reference interpreter: the
+    assertion is about the cache key and the two builds it forces, never about
+    what an ``xla`` artifact computes.
+
+    Assertion: the ``numpy`` signature ends ``..., "numpy", 12500``; after the
+    switch the signature differs only in the backend slot; one ``step`` rebuilds
+    exactly once (``builds == 2``) and the build site really asked for ``"xla"``;
+    a further ``step`` reuses that executable (``builds`` stays 2, so no third
+    build) and advances the generation, while the existing ``shape_signature[-1]``
+    chunk-budget pin stays valid because the backend term sits before it.
+    """
+    import evoxc
+    import tensorneat.host_payload as host_payload
+
+    pipeline = tiny_pipeline()
+    state = pipeline.setup()
+    baseline = pipeline._shape_signature(state)
+    assert pipeline.builds == 0, "setup must not build a generation graph"
+    assert baseline[-2] == "numpy", (
+        f"the second-to-last signature element must be the effective backend, got "
+        f"{baseline[-2]!r} (signature {baseline})"
+    )
+    assert baseline[-1] == host_payload.eval_chunk_rows(
+        pipeline._device_kind(), pipeline._genome().max_nodes
+    ) == 12_500, (
+        f"the trailing element must still be the chunk budget, got {baseline[-1]!r}"
+    )
+
+    requested = []
+    real_build = evoxc.build
+
+    def numpy_build(*args, **options):
+        """Record the requested backend, then compile on the reference interpreter."""
+        requested.append(options.get("backend", "numpy"))
+        options["backend"] = "numpy"
+        return real_build(*args, **options)
+
+    monkeypatch.setattr(evoxc, "build", numpy_build)
+
+    state, _, _ = pipeline.step(state)
+    assert pipeline.builds == 1
+    assert pipeline.shape_signature == baseline, (
+        "the first generation must build the numpy-spelled signature, got "
+        f"{pipeline.shape_signature}"
+    )
+
+    switched = state.update(backend="xla")
+    signature = pipeline._shape_signature(switched)
+    assert signature[:-2] == baseline[:-2], (
+        "a backend switch must not perturb the payload/substrate/formulation "
+        f"prefix: {baseline[:-2]} vs {signature[:-2]}"
+    )
+    assert signature[-2] == "xla" and baseline[-2] == "numpy", (
+        "the backend slot must carry the state's effective backend, got "
+        f"{signature[-2]!r} after switching from {baseline[-2]!r}"
+    )
+    assert signature[-1] == baseline[-1], (
+        "the chunk budget must stay the trailing element across a backend switch, "
+        f"got {baseline[-1]!r} vs {signature[-1]!r}"
+    )
+
+    state, _, fitnesses = pipeline.step(switched)
+    assert pipeline.builds == 2, (
+        "a new backend in the signature must build a second executable, got "
+        f"{pipeline.builds} build(s)"
+    )
+    assert pipeline.shape_signature == signature
+    assert requested == ["numpy", "xla"], (
+        "the two builds must request the two backends (recorded before the spy "
+        f"redirects them to numpy), got {requested}"
+    )
+    assert int(tn.common.to_numpy(state.generation)) == 2
+    assert fitnesses.shape == (TINY_CONFIG["pop_size"],)
+
+    state, _, _ = pipeline.step(state)
+    assert pipeline.builds == 2, (
+        "the second xla-spelled step must reuse its executable, got "
+        f"{pipeline.builds} build(s)"
+    )
+    assert int(tn.common.to_numpy(state.generation)) == 3
+    assert requested == ["numpy", "xla"], (
+        f"a cache hit must not reach the build site again, got {requested}"
     )
 
 

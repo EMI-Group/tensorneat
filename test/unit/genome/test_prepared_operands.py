@@ -16,11 +16,12 @@ two of them are the subject here:
 * the prepared rank-0 scalars (``_StepStatics.scalars`` /
   ``NodeOperands.scalars``) — ``{0.0: zero, 1.0: one}``, materialised once per pass
   and handed to every option callable that **declares a ``scalars`` parameter**
-  (``gene/node/base.py::_takes_scalars``). An option that does not declare it keeps
-  its own literal and its exact old call shape, so the two paths must agree bit for
-  bit; the option that does declare it must drop the per-level ``constant`` ops, and
-  that drop is the proof the prepared tensor — not a fresh literal — is what the
-  activation used.
+  (``gene/node/base.py::_takes_scalars``). Every shipped ``act``/``agg`` option
+  declares it today, so the literal side of the comparison is the test-local
+  :func:`_literal_sigmoid`, which keeps the old one-argument call shape: the two
+  paths must agree bit for bit; and the option that declares ``scalars`` must drop
+  the per-level ``constant`` ops, that drop being the proof the prepared tensor —
+  not a fresh literal — is what the activation used.
 
 Oracles used here (never the kernel itself)
 -------------------------------------------
@@ -273,6 +274,31 @@ def _prepared_sigmoid(z, scalars=None):
     return evoxc.divide(one, evoxc.add(one, evoxc.exp(evoxc.negate(z))))
 
 
+def _literal_sigmoid(z):
+    """``act.sigmoid`` in the call shape an option that declares no ``scalars`` keeps.
+
+    The same expression as :func:`_prepared_sigmoid`, but with **no** ``scalars``
+    parameter, so :func:`~tensorneat.genome.gene.node.base._takes_scalars` answers
+    ``False`` and the node gene hands it the exact old one-argument call: each
+    ``1.0`` is its own fresh ``enp.full`` literal, and ``evoxc`` merges no
+    constants, so the unrolled sweep pays one ``constant`` op per literal per
+    level. This is the non-scalars stand-in the comparison needs — every shipped
+    :mod:`~tensorneat.common.functions.act` / :mod:`~tensorneat.common.functions.agg`
+    option declares ``scalars`` today, so none of them can play that role.
+
+    Args:
+        z: ``(P, N) float32`` pre-activation node values.
+
+    Returns:
+        ``(P, N) float32`` logistic sigmoid, exactly ``1 / (1 + exp(-z))``.
+    """
+    import evoxc
+    from evoxc import numpy as enp
+
+    one = enp.full((), 1.0, dtype=evoxc.float32)
+    return evoxc.divide(one, evoxc.add(one, evoxc.exp(evoxc.negate(z))))
+
+
 def _swept_genome(genome, activation):
     """The shared chain genome with ``activation`` as its only activation option."""
     node_gene = genome.DefaultNode(activation_options=[activation])
@@ -290,22 +316,33 @@ def _swept_genome(genome, activation):
 def test_takes_scalars_is_the_signature_rule():
     """Invariant: ``_takes_scalars`` answers exactly "does ``fn`` declare ``scalars``".
 
-    Oracle: :func:`inspect.signature` itself, applied to the three shipped kernels the
-    pass's constants would serve and to a kernel that does not take any argument
-    keyword. The rule is a *signature* read (host-side, cached per gene), never a
-    name list, so a kernel of the ``common.functions`` tree that starts accepting
-    ``scalars`` flips the flag with no genome-side change — and one that does not
-    keeps its exact old call shape.
+    Oracle: :func:`inspect.signature` itself, applied to the shipped kernels and to
+    kernels that do not declare the parameter. The rule is a *signature* read
+    (host-side, cached per gene), never a name list, so a kernel of the
+    ``common.functions`` tree that declares ``scalars`` flips the flag with no
+    genome-side change — and one that does not keeps its exact old call shape.
+
+    The mapping is live, not a future hook: ``act.sigmoid`` and the six ``agg``
+    kernels named below declare ``scalars=None``, so a shipped forward pass really
+    consumes the prepared tensors, while a kernel without the parameter
+    (:func:`_literal_sigmoid`, a bare lambda) is handed its own literal and the old
+    call shape.
     """
     import inspect
 
     from tensorneat.common.functions import AGG, ACT
     from tensorneat.genome.gene.node.base import _takes_scalars
 
-    for fn in (ACT.sigmoid, AGG.sum, AGG.mean, _prepared_sigmoid):
+    shipped = (ACT.sigmoid, AGG.sum, AGG.max, AGG.min, AGG.product, AGG.maxabs, AGG.mean)
+    for fn in (*shipped, _literal_sigmoid, _prepared_sigmoid):
         assert _takes_scalars(fn) is ("scalars" in inspect.signature(fn).parameters), (
             f"{getattr(fn, '__name__', fn)}: the flag disagrees with its signature"
         )
+    assert all(_takes_scalars(fn) is True for fn in shipped), (
+        "every shipped act/agg option declares `scalars`, so the prepared mapping "
+        "is what a shipped forward pass consumes"
+    )
+    assert _takes_scalars(_literal_sigmoid) is False
     assert _takes_scalars(_prepared_sigmoid) is True
     assert _takes_scalars(lambda z: z) is False
 
@@ -315,24 +352,46 @@ def test_the_prepared_scalar_path_is_bit_identical_to_the_literal_path(
 ):
     """Invariant: an option reusing the pass's ``1.0`` returns the literal option's values.
 
-    Oracle: the shipped ``act.sigmoid`` genome — the same math with its own literal —
-    on the same payload and schedule (exact, ``NaN``-aware). Both genomes are the
-    accelerator formulation at ``samples == 1``, so both run the unrolled sweep and
-    the literal option would pay one ``constant`` per literal per level.
+    Oracle: :func:`_literal_sigmoid` — the same math spelled by an option that
+    declares **no** ``scalars`` parameter, so it keeps its own ``enp.full``
+    literal and the exact old call shape — on the same payload and schedule
+    (exact, ``NaN``-aware). Both genomes are the accelerator formulation at
+    ``samples == 1``, so both run the unrolled sweep.
+
+    The shipped ``act.sigmoid`` cannot serve as the literal side any more: it now
+    declares ``scalars=None`` (as do all six ``agg`` kernels), so the node gene
+    hands *both* genomes the prepared tensor and the two traced graphs are op for
+    op identical — a "fewer constants" assertion against it compares a graph with
+    itself. ``_literal_sigmoid`` keeps the flag off, which is what makes the
+    constant count discriminate.
 
     Assertion: the two read-outs are array-equal; the read-out is finite and non-zero
-    (so the equality is not a vacuous ``NaN`` pattern); and the traced graph of the
-    scalars-aware genome holds **fewer** ``constant`` ops — that count is what proves
-    the activation consumed ``_PreparedScalars`` instead of a fresh ``enp.full``.
+    (so the equality is not a vacuous ``NaN`` pattern); the scalars-aware genome's
+    ``prepare_pass``+``forward_prepared`` graph traces **no** ``constant`` op beyond
+    the ones its ``prepare_pass`` prelude already holds while the literal genome's
+    full graph traces more than its own prelude — i.e. the level body of the
+    prepared route is constant-free and the literal route is not —; and in total the
+    scalars-aware genome holds **fewer** ``constant`` ops. Those counts are what
+    proves the activation consumed ``_PreparedScalars`` instead of a fresh
+    ``enp.full``.
     """
     import evoxc
 
-    from tensorneat.common.functions import ACT
+    from tensorneat.genome.gene.node.base import _takes_scalars
+
+    assert _takes_scalars(_literal_sigmoid) is False, (
+        "the literal stand-in must declare no `scalars` parameter, otherwise the "
+        "scalars-aware path is compared against itself"
+    )
+    assert _takes_scalars(_prepared_sigmoid) is True
 
     payload = payloads.chain_payload(POP_SIZE, MAX_NODES, MAX_CONNS)
     width = len(common.Transformed._fields)
-    counts, values = {}, {}
-    for label, activation in (("literal", ACT.sigmoid), ("prepared", _prepared_sigmoid)):
+    counts, preludes, values = {}, {}, {}
+    for label, activation in (
+        ("literal", _literal_sigmoid),
+        ("prepared", _prepared_sigmoid),
+    ):
         genome_object = _swept_genome(genome, activation)
         state = genome_object.setup(common.State(kernel_mode="accelerator"))
         schedule = run_transform(genome_object, state, payload)
@@ -355,17 +414,45 @@ def test_the_prepared_scalar_path_is_bit_identical_to_the_literal_path(
                 state, schedule_value, prepared, arrays[width + 5]
             )
 
+        def prelude_route(*arrays, genome_object=genome_object, state=state):
+            """``prepare_pass`` alone — the loop-invariant prelude of one pass.
+
+            The prepared record is a ``NamedTuple`` that also holds the host-side
+            ``_StepStatics``, which a graph cannot return, so the traced outputs
+            are its per-level mask tensors: the prelude's own op histogram is what
+            this route is counted for, never the returned record.
+            """
+            schedule_value = common.Transformed(*arrays[:width])
+            prepared = genome_object.prepare_pass(
+                state, schedule_value, *arrays[width : width + 4], arrays[width + 4]
+            )
+            return prepared.level_masks
+
         counts[label] = op_names(evoxc.trace(forward_route, *specs))
+        preludes[label] = op_names(evoxc.trace(prelude_route, *specs[:-1]))
 
     literal, prepared = values["literal"], values["prepared"]
     assert np.isfinite(literal).all(), f"the chain must read out, got {literal.ravel()}"
     assert np.abs(literal).max() > 0.0, "every read-out is zero"
     np.testing.assert_array_equal(prepared, literal)
-    assert counts["prepared"].get("constant", 0) < counts["literal"].get("constant", 0), (
+
+    prepared_constants = counts["prepared"].get("constant", 0)
+    literal_constants = counts["literal"].get("constant", 0)
+    assert prepared_constants == preludes["prepared"].get("constant", 0), (
+        "the prepared route's level body traced "
+        f"{prepared_constants - preludes['prepared'].get('constant', 0)} `constant` "
+        f"op(s) beyond its {preludes['prepared'].get('constant', 0)}-constant "
+        "prepare_pass prelude: it did not reuse the prepared scalar"
+    )
+    assert literal_constants > preludes["literal"].get("constant", 0), (
+        "the literal route's level body must pay its own literal: its full graph "
+        f"traced {literal_constants} `constant` op(s) against its "
+        f"{preludes['literal'].get('constant', 0)}-constant prelude"
+    )
+    assert prepared_constants < literal_constants, (
         "the scalars-aware activation traced "
-        f"{counts['prepared'].get('constant', 0)} constant op(s) against the literal "
-        f"option's {counts['literal'].get('constant', 0)}: it did not reuse the "
-        "prepared scalar"
+        f"{prepared_constants} constant op(s) against the literal option's "
+        f"{literal_constants}: it did not reuse the prepared scalar"
     )
 
 
