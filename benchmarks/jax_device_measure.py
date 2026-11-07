@@ -2,7 +2,7 @@
 """Measure the **frozen pre-rewrite JAX implementation** per generation on the device.
 
 The accelerator report (``benchmarks/GPU.md``, block source
-``results/gpu_rocm_xla_2026-11-07.json``) compares the new evoxc engine against the
+``results/gpu_rocm_xla_2026-11-07_grouped.json``) compares the new evoxc engine against the
 ``numpy`` reference interpreter *on* the GPU. The headline it cannot answer is the one
 this file measures: **new evoxc (``xla`` or ``iree``) against the old JAX version on the
 same physical device**, per generation. ``benchmarks/legacy_jax``
@@ -57,7 +57,7 @@ The new-side columns are never measured here
 --------------------------------------------
 Per case, the ``xla`` and ``iree`` per-generation medians and their ``build_s`` are read
 from a committed accelerator record (``tensorneat-gpu/1``, default
-``results/gpu_rocm_xla_2026-11-07.json``) at render time, and the batch-forward table
+``results/gpu_rocm_xla_2026-11-07_grouped.json``) at render time, and the batch-forward table
 joins two ``tensorneat-forward/1`` records (``--forward-old``: the ``jax`` target on the
 device, ``--forward-new``: ``results/forward.json``'s ``xla-rocm`` rows). A source
 document that cannot be read is a named ``RenderError`` (exit 2, before any block is
@@ -159,7 +159,7 @@ DEFAULT_THREADS = 0
 DEFAULT_JSON = HERE / "results" / "jax_rocm.json"
 DEFAULT_REPORT = HERE / "GPU.md"
 #: The committed accelerator record the new-side (``xla``/``iree``) columns come from.
-DEFAULT_NEW_RECORD = HERE / "results" / "gpu_rocm_xla_2026-11-07.json"
+DEFAULT_NEW_RECORD = HERE / "results" / "gpu_rocm_xla_2026-11-07_grouped.json"
 #: The forward-pass record of the frozen JAX side measured on the device.
 DEFAULT_FORWARD_OLD = HERE / "results" / "forward_jax_rocm_2026-11-07.json"
 #: The committed forward-pass record whose ``xla-rocm`` rows are the new side.
