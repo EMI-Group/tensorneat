@@ -234,7 +234,7 @@ Its verdict is `FAIL`, and nothing below is a uniform CPU win.
 | `cartpole_p100` | 100 | n/a (no old-side equivalent) | 307.16 | n/a |
 
 The numpy interpreter is 2.59× (`xor_p500`) and 4.06× (`xor_p1000`) faster than the frozen JAX side, 1.07× on `xor3d_p1000`, and slower on `xor_p100` (0.94×), `xor3d_p100` (0.68×), `xor3d_p500` (0.83×) and `custom_pagie_p500` (0.38×: 1258.04 vs 480.21 ms/gen); `cartpole_p100` is new-only at 307.16 ms/gen.
-On the accelerator the same cases take 3.8–23.6 ms/generation through `xla`, i.e. 4.9–150.6× faster than the numpy reference and 2.7–3.2× faster than `iree` on the same device.
+On the accelerator the same cases take 3.8–23.6 ms/generation through `xla`, i.e. 4.9–150.6× faster than the numpy reference, 2.7–3.2× faster than `iree` on the same device and 1.40–2.50× faster than the frozen JAX implementation measured on that same device.
 
 ### The batch forward pass
 
@@ -252,6 +252,22 @@ The forward pass is where the rewrite's advantage is largest, because the pre-re
 
 The gap widens with the number of rows: the legacy side re-runs its `max_nodes`-step loop per individual call, while the tensorized sweep amortises each level's dispatch over the whole batch. The CPU reference interpreter wins only on the 400-row row, where its numpy kernel bodies are cheap and the accelerator's launch floor dominates.
 The CartPole row is the one that matters in practice: a rollout re-invokes the policy forward at every timestep, so its 3.07× is paid `max_step` times per generation.
+Run on the device instead of the CPU, the frozen forward is unchanged (it is dispatch-bound: `1.382→1.435` ms at 400 rows, `7.681→7.366` at 250 000), so the same-device forward gap is **3.20×–6.17×** (`benchmarks/results/forward_jax_rocm_2026-11-07.json`).
+
+### Against the frozen JAX implementation, on the same device
+
+The pre-rewrite implementation is in-tree and JAX runs on the MI300X through the same PJRT plugin the `xla` leg uses (`JAX_PLATFORMS=rocm`, `jax`/`jaxlib` 0.10.2, device asserted per row as `rocm:0` / `AMD Instinct MI300X`), so old and new are timed on one device in one protocol (seed 42, 3 warmup + 20 timed generations, one process per row, compile excluded; `benchmarks/results/jax_rocm_2026-11-07.json`, rendered in [`benchmarks/GPU.md`](./benchmarks/GPU.md)):
+
+| case | frozen JAX ms/gen | `xla` ms/gen | `iree` ms/gen | old ÷ `xla` | old ÷ `iree` | old JAX compile s | `xla` build s |
+|---|---|---|---|---|---|---|---|
+| `xor_p100` | 5.338 | **3.825** | 10.633 | **1.40×** | 0.50× | 6.904 | 2.034 |
+| `xor_p500` | 10.089 | **4.033** | 12.744 | **2.50×** | 0.79× | 6.742 | 2.244 |
+| `xor_p1000` | 10.511 | **4.968** | 15.203 | **2.12×** | 0.69× | 6.554 | 2.354 |
+| `xor3d_p500` | 9.196 | **4.153** | 12.910 | **2.21×** | 0.71× | 6.803 | 2.211 |
+| `custom_pagie_p500` | 12.710 | **5.891** | 15.873 | **2.16×** | 0.80× | 6.860 | 2.607 |
+
+`xla` beats the frozen implementation on **all five** shared cases (1.40–2.50×) *and* compiles 2.63–3.40× faster, so there is no per-generation-versus-compile trade to weigh; `iree` is slower than the frozen implementation here (0.50–0.80×), a per-dispatch overhead result rather than a numerical one.
+`cartpole_p100` has no old side — the pre-rewrite RL problems required brax/gymnax/mujoco — and the two sides come from two sessions on one shared device rather than an interleaved A/B, so the per-row min–max is the uncertainty measure.
 
 Build/compile is the one latency number that went the other way: the evoxc build is 0.30 / 0.45 / 0.61 s for `xor_p100`/`xor_p500`/`xor_p1000` against 2.99 / 2.97 / 2.96 s for `jax.jit(...).lower().compile()`, and peak RSS is 6.2× / 3.6× / 2.4× lower than the frozen JAX side on the same rows (109.2/191.5/291.6 vs 680.1/693.6/703.5 MiB) but 1.5× higher on Pagie (1299.0 vs 849.9 MiB), where the interpreter's per-generation working set grows with `pop_size × max_nodes × max_conns` while the XLA side stays close to its runtime floor.
 Both are record-only facts: they describe `63f0fc67`, not a universal property of the interpreter.
@@ -267,7 +283,7 @@ Where the rewrite does win:
 
 The measured bottleneck on the numpy backend is `tell` (speciation), not the forward pass, and the figures come from the hand-measured passes recorded in [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md). Profiling 20 generations at pop 500 *before* the first pass put `evoxc`'s interpreter per-op overhead (operand resolution, dtype/shape validation, `Tensor` construction, ~13 µs/op) at ~63 % of a generation against ~37 % of numpy kernel bodies and 0.1 % of host-side Python, and the two `speciate` scans at 9 160 of the 10 767 executed ops per generation (85 %). The op-count pass (`a697531` → tree `f619f46`) brought a pop-500 generation to 8 336 executed ops (−23 %; 8 340 at pop 1000), and on the current tree a generation executes 7 920 ops for `xor_p500`, 11 187 for `custom_pagie_p500` and 27 860 for `cartpole_p100` (op count is a leading indicator of wall time, never a proxy: pass 1's `agg` fold *added* 16 ops and made `forward` 26 % faster). No committed artifact re-measures the overhead or speciation share after either pass. Pass 3 of the same record is measured on the merged tree (`3437e556`, whose `src/` is byte-identical to `63f0fc67`): keeping the graph and the executed op count fixed, the post-pass evoxc interpreter is 1.07–2.25× faster per generation at 12–37 % lower peak RSS, and that pass is on the pinned `evoxc` revision, so a plain `uv sync` gets it.
 
-Record map: [`benchmarks/GPU.md`](./benchmarks/GPU.md) is the accelerator matrix, [`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md) the CPU compiled-backend evidence, and [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md) the hand-measured numpy passes.
+Record map: [`benchmarks/GPU.md`](./benchmarks/GPU.md) is the accelerator matrix (including the frozen JAX implementation on the same device), [`benchmarks/FORWARD.md`](./benchmarks/FORWARD.md) the batch-forward matrix, [`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md) the CPU compiled-backend evidence, and [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md) the hand-measured numpy passes.
 
 ## Install
 
