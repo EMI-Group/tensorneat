@@ -4,7 +4,7 @@
 Everything in a NEAT generation that is neither network mathematics (genome) nor task evaluation (problem): the payload, the generation counter, speciation, stagnation, spawn allocation, parent pairing and the crossover/mutation dispatch.
 `neat.py` drives the cycle, `species.py` owns the species algebra, `_kernels.py` the host-spelling graph helpers, `_scan_accelerator.py` the accelerator-spelling scan bodies, `_distance.py` the digest-backed distance rows and `_keys.py` the structural-key allocator.
 Every kernel is batch-first over `P = pop_size` and compiled by `pipeline.py` into the single per-generation evoxc graph, so nothing branches on a traced value or reads the host.
-One numpy `Pipeline.step` on this tree dispatches **7 592** ops at `xor_p500` (3 675 of them the 40 compatibility-distance calls) and **30 994** at `cartpole_p100`; the generation is one digest, `2 · species_size` compatibility calls and `O(pop_size)` selection/crossover/mutation.
+Dispatched ops on the numpy interpreter grow with the evolved depth, because the forward's level loop runs once per topological level: `xor_p500` dispatches 7 920 on generation 1, and a generation's own shape is one `prepare_distance` digest plus `2 · species_size` compatibility rows and `O(pop_size)` selection/crossover/mutation.
 Three host statics read once at trace time pick the formulation: `distance_centre` (`"tiled"` on a bare `State`, else `"single"`), `kernel_mode` (`"host"` on a bare `State`, else `"accelerator"`) and the genome's `distance_formulation` (`"merge"`/`"index_free"`); a GPU-class device gets `accelerator`/`tiled`/`index_free`, the numpy pipeline `host`/`single`/`merge` (`pipeline.host_payload._formulation_statics`).
 
 ## API Surface
