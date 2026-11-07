@@ -50,6 +50,7 @@ The committed CPU budgets are session-scoped too, and each belongs to its own re
 | `../iree.md` | Report rendered from `iree.json`. |
 | `../gpu_measure.py` | Producer of the accelerator records here (`matrix`/`run`) and the `render` re-renderer for `../GPU.md`. |
 | `../forward_measure.py` | Producer of `forward.json` (`matrix`/`run`) and the `render` re-renderer for `../FORWARD.md`. |
+| `../jax_device_measure.py` | Producer of the `tensorneat-jax-device/1` record (`jax_rocm_2026-11-07.json`, the frozen JAX implementation measured on the device) and the renderer of `../GPU.md`'s second marked block, which reads `gpu_rocm_xla_2026-11-07.json` and the two forward records as its new-side columns. |
 | `../GPU.md` | Report whose measured block comes from `gpu_rocm_xla_2026-11-07.json`. |
 | `../FORWARD.md` | Report whose measured block comes from `forward.json`: the batch forward-pass record. |
 | `xor3d_quality_2026-11-04.md` | Report rendered from `xor3d_quality_2026-11-04.json`: the narrower pre-tiling XOR3d/Pagie quality record. |
