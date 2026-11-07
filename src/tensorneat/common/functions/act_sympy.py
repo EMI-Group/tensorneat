@@ -172,7 +172,8 @@ class SympyExp(sp.Function):
     Divergence from :func:`.act.exp`: the numeric kernel does *not* clip, so a
     node whose pre-activation exceeds ``EXP_CLIP`` is over/under-estimated by
     the generated formula. Kept for formula stability (the pre-rewrite library
-    behaved the same way); recorded in ``CONTEXT.md`` (Known Divergences).
+    behaved the same way); recorded in ``CONTEXT.md`` (Divergences from the
+    frozen legacy implementation).
     """
 
     @classmethod

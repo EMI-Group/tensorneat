@@ -8,8 +8,10 @@ Contract shared by all kernels here:
 
 * **Batch-first, shape-polymorphic.** Activations are elementwise over *any*
   static shape; the canonical call site is the aggregated node tensor
-  ``(P, N)`` of :func:`apply_activation`, but the same kernels serve output
-  transforms with shape ``(P, out_dim)`` and HyperNEAT substrate nodes.
+  ``(P, N)`` of a node gene's per-level cascade (which calls these kernels
+  directly), and the same kernels serve the dispatch of
+  :func:`apply_activation`, output transforms with shape ``(P, out_dim)`` and
+  HyperNEAT substrate nodes.
 * **float32.** Inputs and outputs are float32. No masking, no padding, no
   sentinel handling: ``NaN`` in gives ``NaN`` out (the pre-rewrite library
   relied on that, so a node value is ``NaN`` exactly while it is uncomputed).
@@ -94,9 +96,10 @@ def sigmoid(z, scalars=None):
     Notes
     -----
     Both ``1.0`` literals of the expression are the *same* operand, so a
-    prepared pass pays one ``constant`` op for them instead of two per level
-    (``evoxc`` merges no constants). With ``scalars=None`` the value is the
-    Python float ``1.0``, which traces exactly the pre-existing graph.
+    prepared pass spends one shared tensor on them and traces no ``constant``
+    op at all. With ``scalars=None`` the value is the Python float ``1.0`` and
+    each of the two uses is its own ``constant`` op, because ``evoxc`` merges
+    no constants.
     """
     one = 1.0 if scalars is None else scalars.get(1.0, 1.0)
     return evoxc.divide(one, evoxc.add(one, evoxc.exp(evoxc.negate(z))))
@@ -281,7 +284,7 @@ def exp(z):
     The pre-rewrite numeric kernel was also unclipped, so the two agree bit for
     bit -- but the sympy counterpart (:class:`~.act_sympy.SympyExp`) clips its
     argument to ``[-10, 10]`` for interpretability. See ``CONTEXT.md``
-    (Known Divergences).
+    (Divergences from the frozen legacy implementation).
     """
     return evoxc.exp(z)
 
@@ -321,7 +324,8 @@ ACT_FUNCS: tuple[Callable, ...] = (
 A node gene stores the *position in the user's option list*; when a genome is
 configured with ``ACT.evoxc_fns`` this tuple is that order, so appending
 is safe, reordering or deleting is a checkpoint/parity break. ``clip`` is
-deliberately absent (see ``CONTEXT.md``, Design Decisions).
+deliberately absent (see ``CONTEXT.md``, the sympy / interpretability
+contract).
 """
 
 
@@ -359,7 +363,7 @@ def apply_activation(z, act_ids, act_fns: Sequence[Callable] = ACT_FUNCS):
     therefore subdominant to the ``(P, N, K)`` gathers of the forward pass.
     Measured graph ops at ``(P, N) = (100, 50)`` int32 ids: 5 for a one-option
     :func:`tanh` list (``constant``/``equal``/``tanh``/``select``/``return``),
-    10 for one-option :func:`sigmoid` (whose kernel carries four constants of
+    10 for one-option :func:`sigmoid` (whose kernel carries two constants of
     its own), 1 for an identity-only list (it returns ``z`` with no ``select`` at
     all) and 74 for the canonical list -- 33 dispatch ops for its 11
     non-identity options plus 41 kernel ops. There is no static way to compute

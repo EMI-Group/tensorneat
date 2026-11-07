@@ -716,10 +716,12 @@ def apply_aggregation(
     ``constant`` op per distinct value through :meth:`_Window.scalar`
     (``evoxc`` does not eliminate duplicate constants).
 
-    Measured graph ops at ``(P, N, K) = (100, 50, 8)`` int32 ids: 7 for a
-    one-option :func:`sum` list, 12 for one-option :func:`max` (its extra four
-    are the ``has_valid`` guard and the live-edge count), and 57 for the
-    canonical list.
+    Measured graph ops at ``(P, N, K) = (100, 50, 8)`` int32 ids (terminators
+    included, like the activation dispatcher's counts): 23 for a one-option
+    :func:`sum` list, 44 for one-option :func:`max` (its extra ops are the
+    second fold behind the live-edge count plus the ``has_valid`` guard), and
+    137 for the canonical list. The fold emits ``K`` ``slice`` ops per kernel,
+    so every count grows with the window width ``K``.
 
     The ``has_valid`` guard (a final ``select(count > 0, result, 0.0)``) is
     emitted only when some option is not ``zero_on_empty`` -- i.e. when a
