@@ -95,7 +95,7 @@ The per-iteration overhead costs **0** dispatches (the trip condition and counte
 - Control flow makes all three environments numpy / iree-llvm-cpu / xla only (TVM rejects `while`/`if`/gather/scatter) and the failure must surface as `evoxc.BackendError`, never a fallback.
 - `show` and every report graph are host-side and built with `**problem.base.build_options(state)`; reporting is finite-safe, so no report may convert a return with `int()`/`round()` or test it against a bound without `math.isfinite` first — `CartPole` prints `survived n/a (NaN return)`, `MountainCarContinuous` prints `goal n/a (NaN return)`, `Pendulum` prints `nan`.
 - Every numeric knob and every `fitness_target` goes through a `_common` validator, so a configuration error is always `TensorNEATError` with a `<Owner>: <name> must be ...` message, never a bare `TypeError`/`ValueError`.
-- Files <= ~1000 lines (`cartpole.py` 735, `mountaincar.py` 824, `pendulum.py` 950, `_common.py` 253).
+- Files <= ~1000 lines (`cartpole.py` 730, `mountaincar.py` 835, `pendulum.py` 960, `_common.py` 253).
 - `L` (the level loop's trip count) is a **runtime** value — the population's own depth — so a per-timestep total moves by the level trip's width per `L`: instrumenting `Interpreter._run_block` over 20 `CartPole` generations reads `L` 2 at the generation after setup, 3 at the median and 4 at the deepest.
 
 ## Measured cost
