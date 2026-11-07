@@ -201,7 +201,9 @@ This block is rendered from `benchmarks/results/gpu_rocm_xla_2026-11-07.json`: 1
 Nothing here is a statement about HEAD: every number belongs to that record and to the tree its fingerprint names.
 Every xla row of this record runs with `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (the XLA+ROCm command-buffer workaround, stored in `meta.xla_flags`), one fresh process per row, on the tree this record's fingerprint names; its per-generation numbers are not comparable with the FUSION-capture xla rows of `gpu_rocm_xla_2026-11-06.json` or with any earlier evoxc revision.
 <!-- END MEASURED (gpu_measure.py) -->
-
+## Against the frozen JAX implementation, same device
+<!-- BEGIN MEASURED (jax_device_measure.py) -->
+<!-- END MEASURED (jax_device_measure.py) -->
 ## Limitations
 
 No legacy-GPU comparison exists: the frozen JAX baseline in `benchmarks/legacy_jax` is CPU-only by protocol, so an accelerator number here is informational and is never part of the numpy-only old-vs-new verdict in `RESULTS.md`; there is no "old side" for a GPU.

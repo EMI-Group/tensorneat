@@ -1,0 +1,1403 @@
+{
+  "schema": "tensorneat-forward/1",
+  "meta": {
+    "command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python benchmarks/forward_measure.py matrix --workloads all --targets jax --passes 10 --warmup 3 --seed 42 --json benchmarks/results/forward_jax_rocm_2026-11-07.json --out /tmp/forward_jax_rocm.md --report-title 'TensorNEAT batch forward pass \u2014 frozen JAX baseline on the MI300X (rocm)' --report-note 'Frozen pre-rewrite JAX forward measured on the ROCm device (JAX_PLATFORMS=rocm, rocm:0) so the batch forward is compared same-device against the accelerator record; the CPU-JAX comparison remains benchmarks/FORWARD.md.'",
+    "report_title": "TensorNEAT batch forward pass \u2014 frozen JAX baseline on the MI300X (rocm)",
+    "report_note": "Frozen pre-rewrite JAX forward measured on the ROCm device (JAX_PLATFORMS=rocm, rocm:0) so the batch forward is compared same-device against the accelerator record; the CPU-JAX comparison remains benchmarks/FORWARD.md.",
+    "created_utc": "2026-11-07T12:21:02+00:00",
+    "session_utc": {
+      "start": "2026-11-07T12:21:02+00:00",
+      "end": "2026-11-07T12:21:54+00:00"
+    },
+    "protocol": {
+      "one_forward_configuration_per_process": true,
+      "rows_strictly_sequential": true,
+      "warmup_forward_passes": 3,
+      "timed_forward_passes": 10,
+      "seed": 42,
+      "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+      "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+      "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+      "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+      "build_measured_separately": true,
+      "build_charged_to_a_pass": false,
+      "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+      "logging_in_timed_region": false,
+      "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+      "float_rtol": 1e-05,
+      "float_atol": 1e-06,
+      "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+    },
+    "workloads": [
+      "xor_p100_s4",
+      "xor_p500_s4",
+      "xor_p1000_s4",
+      "xor_p100_s500",
+      "xor_p500_s500",
+      "xor_p1000_s500",
+      "cartpole_p100_s1"
+    ],
+    "workload_geometry": {
+      "xor_p100_s4": {
+        "pop_size": 100,
+        "samples": 4,
+        "rows": 400,
+        "num_inputs": 2,
+        "num_outputs": 1
+      },
+      "xor_p500_s4": {
+        "pop_size": 500,
+        "samples": 4,
+        "rows": 2000,
+        "num_inputs": 2,
+        "num_outputs": 1
+      },
+      "xor_p1000_s4": {
+        "pop_size": 1000,
+        "samples": 4,
+        "rows": 4000,
+        "num_inputs": 2,
+        "num_outputs": 1
+      },
+      "xor_p100_s500": {
+        "pop_size": 100,
+        "samples": 500,
+        "rows": 50000,
+        "num_inputs": 2,
+        "num_outputs": 1
+      },
+      "xor_p500_s500": {
+        "pop_size": 500,
+        "samples": 500,
+        "rows": 250000,
+        "num_inputs": 2,
+        "num_outputs": 1
+      },
+      "xor_p1000_s500": {
+        "pop_size": 1000,
+        "samples": 500,
+        "rows": 500000,
+        "num_inputs": 2,
+        "num_outputs": 1
+      },
+      "cartpole_p100_s1": {
+        "pop_size": 100,
+        "samples": 1,
+        "rows": 100,
+        "num_inputs": 4,
+        "num_outputs": 2
+      }
+    },
+    "targets": [
+      "jax"
+    ],
+    "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+    "env": {
+      "python": "3.12.3",
+      "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+      "machine": "x86_64",
+      "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+      "cpu_count": 20,
+      "memory_mb": 241611,
+      "numpy": "2.5.4",
+      "jax": "0.10.2",
+      "evoxc": "0.1.0",
+      "tensorneat": "0.2.0",
+      "threads": null,
+      "thread_env": {
+        "OMP_NUM_THREADS": null,
+        "MKL_NUM_THREADS": null,
+        "OPENBLAS_NUM_THREADS": null,
+        "NUMEXPR_NUM_THREADS": null,
+        "XLA_FLAGS": null
+      },
+      "loadavg": [
+        1.02,
+        0.66,
+        0.64
+      ],
+      "git_commit": "54683c3e3d9b85239d60213beffbf5ad4532efa6",
+      "git_dirty": false,
+      "git_dirty_paths": [],
+      "probe_error": null,
+      "iree": {
+        "compiler": "3.13.0",
+        "runtime": "3.13.0",
+        "hip_devices": [
+          {
+            "device_id": 1,
+            "name": "AMD Instinct MI300X VF"
+          }
+        ],
+        "hip_error": null
+      },
+      "gpu": {
+        "rocm_version": "7.1.0",
+        "rocm_smi": {
+          "gpu_model": "AMD Instinct MI300X VF",
+          "gfx_version": "gfx942",
+          "driver_version": "6.16.6"
+        },
+        "rocm_smi_error": null
+      }
+    }
+  },
+  "records": [
+    {
+      "workload": "xor_p100_s4",
+      "case": "xor_p100",
+      "target": "jax",
+      "impl": "old",
+      "backend": "jax",
+      "device": null,
+      "compile_options": null,
+      "seed": 42,
+      "pop_size": 100,
+      "samples": 4,
+      "rows": 400,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": null,
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:21:02+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          0.88,
+          0.57,
+          0.61
+        ],
+        "git_commit": "54683c3e3d9b85239d60213beffbf5ad4532efa6",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "old",
+        "backend": "jax",
+        "jax_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "genome_only": false,
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 3.319917,
+      "build_s": 0.285328,
+      "output": {
+        "shape": [
+          100,
+          4,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.514570951461792,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 4693.86,
+      "ms_per_forward": {
+        "mean": 1.5557,
+        "median": 1.435,
+        "min": 1.3611,
+        "max": 1.8498,
+        "samples": [
+          1.4504,
+          1.8352,
+          1.4165,
+          1.4196,
+          1.8344,
+          1.403,
+          1.3611,
+          1.8498,
+          1.4085,
+          1.5782
+        ]
+      },
+      "forwards_per_second": 696.8566,
+      "rows_per_second": 278742.6402
+    },
+    {
+      "workload": "xor_p500_s4",
+      "case": "xor_p500",
+      "target": "jax",
+      "impl": "old",
+      "backend": "jax",
+      "device": null,
+      "compile_options": null,
+      "seed": 42,
+      "pop_size": 500,
+      "samples": 4,
+      "rows": 2000,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": null,
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:21:09+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          0.89,
+          0.58,
+          0.62
+        ],
+        "git_commit": "54683c3e3d9b85239d60213beffbf5ad4532efa6",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "old",
+        "backend": "jax",
+        "jax_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "genome_only": false,
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 3.263359,
+      "build_s": 0.299393,
+      "output": {
+        "shape": [
+          500,
+          4,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.5041775107383728,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 4716.34,
+      "ms_per_forward": {
+        "mean": 1.7363,
+        "median": 1.6603,
+        "min": 1.5423,
+        "max": 2.0494,
+        "samples": [
+          1.8661,
+          1.6909,
+          1.564,
+          2.0494,
+          1.5823,
+          1.8614,
+          1.6297,
+          1.5436,
+          2.0333,
+          1.5423
+        ]
+      },
+      "forwards_per_second": 602.2957,
+      "rows_per_second": 1204591.3921
+    },
+    {
+      "workload": "xor_p1000_s4",
+      "case": "xor_p1000",
+      "target": "jax",
+      "impl": "old",
+      "backend": "jax",
+      "device": null,
+      "compile_options": null,
+      "seed": 42,
+      "pop_size": 1000,
+      "samples": 4,
+      "rows": 4000,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": null,
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:21:17+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          0.91,
+          0.59,
+          0.62
+        ],
+        "git_commit": "54683c3e3d9b85239d60213beffbf5ad4532efa6",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "old",
+        "backend": "jax",
+        "jax_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "genome_only": false,
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p1000",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 1000,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 3.298949,
+      "build_s": 0.295627,
+      "output": {
+        "shape": [
+          1000,
+          4,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.4983142912387848,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 4708.61,
+      "ms_per_forward": {
+        "mean": 1.7166,
+        "median": 1.6115,
+        "min": 1.5177,
+        "max": 2.0622,
+        "samples": [
+          1.8595,
+          1.644,
+          1.5474,
+          2.0622,
+          1.5485,
+          1.8613,
+          1.579,
+          1.5177,
+          2.0009,
+          1.5455
+        ]
+      },
+      "forwards_per_second": 620.5324,
+      "rows_per_second": 2482129.4614
+    },
+    {
+      "workload": "xor_p100_s500",
+      "case": "xor_p100",
+      "target": "jax",
+      "impl": "old",
+      "backend": "jax",
+      "device": null,
+      "compile_options": null,
+      "seed": 42,
+      "pop_size": 100,
+      "samples": 500,
+      "rows": 50000,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": null,
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:21:24+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          0.92,
+          0.6,
+          0.62
+        ],
+        "git_commit": "54683c3e3d9b85239d60213beffbf5ad4532efa6",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "old",
+        "backend": "jax",
+        "jax_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "genome_only": false,
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 3.345321,
+      "build_s": 0.3158,
+      "output": {
+        "shape": [
+          100,
+          500,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.5079181790351868,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 4882.24,
+      "ms_per_forward": {
+        "mean": 3.0874,
+        "median": 3.0807,
+        "min": 3.006,
+        "max": 3.1914,
+        "samples": [
+          3.006,
+          3.0446,
+          3.0572,
+          3.0781,
+          3.0834,
+          3.1728,
+          3.1065,
+          3.1914,
+          3.0501,
+          3.0833
+        ]
+      },
+      "forwards_per_second": 324.602,
+      "rows_per_second": 16230101.8041
+    },
+    {
+      "workload": "xor_p500_s500",
+      "case": "xor_p500",
+      "target": "jax",
+      "impl": "old",
+      "backend": "jax",
+      "device": null,
+      "compile_options": null,
+      "seed": 42,
+      "pop_size": 500,
+      "samples": 500,
+      "rows": 250000,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": null,
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:21:32+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          0.93,
+          0.61,
+          0.63
+        ],
+        "git_commit": "54683c3e3d9b85239d60213beffbf5ad4532efa6",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "old",
+        "backend": "jax",
+        "jax_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "genome_only": false,
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 3.264341,
+      "build_s": 0.454569,
+      "output": {
+        "shape": [
+          500,
+          500,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.500207245349884,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 4916.38,
+      "ms_per_forward": {
+        "mean": 7.3872,
+        "median": 7.3658,
+        "min": 7.2554,
+        "max": 7.5341,
+        "samples": [
+          7.3063,
+          7.314,
+          7.2554,
+          7.5341,
+          7.3347,
+          7.5301,
+          7.477,
+          7.3256,
+          7.3975,
+          7.397
+        ]
+      },
+      "forwards_per_second": 135.7617,
+      "rows_per_second": 33940423.1748
+    },
+    {
+      "workload": "xor_p1000_s500",
+      "case": "xor_p1000",
+      "target": "jax",
+      "impl": "old",
+      "backend": "jax",
+      "device": null,
+      "compile_options": null,
+      "seed": 42,
+      "pop_size": 1000,
+      "samples": 500,
+      "rows": 500000,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": null,
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:21:39+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          0.94,
+          0.62,
+          0.63
+        ],
+        "git_commit": "54683c3e3d9b85239d60213beffbf5ad4532efa6",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "old",
+        "backend": "jax",
+        "jax_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "genome_only": false,
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p1000",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 1000,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 3.322282,
+      "build_s": 0.320833,
+      "output": {
+        "shape": [
+          1000,
+          500,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.49673670530319214,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 4924.1,
+      "ms_per_forward": {
+        "mean": 13.7379,
+        "median": 13.7451,
+        "min": 13.6078,
+        "max": 13.8683,
+        "samples": [
+          13.7407,
+          13.6078,
+          13.7322,
+          13.8683,
+          13.7647,
+          13.8186,
+          13.7496,
+          13.7908,
+          13.6679,
+          13.6385
+        ]
+      },
+      "forwards_per_second": 72.7531,
+      "rows_per_second": 36376553.1265
+    },
+    {
+      "workload": "cartpole_p100_s1",
+      "case": "cartpole_p100",
+      "target": "jax",
+      "impl": "old",
+      "backend": "jax",
+      "device": null,
+      "compile_options": null,
+      "seed": 42,
+      "pop_size": 100,
+      "samples": 1,
+      "rows": 100,
+      "num_inputs": 4,
+      "num_outputs": 2,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": null,
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:21:47+00:00",
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "loadavg": [
+          1.03,
+          0.65,
+          0.64
+        ],
+        "git_commit": "54683c3e3d9b85239d60213beffbf5ad4532efa6",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "old",
+        "backend": "jax",
+        "jax_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "genome_only": true,
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "cartpole_p100",
+        "family": "rl",
+        "impls": [
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": 180.0,
+        "seed": 42,
+        "notes": "new-only: the legacy library has no equivalent problem",
+        "gens_to_target": false,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "CartPole",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 4,
+          "num_outputs": 2,
+          "max_nodes": 50,
+          "max_conns": 100
+        },
+        "problem_config": {
+          "class": "CartPole",
+          "max_step": 200,
+          "repeat_times": 1
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 5.740497,
+      "build_s": 0.270739,
+      "output": {
+        "shape": [
+          100,
+          1,
+          2
+        ],
+        "dtype": "float32",
+        "mean": -0.053147949278354645,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 4669.69,
+      "ms_per_forward": {
+        "mean": 1.5481,
+        "median": 1.4392,
+        "min": 1.3857,
+        "max": 1.8161,
+        "samples": [
+          1.4101,
+          1.8044,
+          1.4521,
+          1.4153,
+          1.7599,
+          1.3871,
+          1.3857,
+          1.8161,
+          1.4264,
+          1.6243
+        ]
+      },
+      "forwards_per_second": 694.8066,
+      "rows_per_second": 69480.6568
+    }
+  ]
+}
