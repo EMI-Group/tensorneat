@@ -25,6 +25,7 @@ Each one is the recipe for a user-defined environment: one step kernel and one `
 ### Shared shape (all three)
 `B = P * repeat_times` with `P = static_batch_size(transformed)`, **individual-major**: row `p * R + r` is repeat `r` of individual `p`, so `P = 4, R = 1` and `P = 2, R = 2` draw the same four initial states from one key and produce identical per-episode returns.
 Initial states come from **one** `evoxc.random.uniform` off the single rank-0 key, which is never threaded through the loop and never replaced by `np.random`; the trip count is always static (`step < horizon`), never "while any episode is alive".
+That trip condition is `_common.horizon_cond(consts)` at the shared four-leaf carry's counter slot `3`, and `horizon_cond(consts, 1)` for `Pendulum`'s packed `(row, step)` carry.
 The return accumulator rides in the carry and the loop emits no output, because an `evoxc.scan` would carry a `(max_step, B)` stack and scatter one row per iteration.
 `returns_of` is the only place the `(P, R)` layout is assumed, and a rollout prepares its policy query once with `_common.prepared_query(act_fn, batch)`, so the genome's loop-invariant pass operands are derived once per generation.
 
