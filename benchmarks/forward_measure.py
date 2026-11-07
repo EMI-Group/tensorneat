@@ -33,8 +33,9 @@ its genome geometry plus a sample count ``S`` (XOR 4, Pagie 500, RL 1). The 500-
 rows use the XOR genome, whose config is byte-identical to ``custom_pagie_p500``'s (2
 inputs, 1 output, sigmoid read-out), so they measure the Pagie shape. Targets are data
 in :data:`TARGETS`: :data:`gpu_targets.TARGETS` verbatim (``numpy``, ``iree-rocm``,
-``xla-rocm``) plus ``jax``; ``xla-rocm`` needs the PJRT plugin named by
-``--pjrt-plugin PATH`` or ``$EVOXC_PJRT_PLUGIN``.
+``xla-rocm``) plus ``jax``. All four are in the default matrix (:data:`DEFAULT_TARGETS`);
+``xla-rocm`` additionally needs the PJRT plugin named by ``--pjrt-plugin PATH`` or
+``$EVOXC_PJRT_PLUGIN`` (an unresolvable plugin is a named error row, never a fallback).
 
 Protocol, per row, one fresh process: ``setup_s`` and ``build_s`` are measured and
 reported **separately, never charged to a pass**; ``--warmup`` untimed passes then
@@ -63,8 +64,8 @@ numpy-free interpreter.
 
     python3 benchmarks/forward_measure.py --list
     uv run --all-extras python benchmarks/forward_measure.py matrix --workloads all \\
-        --targets numpy,iree-rocm,jax --json benchmarks/results/forward.json \\
-        --out benchmarks/FORWARD.md
+        --targets numpy,iree-rocm,xla-rocm,jax --pjrt-plugin "$EVOXC_PJRT_PLUGIN" \\
+        --json benchmarks/results/forward.json --out benchmarks/FORWARD.md
     uv run --all-extras python benchmarks/forward_measure.py render \\
         --json benchmarks/results/forward.json --out benchmarks/FORWARD.md
 
@@ -126,8 +127,10 @@ TARGETS: dict[str, dict[str, Any]] = {
 TARGETS["jax"] = {"impl": "old", "backend": "jax", "device": None, "compile_options": None}
 
 DEFAULT_WORKLOADS = "all"
-#: The shipped matrix: both new-side legs plus the baseline. ``xla-rocm`` is opt-in.
-DEFAULT_TARGETS = "numpy,iree-rocm,jax"
+#: The shipped matrix: every new-side leg plus the baseline. ``xla-rocm`` needs the PJRT
+#: plugin (``--pjrt-plugin``/``$EVOXC_PJRT_PLUGIN``), which ``matrix`` resolves once up
+#: front; a missing one is a named error, never a silently dropped row.
+DEFAULT_TARGETS = "numpy,iree-rocm,xla-rocm,jax"
 DEFAULT_SEED, DEFAULT_WARMUP, DEFAULT_PASSES = 42, 3, 10
 #: Seconds one row subprocess may take before it is killed and recorded as an error.
 DEFAULT_TIMEOUT = 3600
@@ -1272,10 +1275,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                      "benchmarks/FORWARD.md."),
         epilog=("Try: forward_measure.py --list  |  forward_measure.py run --workload "
                 "xor_p500_s4 --target iree-rocm  |  forward_measure.py matrix --targets "
-                "numpy,iree-rocm,jax --out benchmarks/FORWARD.md  |  forward_measure.py "
-                "render --json benchmarks/results/forward.json --out benchmarks/FORWARD.md. "
-                "'matrix' exits 1 when any planned row is an error row (a blocked leg is "
-                "loud by construction) and 2 when the report could not be rendered."),
+                "numpy,iree-rocm,xla-rocm,jax --out benchmarks/FORWARD.md  |  "
+                "forward_measure.py render --json benchmarks/results/forward.json --out "
+                "benchmarks/FORWARD.md. An xla target needs --pjrt-plugin PATH or "
+                f"${PJRT_ENV_VAR}. 'matrix' exits 1 when any planned row is an error row (a "
+                "blocked leg is loud by construction) and 2 when the report could not be "
+                "rendered."),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--list", action="store_true",
                         help="print the targets, the workloads and the defaults")
