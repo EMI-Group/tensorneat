@@ -6,10 +6,12 @@ statically unrolled ``level = 1 .. max_depth`` sweep. Which spelling a graph is 
 :func:`._static_sweep`'s decision: the sweep on a non-tiled pass whose backend lowers it as one
 capture-eligible body with no host involvement (iree), the loop everywhere else — on IREE a
 ``stablehlo.while`` carrying dispatches is lowered to a host ``cf`` loop with one submission per
-trip, and the ``xla`` leg cannot run the sweep at all (its capture-eligible body is replayed as
-a HIP graph and SIGSEGVs) while it survives the loop's nested ``while``. An evolved network is
-usually 2-4 levels deep, so the ``max_depth`` ceiling would otherwise spend most of a counted
-pass on rows that cannot update. Both spellings run the shared window reduce of
+trip, and the ``xla`` leg is unreliable with either spelling: its compiler captures the sweep's
+single basic block as a HIP graph and SIGSEGVs inside ``libhsa-runtime64`` after one generation,
+while the loop's nested ``while`` is not capture-eligible and merely crashes less often (1 of 3
+trials survives at 21.45 ms/generation). An evolved network is usually 2-4 levels deep, so the
+``max_depth`` ceiling would otherwise spend most of a counted pass on rows that cannot update.
+Both spellings run the shared window reduce of
 :class:`.base.BaseGenome` (:meth:`._node_step`), so the level step exists once.
 
 A region op is safe *here* because this forward is never differentiated: ``evoxc.grad``
@@ -90,11 +92,14 @@ class _PreparedPass(NamedTuple):
 
 
 #: Backends that must not carry the statically unrolled sweep. The ``xla`` leg's compiler
-#: treats the sweep's rollout body — one capture-eligible basic block — as a HIP graph and
-#: replays it through ``hipGraphLaunch``, which SIGSEGVs inside ``libhsa-runtime64`` after a few
-#: hundred launches (the budget shrinks with the captured body's size, and a smaller
-#: ``max_depth`` does not help). A nested ``while`` is not capture-eligible, so the loop
-#: spelling keeps the same body alive there.
+#: captures the sweep's rollout body — one capture-eligible basic block — as a HIP graph and
+#: replays it through ``hipGraphLaunch``, which SIGSEGVs inside ``libhsa-runtime64`` after one
+#: completed generation (2 of 2 trials; the launch budget shrinks with the captured body's
+#: command count and a smaller ``max_depth`` does not help). The loop spelling's nested ``while``
+#: is not capture-eligible, which makes it *less* crash-prone rather than safe: 21.45
+#: ms/generation and 5 generations in 1 of 3 trials, exit 139 after 4 generations in the other
+#: two. Only ``XLA_FLAGS=--xla_gpu_enable_command_buffer=`` makes that leg reliable, so the loop
+#: is selected here as the least-bad spelling, never as a fix.
 _SWEEP_UNSAFE_BACKENDS = ("xla",)
 
 
@@ -113,13 +118,16 @@ def _static_sweep(state: Any, samples: int) -> bool:
       51.0 ms/generation at ``P * samples = 250 000`` (func-fit, iree+rocm) — while the loop
       runs only the batch's real depth once.
     * the backend must not be ``xla`` (see :data:`_SWEEP_UNSAFE_BACKENDS`). On iree the sweep
-      is the faster and the only practical spelling: 95.28 against 151.49 ms/generation for
-      ``cartpole_p100`` at the shipped ``max_depth=16``, and a hybrid static prefix plus a
-      data-dependent tail measures worse than either pure spelling once the network is deeper
-      than ~4 levels (78.05 ms at 4 static levels, 121.48 ms at 1), because the nested tail
-      loop re-stages its bound on every enclosing iteration. On xla the sweep is a hard crash
-      (exit 139, generation 2, 5 of 5 runs, at any ``max_depth``) and the loop runs at 21.63
-      ms/generation, so the loop is the only usable spelling there.
+      is the faster spelling: 60.48 against 145.47 ms/generation for ``cartpole_p100``
+      (``max_step=200``, pop 100) at the shipped ``max_depth=16``. A hybrid static prefix plus a
+      data-dependent tail is rejected, not shipped: 4 static levels plus the tail loop measures
+      73.05 ms, *worse* than the pure sweep's 60.48, because the nested tail loop re-stages its
+      bound on every enclosing iteration. On ``xla`` the sweep is a hard crash — its captured
+      HIP graph SIGSEGVs after one completed generation (2 of 2 trials, at any ``max_depth``) —
+      and the loop, whose nested ``while`` is not capture-eligible, is only the *least-bad*
+      spelling there: 21.45 ms/generation and 5 generations in 1 of 3 trials, with the other two
+      crashing after 4. ``XLA_FLAGS=--xla_gpu_enable_command_buffer=`` is the only reliable fix,
+      so no working ``xla`` leg is claimed.
 
     A state that carries no ``backend`` entry — a bare ``State()`` in a unit test — is not the
     ``xla`` leg and therefore keeps the sweep, as does every backend other than ``xla``.
@@ -404,8 +412,10 @@ class DefaultGenome(BaseGenome):
         # its ``P * samples`` rows by ``max_depth`` -- 16.0 -> 51.0 ms/generation at
         # ``P * samples = 250 000`` rows (func-fit) on iree+rocm, so a tiled batch keeps the
         # ``while_loop`` verbatim -- do not "simplify" this gate away. The backend is the
-        # other: ``xla`` SIGSEGVs on the sweep's capture-eligible body and runs the loop's
-        # nested ``while``, so it asks for the loop even at ``samples == 1``.
+        # other: ``xla`` captures the sweep's basic block as a HIP graph and SIGSEGVs after one
+        # generation, while the loop's nested ``while`` is not capture-eligible, so that backend
+        # asks for the loop even at ``samples == 1`` -- as the least-bad spelling, not as a fix
+        # (it still crashes in 2 of 3 trials).
         sweep = _static_sweep(state, samples)
         return _PreparedPass(
             node_attrs=prepared_attrs,
@@ -496,8 +506,10 @@ class DefaultGenome(BaseGenome):
         the inner bound is re-staged (``queue.alloca`` + ``queue.copy`` + fence wait + load) on
         every enclosing iteration even when the inner loop then runs zero trips (~230 us per
         query end to end). That is why a non-tiled accelerator pass prefers
-        :meth:`_level_sweep` — except on the ``xla`` leg, where the sweep's capture-eligible
-        body SIGSEGVs and this loop's nested ``while`` is the only spelling that runs (see
+        :meth:`_level_sweep`. On the ``xla`` leg the sweep's captured HIP graph SIGSEGVs after
+        one generation (2 of 2 trials) and this loop's nested ``while`` is not
+        capture-eligible, so the loop is the least-bad spelling there — 21.45 ms/generation, and
+        it still SIGSEGVs in 2 of 3 trials, the third surviving 5 generations (see
         :func:`._static_sweep`).
 
         Args:
@@ -551,21 +563,20 @@ class DefaultGenome(BaseGenome):
         keeps the pass on the device: a dispatch-bearing ``stablehlo.while`` is lowered to a
         host ``cf`` loop with one submission per trip, and a nested region re-stages its bound
         on every enclosing iteration, whereas this body is a single capture-eligible basic
-        block with no host involvement — 95.28 against 151.49 ms/generation for
-        ``cartpole_p100`` (max_step 200) on iree+rocm. A hybrid static prefix plus a
-        data-dependent tail is not the compromise it looks like: 78.05 ms at 4 static levels
-        and 121.48 ms at 1, worse than either pure spelling for a network deeper than ~4
-        levels, because the tail loop is nested inside the rollout body and pays the bound
-        re-staging per enclosing iteration. ``kernel_mode`` gates the sweep because the
-        dispatch-bound numpy interpreter reads the trade the other way round, and ``samples``
-        because a tiled pass is ``P * samples`` rows (each unrolled level would cost that many
-        rows: 16.0 -> 51.0 ms/generation at ``P * samples = 250 000``, iree+rocm) queried once
-        per generation, where the loop runs the batch's real depth. On ``xla`` this same
-        capture-eligible body is replayed as a HIP graph by the ROCm plugin and SIGSEGVs
-        inside ``libhsa-runtime64`` after a few hundred launches (generation 2 at any
-        ``max_depth``), while a nested ``while`` is not capture-eligible — so that backend
-        selects the loop and runs at 21.63 ms/generation (all four facts in
-        :func:`._static_sweep`).
+        block with no host involvement — 60.48 against 145.47 ms/generation for
+        ``cartpole_p100`` (max_step 200, ``max_depth=16``) on iree+rocm. A hybrid static prefix
+        plus a data-dependent tail is rejected, not shipped: 73.05 ms at 4 static levels is
+        *worse* than the pure sweep's 60.48, because the tail loop is nested inside the rollout
+        body and pays the bound re-staging per enclosing iteration. ``kernel_mode`` gates the
+        sweep because the dispatch-bound numpy interpreter reads the trade the other way round,
+        and ``samples`` because a tiled pass is ``P * samples`` rows (each unrolled level would
+        cost that many rows: 16.0 -> 51.0 ms/generation at ``P * samples = 250 000``, iree+rocm)
+        queried once per generation, where the loop runs the batch's real depth. On ``xla`` this
+        same capture-eligible body is replayed as a HIP graph by the ROCm plugin and SIGSEGVs
+        inside ``libhsa-runtime64`` after one completed generation (2 of 2 trials, at any
+        ``max_depth``), so that backend selects the loop as the least-bad spelling: 21.45
+        ms/generation and 5 generations in 1 of 3 trials, the other two crashing after 4 (all
+        four facts in :func:`._static_sweep`).
 
         Same values as :meth:`_level_loop`, bit for bit:
 
