@@ -46,6 +46,7 @@ Measured conditions, not a verdict: these numbers are comparable only with anoth
 | IREE compiler / runtime | 3.13.0 / 3.13.0 |
 | JAX (old side) | 0.10.2; backend gpu; devices rocm:0; allocator XLA_PYTHON_CLIENT_PREALLOCATE=false |
 | PJRT plugin (xla targets) | `xla_rocm_plugin.so` (480.1 MiB, sha256 `8e8319b48fcc…`) |
+| XLA_FLAGS (xla targets) | not recorded (record predates the workaround) |
 | tensorneat / evoxc | 0.2.0 / 0.1.0 |
 | numpy | 2.5.4 |
 | Python | 3.12.3 |
