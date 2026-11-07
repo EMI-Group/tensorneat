@@ -1,6 +1,7 @@
-# TensorNEAT accelerator measurement — numpy reference vs iree rocm vs xla rocm on one MI300X VF
+# TensorNEAT accelerator measurement — numpy reference vs iree rocm vs xla rocm, and the frozen JAX implementation on the same MI300X VF
 
 **Verdict for the record this file renders: both compiled paths are green in one session — eighteen planned rows, eighteen `ok`, zero blocked — so every one of the six cases carries a real compile time, a real per-generation timing and a real generation-1 numerical cross-check on `iree` rocm and on `xla` rocm against the `numpy` reference.**
+Two measured blocks live in this file, each owned by one tool and one committed record: `gpu_measure.py` owns `## Measured: numpy vs iree-rocm vs xla-rocm` (from `results/gpu_rocm_xla_2026-11-07.json`), and `jax_device_measure.py` owns `## Against the frozen JAX implementation, same device` (from `results/jax_rocm_2026-11-07.json`) — the frozen pre-rewrite JAX implementation timed on the same device, which is the only block here that answers old-vs-new.
 `Pipeline(backend="iree", device="rocm", compile_options={"target_backends": ["rocm"]})` compiles the generation graph with `iree-compile` for `gfx942`, and `Pipeline(backend="xla", device="rocm", compile_options={"plugin_path": …})` compiles it with XLA for the same device, driving the PJRT C API plugin `xla_rocm_plugin.so` (480.1 MiB, sha256 `8e8319b4…`) whose path the harness passes as `--pjrt-plugin`.
 The device is faster per generation than the numpy reference on all six cases, on both compiled paths: `iree` rocm by 1.76x on `xor_p100` (10.633 against 18.767 ms/gen), 5.73x on `xor_p500` (12.744 against 72.983), 8.69x on `xor_p1000` (15.203 against 132.185), 6.79x on `xor3d_p500` (12.910 against 87.598), 55.90x on `custom_pagie_p500` (15.873 against 887.256) and 1.43x on `cartpole_p100` (67.202 against 95.952); `xla` rocm by 4.91x (3.825), 18.10x (4.033), 26.61x (4.968), 21.09x (4.153), 150.61x (5.891) and 4.07x (23.567) on the same rows.
 The two compiled backends are not close: `xla` rocm is 2.69x–3.16x faster per generation than `iree` rocm on every case, and its per-shape XLA compile (`build_s` 2.034–2.607 s) costs 0.26x–0.31x of `iree`'s (`build_s` 7.799–8.658 s).
@@ -202,10 +203,22 @@ Nothing here is a statement about HEAD: every number belongs to that record and 
 Every xla row of this record runs with `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (the XLA+ROCm command-buffer workaround, stored in `meta.xla_flags`), one fresh process per row, on the tree this record's fingerprint names; its per-generation numbers are not comparable with the FUSION-capture xla rows of `gpu_rocm_xla_2026-11-06.json` or with any earlier evoxc revision.
 <!-- END MEASURED (gpu_measure.py) -->
 ## Against the frozen JAX implementation, same device
+Everything above compares the new engine against the *numpy reference interpreter* — the same implementation on a slower engine — so no row above can speak to the old-vs-new question that `RESULTS.md` answers on the CPU.
+This section times the **frozen pre-rewrite JAX implementation** (`benchmarks/legacy_jax`, the same code `RESULTS.md` calls the old side) on the **same MI300X VF**, in the same protocol (seed 42, 3 warmup + 20 timed generations, one fresh process per row, compile measured separately), so the two implementations are compared on one device.
+`JAX_PLATFORMS=rocm` is what puts JAX itself on the device, and no row may fall back silently: every row records `jax.devices() == ["rocm:0"]`, `jax.default_backend() == "gpu"` and `device_kind` `AMD Instinct MI300X VF`, and a row that reported `cpu` would be an error row rather than a CPU number labelled as a device number.
+Both sides then run through the same device runtime: the JAX ROCm backend *is* the PJRT plugin the `xla` rows drive (`xla_rocm_plugin.so`, 480.1 MiB, sha256 `8e8319b4…`), and both records carry it in their plugin fingerprint.
+On this device the engine decides whether the rewrite wins: the `xla` leg is **1.40x–2.50x faster per generation than the frozen JAX implementation on all five cases the two implementations share**, while the `iree` leg is **slower than it on all five** (0.50x–0.80x, i.e. the pre-rewrite implementation is 1.25x–2.00x faster than `iree` here).
+The per-generation win lands where the rewrite's level sweep replaces the legacy `fori_loop` over `max_nodes`: 5.338 against 3.825 ms/gen on `xor_p100`, 10.089 against 4.033 on `xor_p500`, 10.511 against 4.968 on `xor_p1000`, 9.196 against 4.153 on `xor3d_p500` and 12.710 against 5.891 on `custom_pagie_p500`.
+There is no amortisation trade-off to weigh against the frozen implementation, because `xla` also **compiles 2.63x–3.40x faster per shape** (2.034–2.607 s against the legacy `jax.jit(...).lower().compile()`'s 6.554–6.904 s): the new side is ahead on both the one-off and the per-generation column, so this is not a "faster per generation, slower to start" trade.
+Against the numpy reference above, the same `xla` compile needed 19–136 generations to repay itself; against the frozen JAX implementation there is nothing to repay, because that side pays a 2.6x–3.4x longer compile of its own before its first timed generation.
+The batch forward tells the same story more sharply: on the device the frozen JAX forward takes 1.435 ms at 400 rows and 13.745 ms at 500 000, against `xla`'s 0.419 and 2.229 (**3.20x–6.17x**), and moving the *old* forward onto the device changes almost nothing — 1.382/1.566/1.661/3.430/7.681/14.238 ms in the committed CPU-JAX session (`FORWARD.md`) against 1.435/1.660/1.612/3.081/7.366/13.745 here, i.e. within −10 %…+6 % — because a `vmap` over every connection with a per-node `lax.cond` is dispatch-bound, and the device does not change the dispatch count.
+One protocol finding is shared by both sides: the legacy jitted step dies on this device without the command-buffer workaround (`INTERNAL: Failed to set memcpy d2d node params: HIP_ERROR_InvalidValue` from `jit_step`), and `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` cures it — the same flag, for the same reason, that the `xla` rows above need, so it is a property of XLA-on-ROCm here rather than of `evoxc`.
+The comparison is one repeat per row and two sessions on one shared device — these old-side rows started at load average 1.51–2.16, the new columns come from the accelerator record measured 1 h 53 min earlier — so each ratio is a per-generation ratio of two sessions, not an interleaved A/B, and the per-row `min – max` in the block is its uncertainty measure.
+Two scope limits keep this honest: `cartpole_p100` has no old side at all (the pre-rewrite library's RL problems needed `brax`/`gymnax`/mujoco and were replaced by evoxc-native simulators), and `xor3d_p100`/`xor3d_p1000` are absent from the committed accelerator record, so measuring them would produce an old-side number with no paired new-side column.
 <!-- BEGIN MEASURED (jax_device_measure.py) -->
 ## Frozen JAX on the device — old vs new per generation
 
-**Verdict: the new evoxc engine is faster per generation than the frozen JAX implementation on the same device on most compared cases — `xla-rocm` by 1.29x–2.67x, `iree-rocm` by 0.46x–0.85x on 0 of 5 cases, and slower on `xor_p100` (`iree-rocm` 0.46x), `xor_p500` (`iree-rocm` 0.85x), `xor_p1000` (`iree-rocm` 0.69x), `xor3d_p500` (`iree-rocm` 0.69x), `custom_pagie_p500` (`iree-rocm` 0.79x) (old ÷ new, medians of one repeat per row).**
+**Verdict: the new evoxc engine against the frozen JAX implementation on the same device — `xla-rocm` is 1.40x–2.50x faster on all 5 compared cases; `iree-rocm` is slower on all 5 compared cases (0.50x–0.80x) (old ÷ new, medians of one repeat per row).**
 The old side is `benchmarks/legacy_jax` (`import tensorneat_legacy`) — the frozen pre-rewrite implementation — compiled with `jax.jit(pipeline.step).lower(state).compile()` and measured by one `benchmarks/harness/worker.py` process per row, exactly as the CPU matrix measures it.
 The new side is the committed accelerator record's own `xla` and `iree` rows on the same device, read at render time and never re-measured, so each speed-up is a per-generation ratio of two sessions on one physical device.
 
@@ -217,11 +230,11 @@ The `xla` and `iree` columns are the same case's medians in the accelerator reco
 
 | Case | old JAX ms/gen (median, min–max) | `xla` ms/gen | `iree` ms/gen | old ÷ `xla` | old ÷ `iree` | old JAX compile s | `xla` build s | `iree` build s |
 |---|---|---|---|---|---|---|---|---|
-| `xor_p100` | 4.939 (4.536 – 5.180) | 3.825 | 10.633 | 1.29x | 0.46x | 6.839 | 2.034 | 7.799 |
-| `xor_p500` | 10.774 (10.226 – 10.885) | 4.033 | 12.744 | 2.67x | 0.85x | 6.748 | 2.244 | 8.017 |
-| `xor_p1000` | 10.451 (9.552 – 10.594) | 4.968 | 15.203 | 2.10x | 0.69x | 6.479 | 2.354 | 8.193 |
-| `xor3d_p500` | 8.875 (5.790 – 9.502) | 4.153 | 12.910 | 2.14x | 0.69x | 6.884 | 2.211 | 8.063 |
-| `custom_pagie_p500` | 12.539 (12.181 – 12.863) | 5.891 | 15.873 | 2.13x | 0.79x | 6.788 | 2.607 | 8.406 |
+| `xor_p100` | 5.338 (4.763 – 5.465) | 3.825 | 10.633 | 1.40x | 0.50x | 6.904 | 2.034 | 7.799 |
+| `xor_p500` | 10.089 (10.001 – 10.564) | 4.033 | 12.744 | 2.50x | 0.79x | 6.742 | 2.244 | 8.017 |
+| `xor_p1000` | 10.511 (9.598 – 10.670) | 4.968 | 15.203 | 2.12x | 0.69x | 6.554 | 2.354 | 8.193 |
+| `xor3d_p500` | 9.196 (6.203 – 10.087) | 4.153 | 12.910 | 2.21x | 0.71x | 6.803 | 2.211 | 8.063 |
+| `custom_pagie_p500` | 12.710 (12.414 – 12.961) | 5.891 | 15.873 | 2.16x | 0.80x | 6.860 | 2.607 | 8.406 |
 
 ### Batch forward
 
@@ -252,21 +265,21 @@ Measured conditions, not a verdict: these numbers are comparable with another se
 | `XLA_FLAGS` | `--xla_gpu_enable_command_buffer=WHILE` (ROCm command-buffer workaround: without it the legacy jitted step fails with `HIP_ERROR_InvalidValue`) |
 | XLA allocator policy | `XLA_PYTHON_CLIENT_PREALLOCATE=false` — allocate on demand instead of reserving 75 % of a shared device up front, which OOMed rows |
 | PJRT plugin (the jax ROCm backend *is* this plugin) | `xla_rocm_plugin.so` (480.1 MiB, sha256 `8e8319b48fcc…`) |
-| Load average (start of each row) | 0.62 – 1.24 (1-minute sample at each row's start) |
+| Load average (start of each row) | 1.51 – 2.16 (1-minute sample at each row's start) |
 | Python / numpy | 3.12.3 / 2.5.4 |
 | CPU cores / platform | 20 / Linux-6.8.0-146-generic-x86_64-with-glibc2.39 |
-| Git commit (code under test) | `83a8574faf2e` (clean — generated report artifacts are not counted) |
-| Session (UTC) | 2026-11-07T12:22:23+00:00 – 2026-11-07T12:23:25+00:00 |
+| Git commit (code under test) | `ab02073bebb8` (clean — generated report artifacts are not counted) |
+| Session (UTC) | 2026-11-07T12:25:54+00:00 – 2026-11-07T12:26:57+00:00 |
 
 ### Provenance
 
-Old-side rows (this block's `old JAX` and `old ÷ …` columns): `benchmarks/results/jax_rocm_2026-11-07.json` — 5 row(s), 5 ok and 0 error — measured at git `83a8574faf2e` (clean — generated report artifacts are not counted) in the session 2026-11-07T12:22:23+00:00 – 2026-11-07T12:23:25+00:00.
+Old-side rows (this block's `old JAX` and `old ÷ …` columns): `benchmarks/results/jax_rocm_2026-11-07.json` — 5 row(s), 5 ok and 0 error — measured at git `ab02073bebb8` (clean — generated report artifacts are not counted) in the session 2026-11-07T12:25:54+00:00 – 2026-11-07T12:26:57+00:00.
 New-side columns (`xla`, `iree`, their `build s`): `benchmarks/results/gpu_rocm_xla_2026-11-07.json` at git `93ce3cac122f` (session 2026-11-07T10:29:06+00:00 – 2026-11-07T10:32:39+00:00), schema `tensorneat-gpu/1` — read at render time, never re-measured here and never hard-coded.
 Batch-forward rows: `benchmarks/results/forward_jax_rocm_2026-11-07.json` at git `54683c3e3d9b` (session 2026-11-07T12:21:02+00:00 – 2026-11-07T12:21:54+00:00) (target `jax`) joined with `benchmarks/results/forward.json` at git `8c6330989a92` (session 2026-11-07T08:17:07+00:00 – 2026-11-07T08:19:54+00:00) (target `xla-rocm`), both schema `tensorneat-forward/1`.
 Protocol: seed 42, 3 warmup + 20 timed generations, one fresh process per row, one repeat per row.
 The one-off compile (`jax.jit(pipeline.step).lower(state).compile()`) is timed separately and never charged to a generation, and every quoted millisecond is a median, not a mean.
 Nothing here is a statement about HEAD: every number belongs to the record, tree and session it names.
-The old-side rows of this record are the frozen pre-rewrite JAX implementation (`benchmarks/legacy_jax`) measured on the same MI300X the accelerator record used: seed 42, 3 warmup + 20 timed generations, one fresh process per row, `jax.jit(...).lower().compile()` timed separately under `JAX_FLAGS`-class `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (without it the legacy jitted step dies with HIP_ERROR_InvalidValue); the new-side columns are read from `benchmarks/results/gpu_rocm_xla_2026-11-07.json` (tree `93ce3cac`) and belong to that session.
+The old-side rows of this record are the frozen pre-rewrite JAX implementation (`benchmarks/legacy_jax`) measured on the same MI300X the accelerator record used: seed 42, 3 warmup + 20 timed generations, one fresh process per row, and `jax.jit(...).lower().compile()` timed separately, under `JAX_PLATFORMS=rocm`, `XLA_PYTHON_CLIENT_PREALLOCATE=false` and `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (without that workaround the legacy jitted step dies with `HIP_ERROR_InvalidValue`); the new-side columns are read from `benchmarks/results/gpu_rocm_xla_2026-11-07.json` (tree `93ce3cac`) and belong to that session.
 
 ### What is and is not comparable
 
@@ -282,7 +295,7 @@ None: every planned old-side row measured on the device. This section is written
 <!-- END MEASURED (jax_device_measure.py) -->
 ## Limitations
 
-No legacy-GPU comparison exists: the frozen JAX baseline in `benchmarks/legacy_jax` is CPU-only by protocol, so an accelerator number here is informational and is never part of the numpy-only old-vs-new verdict in `RESULTS.md`; there is no "old side" for a GPU.
+The legacy comparison exists only inside this file: `## Against the frozen JAX implementation, same device` times the frozen implementation on this device (one seed, one repeat, one session), and it is never part of the numpy-only old-vs-new verdict in `RESULTS.md`, which stays computed from `results/authoritative.json` on the CPU contract; an accelerator ratio mixed into that verdict would compare a device measurement against a CPU one.
 One device: a single `AMD Instinct MI300X VF` at one device index (`iree.runtime.get_driver("hip").query_available_devices()` reports one entry, `device_id=1`), so nothing here says how the numbers scale to a second GPU, and no multi-device or multi-stream path is exercised.
 Only `xla` rocm is measurable here: the `xla` backend needs a PJRT C API plugin `.so`, the ROCm one is the `jax-rocm7-pjrt` wheel and no CPU PJRT C API plugin exists to buy (`jaxlib` exports no `GetPjRtApi`, and PyPI ships no CPU plugin package), so an `xla` CPU row stays impossible on this box and `tvm` is untested in this repository.
 One wiring is enough and the harness uses two: `compile_options["plugin_path"]` is what actually loads the plugin, and `EVOXC_PJRT_PLUGIN` in the row process's environment pins the same `.so` for any option-less discovery call, so a row is an `error` row (never a silent fallback) only when neither names a usable plugin and no `jax_plugins/*/*_plugin.so` is installed on `sys.path`.
@@ -343,7 +356,29 @@ uv run --all-extras python benchmarks/forward_measure.py run --workload xor_p500
 #   ... and the same pair for --workload xor_p1000_s500, plus four without-workaround RL trials:
 uv run --all-extras python benchmarks/gpu_measure.py run --case cartpole_p100 --target xla-rocm \
     --warmup 3 --generations 20 --seed 42 --pjrt-plugin "$EVOXC_PJRT_PLUGIN" --xla-flags= --json $TMPDIR/cp-without.json
+# 6. the frozen JAX implementation on the same device: 5 paired cases, strictly sequential, one process per row
+JAX_NOTE=$(cat <<'NOTE'
+The old-side rows of this record are the frozen pre-rewrite JAX implementation (`benchmarks/legacy_jax`) measured on the same MI300X the accelerator record used: seed 42, 3 warmup + 20 timed generations, one fresh process per row, and `jax.jit(...).lower().compile()` timed separately, under `JAX_PLATFORMS=rocm`, `XLA_PYTHON_CLIENT_PREALLOCATE=false` and `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (without that workaround the legacy jitted step dies with `HIP_ERROR_InvalidValue`); the new-side columns are read from `benchmarks/results/gpu_rocm_xla_2026-11-07.json` (tree `93ce3cac`) and belong to that session.
+NOTE
+)
+uv run --all-extras python benchmarks/jax_device_measure.py matrix \
+    --cases xor_p100,xor_p500,xor_p1000,xor3d_p500,custom_pagie_p500 \
+    --platform rocm --warmup 3 --generations 20 --seed 42 \
+    --json benchmarks/results/jax_rocm_2026-11-07.json --out benchmarks/GPU.md \
+    --report-title "TensorNEAT accelerator measurement — the frozen JAX implementation on the MI300X VF" \
+    --report-note "$JAX_NOTE"
+# 7. the frozen JAX batch forward on the device: the block's forward column (JAX_PLATFORMS picks the device)
+JAX_PLATFORMS=rocm uv run --all-extras python benchmarks/forward_measure.py matrix \
+    --workloads all --targets jax --passes 10 --warmup 3 --seed 42 \
+    --json benchmarks/results/forward_jax_rocm_2026-11-07.json
+# 8. re-render either measured block from its record: no measurement, no JSON rewrite
+uv run --all-extras python benchmarks/jax_device_measure.py render \
+    --json benchmarks/results/jax_rocm_2026-11-07.json --out benchmarks/GPU.md
 ```
+Step 6 is what produced the second block: `jax_device_measure.py` pins each child to `JAX_PLATFORMS=rocm` (verified against `jax.default_backend() == "gpu"`), exports `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` and `XLA_PYTHON_CLIENT_PREALLOCATE=false`, and spawns one `benchmarks/harness/worker.py` process per row — the same worker, warmup and timing code the CPU matrix uses.
+Step 7 is the forward column's old side: the `jax` target now receives the same command-buffer workaround (a `jax` row is XLA-driven, and the legacy `fori_loop` forward graph fails without it), which the record stores per row in `record["xla_flags"]`.
+Step 8 is the second block's own re-render: it reproduces the measured block byte-for-byte and leaves the hand-written prose around it untouched.
+The session behind step 6 took 53 s of wall clock on this box (five legacy XLA compiles of 6.554–6.904 s plus 23 generations per row) and step 7 took 50 s (seven rows), so both are foreground-cheap but must not run concurrently with another measurement on the shared device.
 
 Step 3 is the exact argv the record stores in `meta.command`, with the recording worker's absolute interpreter path replaced by the portable `uv run --all-extras python` and the plugin path given as the variable it was read from; the title and the note travel through shell variables only so the stored quoting is reproducible without escaping.
 The session took 3 min 33 s of wall clock on this box, of which the six `iree-compile`s are 49.1 s and the six XLA compiles 13.7 s (sums of the recorded `build_s`), so run it in the background rather than under a short foreground timeout.
@@ -363,5 +398,7 @@ The Python-free paths are `--list`, `--help` and nothing else: `run` and `matrix
 `BACKENDS.md` stays the compiled-backend CPU-leg record of its own session — the `iree` llvm-cpu numbers, which this matrix does not measure — and `PERF_NUMPY.md` stays the numpy-interpreter performance record; neither is re-rendered from here.
 Accelerator rows are never wired into the harness verdict, and that is deliberate: `protocol.comparisons` pairs every old-side record with every new-side record, so an accelerator row in `results/` would enter the numpy-only verdict as if it were a numpy measurement and could flip a timing verdict that the CPU contract owns.
 Keeping the accelerator protocol standalone (`benchmarks/gpu_measure.py`, its own `tensorneat-gpu/1` schema, its own record and report) keeps that contract intact: the harness verdict compares what it declares it compares, and an accelerated row is evidence about a different question.
+The same-device JAX section changes that in no way: `results/jax_rocm_2026-11-07.json` carries schema `tensorneat-jax-device/1` and `results/forward_jax_rocm_2026-11-07.json` carries `tensorneat-forward/1`, neither of which a harness renderer reads, so no row of either can enter `protocol.comparisons` or move `RESULTS.md`, `THREADS.md` or `iree.md`.
+The frozen implementation is read, never edited: the old-side rows import `benchmarks/legacy_jax` unchanged, which is what keeps its role as the baseline and the numerical oracle meaningful.
 `benchmarks/results/gpu_rocm_xla_2026-11-06.json` and `benchmarks/results/gpu_rocm_2026-11-05.json` stay the records of their own trees and sessions: they are superseded as this file's block source only, and are neither rewritten nor re-measured here.
 `FORWARD.md` stays the forward-pass report of its own four-target session; the two forward A/B runs quoted under `## Protocol` are scratch measurements into `$TMPDIR` and are not a record.

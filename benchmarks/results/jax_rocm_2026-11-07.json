@@ -1,13 +1,13 @@
 {
   "schema": "tensorneat-jax-device/1",
   "meta": {
-    "command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python benchmarks/jax_device_measure.py matrix --cases xor_p100,xor_p500,xor_p1000,xor3d_p500,custom_pagie_p500 --platform rocm --warmup 3 --generations 20 --seed 42 --json benchmarks/results/jax_rocm_2026-11-07.json --out benchmarks/GPU.md --report-title 'TensorNEAT accelerator measurement \u2014 the frozen JAX implementation on the MI300X VF' --report-note 'The old-side rows of this record are the frozen pre-rewrite JAX implementation (`benchmarks/legacy_jax`) measured on the same MI300X the accelerator record used: seed 42, 3 warmup + 20 timed generations, one fresh process per row, `jax.jit(...).lower().compile()` timed separately under `JAX_FLAGS`-class `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (without it the legacy jitted step dies with HIP_ERROR_InvalidValue); the new-side columns are read from `benchmarks/results/gpu_rocm_xla_2026-11-07.json` (tree `93ce3cac`) and belong to that session.'",
+    "command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python benchmarks/jax_device_measure.py matrix --cases xor_p100,xor_p500,xor_p1000,xor3d_p500,custom_pagie_p500 --platform rocm --warmup 3 --generations 20 --seed 42 --json benchmarks/results/jax_rocm_2026-11-07.json --out benchmarks/GPU.md --report-title 'TensorNEAT accelerator measurement \u2014 the frozen JAX implementation on the MI300X VF' --report-note 'The old-side rows of this record are the frozen pre-rewrite JAX implementation (`benchmarks/legacy_jax`) measured on the same MI300X the accelerator record used: seed 42, 3 warmup + 20 timed generations, one fresh process per row, and `jax.jit(...).lower().compile()` timed separately, under `JAX_PLATFORMS=rocm`, `XLA_PYTHON_CLIENT_PREALLOCATE=false` and `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (without that workaround the legacy jitted step dies with `HIP_ERROR_InvalidValue`); the new-side columns are read from `benchmarks/results/gpu_rocm_xla_2026-11-07.json` (tree `93ce3cac`) and belong to that session.'",
     "report_title": "TensorNEAT accelerator measurement \u2014 the frozen JAX implementation on the MI300X VF",
-    "report_note": "The old-side rows of this record are the frozen pre-rewrite JAX implementation (`benchmarks/legacy_jax`) measured on the same MI300X the accelerator record used: seed 42, 3 warmup + 20 timed generations, one fresh process per row, `jax.jit(...).lower().compile()` timed separately under `JAX_FLAGS`-class `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (without it the legacy jitted step dies with HIP_ERROR_InvalidValue); the new-side columns are read from `benchmarks/results/gpu_rocm_xla_2026-11-07.json` (tree `93ce3cac`) and belong to that session.",
-    "created_utc": "2026-11-07T12:22:23+00:00",
+    "report_note": "The old-side rows of this record are the frozen pre-rewrite JAX implementation (`benchmarks/legacy_jax`) measured on the same MI300X the accelerator record used: seed 42, 3 warmup + 20 timed generations, one fresh process per row, and `jax.jit(...).lower().compile()` timed separately, under `JAX_PLATFORMS=rocm`, `XLA_PYTHON_CLIENT_PREALLOCATE=false` and `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (without that workaround the legacy jitted step dies with `HIP_ERROR_InvalidValue`); the new-side columns are read from `benchmarks/results/gpu_rocm_xla_2026-11-07.json` (tree `93ce3cac`) and belong to that session.",
+    "created_utc": "2026-11-07T12:25:54+00:00",
     "session_utc": {
-      "start": "2026-11-07T12:22:23+00:00",
-      "end": "2026-11-07T12:23:25+00:00"
+      "start": "2026-11-07T12:25:54+00:00",
+      "end": "2026-11-07T12:26:57+00:00"
     },
     "protocol": {
       "implementation": "old -- the frozen pre-rewrite JAX implementation under benchmarks/legacy_jax (import tensorneat_legacy)",
@@ -89,11 +89,11 @@
         "XLA_FLAGS": null
       },
       "loadavg": [
-        1.24,
-        0.78,
-        0.69
+        3.44,
+        1.35,
+        0.88
       ],
-      "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+      "git_commit": "ab02073bebb87c4cdf6c7f2fd4345921b3b29acb",
       "git_dirty": false,
       "git_dirty_paths": []
     },
@@ -147,7 +147,7 @@
       "error": null,
       "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T12:22:23+00:00",
+      "timestamp_utc": "2026-11-07T12:25:54+00:00",
       "device": {
         "error": null,
         "python": "3.12.3",
@@ -175,7 +175,7 @@
           "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
         }
       },
-      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor_p100 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_lfy12ac_/worker.json",
+      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor_p100 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_qvdd2cqg/worker.json",
       "case_config": {
         "algorithm": "NEAT",
         "algorithm_config": {
@@ -219,14 +219,14 @@
         "cpu_count": 20,
         "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
         "evoxc": "0.1.0",
-        "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+        "git_commit": "ab02073bebb87c4cdf6c7f2fd4345921b3b29acb",
         "git_dirty": false,
         "git_dirty_paths": [],
         "jax": "0.10.2",
         "loadavg": [
-          0.7,
-          0.61,
-          0.63
+          1.66,
+          0.83,
+          0.7
         ],
         "machine": "x86_64",
         "memory_mb": 241611,
@@ -243,47 +243,47 @@
         },
         "threads": 0
       },
-      "compile_s": 6.8394813819322735,
+      "compile_s": 6.904463537037373,
       "generations_consumed_before_timing": 0,
       "ms_per_generation": {
-        "mean": 4.919401672668755,
-        "median": 4.93875565007329,
-        "min": 4.535570042207837,
-        "max": 5.179696949198842,
+        "mean": 5.24291186593473,
+        "median": 5.338025977835059,
+        "min": 4.763133125379682,
+        "max": 5.46454219147563,
         "samples": [
-          4.584028152748942,
-          4.535570042207837,
-          4.700792022049427,
-          4.801834933459759,
-          4.839286906644702,
-          4.9858849961310625,
-          5.055117886513472,
-          5.122274160385132,
-          5.033622030168772,
-          5.179696949198842,
-          5.028096027672291,
-          5.022790050134063,
-          4.990539979189634,
-          4.9385621678084135,
-          4.921266110613942,
-          4.930706927552819,
-          4.912154981866479,
-          4.938949132338166,
-          4.966099048033357,
-          4.9007609486579895
+          4.763133125379682,
+          4.785165889188647,
+          4.8161710146814585,
+          5.0518319476395845,
+          5.081656156107783,
+          5.196095909923315,
+          5.262339022010565,
+          5.381957860663533,
+          5.33835799433291,
+          5.391767947003245,
+          5.3303970489650965,
+          5.384794902056456,
+          5.344797158613801,
+          5.311998073011637,
+          5.360457114875317,
+          5.337693961337209,
+          5.381759023293853,
+          5.453647114336491,
+          5.41967386379838,
+          5.46454219147563
         ]
       },
-      "gens_per_second": 202.4801530695612,
-      "peak_rss_mib": 3320.82421875,
+      "gens_per_second": 187.3351692465104,
+      "peak_rss_mib": 3329.1796875,
       "loadavg_start": [
-        0.62,
-        0.59,
-        0.62
+        1.78,
+        0.83,
+        0.7
       ],
       "loadavg_end": [
-        0.7,
-        0.61,
-        0.63
+        1.66,
+        0.83,
+        0.7
       ],
       "final_max_fitness": -0.24134759604930878
     },
@@ -300,7 +300,7 @@
       "error": null,
       "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T12:22:35+00:00",
+      "timestamp_utc": "2026-11-07T12:26:07+00:00",
       "device": {
         "error": null,
         "python": "3.12.3",
@@ -328,7 +328,7 @@
           "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
         }
       },
-      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor_p500 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_szxifgtg/worker.json",
+      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor_p500 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_x30d9y25/worker.json",
       "case_config": {
         "algorithm": "NEAT",
         "algorithm_config": {
@@ -372,14 +372,14 @@
         "cpu_count": 20,
         "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
         "evoxc": "0.1.0",
-        "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+        "git_commit": "ab02073bebb87c4cdf6c7f2fd4345921b3b29acb",
         "git_dirty": false,
         "git_dirty_paths": [],
         "jax": "0.10.2",
         "loadavg": [
-          0.83,
-          0.64,
-          0.64
+          1.56,
+          0.84,
+          0.7
         ],
         "machine": "x86_64",
         "memory_mb": 241611,
@@ -396,47 +396,47 @@
         },
         "threads": 0
       },
-      "compile_s": 6.748448814032599,
+      "compile_s": 6.741962416097522,
       "generations_consumed_before_timing": 0,
       "ms_per_generation": {
-        "mean": 10.739350214134902,
-        "median": 10.773819056339562,
-        "min": 10.225689969956875,
-        "max": 10.884610004723072,
+        "mean": 10.124846594408154,
+        "median": 10.088822455145419,
+        "min": 10.001052869483829,
+        "max": 10.56427601724863,
         "samples": [
-          10.869859950616956,
-          10.741485981270671,
-          10.83492604084313,
-          10.789738036692142,
-          10.82448405213654,
-          10.716693010181189,
-          10.778205003589392,
-          10.874668136239052,
-          10.835533030331135,
-          10.84814197383821,
-          10.748288128525019,
-          10.61896700412035,
-          10.852190898731351,
-          10.725360829383135,
-          10.548997204750776,
-          10.884610004723072,
-          10.659453924745321,
-          10.640277992933989,
-          10.769433109089732,
-          10.225689969956875
+          10.56427601724863,
+          10.461771860718727,
+          10.173043003305793,
+          10.15602401457727,
+          10.051887948065996,
+          10.017506079748273,
+          10.039981920272112,
+          10.088576003909111,
+          10.090521071106195,
+          10.089068906381726,
+          10.069703916087747,
+          10.158552089706063,
+          10.18617209047079,
+          10.03612601198256,
+          10.090555995702744,
+          10.049286996945739,
+          10.003810049965978,
+          10.074767051264644,
+          10.094247991219163,
+          10.001052869483829
         ]
       },
-      "gens_per_second": 92.81759743417791,
-      "peak_rss_mib": 3443.3828125,
+      "gens_per_second": 99.11959541819354,
+      "peak_rss_mib": 3448.44140625,
       "loadavg_start": [
-        0.7,
-        0.61,
-        0.63
+        1.66,
+        0.83,
+        0.7
       ],
       "loadavg_end": [
-        0.83,
-        0.64,
-        0.64
+        1.56,
+        0.84,
+        0.7
       ],
       "final_max_fitness": -0.20228970050811768
     },
@@ -453,7 +453,7 @@
       "error": null,
       "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T12:22:48+00:00",
+      "timestamp_utc": "2026-11-07T12:26:19+00:00",
       "device": {
         "error": null,
         "python": "3.12.3",
@@ -481,7 +481,7 @@
           "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
         }
       },
-      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor_p1000 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_ecbwb4er/worker.json",
+      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor_p1000 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_wt_7kynq/worker.json",
       "case_config": {
         "algorithm": "NEAT",
         "algorithm_config": {
@@ -525,14 +525,14 @@
         "cpu_count": 20,
         "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
         "evoxc": "0.1.0",
-        "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+        "git_commit": "ab02073bebb87c4cdf6c7f2fd4345921b3b29acb",
         "git_dirty": false,
         "git_dirty_paths": [],
         "jax": "0.10.2",
         "loadavg": [
-          1.26,
-          0.74,
-          0.67
+          2.16,
+          1.0,
+          0.76
         ],
         "machine": "x86_64",
         "memory_mb": 241611,
@@ -549,47 +549,47 @@
         },
         "threads": 0
       },
-      "compile_s": 6.479150749975815,
+      "compile_s": 6.5539537710137665,
       "generations_consumed_before_timing": 0,
       "ms_per_generation": {
-        "mean": 10.37467501591891,
-        "median": 10.450887377373874,
-        "min": 9.551824070513248,
-        "max": 10.593760991469026,
+        "mean": 10.43731679674238,
+        "median": 10.51101554185152,
+        "min": 9.59846586920321,
+        "max": 10.670159943401814,
         "samples": [
-          10.54578903131187,
-          10.4262949898839,
-          10.41642902418971,
-          10.249919025227427,
-          10.363884037360549,
-          10.530248982831836,
-          10.393272154033184,
-          10.461702942848206,
-          10.45112987048924,
-          10.37238398566842,
-          10.593760991469026,
-          10.450644884258509,
-          10.57030213996768,
-          10.555293876677752,
-          10.501502081751823,
-          10.471977991983294,
-          10.428720153868198,
-          10.481946170330048,
-          9.551824070513248,
-          9.67647391371429
+          10.368576040491462,
+          10.383089073002338,
+          10.45560697093606,
+          10.499141877517104,
+          10.399421909824014,
+          10.420155944302678,
+          10.51493501290679,
+          10.492905043065548,
+          10.650809854269028,
+          10.532394051551819,
+          10.670159943401814,
+          10.640730150043964,
+          10.526444064453244,
+          10.549259139224887,
+          10.611639823764563,
+          10.586675023660064,
+          10.550854029133916,
+          10.507096070796251,
+          9.78797604329884,
+          9.59846586920321
         ]
       },
-      "gens_per_second": 95.68565461388434,
-      "peak_rss_mib": 3470.4375,
+      "gens_per_second": 95.13828573636087,
+      "peak_rss_mib": 3469.703125,
       "loadavg_start": [
-        0.83,
-        0.64,
-        0.64
+        1.51,
+        0.84,
+        0.71
       ],
       "loadavg_end": [
-        1.26,
-        0.74,
-        0.67
+        2.16,
+        1.0,
+        0.76
       ],
       "final_max_fitness": -0.18571680784225464
     },
@@ -606,7 +606,7 @@
       "error": null,
       "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T12:23:00+00:00",
+      "timestamp_utc": "2026-11-07T12:26:31+00:00",
       "device": {
         "error": null,
         "python": "3.12.3",
@@ -634,7 +634,7 @@
           "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
         }
       },
-      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor3d_p500 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_3jpb6_if/worker.json",
+      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor3d_p500 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_c1g6ff2f/worker.json",
       "case_config": {
         "algorithm": "NEAT",
         "algorithm_config": {
@@ -674,14 +674,14 @@
         "cpu_count": 20,
         "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
         "evoxc": "0.1.0",
-        "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+        "git_commit": "ab02073bebb87c4cdf6c7f2fd4345921b3b29acb",
         "git_dirty": false,
         "git_dirty_paths": [],
         "jax": "0.10.2",
         "loadavg": [
-          1.2,
-          0.75,
-          0.67
+          1.98,
+          1.0,
+          0.76
         ],
         "machine": "x86_64",
         "memory_mb": 241611,
@@ -698,47 +698,47 @@
         },
         "threads": 0
       },
-      "compile_s": 6.883873296901584,
+      "compile_s": 6.803321678889915,
       "generations_consumed_before_timing": 0,
       "ms_per_generation": {
-        "mean": 8.320209686644375,
-        "median": 8.874712511897087,
-        "min": 5.790263181552291,
-        "max": 9.501688880845904,
+        "mean": 8.731948176864535,
+        "median": 9.195985971018672,
+        "min": 6.202645134180784,
+        "max": 10.087359929457307,
         "samples": [
-          5.790263181552291,
-          6.184329045936465,
-          6.398933939635754,
-          6.920708110556006,
-          7.21025699749589,
-          7.749075070023537,
-          8.055601036176085,
-          8.478812174871564,
-          8.957757148891687,
-          8.839205140247941,
-          8.910219883546233,
-          8.956453995779157,
-          9.199307998642325,
-          9.234337136149406,
-          9.162732865661383,
-          9.492823155596852,
-          9.501688880845904,
-          9.336781920865178,
-          9.328479180112481,
-          8.696426870301366
+          6.202645134180784,
+          6.636305013671517,
+          6.684534018859267,
+          7.448127958923578,
+          7.742108078673482,
+          8.112295996397734,
+          8.685562992468476,
+          8.915849030017853,
+          9.174216073006392,
+          9.217755869030952,
+          9.286244865506887,
+          9.412345942109823,
+          9.476715931668878,
+          9.807453956454992,
+          9.468812961131334,
+          10.087359929457307,
+          9.749701013788581,
+          9.703065967187285,
+          9.74709982983768,
+          9.080762974917889
         ]
       },
-      "gens_per_second": 112.67970637465041,
-      "peak_rss_mib": 3441.05078125,
+      "gens_per_second": 108.74309760274966,
+      "peak_rss_mib": 3449.13671875,
       "loadavg_start": [
-        1.24,
-        0.74,
-        0.67
+        2.16,
+        1.0,
+        0.76
       ],
       "loadavg_end": [
-        1.2,
-        0.75,
-        0.67
+        1.98,
+        1.0,
+        0.76
       ],
       "final_max_fitness": -0.25
     },
@@ -755,7 +755,7 @@
       "error": null,
       "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T12:23:13+00:00",
+      "timestamp_utc": "2026-11-07T12:26:44+00:00",
       "device": {
         "error": null,
         "python": "3.12.3",
@@ -783,7 +783,7 @@
           "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
         }
       },
-      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case custom_pagie_p500 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_ac1_dv20/worker.json",
+      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case custom_pagie_p500 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_x7qa_4if/worker.json",
       "case_config": {
         "algorithm": "NEAT",
         "algorithm_config": {
@@ -834,14 +834,14 @@
         "cpu_count": 20,
         "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
         "evoxc": "0.1.0",
-        "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+        "git_commit": "ab02073bebb87c4cdf6c7f2fd4345921b3b29acb",
         "git_dirty": false,
         "git_dirty_paths": [],
         "jax": "0.10.2",
         "loadavg": [
-          1.17,
-          0.76,
-          0.68
+          3.44,
+          1.35,
+          0.88
         ],
         "machine": "x86_64",
         "memory_mb": 241611,
@@ -858,47 +858,47 @@
         },
         "threads": 0
       },
-      "compile_s": 6.787701603025198,
+      "compile_s": 6.859808332985267,
       "generations_consumed_before_timing": 0,
       "ms_per_generation": {
-        "mean": 12.552416895050555,
-        "median": 12.53890700172633,
-        "min": 12.181394034996629,
-        "max": 12.863492127507925,
+        "mean": 12.688086018897593,
+        "median": 12.710440088994801,
+        "min": 12.413531076163054,
+        "max": 12.960760155692697,
         "samples": [
-          12.181394034996629,
-          12.420498067513108,
-          12.455018004402518,
-          12.450312031432986,
-          12.574609136208892,
-          12.613230850547552,
-          12.451783986762166,
-          12.740642996504903,
-          12.561658164486289,
-          12.808525003492832,
-          12.50962889753282,
-          12.537294998764992,
-          12.425009859725833,
-          12.4601349234581,
-          12.540519004687667,
-          12.386260088533163,
-          12.626925949007273,
-          12.863492127507925,
-          12.726612854748964,
-          12.714786920696497
+          12.803171994164586,
+          12.602725997567177,
+          12.645947048440576,
+          12.710297014564276,
+          12.960760155692697,
+          12.861114926636219,
+          12.413531076163054,
+          12.867482146248221,
+          12.586676981300116,
+          12.754647061228752,
+          12.49912497587502,
+          12.739535188302398,
+          12.529880972579122,
+          12.588705867528915,
+          12.791034998372197,
+          12.735184980556369,
+          12.710583163425326,
+          12.681138003244996,
+          12.506591854617,
+          12.773585971444845
         ]
       },
-      "gens_per_second": 79.75176782651967,
-      "peak_rss_mib": 3467.58203125,
+      "gens_per_second": 78.67548196587146,
+      "peak_rss_mib": 3474.8828125,
       "loadavg_start": [
-        1.2,
-        0.75,
-        0.67
+        1.9,
+        1.0,
+        0.76
       ],
       "loadavg_end": [
-        1.17,
-        0.76,
-        0.68
+        3.44,
+        1.35,
+        0.88
       ],
       "final_max_fitness": -0.042952608317136765
     }
