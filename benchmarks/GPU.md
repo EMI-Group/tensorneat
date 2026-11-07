@@ -118,13 +118,14 @@ The trace is part of the record (`trajectory` per row, `protocol.trajectory_gene
 
 | Item | Value |
 |---|---|
-| Date / session (UTC) | 2026-11-06T07:11:39+00:00 – 2026-11-06T07:17:50+00:00 |
+| Date / session (UTC) | 2026-11-07T10:28:40+00:00 – 2026-11-07T10:28:41+00:00 |
 | GPU model (gfx version) | AMD Instinct MI300X VF (gfx942) |
 | HIP devices (IREE runtime query) | device_id=1 AMD Instinct MI300X VF |
 | ROCm version | 7.1.0 |
 | Driver version | 6.16.6 |
 | IREE compiler / runtime | 3.13.0 / 3.13.0 |
 | PJRT plugin (xla targets) | `xla_rocm_plugin.so` (480.1 MiB, sha256 `8e8319b48fcc…`) |
+| XLA_FLAGS (xla targets) | `--xla_gpu_enable_command_buffer=WHILE` (ROCm command-buffer workaround: the RL rollout's long `while` SIGSEGVs under FUSION capture) |
 | evoxc | 0.1.0 |
 | numpy | 2.5.4 |
 | Python | 3.12.3 |
@@ -132,8 +133,8 @@ The trace is part of the record (`trajectory` per row, `protocol.trajectory_gene
 | CPU model / count | INTEL(R) XEON(R) PLATINUM 8568Y+ / 20 logical |
 | Memory | 241611 MiB |
 | Threads | runtime defaults (nothing exported; inherited environment recorded) |
-| Git commit | `ddd7295afc5a` (clean — generated report artifacts are not counted) |
-| Load average (1/5/15 min, document build) | 5.23 / 5.04 / 3.49 |
+| Git commit | `fc20a91ea277` (clean — generated report artifacts are not counted) |
+| Load average (1/5/15 min, document build) | 5.05 / 3.72 / 7.15 |
 
 ## Measured: numpy vs iree-rocm vs xla-rocm
 
@@ -141,24 +142,24 @@ One row per planned `(case, target)`; `n/a` marks a metric the row does not have
 
 | Case | Target | Backend | Status | setup (s) | build (s) | ms/gen median | ms/gen mean | ms/gen min–max | gens/s | peak RSS (MiB) | final max fitness | cross-check |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| xor_p100 | `numpy` | `numpy` | ok | 0.016 | 0.287 | 43.300 | 43.573 | 35.268 – 56.056 | 22.950 | 156.6 | -0.176966 | skipped (target is the numpy reference) |
-| xor_p100 | `iree-rocm` | `iree` | ok | 1.305 | 8.017 | 10.295 | 10.403 | 9.926 – 12.005 | 96.124 | 1894.9 | -0.184767 | gen 1 pass; final-state drift (node_keys) |
-| xor_p100 | `xla-rocm` | `xla` | ok | 4.460 | 2.149 | 3.610 | 3.611 | 3.500 – 3.746 | 276.918 | 9368.5 | -0.176966 | pass (gen 1) |
-| xor_p500 | `numpy` | `numpy` | ok | 0.016 | 0.318 | 120.186 | 119.846 | 112.608 – 126.576 | 8.344 | 240.0 | -0.147786 | skipped (target is the numpy reference) |
-| xor_p500 | `iree-rocm` | `iree` | ok | 1.218 | 8.212 | 12.820 | 12.947 | 12.698 – 14.543 | 77.238 | 1913.3 | -0.112459 | gen 1 pass; final-state drift (node_keys) |
-| xor_p500 | `xla-rocm` | `xla` | ok | 4.334 | 2.197 | 4.535 | 4.523 | 4.386 – 4.649 | 221.094 | 9387.8 | -0.140949 | gen 1 pass; final-state drift (node_keys) |
-| xor_p1000 | `numpy` | `numpy` | ok | 0.017 | 0.382 | 182.567 | 184.049 | 175.568 – 199.017 | 5.433 | 341.6 | -0.053339 | skipped (target is the numpy reference) |
-| xor_p1000 | `iree-rocm` | `iree` | ok | 1.326 | 8.161 | 15.117 | 15.194 | 14.787 – 15.859 | 65.814 | 1936.6 | -0.136390 | gen 1 pass; final-state drift (node_keys) |
-| xor_p1000 | `xla-rocm` | `xla` | ok | 4.354 | 2.367 | 5.497 | 5.503 | 5.317 – 5.625 | 181.720 | 9423.4 | -0.053339 | gen 1 pass; final-state drift (node_keys) |
-| xor3d_p500 | `numpy` | `numpy` | ok | 0.018 | 0.323 | 136.063 | 137.903 | 126.384 – 168.140 | 7.252 | 248.0 | -0.223466 | skipped (target is the numpy reference) |
-| xor3d_p500 | `iree-rocm` | `iree` | ok | 1.466 | 8.617 | 12.920 | 13.085 | 12.822 – 14.637 | 76.421 | 1914.9 | -0.250000 | gen 1 pass; final-state drift (node_keys) |
-| xor3d_p500 | `xla-rocm` | `xla` | ok | 4.435 | 2.332 | 4.580 | 4.594 | 4.432 – 4.988 | 217.683 | 9413.5 | -0.223466 | gen 1 pass; final-state drift (node_keys) |
-| custom_pagie_p500 | `numpy` | `numpy` | ok | 0.018 | 0.805 | 965.043 | 971.508 | 888.500 – 1092.814 | 1.029 | 1306.2 | -0.032613 | skipped (target is the numpy reference) |
-| custom_pagie_p500 | `iree-rocm` | `iree` | ok | 1.305 | 9.027 | 15.768 | 15.282 | 14.298 – 16.103 | 65.438 | 1942.7 | -0.046049 | gen 1 pass; final-state drift (node_keys) |
-| custom_pagie_p500 | `xla-rocm` | `xla` | ok | 4.455 | 2.672 | 6.319 | 6.363 | 6.146 – 6.816 | 157.167 | 9427.1 | -0.032613 | gen 1 pass; final-state drift (node_keys) |
-| cartpole_p100 | `numpy` | `numpy` | ok | 0.016 | 0.283 | 236.023 | 256.083 | 229.720 – 370.927 | 3.905 | 155.2 | 200.000000 | skipped (target is the numpy reference) |
-| cartpole_p100 | `iree-rocm` | `iree` | ok | 1.234 | 8.711 | 61.495 | 61.785 | 59.606 – 64.012 | 16.185 | 1934.3 | 200.000000 | pass (gen 1) |
-| cartpole_p100 | `xla-rocm` | `xla` | ok | 4.357 | 2.227 | 13.362 | 13.433 | 13.182 – 13.734 | 74.444 | 9390.9 | 200.000000 | gen 1 pass; final-state drift (fitness) |
+| xor_p100 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p100 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p100 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p500 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p500 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p500 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p1000 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p1000 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p1000 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor3d_p500 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor3d_p500 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor3d_p500 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| custom_pagie_p500 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| custom_pagie_p500 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| custom_pagie_p500 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| cartpole_p100 | `numpy` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| cartpole_p100 | `iree-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| cartpole_p100 | `xla-rocm` | `?` | error | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
 ## Numerical cross-check
 
@@ -166,284 +167,50 @@ Each non-numpy row is compared against a fresh `backend="numpy"` run of the same
 
 | Case | Target | Generation 1 | Keys (gen 1) | Attr max abs diff (gen 1) | Fitness max abs diff | Mask mismatches | Final state | Keys (final) | Attr max abs diff (final) | Fitness max abs diff (final) | Mask mismatches (final) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| xor_p100 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000238; conn_attrs 0.000000238 | 0.000000060 | 0 | fail | node_keys 189 mismatch(es); conn_keys 686 mismatch(es) | node_attrs 1.492010832; conn_attrs 4.826976299 | 0.131897777 | 1080 |
-| xor_p100 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000238; conn_attrs 0.000000238 | 0.000000060 | 0 | pass | node_keys exact; conn_keys exact | node_attrs 0.000000149; conn_attrs 0.000000238 | 0.000000045 | 0 |
-| xor_p500 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000294 | 0.000000060 | 0 | fail | node_keys 734 mismatch(es); conn_keys 3545 mismatch(es) | node_attrs 2.440064669; conn_attrs 7.131760120 | 0.266454309 | 4278 |
-| xor_p500 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000238; conn_attrs 0.000000238 | 0.000000089 | 0 | fail | node_keys 857 mismatch(es); conn_keys 3765 mismatch(es) | node_attrs 2.720985651; conn_attrs 7.074343204 | 0.230899110 | 5990 |
-| xor_p1000 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000298 | 0.000000089 | 0 | fail | node_keys 1687 mismatch(es); conn_keys 8767 mismatch(es) | node_attrs 3.298459530; conn_attrs 6.690523148 | 0.420150518 | 7554 |
-| xor_p1000 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000238; conn_attrs 0.000000238 | 0.000000119 | 0 | fail | node_keys 1527 mismatch(es); conn_keys 7624 mismatch(es) | node_attrs 4.058683395; conn_attrs 6.799370766 | 0.418266296 | 9380 |
-| xor3d_p500 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000298 | 0.000000060 | 0 | fail | node_keys 976 mismatch(es); conn_keys 4456 mismatch(es) | node_attrs 4.066220284; conn_attrs 4.489749908 | 0.153934240 | 7562 |
-| xor3d_p500 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000238; conn_attrs 0.000000238 | 0.000000060 | 0 | fail | node_keys 959 mismatch(es); conn_keys 4229 mismatch(es) | node_attrs 4.066220284; conn_attrs 4.200792313 | 0.152276725 | 4512 |
-| custom_pagie_p500 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000294 | 0.000000238 | 0 | fail | node_keys 507 mismatch(es); conn_keys 2853 mismatch(es) | node_attrs 3.389557362; conn_attrs 3.321706295 | 0.095183104 | 5962 |
-| custom_pagie_p500 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000238; conn_attrs 0.000000238 | 0.000000089 | 0 | fail | node_keys 237 mismatch(es); conn_keys 1458 mismatch(es) | node_attrs 3.406351328; conn_attrs 2.775112629 | 0.112810448 | 1896 |
-| cartpole_p100 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000294 | 0.000000000 | 0 | pass | node_keys exact; conn_keys exact | node_attrs 0.000000119; conn_attrs 0.000000238 | 0.000000000 | 0 |
-| cartpole_p100 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000238; conn_attrs 0.000000238 | 0.000000000 | 0 | fail | node_keys exact; conn_keys exact | node_attrs 0.000000119; conn_attrs 0.000000238 | 1.000000000 | 0 |
-
-## Per-generation trajectory
-
-Every traced row was re-run after the timed region, with the peak-RSS sample already taken, as a lockstep pair: a fresh accelerated pipeline and a fresh `backend="numpy"` pipeline of the same case and seed, each paying its own build, compared per generation with the cross-check rules above. The trace touches neither the timings nor the recorded RSS.
-
-**xor_p100 / `iree-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: 13; first float exceedance: 13; wall time 9.924 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.253215 / -0.253215 | 1 / 1 |
-| 2 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250795 / -0.250795 | 1 / 1 |
-| 3 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.250101 / -0.250101 | 2 / 2 |
-| 4 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.250050 / -0.250050 | 2 / 2 |
-| 5 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.249919 / -0.249919 | 2 / 2 |
-| 6 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.249629 / -0.249629 | 2 / 2 |
-| 7 | 0 | 0 | 0.000000060 | 0.000000119 | 0 | 0.000000060 | 0 | -0.248715 / -0.248715 | 2 / 2 |
-| 8 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000030 | 0 | -0.247675 / -0.247675 | 2 / 2 |
-| 9 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.246592 / -0.246592 | 2 / 2 |
-| 10 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.245527 / -0.245527 | 3 / 3 |
-| 11 | 0 | 0 | 0.000000060 | 0.000000119 | 0 | 0.000000060 | 0 | -0.243673 / -0.243673 | 6 / 6 |
-| 12 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.241268 / -0.241268 | 6 / 6 |
-| 13 | 27 | 118 | 2.164435387 | 2.167837143 | 101 | 0.113686353 | 4 | -0.237129 / -0.238927 | 6 / 6 |
-| 14 | 53 | 187 | 0.813701153 | 1.681092739 | 202 | 0.086849481 | 4 | -0.233823 / -0.235706 | 6 / 6 |
-
-**xor_p100 / `xla-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: none within 14 generations; first float exceedance: none within 14 generations; wall time 2.646 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.253215 / -0.253215 | 1 / 1 |
-| 2 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250795 / -0.250795 | 1 / 1 |
-| 3 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.250101 / -0.250101 | 2 / 2 |
-| 4 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.250050 / -0.250050 | 2 / 2 |
-| 5 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.249919 / -0.249919 | 2 / 2 |
-| 6 | 0 | 0 | 0.000000179 | 0.000000238 | 0 | 0.000000060 | 0 | -0.249629 / -0.249629 | 2 / 2 |
-| 7 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.248715 / -0.248715 | 2 / 2 |
-| 8 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000045 | 0 | -0.247675 / -0.247675 | 2 / 2 |
-| 9 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.246592 / -0.246592 | 2 / 2 |
-| 10 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.245527 / -0.245527 | 3 / 3 |
-| 11 | 0 | 0 | 0.000000238 | 0.000000119 | 0 | 0.000000060 | 0 | -0.243673 / -0.243673 | 6 / 6 |
-| 12 | 0 | 0 | 0.000000179 | 0.000000238 | 0 | 0.000000045 | 0 | -0.241268 / -0.241268 | 6 / 6 |
-| 13 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000030 | 0 | -0.237129 / -0.237129 | 6 / 6 |
-| 14 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000060 | 0 | -0.233823 / -0.233823 | 6 / 6 |
-
-**xor_p500 / `iree-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: 4; first float exceedance: 4; wall time 11.223 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000477 | 0.000000294 | 0 | 0.000000060 | 0 | -0.250251 / -0.250251 | 1 / 1 |
-| 2 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250017 / -0.250017 | 6 / 3 |
-| 3 | 0 | 0 | 0.000000149 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250007 / -0.250007 | 16 / 6 |
-| 4 | 308 | 1720 | 2.618898392 | 3.687131405 | 1789 | 0.097838163 | 14 | -0.250001 / -0.250001 | 20 / 6 |
-| 5 | 433 | 2154 | 3.048482180 | 3.928130150 | 1764 | 0.078658432 | 25 | -0.249823 / -0.249994 | 20 / 6 |
-| 6 | 563 | 2590 | 2.242585182 | 3.767443895 | 1436 | 0.162336916 | 27 | -0.248735 / -0.249380 | 20 / 6 |
-| 7 | 667 | 2650 | 2.098993301 | 3.576029778 | 1588 | 0.102464199 | 22 | -0.247461 / -0.245810 | 20 / 6 |
-| 8 | 645 | 2686 | 2.583975077 | 4.072798729 | 1524 | 0.112536043 | 18 | -0.243918 / -0.231725 | 20 / 6 |
-| 9 | 658 | 2802 | 1.784778357 | 4.102497101 | 1700 | 0.141785219 | 23 | -0.241320 / -0.217541 | 20 / 6 |
-| 10 | 635 | 2735 | 1.898266077 | 4.312487602 | 1567 | 0.121345967 | 31 | -0.240657 / -0.208400 | 20 / 6 |
-| 11 | 698 | 2788 | 2.298183441 | 4.652419090 | 1816 | 0.129715905 | 23 | -0.237867 / -0.196763 | 20 / 6 |
-| 12 | 722 | 2918 | 2.593549967 | 4.535817146 | 1813 | 0.125310659 | 25 | -0.233631 / -0.192127 | 20 / 6 |
-| 13 | 688 | 2979 | 4.043320179 | 4.633800030 | 1700 | 0.103745818 | 35 | -0.228627 / -0.184734 | 20 / 6 |
-| 14 | 754 | 3099 | 2.290542126 | 4.885830402 | 1975 | 0.181158334 | 21 | -0.224597 / -0.174005 | 20 / 6 |
-
-**xor_p500 / `xla-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: 6; first float exceedance: 5; wall time 3.994 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000089 | 0 | -0.250251 / -0.250251 | 1 / 1 |
-| 2 | 0 | 0 | 0.000000477 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250017 / -0.250017 | 6 / 6 |
-| 3 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250007 / -0.250007 | 16 / 16 |
-| 4 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250001 / -0.250001 | 20 / 20 |
-| 5 | 0 | 0 | 0.217691779 | 0.003084108 | 0 | 0.000197470 | 0 | -0.249823 / -0.249823 | 20 / 20 |
-| 6 | 119 | 375 | 2.586089373 | 1.691174030 | 72 | 0.039434135 | 6 | -0.248735 / -0.248735 | 20 / 20 |
-| 7 | 332 | 1141 | 1.609423399 | 2.881172419 | 1056 | 0.093943715 | 5 | -0.247461 / -0.246979 | 20 / 20 |
-| 8 | 405 | 1263 | 1.491860032 | 4.651563644 | 1086 | 0.082730204 | 3 | -0.243918 / -0.245092 | 20 / 20 |
-| 9 | 589 | 2079 | 1.595991731 | 4.324651241 | 1713 | 0.100329936 | 13 | -0.241320 / -0.243271 | 20 / 20 |
-| 10 | 574 | 1972 | 1.595991731 | 4.690880775 | 1618 | 0.124292791 | 17 | -0.240657 / -0.242666 | 20 / 20 |
-| 11 | 627 | 2289 | 2.092477322 | 5.117555618 | 1926 | 0.097553045 | 15 | -0.237867 / -0.239880 | 20 / 20 |
-| 12 | 625 | 2364 | 2.593549967 | 4.449964523 | 1521 | 0.113933265 | 21 | -0.233631 / -0.236103 | 20 / 20 |
-| 13 | 634 | 2507 | 4.043320179 | 4.839536667 | 1667 | 0.137924224 | 17 | -0.228627 / -0.231327 | 20 / 20 |
-| 14 | 639 | 2907 | 2.290542126 | 4.711293697 | 1713 | 0.103182733 | 16 | -0.224597 / -0.227711 | 20 / 20 |
-
-**xor_p1000 / `iree-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: 4; first float exceedance: 4; wall time 13.194 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000477 | 0.000000298 | 0 | 0.000000089 | 0 | -0.250251 / -0.250251 | 2 / 2 |
-| 2 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250060 / -0.250060 | 12 / 5 |
-| 3 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250001 / -0.250001 | 20 / 12 |
-| 4 | 600 | 3449 | 3.142985821 | 2.540262222 | 2201 | 0.108110696 | 30 | -0.249913 / -0.250001 | 20 / 12 |
-| 5 | 1088 | 5767 | 2.857068777 | 2.704190731 | 3712 | 0.109995067 | 62 | -0.249371 / -0.249985 | 20 / 12 |
-| 6 | 1739 | 7095 | 3.530684710 | 2.946155310 | 5409 | 0.107642204 | 45 | -0.248355 / -0.249422 | 20 / 12 |
-| 7 | 1762 | 7061 | 3.324771166 | 3.175319195 | 5089 | 0.110316157 | 50 | -0.246130 / -0.249157 | 20 / 12 |
-| 8 | 1806 | 7173 | 3.536395550 | 4.040146351 | 5196 | 0.168323487 | 50 | -0.235605 / -0.248230 | 20 / 12 |
-| 9 | 1713 | 7147 | 3.307558060 | 4.064034462 | 4586 | 0.123532623 | 50 | -0.232334 / -0.245386 | 20 / 12 |
-| 10 | 1674 | 6902 | 3.386581659 | 3.137895107 | 4795 | 0.127675205 | 51 | -0.218614 / -0.247435 | 20 / 12 |
-| 11 | 1485 | 7060 | 3.233250618 | 4.073899269 | 4282 | 0.127774924 | 39 | -0.212860 / -0.243339 | 20 / 12 |
-| 12 | 1499 | 6868 | 3.050926685 | 4.206381798 | 3604 | 0.117527127 | 65 | -0.206379 / -0.236054 | 20 / 12 |
-| 13 | 1510 | 7107 | 3.303441048 | 4.303811550 | 4321 | 0.193081409 | 64 | -0.199304 / -0.223004 | 20 / 12 |
-| 14 | 1428 | 6903 | 3.186868191 | 4.832839966 | 4277 | 0.198184818 | 53 | -0.187691 / -0.215279 | 20 / 12 |
-
-**xor_p1000 / `xla-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: 9; first float exceedance: 8; wall time 5.594 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000119 | 0 | -0.250251 / -0.250251 | 2 / 2 |
-| 2 | 0 | 0 | 0.000000477 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250060 / -0.250060 | 12 / 12 |
-| 3 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250001 / -0.250001 | 20 / 20 |
-| 4 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.249913 / -0.249913 | 20 / 20 |
-| 5 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.249371 / -0.249371 | 20 / 20 |
-| 6 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.248355 / -0.248355 | 20 / 20 |
-| 7 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.246130 / -0.246130 | 20 / 20 |
-| 8 | 0 | 0 | 0.130168200 | 0.005506754 | 0 | 0.000000060 | 0 | -0.235605 / -0.235605 | 20 / 20 |
-| 9 | 18 | 92 | 3.740734100 | 2.835820675 | 66 | 0.010366738 | 1 | -0.232334 / -0.232334 | 20 / 20 |
-| 10 | 243 | 1357 | 3.740734100 | 4.559720993 | 1427 | 0.087913930 | 1 | -0.218614 / -0.218614 | 20 / 20 |
-| 11 | 614 | 2870 | 3.159790277 | 5.169526100 | 1591 | 0.102426678 | 8 | -0.212860 / -0.212860 | 20 / 20 |
-| 12 | 1257 | 5537 | 3.268372774 | 5.513322830 | 3801 | 0.156097621 | 30 | -0.206379 / -0.206379 | 20 / 20 |
-| 13 | 896 | 3740 | 3.268372774 | 5.399968147 | 2690 | 0.185953230 | 16 | -0.199304 / -0.199304 | 20 / 20 |
-| 14 | 1257 | 4970 | 3.783902168 | 5.535475731 | 4239 | 0.218329474 | 25 | -0.187691 / -0.187691 | 20 / 20 |
-
-**xor3d_p500 / `iree-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: 5; first float exceedance: 5; wall time 11.785 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000477 | 0.000000298 | 0 | 0.000000060 | 0 | -0.251171 / -0.251171 | 1 / 1 |
-| 2 | 0 | 0 | 0.000000179 | 0.000000358 | 0 | 0.000000060 | 0 | -0.250194 / -0.250194 | 1 / 1 |
-| 3 | 0 | 0 | 0.000000119 | 0.000000328 | 0 | 0.000000060 | 0 | -0.250011 / -0.250011 | 3 / 3 |
-| 4 | 0 | 0 | 0.000000238 | 0.000000328 | 0 | 0.000000089 | 0 | -0.250004 / -0.250004 | 3 / 3 |
-| 5 | 86 | 792 | 1.953010201 | 2.348107815 | 671 | 0.091053963 | 12 | -0.250001 / -0.250002 | 20 / 3 |
-| 6 | 127 | 1537 | 1.840878963 | 1.091112375 | 1183 | 0.103558660 | 9 | -0.250000 / -0.250001 | 20 / 3 |
-| 7 | 556 | 2668 | 1.980885267 | 3.377946854 | 2372 | 0.114442766 | 41 | -0.250000 / -0.250000 | 20 / 3 |
-| 8 | 529 | 2592 | 2.809998512 | 2.657910347 | 1947 | 0.085243106 | 23 | -0.249999 / -0.250000 | 20 / 3 |
-| 9 | 576 | 2906 | 3.217855453 | 2.737298012 | 1999 | 0.095178545 | 9 | -0.249980 / -0.250000 | 20 / 3 |
-| 10 | 654 | 2968 | 2.132001162 | 1.575432777 | 2310 | 0.139350057 | 26 | -0.249943 / -0.250000 | 20 / 3 |
-| 11 | 732 | 3174 | 4.228101254 | 2.438176394 | 2161 | 0.080694973 | 23 | -0.249839 / -0.250000 | 20 / 3 |
-| 12 | 802 | 3245 | 4.228100777 | 3.425137281 | 2424 | 0.117904425 | 25 | -0.249462 / -0.250000 | 20 / 3 |
-| 13 | 852 | 3352 | 4.248557568 | 2.914254904 | 2660 | 0.080749840 | 27 | -0.249007 / -0.250000 | 20 / 3 |
-| 14 | 988 | 3647 | 3.936978817 | 2.440686226 | 3330 | 0.047573268 | 16 | -0.247870 / -0.250000 | 20 / 3 |
-
-**xor3d_p500 / `xla-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: 8; first float exceedance: 8; wall time 4.090 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.251171 / -0.251171 | 1 / 1 |
-| 2 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250194 / -0.250194 | 1 / 1 |
-| 3 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250011 / -0.250011 | 3 / 3 |
-| 4 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250004 / -0.250004 | 3 / 3 |
-| 5 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.250001 / -0.250001 | 20 / 20 |
-| 6 | 0 | 0 | 0.000000238 | 0.000000119 | 0 | 0.000000060 | 0 | -0.250000 / -0.250000 | 20 / 20 |
-| 7 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000030 | 0 | -0.250000 / -0.250000 | 20 / 20 |
-| 8 | 43 | 220 | 1.093454957 | 1.200019002 | 221 | 0.066319168 | 4 | -0.249999 / -0.249999 | 20 / 20 |
-| 9 | 127 | 550 | 1.899353027 | 2.193921089 | 295 | 0.090819627 | 4 | -0.249980 / -0.249980 | 20 / 20 |
-| 10 | 562 | 2135 | 2.144493103 | 3.445238590 | 2216 | 0.133314312 | 22 | -0.249943 / -0.249943 | 20 / 20 |
-| 11 | 791 | 2750 | 2.467591524 | 3.774496555 | 2480 | 0.107461154 | 19 | -0.249839 / -0.249839 | 20 / 20 |
-| 12 | 711 | 2824 | 3.996948242 | 3.603818178 | 2223 | 0.150442004 | 23 | -0.249462 / -0.249462 | 20 / 20 |
-| 13 | 853 | 3114 | 3.996948242 | 4.945690155 | 1948 | 0.098944753 | 18 | -0.249007 / -0.249007 | 20 / 20 |
-| 14 | 906 | 3311 | 2.749063015 | 5.074888229 | 2843 | 0.089159191 | 20 | -0.247870 / -0.247870 | 20 / 20 |
-
-**custom_pagie_p500 / `iree-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: 4; first float exceedance: 4; wall time 22.996 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000477 | 0.000000294 | 0 | 0.000000238 | 0 | -0.046480 / -0.046480 | 1 / 1 |
-| 2 | 0 | 0 | 0.000000134 | 0.000000238 | 0 | 0.000000063 | 0 | -0.046061 / -0.046061 | 3 / 3 |
-| 3 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000089 | 0 | -0.046049 / -0.046049 | 3 / 3 |
-| 4 | 90 | 510 | 2.348528624 | 1.000000000 | 579 | 0.034655090 | 1 | -0.046049 / -0.046049 | 4 / 3 |
-| 5 | 123 | 700 | 2.387268543 | 2.084776640 | 781 | 0.045766756 | 1 | -0.046031 / -0.046049 | 5 / 3 |
-| 6 | 241 | 1292 | 2.348528624 | 1.299737096 | 1484 | 0.117517307 | 2 | -0.046018 / -0.046049 | 5 / 3 |
-| 7 | 319 | 1777 | 1.973827958 | 1.592835426 | 1930 | 0.083048046 | 7 | -0.045835 / -0.046049 | 6 / 3 |
-| 8 | 360 | 1793 | 2.140910149 | 2.081655264 | 2015 | 0.083571717 | 7 | -0.045799 / -0.046049 | 6 / 3 |
-| 9 | 369 | 1890 | 2.140910149 | 2.273530960 | 2114 | 0.089705303 | 7 | -0.045137 / -0.046049 | 6 / 3 |
-| 10 | 358 | 1857 | 2.196461439 | 2.397579670 | 2039 | 0.072265916 | 2 | -0.044979 / -0.046049 | 6 / 3 |
-| 11 | 374 | 1954 | 2.276385069 | 1.619795561 | 2140 | 0.072071239 | 3 | -0.044345 / -0.046049 | 7 / 3 |
-| 12 | 427 | 2098 | 2.318641424 | 2.457735062 | 2331 | 0.086077839 | 3 | -0.043920 / -0.046049 | 8 / 3 |
-| 13 | 432 | 2099 | 2.306272745 | 2.457735300 | 2336 | 0.058883082 | 5 | -0.042594 / -0.046049 | 8 / 3 |
-| 14 | 459 | 2382 | 2.287573338 | 1.607507110 | 2414 | 0.125538796 | 18 | -0.042274 / -0.046049 | 8 / 3 |
-
-**custom_pagie_p500 / `xla-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: 10; first float exceedance: 7; wall time 16.050 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000089 | 0 | -0.046480 / -0.046480 | 1 / 1 |
-| 2 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000022 | 0 | -0.046061 / -0.046061 | 3 / 3 |
-| 3 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000030 | 0 | -0.046049 / -0.046049 | 3 / 3 |
-| 4 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000030 | 0 | -0.046049 / -0.046049 | 4 / 4 |
-| 5 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000060 | 0 | -0.046031 / -0.046031 | 5 / 5 |
-| 6 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000030 | 0 | -0.046018 / -0.046018 | 5 / 5 |
-| 7 | 0 | 0 | 0.306329429 | 0.008525796 | 0 | 0.000130326 | 0 | -0.045835 / -0.045835 | 6 / 6 |
-| 8 | 0 | 0 | 0.259954870 | 0.010306090 | 0 | 0.000155181 | 0 | -0.045799 / -0.045799 | 6 / 6 |
-| 9 | 0 | 0 | 0.259954810 | 0.010306120 | 0 | 0.000231959 | 0 | -0.045137 / -0.045137 | 6 / 6 |
-| 10 | 1 | 4 | 1.414301872 | 0.234590173 | 6 | 0.001782279 | 0 | -0.044979 / -0.044979 | 6 / 6 |
-| 11 | 0 | 0 | 0.259954810 | 0.009333849 | 0 | 0.000296667 | 0 | -0.044345 / -0.044345 | 7 / 7 |
-| 12 | 0 | 0 | 0.259954840 | 0.009333819 | 0 | 0.000089884 | 0 | -0.043920 / -0.043920 | 8 / 8 |
-| 13 | 0 | 0 | 0.259954870 | 0.009333819 | 0 | 0.000088129 | 0 | -0.042594 / -0.042594 | 8 / 8 |
-| 14 | 0 | 0 | 0.380616546 | 0.009333789 | 0 | 0.000011727 | 0 | -0.042274 / -0.042274 | 8 / 8 |
-
-**cartpole_p100 / `iree-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: none within 14 generations; first float exceedance: none within 14 generations; wall time 14.431 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000477 | 0.000000294 | 0 | 0.000000000 | 0 | 56.000000 / 56.000000 | 1 / 1 |
-| 2 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000000 | 0 | 145.000000 / 145.000000 | 1 / 1 |
-| 3 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 4 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 5 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 6 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 7 | 0 | 0 | 0.000000179 | 0.000000238 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 8 | 0 | 0 | 0.000000179 | 0.000000477 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 9 | 0 | 0 | 0.000000119 | 0.000000477 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 10 | 0 | 0 | 0.000000179 | 0.000000477 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 11 | 0 | 0 | 0.000000149 | 0.000000477 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 12 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 13 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 14 | 0 | 0 | 0.000000119 | 0.000000358 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-
-**cartpole_p100 / `xla-rocm`** — 14 generation(s) compared in lockstep; first node-key divergence: none within 14 generations; first float exceedance: 4; wall time 5.969 s.
-
-*Both legs share one PRNG from one seed and one graph, so a first key divergence beyond generation 1 is a selection near-tie flip caused by a sub-ulp float difference between the backends, not a kernel defect.*
-
-| Generation | Node-key mismatches | Conn-key mismatches | Node attr max abs diff | Conn attr max abs diff | Attr NaN-mask mismatches | Fitness max abs diff | Fitness mask mismatches | Max fitness (numpy / accelerated) | Species (numpy / accelerated) |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0 | 0 | 0.000000238 | 0.000000238 | 0 | 0.000000000 | 0 | 56.000000 / 56.000000 | 1 / 1 |
-| 2 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000000 | 0 | 145.000000 / 145.000000 | 1 / 1 |
-| 3 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 4 | 0 | 0 | 0.000000119 | 0.000000119 | 0 | 3.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 5 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 12.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 6 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 1.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 7 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 1.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 8 | 0 | 0 | 0.000000119 | 0.000000477 | 0 | 1.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 9 | 0 | 0 | 0.000000119 | 0.000000477 | 0 | 23.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 10 | 0 | 0 | 0.000000119 | 0.000000477 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 11 | 0 | 0 | 0.000000119 | 0.000000477 | 0 | 2.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 12 | 0 | 0 | 0.000000060 | 0.000000238 | 0 | 1.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 13 | 0 | 0 | 0.000000119 | 0.000000238 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
-| 14 | 0 | 0 | 0.000000119 | 0.000000358 | 0 | 0.000000000 | 0 | 200.000000 / 200.000000 | 1 / 1 |
+| xor_p100 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p100 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p500 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p500 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p1000 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor_p1000 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor3d_p500 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| xor3d_p500 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| custom_pagie_p500 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| custom_pagie_p500 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| cartpole_p100 | `iree-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| cartpole_p100 | `xla-rocm` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
 ## Blocked rows
 
-No row was blocked: every planned row is `ok`.
+The full traceback of every row below stays in the record; the cell prints its last non-empty line.
+
+| Case | Target | Error (last non-empty line) |
+|---|---|---|
+| xor_p100 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| xor_p100 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| xor_p100 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| xor_p500 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| xor_p500 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| xor_p500 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| xor_p1000 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| xor_p1000 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| xor_p1000 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| xor3d_p500 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| xor3d_p500 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| xor3d_p500 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| custom_pagie_p500 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| custom_pagie_p500 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| custom_pagie_p500 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| cartpole_p100 | `numpy` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| cartpole_p100 | `iree-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
+| cartpole_p100 | `xla-rocm` | gpu_measure.py run: error: argument --xla-flags: expected one argument |
 
 ## Provenance of this block
 
-This block is rendered from `benchmarks/results/gpu_rocm_xla_2026-11-06.json`: 18 record(s), 18 ok and 0 error, measured in the session 2026-11-06T07:11:39+00:00 – 2026-11-06T07:17:50+00:00 (UTC) at git `ddd7295afc5a` (clean — generated report artifacts are not counted).
-`benchmarks/results/gpu_rocm_xla_2026-11-06.json` is committed evidence (it is in the re-include list of `benchmarks/results/.gitignore`), so every cell above is traceable to the committed record.
+This block is rendered from `benchmarks/results/gpu_rocm_xla_2026-11-07.json`: 18 record(s), 0 ok and 18 error, measured in the session 2026-11-07T10:28:40+00:00 – 2026-11-07T10:28:41+00:00 (UTC) at git `fc20a91ea277` (clean — generated report artifacts are not counted).
+`benchmarks/results/gpu_rocm_xla_2026-11-07.json` is committed evidence (it is in the re-include list of `benchmarks/results/.gitignore`), so every cell above is traceable to the committed record.
 Nothing here is a statement about HEAD: every number belongs to that record and to the tree its fingerprint names.
+Every xla row of this record runs with `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (the XLA+ROCm command-buffer workaround, stored in `meta.xla_flags`), one fresh process per row, on the tree this record's fingerprint names; its per-generation numbers are not comparable with the FUSION-capture xla rows of `gpu_rocm_xla_2026-11-06.json` or with any earlier evoxc revision.
 <!-- END MEASURED (gpu_measure.py) -->
 
 ## Limitations

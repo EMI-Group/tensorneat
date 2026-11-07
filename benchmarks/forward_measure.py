@@ -757,7 +757,8 @@ def _child_command(
     if plugin is not None:
         command += [PJRT_FLAG, plugin]
     # Forwarded explicitly so `--xla-flags ''` reaches the child as an empty value.
-    return command + ["--xla-flags", args.xla_flags]
+    # The `=` form is required: the default value itself begins with `--`.
+    return command + [f"--xla-flags={args.xla_flags}"]
 
 
 def _child_environment(plugin: str | None, xla_flags: str | None) -> dict[str, str]:

@@ -768,7 +768,9 @@ def _child_command(
     if args.trace:
         command += ["--trace", str(args.trace)]
     # Forwarded explicitly so `--xla-flags ''` reaches the child as an empty value.
-    command += ["--xla-flags", args.xla_flags]
+    # The `=` form is required: the default value itself begins with `--`, which
+    # argparse would otherwise read as the next option instead of this one's value.
+    command += [f"--xla-flags={args.xla_flags}"]
     return command
 
 
