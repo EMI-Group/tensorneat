@@ -132,7 +132,7 @@ The rollout *component* alone (`evaluate` traced alone, no genome forward) is li
 |---|---|
 | `./base.py` | `BaseProblem` protocol, `static_batch_size(transformed)`, `finalize_fitness(fitness)`, `build_options(state)` (the `backend`/`device`/`compile_options` a `show` report graph builds with). |
 | `./func_fit` | Supervised function fitting: `FuncFit` tiling + loss reduction + dataset budget, `XOR`, `XOR3d`, `CustomFuncFit`. |
-| `./rl` | Three batched evoxc environments — `CartPole` (discrete), `Pendulum` (continuous torque), `MountainCarContinuous` (continuous force with a one-time goal bonus) — each a `while_loop` over timesteps, plus `_common.py` host helpers, the measured cost table, the per-timestep IREE dispatch inventory and the recipe for user-defined evoxc environments. |
+| `./rl` | Three batched evoxc environments — `CartPole` (discrete), `Pendulum` (continuous torque), `MountainCarContinuous` (continuous force with a one-time goal bonus) — each a `while_loop` over timesteps, plus `_common.py` host helpers, the measured cost table, the per-timestep step shape and the recipe for user-defined evoxc environments. |
 | `../../host_payload.py` | Host-only evaluate plumbing this node's contract runs through: `_NetworkActFn`, `_prepared_query`, `eval_chunk_rows`/`EVAL_CHUNK_ROWS`/`DEVICE_EVAL_CHUNK_BYTES`, `_slice_batch` (sibling — read-only). |
 | `../common/errors.py` | `TensorNEATError`, the single config-validation exception (sibling — read-only). |
 | `../genome/base.py` | Produces the batch-first `transformed` schedule this node consumes and the `forward` kernel used as `act_fn` (sibling — read-only). |
