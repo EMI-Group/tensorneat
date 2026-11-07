@@ -418,12 +418,13 @@ class Pendulum(BaseProblem):
 
         * the packed step is 4 ops wider on numpy -- 33 against 29 in an
           env-only trace, from five slices and two extra multiplies in place of
-          one select -- and accelerator mode costs **121 218** executed ops on
-          one generation against **26 190** for host mode, because that mode
-          also unrolls the genome's level sweep inside the rollout (a 565-op
-          body per timestep where host mode runs 36 twice). The host leg
-          therefore keeps the byte-identical host kernel: same per-step op list,
-          same fitness;
+          one select -- and accelerator mode dispatches **130 461** ops on one
+          generation (from the second on) against **41 489** for host mode,
+          because that mode also unrolls the genome's level sweep inside the
+          rollout (a statically unrolled 628-op sweep body per timestep, where
+          host mode runs its 39-op level body once per level of the
+          population's own depth). The host leg therefore keeps the
+          byte-identical host kernel: same per-step op list, same fitness;
         * in the **assembled generation graph** the packed body's column slices
           are materialised as their own copies instead of fusing into the
           carried region, so the whole-step dispatch win of the standalone body
