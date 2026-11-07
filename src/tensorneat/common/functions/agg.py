@@ -37,9 +37,13 @@ Contract shared by all kernels in this module:
   ``0.0``; :func:`apply_aggregation` overrides every such column to exactly
   ``0.0``.
 
-Every kernel is a plain module-level function ``(z, mask) -> (P, N)``, so it
-stays importable by name and picklable as a gene option. Each one is a thin
-wrapper over a private ``_body(window)`` that takes the shared
+Every kernel is a plain module-level function ``(z, mask, scalars=None) -> (P, N)``,
+so it stays importable by name and picklable as a gene option. ``scalars`` is
+the optional ``float -> tensor`` mapping of rank-0 constants a forward pass
+prepared once (``genome.step._PreparedScalars.mapping``); it seeds
+:meth:`_Window.scalar`, and ``None`` -- every direct call -- builds the same
+literals locally, so the graph and the values are unchanged. Each kernel is a
+thin wrapper over a private ``_body(window)`` that takes the shared
 :class:`_Window` of one ``(z, mask)`` pair; the dispatcher calls the bodies and
 reuses one window, which is what keeps a multi-option dispatch from rebuilding
 the same neutral-padded tensor, the same ``(P, N, K)`` reduction and the same
@@ -262,17 +266,23 @@ class _Window:
         Contribution of every incoming edge of every node.
     mask : ``(P, N, K) bool``
         ``True`` for real incoming edges.
+    scalars : mapping of ``float`` to ``() float32``, optional
+        Loop-invariant rank-0 constants prepared once per forward pass
+        (``genome.step._PreparedScalars.mapping``); ``None`` builds them
+        locally. They seed the :meth:`scalar` memo, so a neutral element the
+        pass already materialised (``0.0``/``1.0``) costs no ``constant`` op
+        here, and every other literal is still built and memoised per window.
     """
 
     __slots__ = ("_z", "_mask", "_padded", "_count", "_total", "_scalars")
 
-    def __init__(self, z: Any, mask: Any) -> None:
+    def __init__(self, z: Any, mask: Any, scalars: Any = None) -> None:
         self._z = z
         self._mask = mask
         self._padded: dict[float, Any] = {}
         self._count: Any = None
         self._total: Any = None
-        self._scalars: dict[float, Any] = {}
+        self._scalars: dict[float, Any] = dict(scalars) if scalars else {}
 
     def scalar(self, value: float):
         """0-d ``float32`` constant, built once per distinct ``value``.
@@ -296,6 +306,11 @@ class _Window:
         not merge them, so routing every literal of one dispatch through this
         memo is what keeps a multi-option dispatch from emitting the same
         ``0.0`` four times.
+
+        A window built by a prepared forward pass is seeded from that pass's
+        rank-0 constants (:class:`_Window`'s ``scalars``), so a ``0.0`` or
+        ``1.0`` the pass already materialised resolves to its tensor and costs
+        no op at all; every other value is built here once and memoised.
         """
         key = float(value)
         cached = self._scalars.get(key)
@@ -377,7 +392,7 @@ def _sum_body(window: _Window):
     return window.total()
 
 
-def sum(z, mask):
+def sum(z, mask, scalars=None):
     """Masked sum over the incoming-edge axis.
 
     Parameters
@@ -386,6 +401,9 @@ def sum(z, mask):
         Contribution of every incoming edge of every node.
     mask : ``(P, N, K) bool``
         ``True`` for real incoming edges.
+    scalars : mapping of ``float`` to ``() float32``, optional
+        Loop-invariant rank-0 constants prepared once per forward pass; ``None``
+        builds them locally.
 
     Returns
     -------
@@ -401,8 +419,10 @@ def sum(z, mask):
     mask, not ``isnan``, decides.
     An all-``False`` column is therefore already ``0.0`` (``zero_on_empty``), so
     the dispatcher needs no ``has_valid`` guard for this option.
+    The padding and the fold's seed are the *same* ``0.0``, so a prepared pass
+    supplies one shared constant for both.
     """
-    return _sum_body(_Window(z, mask))
+    return _sum_body(_Window(z, mask, scalars))
 
 
 sum.window_body = _sum_body
@@ -416,7 +436,7 @@ def _product_body(window: _Window):
     )
 
 
-def product(z, mask):
+def product(z, mask, scalars=None):
     """Masked product over the incoming-edge axis.
 
     Parameters
@@ -425,6 +445,9 @@ def product(z, mask):
         Contribution of every incoming edge of every node.
     mask : ``(P, N, K) bool``
         ``True`` for real incoming edges.
+    scalars : mapping of ``float`` to ``() float32``, optional
+        Loop-invariant rank-0 constants prepared once per forward pass; ``None``
+        builds them locally.
 
     Returns
     -------
@@ -438,8 +461,10 @@ def product(z, mask):
     byte-identical to ``reduce_prod(select(mask, z, 1.0), axes=-1)``. The empty
     column is ``1.0``, not ``0.0``, so this kernel is *not* ``zero_on_empty``
     and a dispatch that includes it keeps the ``has_valid`` guard.
+    The neutral padding and the fold's identity are the same ``1.0``, so a
+    prepared pass supplies one shared constant for both.
     """
-    return _product_body(_Window(z, mask))
+    return _product_body(_Window(z, mask, scalars))
 
 
 product.window_body = _product_body
@@ -454,7 +479,7 @@ def _max_body(window: _Window):
     )
 
 
-def max(z, mask):
+def max(z, mask, scalars=None):
     """Masked maximum over the incoming-edge axis.
 
     Parameters
@@ -463,6 +488,9 @@ def max(z, mask):
         Contribution of every incoming edge of every node.
     mask : ``(P, N, K) bool``
         ``True`` for real incoming edges.
+    scalars : mapping of ``float`` to ``() float32``, optional
+        Loop-invariant rank-0 constants prepared once per forward pass; ``None``
+        builds them locally.
 
     Returns
     -------
@@ -476,9 +504,10 @@ def max(z, mask):
     byte-identical to ``reduce_max(select(mask, z, -inf), axes=-1)``; the
     ``-inf`` is a scalar constant that ``evoxc.select`` weak-promotes to the
     tensor's float32 dtype, shared with the fold's starting value. Not
-    ``zero_on_empty`` (an empty column is ``-inf``).
+    ``zero_on_empty`` (an empty column is ``-inf``). A prepared pass supplies
+    that one constant instead of building it per level.
     """
-    return _max_body(_Window(z, mask))
+    return _max_body(_Window(z, mask, scalars))
 
 
 max.window_body = _max_body
@@ -493,7 +522,7 @@ def _min_body(window: _Window):
     )
 
 
-def min(z, mask):
+def min(z, mask, scalars=None):
     """Masked minimum over the incoming-edge axis.
 
     Parameters
@@ -502,6 +531,9 @@ def min(z, mask):
         Contribution of every incoming edge of every node.
     mask : ``(P, N, K) bool``
         ``True`` for real incoming edges.
+    scalars : mapping of ``float`` to ``() float32``, optional
+        Loop-invariant rank-0 constants prepared once per forward pass; ``None``
+        builds them locally.
 
     Returns
     -------
@@ -513,9 +545,10 @@ def min(z, mask):
     -----
     The ``K``-plane fold of ``select(mask, z, +inf)`` (:func:`_fold_last`),
     byte-identical to ``reduce_min(select(mask, z, +inf), axes=-1)``. Not
-    ``zero_on_empty`` (an empty column is ``+inf``).
+    ``zero_on_empty`` (an empty column is ``+inf``). A prepared pass supplies
+    the one ``+inf`` constant instead of building it per level.
     """
-    return _min_body(_Window(z, mask))
+    return _min_body(_Window(z, mask, scalars))
 
 
 min.window_body = _min_body
@@ -533,7 +566,7 @@ def _maxabs_body(window: _Window):
     return evoxc.reshape(picked, (pop_size, num_nodes))
 
 
-def maxabs(z, mask):
+def maxabs(z, mask, scalars=None):
     """Signed contribution with the largest magnitude, over the incoming-edge axis.
 
     Parameters
@@ -542,6 +575,9 @@ def maxabs(z, mask):
         Contribution of every incoming edge of every node.
     mask : ``(P, N, K) bool``
         ``True`` for real incoming edges.
+    scalars : mapping of ``float`` to ``() float32``, optional
+        Loop-invariant rank-0 constants prepared once per forward pass; ``None``
+        builds them locally.
 
     Returns
     -------
@@ -567,9 +603,10 @@ def maxabs(z, mask):
     yields its neutral element ``0.0`` instead of an arbitrary (possibly ``NaN``)
     padding slot, exactly like the pre-rewrite ``z[argmax]`` after zeroing.
     Two extra ops beyond the magnitude variant, both ``O(P * N * K)`` gathers.
-    ``zero_on_empty``: an empty column is already ``0.0``.
+    ``zero_on_empty``: an empty column is already ``0.0``. A prepared pass
+    supplies the ``0.0`` padding instead of building it per level.
     """
-    return _maxabs_body(_Window(z, mask))
+    return _maxabs_body(_Window(z, mask, scalars))
 
 
 maxabs.window_body = _maxabs_body
@@ -582,7 +619,7 @@ def _mean_body(window: _Window):
     return evoxc.divide(window.total(), floor)
 
 
-def mean(z, mask):
+def mean(z, mask, scalars=None):
     """Masked arithmetic mean over the incoming-edge axis.
 
     Parameters
@@ -591,6 +628,9 @@ def mean(z, mask):
         Contribution of every incoming edge of every node.
     mask : ``(P, N, K) bool``
         ``True`` for real incoming edges.
+    scalars : mapping of ``float`` to ``() float32``, optional
+        Loop-invariant rank-0 constants prepared once per forward pass; ``None``
+        builds them locally.
 
     Returns
     -------
@@ -609,9 +649,10 @@ def mean(z, mask):
     The zero-padded sum it divides and the count it floors are both shared with
     the other options of the same dispatch (see :class:`_Window`), so a
     dispatch holding :func:`sum` and :func:`mean` reduces the ``(P, N, K)``
-    window once, not twice.
+    window once, not twice. A prepared pass supplies the ``0.0`` sum seed and
+    the ``1.0`` divisor floor as its shared rank-0 constants.
     """
-    return _mean_body(_Window(z, mask))
+    return _mean_body(_Window(z, mask, scalars))
 
 
 mean.window_body = _mean_body

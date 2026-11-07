@@ -72,20 +72,34 @@ def scaled_sigmoid(z):
     )
 
 
-def sigmoid(z):
+def sigmoid(z, scalars=None):
     """Logistic sigmoid, ``1 / (1 + exp(-z))``.
 
     Parameters
     ----------
     z : ``(...,) float32``
         Pre-activation node values, any static shape.
+    scalars : mapping of ``float`` to ``() float32``, optional
+        Loop-invariant rank-0 constants prepared once per forward pass
+        (``genome.step._PreparedScalars.mapping``); ``None`` builds them
+        locally. Only the ``1.0`` is looked up, and a mapping without it keeps
+        the literal, so the default spelling is op for op the one this kernel
+        always traced.
 
     Returns
     -------
     ``(...,) float32``
         Values in ``(0, 1)``; ``NaN`` propagates, ``+-inf`` saturates to ``1``/``0``.
+
+    Notes
+    -----
+    Both ``1.0`` literals of the expression are the *same* operand, so a
+    prepared pass pays one ``constant`` op for them instead of two per level
+    (``evoxc`` merges no constants). With ``scalars=None`` the value is the
+    Python float ``1.0``, which traces exactly the pre-existing graph.
     """
-    return evoxc.divide(1.0, evoxc.add(1.0, evoxc.exp(evoxc.negate(z))))
+    one = 1.0 if scalars is None else scalars.get(1.0, 1.0)
+    return evoxc.divide(one, evoxc.add(one, evoxc.exp(evoxc.negate(z))))
 
 
 def scaled_tanh(z):
