@@ -133,7 +133,6 @@ Reference payload: the cost-table genome (`DefaultGenome(2→1, max_nodes=50, ma
 - Per-stage increments at pop 500 (that probability `1.0`, the rest `0.0`, cumulative): base 98 · add-node +137 · delete-node +67 · add-conn +186 (includes the 81-op cycle predicate, the host formulation's count) · delete-conn +48 — exactly additive, and independent of the probability values (all four stages stay traced unless a probability is `0`).
 - Recurrent cells at pop 1000 on a six-round-evolved payload: `RecurrentGenome` + `DefaultMutation` **452 ops / 16.3 ms**, `RecurrentMutation(p_recur=0.0)` **481 / 20.5** (region elided, the +29 is the recurrent attempt tableau), `RecurrentMutation(p_recur=0.1)` **570 / 23.1**.
 - One pop-500 `Pipeline.step` builds ≈2 270 traced ops, of which this kernel is 536 — under a quarter.
-- Executed dispatches per generation on the numpy interpreter, this worktree: `xor_p500` **7 592**, `cartpole_p100` **30 994**.
 
 ## Known Issues
 - **The four-gate reality** (20 000 individual-mutations, `DefaultMutation()` defaults, gate rows replayed from the kernel's own key split): gate histogram 0/1/2/3/4 firing operations = 51.16 / 38.01 / 9.74 / 1.05 / 0.045 % (any 48.84 %, ≥2 10.83 %, against the analytic 48.16 % / 10.72 %), and 5.12 % of individual-mutations apply ≥2 reconstructed operations on XOR (4.47 % on XOR3d) — one split writes three visible connection edits and a delete-node removes every edge touching its key, so the ≥2 count is not a per-gate count.
