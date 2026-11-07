@@ -76,9 +76,10 @@ def _finite_bound(dtype: Any) -> Any:
     Note:
         The bound is the *exact* largest finite value of the dtype, so
         ``abs(f) <= bound`` is true for every finite ``f`` and false for ``inf``
-        and ``NaN`` -- the same predicate the previous ``f - f`` composition
-        computed, without performing ``inf - inf`` (which numpy reports as a
-        ``RuntimeWarning: invalid value encountered in subtract``).
+        and ``NaN``.  A ``f - f`` test would answer the same question but
+        computes ``inf - inf``, which numpy reports as a ``RuntimeWarning:
+        invalid value encountered in subtract``, so the predicate is spelled as
+        this comparison.
     """
     np_dtype = np.dtype(dtype)
     if not np.issubdtype(np_dtype, np.floating):

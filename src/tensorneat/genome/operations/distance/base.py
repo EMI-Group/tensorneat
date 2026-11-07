@@ -318,9 +318,11 @@ class BaseDistance(StatefulBaseClass):
             mode), so such a call cannot produce a valid trace and would otherwise fail inside
             the route's first op.  On a trace every leaf is a ``SymbolicTensor``, the check
             reads nothing and emits no op, and a value-dependent raise stays impossible; the
-            guard is therefore a host-call guarantee, and ``Pipeline`` never selects this route
-            at all because ``algorithm/neat/_kernels.py::single_payload`` tiles every species
-            centre to ``pop_size`` rows before measuring.
+            guard is therefore a host-call guarantee.  ``Pipeline`` does select this route: a CPU
+            pipeline registers ``distance_centre="single"`` (``host_payload._formulation_statics``)
+            and ``algorithm/neat/_distance.py::DistanceRows.row`` hands a batch-1 centre on
+            unchanged in that mode, while the ``"tiled"`` (GPU-class) leg broadcasts it to
+            ``pop_size`` rows first and so always takes the row-wise merge.
         """
         payload = (node_keys, node_attrs, conn_keys, conn_attrs)
         _validate_single(type(self).__name__, "measure", payload)

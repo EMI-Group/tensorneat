@@ -15,12 +15,10 @@ resolved in a single lookup pass, so the whole predicate pays one table build an
 Anything wider than rank 1 is expensive on a compiled backend: StableHLO lowers ``scatter``
 to one workgroup of one thread, so a multi-element scatter is fully serialized, and a wide
 element type doubles the traffic of a sort.  The dense table keeps every index block flat and
-its element type ``int32``: on numpy the graph is **81 traced ops** and **3.2 / 3.5 / 3.7 ms**
-per call at pop 500 on evolved payloads of generations 1 / 5 / 10, against **127 ops** and
-**9.0 / 9.3 / 9.8 ms** for the sort-based route it replaced in the same interleaved process
-A/B (per-round ratios 0.35-0.41), which also moves ``Pipeline.step`` on ``xor_p500`` from
-164.4 to 161.1 ms per generation (median ratio 0.967 over six interleaved process pairs) and
-lowers peak RSS by 15 MiB.
+its element type ``int32``: on numpy the graph is **78 executed ops** (counted with
+``test/unit/ir_ops.count_graph_ops``, the ``return`` terminator excluded) with two ``scatter``s,
+against the sort-based route it replaced, which measured higher op count, lower peak RSS
+headroom and a slower ``Pipeline.step`` in the same interleaved process A/B.
 
 Static precondition (a host-side law, never a traced branch): every node key and every
 connection endpoint that must be visible lies in ``[0, key_span)``.  That is exactly the
@@ -54,9 +52,9 @@ iteration counter to carry (and no hop cap to fall back on).
 A hop as one batched ``dot`` against a dense ``(P, N, N) float32`` adjacency — which turns the
 three serialized hop scatters into three wide matrix-vector dispatches — is decision-identical
 (it needs ``frontier | A @ frontier``, not ``A @ frontier`` alone, or ``dst`` itself leaves the
-set after the first hop) but **rejected on measurement**: +24 traced ops and 30-33 % slower per
-call on numpy (median ratio 1.30-1.31 over six interleaved rounds on each of the three evolved
-payloads), while adding a quadratic ``(P, N*N + 1)`` float32 buffer (5 MB at pop 500 /
+set after the first hop) but **rejected on measurement**: more traced ops and slower per
+call on numpy (three evolved payloads, interleaved rounds), while adding a quadratic
+``(P, N*N + 1)`` float32 buffer (5 MB at pop 500 /
 ``max_nodes`` 50, 160 MB at pop 1000 / ``max_nodes`` 200) that no static ceiling in this file
 bounds.  The scatter hop stays.
 
@@ -73,7 +71,7 @@ contains exactly one of them.
 
 IREE constraint (release gate): the frontier is seeded with a one-hot ``equal`` over the flat
 ``(P, width)`` index, **never** with a boolean ``scatter``.  A ``scatter`` whose result is the
-``while_loop`` init makes ``iree-compile`` (IREE 3.11, llvm-cpu) SIGSEGV on the generation
+``while_loop`` init makes ``iree-compile`` (llvm-cpu) SIGSEGV on the generation
 graph — the same scatter inside the loop body is fine, so only the always-taken seed form is
 restricted.  Verify with ``pytest test/backends`` (the ``evoxc[iree]`` extra); the one-hot seed
 is the same values and 2 traced ops cheaper than the boolean ``scatter`` it replaced.
@@ -353,7 +351,7 @@ def _closes_cycle_host(
     # frontier.  ``width`` carries the dump column, and ``dst_row`` lies in
     # ``[0, node_count)``, so that column starts ``False``.  The seed is **not** a
     # ``scatter``: a boolean scatter whose result is the ``while_loop`` init makes
-    # ``iree-compile`` (IREE 3.11, llvm-cpu) SIGSEGV on the generation graph, while this
+    # ``iree-compile`` (llvm-cpu) SIGSEGV on the generation graph, while this
     # ``equal``/``logical_and`` pair (4 ops, same values) compiles — see the module note.
     frontier = enp.reshape(
         evoxc.logical_and(

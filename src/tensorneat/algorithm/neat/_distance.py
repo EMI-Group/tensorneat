@@ -18,7 +18,8 @@ spelled by ``state.distance_centre``: a host string read at trace time
   rank-raising ``evoxc.broadcast`` per field, built by ``_kernels.centre_payload``).
   That is the population-shaped payload the genome's row-wise merge route takes,
   so no call can select its dense single-centre route -- whose per-call scatters
-  a GPU lowers single-threaded, a measured 2x device-time regression.
+  a GPU lowers single-threaded (an ``evoxc`` scatter is one workgroup of one
+  thread).
 * ``"single"``: a one-individual payload (leading axis ``1``, one
   ``evoxc.reshape`` per field), which selects that dense route.  It is the
   cheaper spelling on the numpy interpreter and the dearer one on a GPU, so the
@@ -60,60 +61,39 @@ population.
 
 Measured cost
 -------------
-Numpy reference backend, ``species_size=20``, one configuration per fresh
-process, 3 warmup + 20 timed ``Pipeline.step`` after the build step, six
-interleaved rounds, medians of the per-round medians, ``XOR``, seed 42,
-``is_detailed=False``; ``reference`` is the pre-change tree's measurement
-(one-individual only, i.e. what ``"single"`` replaces):
-
-* ``xor_p500`` ms per generation: 159.43 tiled, 112.73 single, 115.81 reference.
-* ``xor_p1000`` ms per generation: 272.84 tiled, 176.61 single, 178.58 reference.
-* ``xor_p100`` ms per generation: 42.85 tiled, 41.09 single, 40.92 reference.
-* peak RSS ``P = 500`` / ``P = 1000``: 218.7 / 348.5 MiB tiled, 196.4 / 302.5 single.
-* executed ops per generation at ``P = 500`` / ``P = 1000`` / ``P = 100``:
-  7 466 / 7 471 / 3 817 tiled against 8 066 / 8 071 / 3 877 single (and reference).
-
-``"single"`` is within noise of the reference it replaced (0.986x / 0.999x /
-1.004x), so the switch costs the interpreter nothing.
-``"tiled"`` is the legacy merge shape and dispatches **fewer** ops (-7.4 %) yet
-runs +39 % / +54 % / +4.3 % slower: at these populations the numpy interpreter
-is charged by element volume rather than by dispatch, and the merge's
-``(pop_size, 2 * max_conns)`` row-width intermediates are that volume (the
-genome records 2.39 against 1.35 ms per compatibility call at ``P = 500``).
-So on numpy a pipeline selects ``"single"``, and ``"tiled"`` exists for
-GPU-class devices, where the dense route's per-call scatters are lowered
-single-threaded (40 x 0.97 ms + 40 x 0.52 ms of a generation) and the merge is
-the 2x cheaper device shape.
 The table costs exactly one ``measure_distance`` call per centre row on the host
-spelling -- 40 calls per generation at ``species_size = 20``, 20 here and 20 in
-scan 2 -- and what the scan buys there is the *region* around those calls, not
-fewer of them.
+spelling -- 40 calls per generation at ``species_size = 20``, 20 in scan 1 and
+20 in scan 2 -- and what the whole-table scan buys there is the *region* around
+those calls, not fewer of them.
+Pre-measuring *both* speciation scans on the host spelling would need a ``cond``
+for scan 2's data-dependent ``pop[seed]`` centre and costs more peak RSS for no
+timed gain, so scan 2 keeps measuring its centre per iteration inside the scan.
 
-Pre-measuring *both* speciation scans on the host spelling needs a ``cond`` for
-scan 2's data-dependent ``pop[seed]`` centre and costs ~50 % more peak RSS for no
-timed gain.
+The centre spelling follows the leg's cost law, not a preference.  On the numpy
+interpreter a kernel is charged by element volume rather than by dispatch, and
+the merge's ``(pop_size, 2 * max_conns)`` row-width intermediates are that
+volume, so ``"single"`` is the spelling a CPU pipeline selects.  A GPU-class
+device lowers the dense route's per-call scatters single-threaded (an ``evoxc``
+scatter is one workgroup of one thread), which makes the wide, scatter-free
+merge the cheaper device shape, so ``"tiled"`` is the spelling it selects.  Both
+spellings carry the same centre row and return the same ``(P,)`` floats, because
+the compatibility kernel is row-independent.
 
 Grouped ``k``-centre calls are the **accelerator spelling's** table leg, never
 the host one's: the genome's ``group_digest`` / ``GroupedDigest`` route is
-bit-identical to ``k`` plain ``P``-row calls and is a row-wise-merge shape, so it
-competes with ``"tiled"`` rather than with ``"single"``, and
-``grouped.group_size`` answers ``k = 1`` for every non-accelerator state, which is
-why the numpy pipeline traces exactly the calls it traced before.
+bit-identical to ``k`` plain ``P``-row calls and is a row-wise-merge shape, so
+it competes with ``"tiled"`` rather than with ``"single"``, and
+``grouped.group_size`` answers ``k = 1`` for every non-accelerator state, so the
+host leg measures one centre per ``__call__``.
 The grouped leg scans ``K // k`` **groups**: one iteration gathers the ``k``
-centre rows of its group, merges them with ``grouped.centre_batch`` and makes one
-``measure_distance`` call against the ``k``-times tiled digest, ``k = 2`` on the
-shipped accelerator statics, and at most ``K % k`` trailing rows are measured
-singly against the plain digest.
-The same grouping did **not** ship for numpy: there the interpreter is charged by
-element volume rather than by dispatch, and the ``k``-times wider
-``(k * P, 2 * max_conns)`` merge intermediates cost more than the dispatches they
-save (253.2 against 233.8 MiB peak RSS, wall time bimodal at process level), so
-the host leg keeps ``k = 1`` and one centre per call.
-The grouped leg's own device numbers are not part of this record: the
-1 267 -> 1 130 kernel / 7.45 -> 6.83 ms device-time pair was measured when the
-table was spelled as straight-line calls, a spelling this module no longer
-traces, so the grouped form here carries the same values but has no committed
-measurement on this tree.
+centre rows of its group, merges them with ``grouped.centre_batch`` and makes
+one ``measure_distance`` call against the ``k``-times tiled digest, ``k = 2`` on
+the shipped accelerator statics, and at most ``K % k`` trailing rows are
+measured singly against the plain digest.
+The grouped form does not ship for numpy, where the interpreter is charged by
+element volume rather than by dispatch: the ``k``-times wider
+``(k * P, 2 * max_conns)`` merge intermediates cost more than the dispatches
+they save (see ``genome/operations/distance/grouped.py``).
 Scan 2 is not grouped at all: its per-slot centre is ``pop[seed]`` on a creating
 slot, and ``seed`` depends on the assignments made by the earlier slots, so a
 group of consecutive centres cannot be formed before their rows are measured.
@@ -127,17 +107,12 @@ transients at a time, while a kernel at the top level keeps them alive for the
 rest of the generation -- which is what the whole-table scan is for, and why the
 table is not measured at the top level on either spelling (only its ``K % k``
 tail is, and that is less than one group).
-The measured footprint is per mode (the table above): 196.4 / 302.5 MiB at
-``P = 500`` / ``P = 1000`` in ``"single"`` and 218.7 / 348.5 MiB in ``"tiled"``,
-the merge's wider rows being the difference; build follows the same split,
-because a loop body is traced once while a static loop over ``S`` centres traces
-``S`` copies of the kernel.
-That build term is why the region stays even on a compiled backend: spelling the
-same rows as straight-line calls removes the ``while`` and its per-iteration
-scaffolding, and measured on ``xor_p500`` it tripled the static generation graph
-(2 174 -> 7 393 ops, 296 -> 531 ``hal.executable.export``) and took
-``iree-compile`` from ~5.8-6.0 s to 11.4-14.2 s per shape, a net loss that was
-reverted.
+A loop body is also traced once while a static loop over ``K`` centres traces
+``K`` copies of the kernel, so the region bounds build time as well as peak
+memory, and that is why it stays even on a compiled backend: spelling the same
+rows as straight-line calls removes the ``while`` and its per-iteration
+scaffolding and multiplies the static generation graph and its compile time, for
+no timed win.
 Any future hoist out of the region has to report peak RSS and build next to its
 wall time.
 """

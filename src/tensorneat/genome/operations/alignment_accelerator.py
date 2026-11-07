@@ -9,12 +9,8 @@ What changes on a compiled backend is the price of ordering.  The merge turns bo
 packed identities into one ``(P, 2M)`` ``int64`` block, ``argsort``-s it and inverts the
 permutation with a second, encoded ``int32`` ``sort``; a compiled backend lowers each of
 those to a bitonic sort, one workgroup per row, so the work is nothing like the
-``O(M log M)`` the formulation describes.  Measured on the box's MI300X (gfx942, IREE 3.11,
-``--iree-hal-target-backends=rocm``) at the ``xor_p500`` geometry (``max_nodes`` 50,
-``max_conns`` 100), the conn
-family's ``(500, 200)`` ``int32`` sort alone is one dispatch at **2.03 ms** and the node
-family's ``(500, 100)`` one **0.28 ms** — the second-largest device cost of a generation
-(see ``## Measured cost`` in this node's ``CONTEXT.md``).
+``O(M log M)`` the formulation describes and each sort becomes one of the largest device
+costs of a generation (see ``## Cost law`` in this node's ``CONTEXT.md``).
 
 This formulation drops both sorts and asks the question directly, in the shape
 :func:`tensorneat.genome.operations.distance.index_free.resolve` already uses:

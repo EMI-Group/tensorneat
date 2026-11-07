@@ -11,8 +11,8 @@ lowers ``scatter`` to **one workgroup of one thread**:
 1. **Key resolution: an equality template, no scatter.**  The dense ``key -> row`` table
    (:func:`~.cycle._key_table`) is a flat ``scatter`` of ``P * N`` updates into
    ``P * (key_span + 1)`` cells, i.e. 25 000 serialised writes into 75 500 cells at pop 500,
-   and it measured **0.515-0.578 ms of the predicate's 0.769 ms per call** there (90 % at pop
-   1000).  The template — the one
+   and that scatter is the dominant share of the predicate's device time per call.  The
+   template — the one
    :func:`tensorneat.genome.operations.distance.index_free.resolve` already uses — is one
    broadcast ``equal`` of the ``Q = 2 * E + 2`` query keys against the node row axis, then the
    *lowest* matching row (``reduce_min`` of ``select(match, arange(N), N)``): a ``(P, Q, N)``
@@ -27,11 +27,13 @@ lowers ``scatter`` to **one workgroup of one thread**:
    destination through a reduction instead of a write.
 
 Measured on the box's MI300X VF (gfx942, ROCm 7.1, IREE 3.13) with the predicate isolated at
-the ``xor`` geometry (``max_nodes`` 50, ``max_conns`` 100, ``key_span`` 150), warmed, device ms
-per call from ``rocprofv3 --kernel-trace``: **0.769 -> 0.173 ms at pop 500** and
-**1.425 -> 0.282 ms at pop 1000**, i.e. -77 % / -80 %, with the graph's last ``scatter`` gone
-(traced ops 92 -> 81, scatters 1 -> 0).  Splitting the resolution into one ``(P, E, N)`` pass
-per key family halves the transient but adds ten dispatches and measured 0.206 / 0.345 ms — so
+the ``xor`` geometry (``max_nodes`` 50, ``max_conns`` 100, ``key_span`` 150) and warmed: this
+body is several times faster per call than the host formulation at pop 500 and at pop 1000 -
+the predicate's dominant cost on the host side is that dense ``scatter`` - with the graph's
+last ``scatter`` gone (0 scatters against the host formulation's 2; both spellings now execute
+78 ops, counted with ``test/unit/ir_ops.count_graph_ops`` and terminators excluded).
+Splitting the resolution into one ``(P, E, N)`` pass
+per key family halves the transient but adds ten dispatches and measured slower — so
 the single pass is the shipped form.  The numpy reference interpreter pays the ``(P, Q, N)``
 element volume in full (it is ~6-8x the host call there), which is exactly why ``"host"``
 stays the default and this route is selected by :data:`KERNEL_MODE_KEY` on a device where the
@@ -39,9 +41,9 @@ serialised scatters dominate.
 
 A **statically counted** spelling of the same hop -- the reached set plus a hop counter in one
 ``(P, N + 1) int32`` carry, ``cond = hops < node_count``, no per-hop readback -- answers the same
-boolean and is **rejected on measurement**: a whole generation costs 21.28 against 13.27 ms on
-``xor_p500`` (pop 500) and 69.01 against 60.16 ms on ``cartpole_p100``, 23.56 against 16.19 on
-``xor_p1000`` and 24.16 against 16.13 on ``custom_pagie_p500`` (one session, seed 42, ``iree`` on
+boolean and is **rejected on measurement**: it costs more per generation on every shipped case
+(``xor_p500``, ``xor_p1000``, ``custom_pagie_p500`` and ``cartpole_p100``; one session,
+seed 42, ``iree`` on
 ``rocm``, warmup 2 + 5 timed generations) -- these populations stabilize in two or three hops,
 while the counted loop pays the ``O(P * E * N)`` destination one-hot for all ``N = 50`` hops.
 The readback this body pays per hop is therefore the cheaper of the two; keep it.

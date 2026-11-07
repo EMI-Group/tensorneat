@@ -546,13 +546,14 @@ def read_population(state: Any, pop: Any = None) -> Any:
 #: Largest ``species_size * pop_size`` species table that keeps the lazy
 #: per-slot ``evoxc.cond`` distance rows (host mode only).
 #: The lazy ``cond`` is a numpy-interpreter op-count optimisation -- it skips
-#: the compatibility kernel on a slot that cannot write -- and pays off only
-#: while the table is *sparse* (1-3 live slots of 20 at pop 8/100, 20 of 20 at
-#: pop >= 500): measured ``Pipeline.step`` medians of the gated against the
-#: ungated tree are 2.3x at pop 100, 1.2x at pop 300, parity from pop 200 up.
-#: On a compiled backend it is backwards -- each ``cond`` reads its predicate
-#: back to the host, while the extra device work is nearly free inside the
-#: already-launched kernel sequence -- so accelerator mode never gates.
+#: the compatibility kernel on a slot that cannot write -- so it pays off only
+#: while the table is *sparse*, i.e. while most slots are dead and their rows
+#: would be computed for nothing.  Once the species table is full every slot
+#: is live and nothing is skippable.
+#: On a compiled backend it is backwards -- each gated iteration is one
+#: host-distributed control-flow round trip, while the row it skips is one
+#: nearly-free unconditional dispatch inside the sequence already launched --
+#: so accelerator mode never gates.
 GATED_ROWS = 6000
 
 
@@ -565,9 +566,10 @@ def gated(species_size: int, pop_size: int, mode: str = "host") -> bool:
         mode (str): The trace-time ``kernel_mode`` static (``"host"`` default).
 
     Returns:
-        bool: ``False`` for an accelerator formulation, where the lazy ``cond``
-            costs a host round trip per species slot and the row it skips is one
-            extra unconditional dispatch instead (see ``GATED_ROWS``); else
+        bool: ``False`` for an accelerator formulation, where each gated
+            iteration is one host-distributed control-flow round trip and the
+            row it skips is one nearly-free unconditional dispatch inside the
+            sequence already launched (see ``GATED_ROWS``); else
             ``species_size * pop_size <= GATED_ROWS`` -- the sparse-table test,
             a pure host predicate the caller branches on with a Python ``if``
             at trace time, never with a traced ``cond``.

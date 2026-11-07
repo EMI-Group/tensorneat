@@ -417,8 +417,8 @@ class SpeciesController(StatefulBaseClass):
                 ``(S, ...)`` fields and expanding it is this method's job, not the
                 genome's; ``NEAT.tell`` builds the callable from
                 ``genome.prepare_distance`` (see :class:`._distance.DistanceRows`),
-                and ``genome.execute_distance`` no longer plugs in directly
-                because it re-sorts the population for every centre.
+                and ``genome.execute_distance`` cannot plug in directly because it
+                re-sorts the population for every centre.
             pop (Any, optional): The current population payload.  Defaults to the
                 payload read from ``state`` -- the ``POP_KEY`` entry, or the four
                 split ``SPLIT_POP_KEYS`` arrays; an explicit argument wins so a
@@ -496,10 +496,10 @@ class SpeciesController(StatefulBaseClass):
             bit-identical.  A sparse table (1-3 live slots of 20 at pop 8/100)
             would pay for the rows of slots that cannot write, so the lazy path is
             kept there.  ``_kernels.gated`` never gates in ``"accelerator"``
-            mode: there each ``cond`` reads its predicate back to the host, while
-            the extra unconditional row is nearly free in the already-launched
-            device sequence, so the accelerator leg always uses the dense form
-            below.
+            mode: there each gated iteration is one host-distributed
+            control-flow round trip, while the extra unconditional row is
+            nearly free inside the sequence already launched, so the
+            accelerator leg always uses the dense form below.
         Note:
             **Above ``_kernels.GATED_ROWS`` -- and always in ``"accelerator"``
             kernel mode, whatever the table size -- scan 1's whole centre table
@@ -517,10 +517,11 @@ class SpeciesController(StatefulBaseClass):
             kernel is row-independent).  Once the
             species table is full every slot is live and nothing is skippable,
             so a lazy row's ``if`` region costs more than it saves, and in
-            ``"accelerator"`` mode the per-slot host round trip costs more than
-            the row it skips (see ``_kernels.GATED_ROWS``).  The gate is a pure
-            static predicate on ``(species_size, pop_size, kernel_mode)``, so
-            exactly one of the two paths reaches the graph.  The dense path
+            ``"accelerator"`` mode the per-slot host-distributed round trip
+            costs more than the row it skips (see ``_kernels.GATED_ROWS``).  The
+            gate is a pure static predicate on
+            ``(species_size, pop_size, kernel_mode)``, so exactly one of the two
+            paths reaches the graph.  The dense path
             needs the digest-backed callable (``DistanceRows.matrix``) and raises
             ``TensorNEATError`` for any other callable -- an accelerator-mode
             state with a matrix-less callable raises instead of silently
