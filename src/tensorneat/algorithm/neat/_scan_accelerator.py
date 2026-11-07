@@ -10,13 +10,20 @@ a plain host string read at trace time, so a graph contains exactly one of them.
 
 What a compiled backend charges
 -------------------------------
-On the box's MI300X a ``xor_p500`` generation is 19.6 ms of device time in 2 087
-kernels, and ~2.29 ms of it (12 %) is ~120 dispatches inside these two scans,
-every one launched as a single workgroup on grid ``(1, 1, 1)`` -- the dispatches
-that cannot be spread over the grid are what a per-slot loop costs there.  A
-dispatch costs a ~4.5 µs floor regardless of body size, and an index-tracking
-reduction (``argmin``/``argmax``) is much dearer than a plain reduce, so the two
-levers are **fewer dispatches** and **plain reductions instead of index scans**.
+A step body is charged for its **dispatches**, not for its arithmetic: one
+kernel per operation in a dependency chain, so the cost of the loop is the
+number of kernels it submits and how far each of them can be spread.
+
+``evoxc``'s ``scatter`` cannot spread at all -- it lowers to one workgroup of
+one thread -- and a reduction to a rank-0 result is likewise a single-workgroup
+launch however wide its input, while ``gather``, the wide elementwise ops and
+the per-row reductions spread over the whole grid.  A body assembled from
+``(P,)``-axis-0 reductions is therefore a chain of single-workgroup kernels no
+matter how few ops it holds, and an index-tracking reduction
+(``argmin``/``argmax``) is the dearest member of that chain, because it carries
+an index accumulator through the reduction.  So the two levers are **fewer
+dispatches** and **plain reductions instead of index scans**.
+
 The host form has three avoidable costs, one formulation per item below:
 
 1. **A duplicated predicate reduction.**  ``argmin_with_mask``/``fetch_first``
@@ -51,10 +58,9 @@ The host form has three avoidable costs, one formulation per item below:
    created rows are rebuilt once after the scan with a prefix sum over the
    created mask (the exact sequence the two scatters wrote).
 
-Two further removals, both about *what shape* the remaining dispatches have.
-A ``(P,)``-axis-0 elementwise op or reduction is one workgroup of one thread on
-ROCm, so a body of ~13 such dispatches is a serial chain no matter how few ops
-it is; the levers below turn them into multi-workgroup work or delete them.
+The last two items are about *what shape* the remaining dispatches have --
+which of them can be made to spread over more than one workgroup, and which one
+is cheaper left exactly as it is.
 
 4. **Scan 1's two reductions are row-wise over the whole table.**  On the dense
    path (``gate`` false) the ``(S, P)`` table ``rows1`` is already materialised
@@ -67,39 +73,30 @@ it is; the levers below turn them into multi-workgroup work or delete them.
    ``gather`` of its row disappears (the block is closed over).  The gated path
    has no table to close over -- its row is a lazily built ``cond`` -- so it
    keeps the per-slot form.
-5. **Scan 2's seed reduction stays unconditional (two measured rejections).**
-   ``seed`` is only *used* by a dead slot (``create = not live and the
-   population still has an unassigned genome``), and it is the last serialised
-   ``(P,)``-axis-0 reduction inside a scan body: on the MI300X it is 20
-   dispatches of ``reduction_500_f32xi32xi32``, 0.39-0.48 ms of a ~6 ms
-   ``xor_p500`` generation.  Both spellings that would skip or spread it were
-   built, measured under ``rocprofv3 --kernel-trace`` against HEAD's artifact and
-   rejected; the flat form is what ships.
-   (a) **A two-level tree reduce** -- ``reshape (P,) -> (k, P // k)``,
-   ``reduce_min(axes=1) -> (k,)``, one more ``reduce_min`` -- turns one
-   single-workgroup reduction into a multi-workgroup one and costs two extra
-   dispatches per iteration: the cell read 1 044 -> 1 082 generation kernels and
-   107 -> 125 single-workgroup dispatches, with the 0.46 ms reduction replaced by
-   ``elementwise`` (0.53 ms) + ``reduction_20_i32`` (0.52 ms) +
-   ``elementwise_broadcast_500x200_i32`` (0.41 ms) over the same 20 iterations.
-   On this backend a dispatch in a dependency chain costs ~20 us whatever its
-   size, so trading one reduction for three dispatches loses ~3x.
-   (b) **A minimal-scope ``evoxc.cond`` around the reduction alone** (predicate
-   ``not live`` of the iteration's own slot -- *not* the earlier shape that
-   wrapped the body's distance call, which an earlier session measured at
-   +16 % wall at ``P = 500`` and +12 % at ``P = 1000`` because the ``if`` sat in
-   front of the distance kernel): it works -- the numpy interpreter's
-   ``reduce_min`` dispatch count falls 64 -> 44 at ``xor_p500``, i.e. the 20 seed
-   reductions of a fully live table are skipped -- and it still loses on device
-   time: the 20 ``if`` dispatches replace 20 executions of a 19 us kernel, the
-   seed kernel drops 20 -> 14 dispatches (0.39 -> 0.25 ms) only because the
-   measured trajectory had six dead slots, and single-workgroup dispatches rise
-   107 -> 121.  Numpy's own dispatch total is unchanged (6 248), so the region is
-   pure overhead on the interpreter and a wash at best on the device.
-   The invariant both rejections share: **on this backend the seed reduction is
-   already one fused kernel** (``isnan`` + ``select`` + ``reduce_min`` in a single
-   ``reduction_500`` dispatch, so there is no second dispatch to delete) and the
-   dependency chain -- not the element work -- is what it costs.
+5. **Scan 2's seed reduction stays unconditional and flat.**  ``seed`` is only
+   *used* by a dead slot (``create = not live and the population still has an
+   unassigned genome``), yet the body computes it for every iteration as one
+   plain ``(P,)``-axis-0 ``reduce_min``.  The invariant that decides this: on
+   this backend one dispatch in a dependency chain is what costs, so neither
+   shape that would skip or spread the reduction pays.
+   (a) **Spreading it** needs a two-level tree -- ``reshape (P,) -> (k,
+   P // k)``, ``reduce_min(axes=1) -> (k,)``, one more ``reduce_min`` -- which
+   replaces one dispatch with three in the same chain, so it loses by that
+   ratio whatever the element work of each one is.
+   (b) **Skipping it** needs a data-dependent ``evoxc.cond`` inside the scan
+   body, which is a host-distributed control-flow round trip per iteration on a
+   compiled backend and, in this body, sits in front of the distance kernel, so
+   the region costs more than the reduction it skips.
+   The reduction is already one fused dispatch (``isnan`` + ``select`` +
+   ``reduce_min``), so there is no second dispatch to delete -- the dependency
+   chain, not the element work, is what this body costs.
+
+The slot axis stays a fixed-length ``evoxc.scan`` over
+``iota_i32(species_size)`` with per-slot masks, reproducing the host form's
+early-terminating ``while_loop``: a data-dependent trip count does not run on
+this leg, and unrolling the slot axis into straight-line SSA triples the static
+graph and the ``iree-compile`` build for no device-time win, because the body is
+launch-bound rather than arithmetic-bound.
 
 Bit identity
 ------------
@@ -162,9 +159,10 @@ which the shipped genome never produces, and this form is the safer of the two
 there (it never claims a row that is not a candidate).
 
 ``evoxc.scan`` peels step ``0`` at the enclosing level (its ``y`` is
-``reshape(step0, (1, ...))`` + ``broadcast`` to the full stack), so the body's
-own y-write runs ``S - 1`` times per scan; the op count above counts the
-per-iteration write, which is what a region body pays.
+``reshape(step0, (1, ...))`` + ``broadcast`` to the full stack) and traces the
+body again for the loop, so a body's own ``y``-write runs ``S - 1`` times per
+scan while its step-0 value is the peeled one: each scan pays ``S - 1`` stack
+writes per body, not ``S``.
 """
 
 from __future__ import annotations
@@ -390,10 +388,9 @@ def assign_step(
         live = evoxc.logical_not(evoxc.isnan(key_slot))
         unassigned = evoxc.isnan(assign)
         # The first unassigned index, ``iinf`` when there is none.  Gating this
-        # on a trace-time "some slot is dead" scalar is a measured regression
-        # (module docstring, item 5): the ``if`` region costs more than the
-        # reduction it skips, because it sits in front of the body's distance
-        # kernel.
+        # on a trace-time "some slot is dead" scalar is a regression (module
+        # docstring, item 5): the ``if`` region costs more than the reduction it
+        # skips, because it sits in front of the body's distance kernel.
         seed = evoxc.reduce_min(
             evoxc.select(unassigned, operands.pop_index, operands.iinf), axes=0
         )
