@@ -126,8 +126,11 @@ any row is ``error`` (a blocked device path is loud by construction) and 2 when 
 report could not be rendered. ``render`` re-renders that block from an existing
 record and replaces only the text between the report's markers, exiting 2 with a
 named error on a missing marker, an unreadable document, a wrong schema or a
-missing ``records`` list. ``--list`` prints the targets, the passthrough flags and
-the canonical case matrix.
+missing ``records`` list; ``--persist-note TEXT`` additionally stores that one-line
+note as the record's ``meta.report_note`` before rendering (the only thing it writes,
+verified by re-reading the record and refusing to render if anything else moved), so
+the block's trailing scope sentence survives the next bare re-render. ``--list``
+prints the targets, the passthrough flags and the canonical case matrix.
 
 Usage
 -----
@@ -963,10 +966,75 @@ def matrix_command(args: argparse.Namespace) -> int:
 # --- ``render`` and ``--list`` ----------------------------------------------------------
 
 
+def _persist_report_note(path: Path, document: dict[str, Any], note: str) -> str | None:
+    """Store ``note`` in the record's ``meta.report_note``; return an error message or ``None``.
+    ``records`` and every number stay byte-identical: only ``meta`` is replaced, and the
+    write is verified by re-reading the file and comparing every other top-level key
+    against what was loaded. A failed verification leaves the file as written and refuses
+    to render, because a record whose rows moved is not the measurement it was any more.
+    A record whose ``meta`` is not a JSON object is refused up front: replacing it would
+    drop the provenance the block is rendered from.
+    """
+    meta = document.get("meta")
+    if not isinstance(meta, dict):
+        return (
+            f"--persist-note cannot read the meta of {display_path(path)} (meta is "
+            f"{type(meta).__name__}, not a JSON object); the record is not the measurement "
+            "it was — restore it from git and do not render it"
+        )
+    meta = dict(meta)
+    meta["report_note"] = note
+    updated = dict(document)
+    updated["meta"] = meta
+    try:
+        Path(path).write_text(json.dumps(updated, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        return (f"--persist-note cannot write {display_path(path)}: "
+                f"{type(exc).__name__}: {exc}")
+    try:
+        reloaded = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return (f"--persist-note wrote {display_path(path)} but it cannot be re-read: "
+                f"{type(exc).__name__}: {exc}")
+    before = {key: value for key, value in document.items() if key != "meta"}
+    after = {key: value for key, value in reloaded.items() if key != "meta"}
+    if before != after:
+        changed = sorted(
+            key for key in set(before) | set(after) if before.get(key) != after.get(key)
+        )
+        return (
+            f"--persist-note changed more than meta in {display_path(path)} (top-level "
+            f"keys {changed}); the record is no longer the measurement it was — restore it "
+            "from git and do not render it"
+        )
+    stored = reloaded.get("meta") if isinstance(reloaded.get("meta"), dict) else {}
+    if stored.get("report_note") != note:
+        return (
+            f"--persist-note did not store the note in the meta of {display_path(path)}; "
+            "the record is no longer the measurement it was — restore it from git and do "
+            "not render it"
+        )
+    print(
+        f"persisted meta.report_note in {display_path(path)}: only meta changed, "
+        "records/numbers untouched"
+    )
+    return None
+
+
 def render_command(args: argparse.Namespace) -> int:
-    """``render``: re-render the measured block from an existing record (no measurement)."""
+    """``render``: re-render the measured block from an existing record (no measurement).
+    With ``--persist-note`` the note is stored in the record's ``meta`` first (nothing
+    else about the document changes) and the record is re-read, so the block's trailing
+    scope sentence comes from the record and the next bare render reproduces it. A bare
+    ``render`` never writes the record.
+    """
     try:
         document = read_document(args.json)
+        if args.persist_note is not None:
+            error = _persist_report_note(args.json, document, args.persist_note)
+            if error is not None:
+                raise RenderError(error)
+            document = read_document(args.json)
         splice_block(args.out, render_block(document, record_path=args.json))
     except RenderError as exc:
         print(f"gpu_measure render: {exc}", file=sys.stderr)
@@ -1158,6 +1226,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     render.add_argument(
         "--out", type=Path, default=DEFAULT_REPORT, metavar="REPORT",
         help="report whose marked block is replaced (default: %(default)s)")
+    render.add_argument(
+        "--persist-note", default=None, metavar="TEXT",
+        help=("store this one-line note as the record's meta.report_note before "
+              "rendering it, so the block's trailing scope sentence survives the next "
+              "bare render; only meta is written (verified by re-reading the record, "
+              "refusing to render if anything else moved), and without this flag "
+              "render never writes the record"))
 
     subparsers.add_parser("list", help="print the targets, the overrides and the case matrix")
 
