@@ -446,7 +446,7 @@ wheels = [
 [[package]]
 name = "evoxc"
 version = "0.1.0"
-source = { git = "https://github.com/EMI-Group/evoxc?tag=v0.1.1#be145eee52053422c77694e072700a8314d0346d" }
+source = { git = "https://github.com/EMI-Group/evoxc?rev=fe85a534192f749a97b2f6e3b13b0800f69b8d90#fe85a534192f749a97b2f6e3b13b0800f69b8d90" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -1833,9 +1833,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "evoxc", git = "https://github.com/EMI-Group/evoxc?tag=v0.1.1" },
-    { name = "evoxc", extras = ["tvm"], marker = "extra == 'compilers'", git = "https://github.com/EMI-Group/evoxc?tag=v0.1.1" },
-    { name = "evoxc", extras = ["tvm"], marker = "extra == 'tvm'", git = "https://github.com/EMI-Group/evoxc?tag=v0.1.1" },
+    { name = "evoxc", git = "https://github.com/EMI-Group/evoxc?rev=fe85a534192f749a97b2f6e3b13b0800f69b8d90" },
+    { name = "evoxc", extras = ["tvm"], marker = "extra == 'compilers'", git = "https://github.com/EMI-Group/evoxc?rev=fe85a534192f749a97b2f6e3b13b0800f69b8d90" },
+    { name = "evoxc", extras = ["tvm"], marker = "extra == 'tvm'", git = "https://github.com/EMI-Group/evoxc?rev=fe85a534192f749a97b2f6e3b13b0800f69b8d90" },
     { name = "iree-base-compiler", marker = "extra == 'compilers'", specifier = ">=3.13,<3.14" },
     { name = "iree-base-compiler", marker = "extra == 'iree'", specifier = ">=3.13,<3.14" },
     { name = "iree-base-runtime", marker = "extra == 'compilers'", specifier = ">=3.13,<3.14" },

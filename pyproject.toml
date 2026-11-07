@@ -28,13 +28,13 @@ classifiers = [
 # The computation layer is evoxc (pure Python + numpy by default); jax/torch are
 # NOT runtime dependencies. Compiled backends are opt-in extras.
 #
-# evoxc is pinned to the v0.1.1 git tag rather than to a PyPI release: PyPI only
-# ships the 0.1.0 wheel (tag v0.1.0), which predates the v0.1.1 frontend
-# performance work -- linear `ir.verify` tracking, two redundant verify passes
-# removed from `lower()`, batched constant-payload emission, frame-walk
-# source-location capture, and an xla deadlock fix. The `>= 0.1.1` floor keeps
-# non-uv installers (plain `pip install tensorneat`) honest: they cannot
-# silently resolve back to the slower 0.1.0 wheel.
+# evoxc is pinned to an upstream `main` commit rather than to a PyPI release:
+# PyPI only ships the 0.1.0 wheel, which predates the compiled-backend frontend
+# work and the numpy-interpreter performance pass (per-block dispatch plans, a
+# flat value store, dead-value release) that the library's CPU leg depends on.
+# The pinned commit is the same code upstream `main` carries; the `>= 0.1.1`
+# metadata floor keeps non-uv installers (plain `pip install tensorneat`) from
+# silently resolving back to the slower 0.1.0 wheel.
 dependencies = [
     "evoxc >= 0.1.1",
     "numpy >= 1.24",
@@ -53,8 +53,8 @@ iree = ["iree-base-compiler>=3.13,<3.14", "iree-base-runtime>=3.13,<3.14"]
 tvm = ["evoxc[tvm]"]
 # The `xla` backend drives a PJRT C API plugin .so over ctypes (no `jax`
 # import). For an AMD ROCm device the JAX ROCm PJRT plugin wheel provides one;
-# evoxc discovers an installed `jax_plugins/*/*_plugin.so` automatically, while
-# the pinned v0.1.1 needs `EVOXC_PJRT_PLUGIN` or `compile_options["plugin_path"]`.
+# evoxc discovers an installed `jax_plugins/*/*_plugin.so` automatically;
+# `compile_options["plugin_path"]` names it explicitly when several are present.
 # NVIDIA users install `jax-cuda12-pjrt` instead; no CPU PJRT plugin is
 # pip-installable, so the CPU leg stays numpy / iree-llvm-cpu.
 xla-rocm = ["jax-rocm7-pjrt==0.10.2"]
@@ -78,7 +78,7 @@ docs = ["sphinx >= 7.0", "sphinx-rtd-theme"]
 # affects uv (`uv lock` / `uv sync`); pip and other installers still see the
 # plain `evoxc >= 0.1.1` requirement.
 [tool.uv.sources]
-evoxc = { git = "https://github.com/EMI-Group/evoxc", tag = "v0.1.1" }
+evoxc = { git = "https://github.com/EMI-Group/evoxc", rev = "fe85a534192f749a97b2f6e3b13b0800f69b8d90" }
 
 [dependency-groups]
 # Developer tooling only; the test suite needs nothing beyond pytest. Optional
