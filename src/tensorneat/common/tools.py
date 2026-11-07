@@ -57,17 +57,18 @@ change the result dtype), so a helper called from inside a ``scan``/``cond``
 body would pay one such op per iteration. :func:`fetch_first` and
 :func:`argmin_with_mask` therefore also accept a pre-built constant, which is
 used verbatim; build it once at trace time and close over it. Helpers that do
-not offer that spelling yet are listed in ``common/CONTEXT.md``.
+that spelling are listed in ``common/CONTEXT.md``.
 
-Public surface without a production caller: :func:`hash_rows`,
-:func:`fetch_random`, :func:`mutate_float` and :func:`mutate_int` are exported
-by ``common.__init__`` for tests and legacy parity only — nothing in ``src/``
-calls them. The genome path has its own primitives: attribute mutation is
-:func:`tensorneat.genome.gene.blocks.mutate_attrs` (its own per-spec draws,
-not :func:`mutate_float`/:func:`mutate_int`), the ``(row, hit)`` pair in
-``genome/operations/mutation/arrays.py`` replaces :func:`fetch_random`, and
-gene hashing is the in-graph ``hash_int32`` (``genome/gene/base.py``), whose
-host-only twin is :func:`hash_rows`. Each docstring states this individually.
+Public surface without a production caller: :func:`fetch_random`,
+:func:`mutate_float` and :func:`mutate_int` are exported by ``common.__init__``
+for tests and legacy parity only — nothing in ``src/`` calls them. The genome
+path has its own primitives: attribute mutation is
+:func:`tensorneat.genome.gene.blocks.mutate_attrs` (its own per-spec draws, not
+:func:`mutate_float`/:func:`mutate_int`), and the ``(row, hit)`` pair in
+``genome/operations/mutation/arrays.py`` replaces :func:`fetch_random`.
+:func:`hash_rows` does have a production caller — ``genome/host.py::BaseGenomeHost.hash``
+folds it over the numpy payload — and the package has no in-graph hashing op
+(evoxc has no ``bitcast``). Each docstring states this individually.
 """
 
 import numpy as np
@@ -876,9 +877,9 @@ def hash_rows(rows):
 
     Returns:
         ``(N,)`` ``numpy.uint32`` array; equal rows give equal hashes, unequal
-        rows almost certainly different ones. This is the host-only twin of the
-        in-graph ``hash_int32`` (:mod:`tensorneat.genome.gene.base`), with
-        **no production caller** — it is exported for tests and legacy parity.
+        rows almost certainly different ones. ``genome/host.py::BaseGenomeHost.hash``
+        folds it over the numpy payload, so this is a production helper, not a
+        test-only one: it is the host-side half of the genome digest.
 
     Raises:
         ValueError: If ``rows`` is not 2-D.
@@ -886,11 +887,11 @@ def hash_rows(rows):
     Notes:
         Must **never** be called inside an ``@evoxc.defn`` graph: it needs
         numpy bit-viewing (``view(np.uint32)``) and evoxc has no ``bitcast``
-        op. ``Genome.hash()`` is the in-graph ``hash_int32`` and does not call
-        this function; in-graph gene identity therefore compares the key
-        columns with ``evoxc.equal`` (crossover matching), never a row hash.
-        Fold order is left-to-right with the legacy ``0x9E3779B9`` constant so
-        the numbers stay comparable with the pre-rewrite library.
+        op, which is also why the package has no in-graph hashing op — in-graph
+        gene identity compares the key columns with ``evoxc.equal`` (crossover
+        matching), never a row hash. Fold order is left-to-right with the legacy
+        ``0x9E3779B9`` constant so the numbers stay comparable with the
+        pre-rewrite library.
     """
     array = np.ascontiguousarray(rows)
     if array.ndim != 2:

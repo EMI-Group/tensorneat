@@ -636,7 +636,9 @@ def incoming_table(order, cc, src, max_nodes, max_in_degree):
 
 
 #: Relaxation steps per trip in the accelerator leg's fast campaign (see
-#: :func:`node_levels`): a condition readback costs ~157 us there, a dispatch ~2.5 us.
+#: :func:`node_levels`): IREE host-distributes a dispatch-bearing ``while``, so a
+#: trip whose predicate is device data costs one host round trip (~157 us) against
+#: ~2.5 us for a dispatch, while a static-counter trip stays on the device timeline.
 _ACCELERATOR_UNROLL = 4
 
 
@@ -692,13 +694,17 @@ def node_levels(
         The host leg stops each campaign at its fixpoint with ``step < cap and
         changed`` (a carried flag, the ``reduce_max`` of the steps' ``not_equal``
         pairs); the predicate is a Python ``if`` at trace time, never a traced value.
-        On the accelerator leg a condition readback per trip is dear, so the fast
-        campaign keeps the data-dependent exit but relaxes ``min(_ACCELERATOR_UNROLL,
-        cap)`` steps per trip (a static remainder tail keeps the total at exactly
-        ``cap``, so its answer is the single-step one on every payload, cyclic
-        included), while the cycle-detecting fallback runs the counter-only ``step <
-        cap`` with no ``changed`` leaf — provably no early exit: ``reach`` grows until
-        the cap whenever it runs. Every count stays bit-identical to the single-step
+        On the accelerator leg IREE host-distributes a dispatch-bearing ``while`` —
+        one ``stream.cmd.execute`` plus a blocking ``hal.fence.await`` and a
+        ``hal.buffer.load`` per trip, ~157 us against ~2.5 us for a dispatch — so the
+        fast campaign keeps the data-dependent exit but relaxes
+        ``min(_ACCELERATOR_UNROLL, cap)`` steps per trip (a static remainder tail keeps
+        the total at exactly ``cap``, so its answer is the single-step one on every
+        payload, cyclic included), while the cycle-detecting fallback runs the
+        counter-only ``step < cap`` with no ``changed`` leaf — a counter against a
+        static constant stays on the device timeline, so no host round trip is paid —
+        and that is provably no early exit: ``reach`` grows until the cap whenever it
+        runs. Every count stays bit-identical to the single-step
         one: a settled body is idempotent (``best + 1 <= values``, and ``best == -1``
         keeps ``values``), so extra steps change no value.
         :func:`_cycle_violation`'s ``evoxc.cond`` stays data-dependent on purpose — its

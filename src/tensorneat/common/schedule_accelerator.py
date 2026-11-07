@@ -5,23 +5,23 @@ This module is the second spelling of two steps of
 return byte-identical values, so the schedule a caller sees does not depend on which one a graph
 was traced with.
 What changes on a compiled backend is everything a ``scatter`` touches: StableHLO lowers
-``scatter`` to **one workgroup of one thread** (measured 17-21 ns per *update* element on the
-box's MI300X, independent of the destination width), while a gather, an elementwise op and a
-reduction spread over the whole grid.  The two writes left in the schedule are therefore pure
-serialisation, and each has a **read-only** formulation:
+``scatter`` to **one workgroup of one thread** (grid ``1x1x1``, untiled, independent of the
+destination width; see ``benchmarks/spikes/rocm/CONTEXT.md``), while a gather, an elementwise op
+and a reduction spread over the whole grid.  The two writes left in the schedule are therefore
+pure serialisation, and each has a **read-only** formulation:
 
 1. **``cc`` (the ``cumsum``-free in-degree prefix) without the inverse permutation.**
    :func:`~tensorneat.common.tensorization.edge_order` inverts its ``argsort`` with a
-   ``(P, C + N)`` flat scatter — 75 000 serialised writes at ``xor_p500`` (pop 500,
-   ``max_nodes`` 50, ``max_conns`` 100) measured at **1.40 ms of the generation**.  The value it
+   ``(P, C + N)`` flat scatter — 75 000 serialised update elements at ``xor_p500`` (pop 500,
+   ``max_nodes`` 50, ``max_conns`` 100).  The value it
    produces is ``cc[i] = inv[C + i] - i``, i.e. *the number of valid edges whose destination slot
    is at most* ``i``, which is exactly a cumulative count over the ``(P, N, C)`` destination table
    ``dst <= i``; :func:`cumulative_indegree` reduces that table directly.  The ``argsort`` itself
    stays — ``order`` is what :func:`~tensorneat.common.tensorization.incoming_table` gathers its
    window out of, and no formulation needs the *inverse* permutation except this prefix.
 2. **the key→slot table without the dense scatter.**  ``key_slot_table`` writes ``P * N``
-   updates into ``P * (key_span + 1)`` cells with one flat scatter — 25 000 serialised writes,
-   **0.55 ms of the generation** at the same geometry.  :func:`key_template` replaces it with the
+   updates into ``P * (key_span + 1)`` cells with one flat scatter — 25 000 serialised update
+   elements at the same geometry.  :func:`key_template` replaces it with the
    equality template the distance layer already uses
    (:func:`~tensorneat.genome.operations.distance.index_free.resolve` and
    :func:`~tensorneat.genome.operations.mutation.cycle_accelerator`): one broadcast ``equal`` of
