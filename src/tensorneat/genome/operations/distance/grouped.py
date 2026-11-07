@@ -209,13 +209,19 @@ def _repeat(block: evoxc.SymbolicTensor, group: int) -> evoxc.SymbolicTensor:
 #: a bandwidth-bound one does not.
 #: The two other caps still bound the ``k * P`` centre width, and with it peak memory:
 #: ``k = max(1, min(ACCELERATOR_GROUP, GROUP_ROW_BUDGET // pop_size, species_size))``, so a
-#: 20-slot table with 20 species is two grouped calls plus a ``< 8``-row tail at ``pop <= 512``
-#: and five grouped calls at pop 1000, where ``4096 // 1000 = 4`` binds.
+#: 20-slot table with 20 species is two grouped calls plus a 4-row singly-measured tail at every
+#: shipped population (``20 = 2 * 8 + 4``) and ``ACCELERATOR_GROUP`` binds at pop 100
+#: (``8192 // 100 = 81``), pop 500 (``8192 // 500 = 16``) and pop 1000 (``8192 // 1000 = 8``,
+#: where the row budget binds exactly at the constant's own value, 8 000 centre rows).
 ACCELERATOR_GROUP = 8
 #: Rows one grouped call may carry.  The grouping amortises a per-launch cost, never a per-element
 #: one, so a population wide enough that ``k`` batches would double the intermediates keeps
 #: today's dispatch count instead (:func:`group_size` then answers ``1``).
-GROUP_ROW_BUDGET = 4096
+#: The budget is deliberately not pushed past the constant: a ``k`` sweep at pop 1000 (the only
+#: population where the row budget can still bind) puts the optimum at ``k = 8``, with
+#: ``k >= 12`` worse on xla — over-budget rows only widen the merge, at a flat peak RSS, so the
+#: sweep was a wall-clock trade rather than a memory one (``CONTEXT.md``, ``## Grouped route``).
+GROUP_ROW_BUDGET = 8192
 
 
 def group_size(state, pop_size: int, species_size: int | None = None) -> int:
@@ -231,9 +237,10 @@ def group_size(state, pop_size: int, species_size: int | None = None) -> int:
     Returns:
         int: ``1`` on the host leg (the plain route, unchanged), else
         ``max(1, min(ACCELERATOR_GROUP, GROUP_ROW_BUDGET // pop_size, species_size))`` — ``8``
-        at pop 100 (where the constant binds, ``4096 // 100 = 40``), ``8`` at pop 500 (where the
-        row budget binds at exactly 8) and ``4`` at pop 1000 (``4096 // 1000``), i.e. 800 /
-        4 000 / 4 000 centre rows for a 20-slot table.
+        at pop 100 (where the constant binds, ``8192 // 100 = 81``), ``8`` at pop 500 (also the
+        constant, ``8192 // 500 = 16``) and ``8`` at pop 1000 (``8192 // 1000``, where the row
+        budget binds exactly at the constant's value), i.e. 800 / 4 000 / 8 000 centre rows for a
+        20-slot table.
 
     Raises:
         ConfigError: If ``pop_size`` is not a positive ``int``, or if ``species_size`` is neither
