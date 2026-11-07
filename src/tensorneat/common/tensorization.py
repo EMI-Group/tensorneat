@@ -250,9 +250,10 @@ def derive_schedule(
             and counts ``cc`` directly
             (:func:`~tensorneat.common.schedule_accelerator.cumulative_indegree`), which
             drops both flat ``scatter`` calls — on a compiled backend a ``scatter`` is one
-            workgroup of one thread, and those two writes are ~1.95 ms of a ``xor_p500``
-            ROCm generation while the reference interpreter pays the replacement's
-            element volume. Both formulations return **byte-identical** ``Transformed``
+            workgroup of one thread (grid ``1x1x1``, untiled), and the two writes serialise
+            75 000 and 25 000 update elements at ``xor_p500``, while the reference
+            interpreter pays the replacement's element volume. Both formulations return
+            **byte-identical** ``Transformed``
             values; the returned schedule never depends on the mode.
 
     Returns:
