@@ -7,9 +7,11 @@ statics, each a plain host string on the configuration ``State``:
 
 * ``kernel_mode`` in ``("host", "accelerator")`` (``common/schedule_accelerator.py``)
   -- the only static that makes the **grouped** distance route selectable:
-  ``grouped.group_size`` answers ``1`` for a host state and ``ACCELERATOR_GROUP`` (2)
-  for an accelerator one, and ``_kernels.gated`` never gates an accelerator table
-  however small it is.
+  ``grouped.group_size`` answers ``1`` for a host state and
+  ``max(1, min(ACCELERATOR_GROUP, GROUP_ROW_BUDGET // P, S))`` for an accelerator one
+  (``8`` at the ``P = 100``, ``S = 8`` geometry below, where the slot cap *is* the
+  constant), and ``_kernels.gated`` never gates an accelerator table however small
+  it is.
 * ``distance_centre`` in ``("tiled", "single")`` (``algorithm/neat/_validation.py``)
   -- the width of every centre payload handed to the genome.
 * ``distance_formulation`` in ``("merge", "index_free")``
@@ -32,6 +34,17 @@ numpy leg that CI runs:
   route was *selected*, by trace-time spies rather than by equal numbers.
 * :func:`test_the_index_free_formulation_seam_is_the_branch_the_static_selects` proves
   ``distance_formulation`` reaches its arm of the alignment seam under both legs.
+* :func:`test_group_size_follows_the_shipped_law` pins the grouping law itself
+  (``k`` and the ``k * P`` centre rows it covers) row by row, on both legs, and
+  probes ``grouped.for_state`` through a real graph so the predicate the pipeline
+  calls answers exactly what the law says.
+* :func:`test_the_tail_rows_are_measured_singly_and_the_table_is_unchanged` measures
+  one ``S = 20`` table at ``P = 100`` and ``P = 500`` and pins the tail: two grouped
+  scan passes of ``k * P`` rows plus the ``S % k`` trailing rows measured singly,
+  with the ``(S, P)`` table byte-identical to the ungrouped one.
+* :func:`test_a_twenty_slot_table_is_bit_identical_at_group_two_and_at_group_eight`
+  measures the same ``S = 20`` table with the grouping patched to ``2`` and to ``8``
+  and compares the two byte for byte.
 * :func:`test_the_reference_route_is_the_default_spelling` pins that the reference
   point *is* the absent-entry default the three readers resolve.
 
@@ -80,7 +93,10 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
+import evoxc
+import evoxc.numpy as enp
 import numpy as np
+import pytest
 
 # The helpers and the whole-``tell`` runner are shared with the gated/dense seam
 # suite rather than copied: ``run_tell`` rebuilds the ``State`` *inside* the trace
@@ -112,9 +128,15 @@ from tensorneat.genome.utils import GenomeTensors
 POP_SIZE = 100
 #: Species-slot capacity of the speciation centre table (``S * P = 800``, still
 #: inside ``_kernels.GATED_ROWS`` -- that is the point of the gated interaction).
+#: ``S == 8`` is also exactly ``ACCELERATOR_GROUP``, so this pin exercises
+#: ``k == ACCELERATOR_GROUP`` at ``P = 100``: one grouped pass, no tail.
 SPECIES_SIZE = 8
-#: Individuals each of the four canonical topologies contributes (``4 * 25 = 100``).
-TOPOLOGY_ROWS = POP_SIZE // 4
+#: A species table wider than one group (``20 = 2 * 8 + 4`` at the shipped
+#: ``k = 8``), so the grouped route must run its tail path as well.
+TAIL_SPECIES_SIZE = 20
+#: The second population the tail path is measured at: wide enough that one
+#: grouped call carries ``8 * 500 = 4 000`` centre rows.
+WIDE_POP_SIZE = 500
 #: The ten ``SpeciesState`` fields ``run_tell`` returns, in ``fields`` order.
 SPECIES_FIELDS = (
     "species_keys",
@@ -203,50 +225,69 @@ ALL_ROUTES = tuple(
 # --- payloads ---
 
 
-def population(payloads: Any) -> tuple:
-    """A ``P = 100`` payload over the four canonical topologies.
+def population(payloads: Any, pop_size: int = POP_SIZE) -> tuple:
+    """A ``P``-row payload over the four canonical topologies.
 
-    Rows ``0 .. 24`` are the dense chain, ``25 .. 49`` the skipped-node genome,
-    ``50 .. 74`` the isolated-node one and ``75 .. 99`` the recurrent ring, so the
-    population holds four different key sets and in-degrees -- the merge has real work
-    to do in both halves (keys *and* attributes).  Every row also gets its own
-    connection-weight offset (``row * 0.01``); ``NaN + x`` keeps padding rows NaN.
+    The rows are split evenly between the dense chain, the skipped-node genome, the
+    isolated-node one and the recurrent ring (``P = 100`` gives the documented
+    ``0 .. 24`` / ``25 .. 49`` / ``50 .. 74`` / ``75 .. 99`` blocks), so the population
+    holds four different key sets and in-degrees -- the merge has real work to do in
+    both halves (keys *and* attributes).  Every row also gets its own connection-weight
+    offset (``row * 0.01``), so two rows of the same topology are still distinguishable
+    in the table; ``NaN + x`` keeps padding rows ``NaN``.
 
     Args:
         payloads: The ``support.payloads`` module fixture.
+        pop_size (int): Population batch ``P``; it must divide evenly by the four
+            topologies, so the blocks stay equal.
 
     Returns:
         tuple: The four payload arrays in ``GenomeTensors`` order, ``(P, ...)``.
+
+    Raises:
+        ValueError: If ``pop_size`` is not a multiple of the four topologies.
     """
+    rows, remainder = divmod(pop_size, 4)
+    if remainder:
+        raise ValueError(
+            f"population: pop_size must split evenly over four topologies, got {pop_size}"
+        )
     parts = [
-        payloads.chain_payload(pop_size=TOPOLOGY_ROWS),
-        payloads.skip_payload(pop_size=TOPOLOGY_ROWS),
-        payloads.isolated_payload(pop_size=TOPOLOGY_ROWS),
-        payloads.ring_payload(pop_size=TOPOLOGY_ROWS),
+        payloads.chain_payload(pop_size=rows),
+        payloads.skip_payload(pop_size=rows),
+        payloads.isolated_payload(pop_size=rows),
+        payloads.ring_payload(pop_size=rows),
     ]
     arrays = {
         name: np.concatenate([getattr(part, name) for part in parts], axis=0)
         for name in POP_FIELDS
     }
-    offset = (np.arange(POP_SIZE, dtype=np.float32) * np.float32(0.01))[:, None, None]
+    offset = (np.arange(pop_size, dtype=np.float32) * np.float32(0.01))[:, None, None]
     arrays["conn_attrs"] = arrays["conn_attrs"] + offset
     return tuple(arrays[name] for name in POP_FIELDS)
 
 
-def centre_rows(payload: tuple) -> tuple:
-    """``S = 8`` centre rows spread over all four topologies.
+def centre_rows(payload: tuple, species_size: int = SPECIES_SIZE) -> tuple:
+    """``S`` centre rows spread over all four topologies of ``payload``.
 
-    Slot ``p`` is row ``(p % 4) * 25 + p // 4`` (``0, 25, 50, 75, 1, 26, 51, 76``), so
-    the centre table is not one contiguous block and a centre whose key set matches
-    only part of the population makes the disjoint/excess halves non-zero.
+    Slot ``p`` is row ``(p % 4) * (P / 4) + p // 4`` (``0, 25, 50, 75, 1, 26, 51, 76``
+    at ``P = 100``, ``S = 8``), so the centre table is not one contiguous block and a
+    centre whose key set matches only part of the population makes the disjoint/excess
+    halves non-zero.  The rows stay inside the population because ``p // 4 < P / 4``
+    for every ``p < S`` used here.
 
     Args:
         payload: The arrays :func:`population` returns.
+        species_size (int): Slot count ``S``; ``S > P / 4`` still stays in bounds
+            because the quotient is what selects the topology block.
 
     Returns:
         tuple: The four centre arrays in ``GenomeTensors`` order, ``(S, ...)``.
     """
-    rows = [(slot % 4) * TOPOLOGY_ROWS + slot // 4 for slot in range(SPECIES_SIZE)]
+    per_topology = int(payload[0].shape[0]) // 4
+    rows = [
+        (slot % 4) * per_topology + slot // 4 for slot in range(species_size)
+    ]
     return tuple(field[rows] for field in payload)
 
 
@@ -286,6 +327,71 @@ def measure_table(
         return rows.matrix(state, centre)
 
     return to_numpy(run_defn(kernel, *population_payload, *centres))
+
+
+def group_in_graph(
+    genome: Any,
+    payload: tuple,
+    kernel_mode: str,
+    species_size: int,
+) -> int:
+    """The ``k`` ``grouped.for_state`` answers inside a real graph, as a host ``int``.
+
+    ``for_state`` reads the grouped static through ``grouped.group_size`` and then
+    tiles the digest, so it needs a traced digest; this kernel prepares one from the
+    payload and returns the answered group as a one-element array (the graph's output
+    must be a tensor, not a host ``int``).
+
+    Args:
+        genome: The genome under test (its ``prepare_distance`` builds the digest).
+        payload: The ``(P, ...)`` population arrays.
+        kernel_mode (str): The ``kernel_mode`` static of the state.
+        species_size (int): The slot count handed to ``for_state``.
+
+    Returns:
+        int: ``for_state``'s group answer for this state and payload.
+    """
+
+    def kernel(*values: Any) -> Any:
+        """One digest, grouped for the state's leg; answers ``k``."""
+        state = common_module.State(kernel_mode=kernel_mode)
+        digest = genome.prepare_distance(state, GenomeTensors(*values))
+        _, group = grouped_module.for_state(
+            state, digest, species_size=species_size
+        )
+        return enp.full((1,), group, dtype=evoxc.int32)
+
+    return int(to_numpy(run_defn(kernel, *payload))[0])
+
+
+def record_measurements(monkeypatch: Any, genome: Any) -> list:
+    """Record ``(centre rows, digest rows)`` of every traced ``measure_distance`` call.
+
+    The two spellings a ``DistanceRows.matrix`` body hands the genome are recorded the
+    same way: the grouped leg passes the four concatenated arrays (a plain tuple), the
+    per-row leg a ``GenomeTensors``; both expose their centre rows at index ``0``.
+    Only the *shape* of the record is asserted on (``evoxc.scan`` peels step 0 and
+    traces its body again, so one region contributes two record entries).
+
+    Args:
+        monkeypatch: pytest's ``monkeypatch`` fixture.
+        genome: The genome instance whose ``measure_distance`` is spied on.
+
+    Returns:
+        list: The live record; each entry is ``(centre rows, digest rows)``.
+    """
+    calls: list = []
+    original = type(genome).measure_distance
+
+    def measure_spy(self: Any, state: Any, *args: Any) -> Any:
+        """Log the batch widths, then run the shipped kernel unchanged."""
+        head = args[0]
+        rows = int(head.shape[0]) if hasattr(head, "shape") else int(head[0].shape[0])
+        calls.append((rows, int(args[-1].node_count.shape[0])))
+        return original(self, state, *args)
+
+    monkeypatch.setattr(type(genome), "measure_distance", measure_spy)
+    return calls
 
 
 # --- distance-table level: the whole 2 x 2 x 2 grid ---
@@ -398,6 +504,232 @@ def test_tell_is_identical_across_the_three_distance_routes(neat, common, evoxc_
         ), f"per-species member sets/ranks differ under {route.label}"
 
 
+# --- the grouping law: k = max(1, min(ACCELERATOR_GROUP, GROUP_ROW_BUDGET // P, S)) ---
+
+
+#: The shipped law, one row per shape its two caps were argued over:
+#: ``(pop_size, species_size, k, centre rows one grouped call covers)``.
+#: ``k`` is ``ACCELERATOR_GROUP`` (8) at every shipped population because the row
+#: budget never binds below ``P = 1000`` and the constant then wins; the slot cap
+#: binds only when a table is narrower than a group; a population at or above the
+#: row budget floors ``GROUP_ROW_BUDGET // P`` to zero and so stays ungrouped.
+GROUP_LAW = (
+    (100, 20, 8, 800),
+    (500, 20, 8, 4_000),
+    (1_000, 20, 8, 8_000),
+    (100, 8, 8, 800),
+    (1_000, 4, 4, 4_000),
+    (100, 5, 5, 500),
+    (500, 5, 5, 2_500),
+    (1_000, 5, 5, 5_000),
+    (8_192, 20, 1, 8_192),
+    (16_384, 20, 1, 16_384),
+    (100, 1, 1, 100),
+)
+
+#: The uncapped spelling (``species_size=None``): only the constant and the row
+#: budget bind, so the constant wins until ``P`` reaches ``GROUP_ROW_BUDGET``.
+GROUP_LAW_UNCAPPED = (
+    (100, 8),
+    (1_000, 8),
+    (8_192, 1),
+    (16_384, 1),
+)
+
+
+@pytest.mark.parametrize("pop_size, species_size, expected, rows", GROUP_LAW)
+def test_group_size_follows_the_shipped_law(
+    pop_size: int,
+    species_size: int,
+    expected: int,
+    rows: int,
+    payloads: Any,
+    common: Any,
+) -> None:
+    """``grouped.group_size`` answers the law's ``k`` at every documented shape.
+
+    The host leg is the plain route at every shape (``1``); the accelerator leg is
+    ``max(1, min(ACCELERATOR_GROUP, GROUP_ROW_BUDGET // P, S))``, whose answer is
+    pinned as a literal here and whose ``k * P`` centre-row width is pinned beside it.
+    ``grouped.for_state`` -- the predicate ``DistanceRows.matrix`` actually calls -- is
+    then proved to agree, through a real graph, because it reads the digest's
+    population axis rather than a caller-supplied ``P``.
+    """
+    host = common.State()
+    accelerator = common.State(kernel_mode="accelerator")
+
+    host_answer = grouped_module.group_size(host, pop_size, species_size)
+    assert host_answer == 1, (
+        f"the host leg must stay ungrouped at ({pop_size}, {species_size}), "
+        f"got k = {host_answer}"
+    )
+
+    answer = grouped_module.group_size(accelerator, pop_size, species_size)
+    assert answer == expected, (
+        f"group_size(accelerator, {pop_size}, {species_size}) answered {answer}, "
+        f"the law says {expected}"
+    )
+    assert answer * pop_size == rows, (
+        f"k = {answer} at P = {pop_size} covers {answer * pop_size} centre rows, "
+        f"the law says {rows}"
+    )
+
+    genome = payloads.default_genome()
+    payload = population(payloads, pop_size)
+    assert group_in_graph(genome, payload, "accelerator", species_size) == expected, (
+        "grouped.for_state must answer the law's k from the digest it is handed, at "
+        f"({pop_size}, {species_size})"
+    )
+    assert group_in_graph(genome, payload, "host", species_size) == 1, (
+        "grouped.for_state must hand the host leg the plain digest"
+    )
+
+
+@pytest.mark.parametrize("pop_size, expected", GROUP_LAW_UNCAPPED)
+def test_group_size_without_a_slot_count_leaves_the_slot_cap_out(
+    pop_size: int, expected: int, common: Any
+) -> None:
+    """``species_size=None`` is the uncapped spelling: the constant vs the row budget.
+
+    Pinned separately from :data:`GROUP_LAW` because an absent slot count is the one
+    branch of the law the caller-visible table cannot express, and it is what a caller
+    holding groups rather than slots relies on.
+    """
+    assert grouped_module.group_size(common.State(), pop_size) == 1, (
+        "the host leg ignores the absent slot count as well"
+    )
+    answer = grouped_module.group_size(common.State(kernel_mode="accelerator"), pop_size)
+    assert answer == expected, (
+        f"group_size(accelerator, {pop_size}) answered {answer}, the uncapped law "
+        f"says {expected}"
+    )
+
+
+# --- the tail: species_size // k grouped calls plus species_size % k singles ---
+
+
+#: ``(pop_size, species_size)`` the tail path is measured at: ``S = 20`` at both
+#: shipped populations (``20 = 2 * 8 + 4``: two grouped passes and a four-row tail)
+#: and ``S = 8`` at the narrow one (``S % k == 0``: one grouped pass, no tail).
+TAIL_CASES = (
+    (POP_SIZE, TAIL_SPECIES_SIZE),
+    (WIDE_POP_SIZE, TAIL_SPECIES_SIZE),
+    (POP_SIZE, SPECIES_SIZE),
+)
+
+
+@pytest.mark.parametrize("pop_size, species_size", TAIL_CASES)
+def test_the_tail_rows_are_measured_singly_and_the_table_is_unchanged(
+    pop_size: int, species_size: int, payloads: Any, common: Any, monkeypatch: Any
+) -> None:
+    """``matrix`` groups ``S // k`` passes, measures ``S % k`` rows singly, same table.
+
+    The oracle is the ungrouped (``k = 1``) route on the same payload, so the tail is
+    pinned twice: the ``(S, P)`` table must be ``tobytes()``-identical to the plain
+    one, and the ``measure_distance`` record must hold only ``k * P``-row grouped
+    calls plus one ``P``-row call per trailing row -- no lookback into the grouped
+    digest and no silently measured grouped row twice.
+    """
+    genome = payloads.default_genome()
+    payload = population(payloads, pop_size)
+    centres = centre_rows(payload, species_size)
+    assert (payload[0].shape[0], centres[0].shape[0]) == (pop_size, species_size)
+
+    group = grouped_module.group_size(
+        common.State(kernel_mode="accelerator"), pop_size, species_size
+    )
+    assert group == grouped_module.ACCELERATOR_GROUP, (
+        f"the constant must be the binding cap at P = {pop_size} / S = {species_size}, "
+        f"got k = {group}"
+    )
+    tail = species_size % group
+    assert (species_size // group) * group + tail == species_size
+
+    ungrouped = measure_table(payload, centres, REFERENCE, genome)
+    calls = record_measurements(monkeypatch, genome)
+    table = measure_table(payload, centres, Route(kernel_mode="accelerator"), genome)
+
+    assert table.shape == (species_size, pop_size), (
+        f"matrix returned {table.shape}, expected {(species_size, pop_size)}"
+    )
+    assert table.dtype == np.float32, (
+        f"matrix returned {table.dtype}, expected float32"
+    )
+    assert table.tobytes() == ungrouped.tobytes(), (
+        "the grouped table must be byte-identical to the ungrouped one: "
+        f"{np.flatnonzero(table.ravel() != ungrouped.ravel())[:8]}"
+    )
+    assert np.any(table > 0), f"every distance is zero: {table}"
+
+    # One scan region contributes two trace entries (the peeled step 0 and the loop
+    # body), whatever its iteration count; every tail row is its own top-level call,
+    # measured against the plain (``P``-row) digest at the table's own width.
+    expected_record = [(group * pop_size, group * pop_size)] * 2 + [
+        (pop_size, pop_size)
+    ] * tail
+    assert calls == expected_record, (
+        "the grouped route must trace two k*P-row passes and one P-row call per tail "
+        f"row, saw {calls}"
+    )
+
+
+def test_a_twenty_slot_table_is_bit_identical_at_group_two_and_at_group_eight(
+    payloads: Any, common: Any, monkeypatch: Any
+) -> None:
+    """``k = 2`` and ``k = 8`` measure the same ``S = 20`` table byte for byte.
+
+    The grouping is a *shape* decision on the tiled scaffolding, never an arithmetic
+    one, so the only thing a different ``k`` may change is how many rows one call
+    carries.  Patching ``ACCELERATOR_GROUP`` is the seam a caller would move if the
+    device's launch/bandwidth trade changed; the answer must not move with it.
+    ``k = 2`` divides ``S = 20`` exactly, so that leg measures no tail at all while
+    the shipped ``k = 8`` leg measures four rows singly -- both reach the same table.
+    """
+    genome = payloads.default_genome()
+    payload = population(payloads)
+    centres = centre_rows(payload, TAIL_SPECIES_SIZE)
+    accelerator = common.State(kernel_mode="accelerator")
+    route = Route(kernel_mode="accelerator")
+    calls = record_measurements(monkeypatch, genome)
+
+    tables: dict = {}
+    records: dict = {}
+    for group in (2, 8):
+        monkeypatch.setattr(grouped_module, "ACCELERATOR_GROUP", group)
+        assert (
+            grouped_module.group_size(accelerator, POP_SIZE, TAIL_SPECIES_SIZE) == group
+        ), f"the patched constant must reach the law, k = {group} was not answered"
+        calls.clear()
+        tables[group] = measure_table(payload, centres, route, genome)
+        records[group] = list(calls)
+
+    for group, table in tables.items():
+        assert table.shape == (TAIL_SPECIES_SIZE, POP_SIZE), (
+            f"k = {group} returned {table.shape}, expected "
+            f"{(TAIL_SPECIES_SIZE, POP_SIZE)}"
+        )
+        assert table.dtype == np.float32, (
+            f"k = {group} returned {table.dtype}, expected float32"
+        )
+    assert np.any(tables[2] > 0), "the compared table is all zeros"
+    assert len(np.unique(tables[2])) > TAIL_SPECIES_SIZE, (
+        f"the compared table is degenerate: {np.unique(tables[2])}"
+    )
+    assert tables[2].tobytes() == tables[8].tobytes(), (
+        "k = 2 and k = 8 must measure the same table: "
+        f"{np.flatnonzero(tables[2].ravel() != tables[8].ravel())[:8]}"
+    )
+
+    assert records[2] == [(2 * POP_SIZE, 2 * POP_SIZE)] * 2, (
+        f"the k = 2 leg is all grouped calls and no tail, saw {records[2]}"
+    )
+    assert records[8] == [(8 * POP_SIZE, 8 * POP_SIZE)] * 2 + [
+        (POP_SIZE, POP_SIZE)
+    ] * (TAIL_SPECIES_SIZE % 8), (
+        f"the k = 8 leg must measure its trailing rows singly, saw {records[8]}"
+    )
+
+
 # --- route-selected proof: the spies ---
 
 
@@ -411,8 +743,8 @@ def test_the_grouped_leg_is_the_route_the_accelerator_static_selects(
     centres one whole-table call carried, and ``_distance.centre_batch`` records the
     width of every merged centre batch.  The host reference at ``S * P = 800 <=
     GATED_ROWS`` gates its scans and never asks for a table, so its three records are
-    empty; ``accelerator``/``single`` still *resolves* ``k = 2`` but the ``not tiled``
-    guard keeps the per-row scan, so only its merge record is empty.
+    empty; ``accelerator``/``single`` still *resolves* ``k = ACCELERATOR_GROUP`` but
+    the ``not tiled`` guard keeps the per-row scan, so only its merge record is empty.
     ``grouped.group_size`` and ``_kernels.gated`` are then called directly, which pins
     the two documented static predicates without another graph.
     """
@@ -466,7 +798,8 @@ def test_the_grouped_leg_is_the_route_the_accelerator_static_selects(
     )
 
     # (ii)+(iii) both accelerator runs measure the whole slot table in one call and
-    # both resolve k = 2; only the "tiled" spelling ever merges a group.
+    # both resolve k = ACCELERATOR_GROUP (at S = 8 the slot cap is the constant);
+    # only the "tiled" spelling ever merges a group.
     for label in (tiled, single):
         route_groups, route_tables, _merges = recorded[label]
         assert [slots for slots, _answer in route_groups] == [SPECIES_SIZE], (
@@ -494,6 +827,15 @@ def test_the_grouped_leg_is_the_route_the_accelerator_static_selects(
     assert (
         grouped_module.GROUP_ROW_BUDGET // POP_SIZE >= group
     ), "the row budget must not be the binding group cap at this population"
+    assert (
+        min(
+            grouped_module.ACCELERATOR_GROUP,
+            grouped_module.GROUP_ROW_BUDGET // POP_SIZE,
+            SPECIES_SIZE,
+        )
+        == group
+        == grouped_module.ACCELERATOR_GROUP
+    ), "at this geometry the constant is the binding cap, so k == ACCELERATOR_GROUP"
     assert grouped_module.group_size(common.State(), POP_SIZE, SPECIES_SIZE) == 1, (
         "the host leg groups at k = 1 (the plain route)"
     )
