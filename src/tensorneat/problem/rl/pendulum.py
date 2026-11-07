@@ -333,7 +333,7 @@ class Pendulum(BaseProblem):
 
         The report also traces the carry formulation the run trained with
         (``state.kernel_mode``, see :meth:`_rollout`), so a state on the
-        accelerator leg reports from the packed one-dispatch step instead of
+        accelerator leg reports from the packed carry formulation instead of
         the host one.
 
         A non-finite return (a NaN-poisoned policy) prints as ``nan`` in the
@@ -412,31 +412,24 @@ class Pendulum(BaseProblem):
 
         Why the packing is gated rather than unconditional: on a compiled
         backend a dispatch is one loop-carried float root region, so collapsing
-        three roots into one carried row takes the rollout body from three
-        elementwise dispatches to one fused one (measured statically on the
-        compiled ROCm configuration: a standalone rollout graph's body block
-        goes **3 -> 1**). Two costs keep it off the host leg and one keeps it
-        from being a bigger win than that:
+        three roots into one carried row reaches a single fused dispatch in a
+        standalone rollout graph (against three elementwise ones for the
+        three-leaf host carry). Two costs keep it off the host leg:
 
-        * assembling the next row costs **+805 executed ops per generation** on
-          the numpy reference interpreter (accelerator mode 27 055 -> 27 860 on
-          the generation after setup, i.e. ~42 421 -> 43 226 averaged over 20
-          timed generations, +1.9 %), so it stays behind the accelerator static
-          and the host leg is byte-for-byte the shipped kernel (27 391 ops on
-          that same generation, identical per-step list, identical fitness);
-        * in the **assembled generation graph** IREE materialises the packed
-          body's column slices as one ``slow_memcpy`` dispatch each, so the
-          step block holds 2 copies + the fused elementwise = 3 dispatches
-          against the host formulation's 3 roots there: the whole-step dispatch
-          win does not survive graph assembly, and what does survive is the
-          per-query region, because the packed body slices its observation out
-          of the carried row instead of selecting it out of two leaves
-          (``^bb5`` 4 -> 3). Net at the reference geometry, accelerator mode:
-          ``^bb5`` 3 + 5 dispatches per level trip + ``^bb8`` 3 = **21**
-          dispatches per timestep against the same packed carry before that
-          win, 4 + 5 + 3 = 22 on the same graph family, whole-graph static
-          sites 415 -> 414. The host-mode graph is untouched at 445 sites and
-          ``4 + 4 + 3`` = 19 dispatches per timestep.
+        * the packed step is 4 ops wider on numpy -- 33 against 29 in an
+          env-only trace, from five slices and two extra multiplies in place of
+          one select -- and accelerator mode costs **121 218** executed ops on
+          one generation against **26 190** for host mode, because that mode
+          also unrolls the genome's level sweep inside the rollout (a 565-op
+          body per timestep where host mode runs 36 twice). The host leg
+          therefore keeps the byte-identical host kernel: same per-step op list,
+          same fitness;
+        * in the **assembled generation graph** the packed body's column slices
+          are materialised as their own copies instead of fusing into the
+          carried region, so the whole-step dispatch win of the standalone body
+          does not survive graph assembly; what survives is the per-query
+          region, because the packed body slices its observation out of the
+          carried row instead of selecting it out of two leaves.
 
         Args:
             keys: One rank-0 evoxc key for the single reset draw.
@@ -491,13 +484,12 @@ class Pendulum(BaseProblem):
         theta0: Any,
         theta_dot0: Any,
     ) -> tuple[Any, Any]:
-        """Roll out the packed one-dispatch step of the accelerator formulation.
+        """Roll out the packed step of the accelerator formulation.
 
         The carry is ``(row (B, 3), step ())`` with ``row = (theta, theta_dot,
-        total)``: one float root instead of three, which is what lets the whole
-        step body fuse into a single dispatch on a compiled backend
-        (:meth:`_rollout` holds the measured inventory and the caveat that the
-        assembled generation graph re-materialises the column slices). The step
+        total)``: one float root instead of three, which is what a compiled
+        backend fuses furthest (:meth:`_rollout` holds the measured caveat that
+        the assembled generation graph materialises the column slices). The step
         is :meth:`_loop_body_packed`; everything after the loop is three
         contiguous column slices of the final row, so the packing costs no op
         outside the body.
@@ -618,10 +610,8 @@ class Pendulum(BaseProblem):
             boolean ``obs_columns`` (``[True, False]``), which broadcasts the two
             ``(B, 1)`` leaves into a ``(B, 2)`` row. That is the same op count as
             the ``enp.concatenate`` it replaced -- one -- but a concatenate of two
-            columns lowers to one strided copy (one dispatch) per column on a
-            compiled backend, while the select fuses into the observation
-            producer and is a single dispatch (measured: the per-query region
-            around the policy drops from 5 dispatches to 4).
+            columns lowers to one serialised copy per column on a compiled
+            backend, while the select fuses into the observation producer.
 
             Args:
                 carry: ``(theta (B, 1), theta_dot (B, 1), total (B, 1),
@@ -656,7 +646,8 @@ class Pendulum(BaseProblem):
         then ``theta' = theta + theta_dot' * dt`` and ``total' = total - cost``
         -- but it reads and writes one ``(B, 3)`` row ``(theta, theta_dot,
         total)`` instead of three float leaves, so the step has one carried
-        float root instead of three (one IREE dispatch per root).
+        float root instead of three (one dispatch per carried root on a
+        compiled backend).
 
         The row is split with static slices (:func:`evoxc.ops.slice`): the
         leading ``(B, 2)`` window is the observation the policy consumes
@@ -678,17 +669,14 @@ class Pendulum(BaseProblem):
         which the host carry does not, but the fitness reads the accumulator
         column only and any NaN there is already ``-inf``.
 
-        Measured statically on the compiled ROCm configuration (``pop`` 100,
-        ``max_step`` 200, seed 42, ``iree-compile ... --compile-to=
-        executable-configurations``), the fused assembly is what the three
-        carried roots collapse into: the standalone rollout graph's body block
-        is **1 dispatch**, against three elementwise dispatches for the
-        three-leaf host carry. In the assembled generation graph IREE
-        materialises the column slices as one ``slow_memcpy`` dispatch each, so
-        the step block there holds those two copies plus the fused
-        ``elementwise_100x3`` -- 3 dispatches, the same count as the host
-        formulation's three roots, and the net win of the packing is one
-        dispatch in the per-query region (below).
+        One carried float root instead of three is what a compiled backend
+        fuses furthest: in a standalone rollout graph the assembly above is a
+        single dispatch region against three elementwise regions for the
+        three-leaf host carry. In the assembled generation graph the column
+        slices are materialised as their own copies rather than fused into the
+        carried region, so the step block there holds those copies plus the
+        fused region -- about the host formulation's count -- and the surviving
+        win is the per-query region (see :meth:`_rollout`).
 
         The three baked rows are built **once per rollout, outside the loop**
         (here, at trace time, not inside ``step``), so the body pays no
@@ -728,8 +716,7 @@ class Pendulum(BaseProblem):
             ``obs_columns`` select of the host formulation is what keeps the
             per-query region at its host width: the select would need both
             columns of a three-column row, while the leading slice is one
-            narrower (measured: the per-query region holds 3 dispatches against
-            the host formulation's 4 on the compiled ROCm configuration).
+            narrower.
 
             Args:
                 carry: ``(row (B, 3), index ())`` with ``row`` holding
