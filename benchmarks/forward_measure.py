@@ -37,16 +37,16 @@ in :data:`TARGETS`: :data:`gpu_targets.TARGETS` verbatim (``numpy``, ``iree-rocm
 ``xla-rocm`` additionally needs the PJRT plugin named by ``--pjrt-plugin PATH`` or
 ``$EVOXC_PJRT_PLUGIN`` (an unresolvable plugin is a named error row, never a fallback).
 
-The ``XLA_FLAGS`` workaround (``--xla-flags``): a *generation* graph holding a long
-``while`` (the RL rollout) SIGSEGVs on this box inside
-``PJRT_LoadedExecutable_Execute`` because XLA captures it as a HIP graph / FUSION
+The ``XLA_FLAGS`` workaround (``--xla-flags``): a graph holding a long ``while`` (the RL
+rollout, or the legacy ``fori_loop`` forward of the ``jax`` baseline) SIGSEGVs on this box
+inside ``PJRT_LoadedExecutable_Execute`` because XLA captures it as a HIP graph / FUSION
 command buffer, and ``--xla_gpu_enable_command_buffer=WHILE`` in ``XLA_FLAGS`` cures
 it (XLA reads that variable at backend init, so it must be an environment setting,
-never a ``compile_options`` entry; see ``benchmarks/gpu_targets.py``). A forward pass
-holds no ``while`` and does not crash, so the flag is not load-bearing here -- but an
-``xla-rocm`` row is exported the very same ``XLA_FLAGS`` value, for an xla target
-only, and records it (``record["xla_flags"]`` / ``meta["xla_flags"]``), so a
-forward number is never attributed to a flag it did not run with.
+never a ``compile_options`` entry; see ``benchmarks/gpu_targets.py``). An XLA-driven row
+(:data:`XLA_DRIVEN_TARGETS`: the ``xla-rocm`` target and the ``jax`` baseline, which runs
+on XLA too) is exported that same ``XLA_FLAGS`` value and records it
+(``record["xla_flags"]`` / ``meta["xla_flags"]``), so a forward number is never attributed
+to a flag it did not run with.
 
 Protocol, per row, one fresh process: ``setup_s`` and ``build_s`` are measured and
 reported **separately, never charged to a pass**; ``--warmup`` untimed passes then
@@ -137,6 +137,12 @@ TARGETS: dict[str, dict[str, Any]] = {
     name: {"impl": "new", **GPU_TARGETS[name]} for name in ("numpy", "iree-rocm", "xla-rocm")
 }
 TARGETS["jax"] = {"impl": "old", "backend": "jax", "device": None, "compile_options": None}
+
+#: The targets whose computation XLA drives: the PJRT ones plus ``jax``.
+#: ``jax`` belongs here because the frozen baseline runs on XLA too, and its legacy
+#: ``fori_loop`` forward graph hits the same captured-``while`` failure on this MI300X,
+#: so it gets (and records) the same command-buffer workaround.
+XLA_DRIVEN_TARGETS: frozenset[str] = frozenset(PJRT_TARGETS | {"jax"})
 
 DEFAULT_WORKLOADS = "all"
 #: The shipped matrix: every new-side leg plus the baseline. ``xla-rocm`` needs the PJRT
@@ -320,13 +326,14 @@ def _target_plan(target_name: str, plugin: str | None = None) -> dict[str, Any]:
 def _effective_xla_flags(target_name: str, requested: str) -> str | None:
     """The ``XLA_FLAGS`` value this target is measured with (``None`` = leave alone).
 
-    Only a :data:`gpu_targets.PJRT_TARGETS` target gets the ROCm command-buffer
-    workaround (:data:`gpu_targets.XLA_WORKAROUND_FLAGS`); every other target --
-    including ``iree-rocm`` and the ``jax`` baseline -- inherits the parent
-    environment untouched. An empty ``requested`` is a request for the *absence* of
-    the workaround (``--xla-flags ''``), so it stays the empty string.
+    An :data:`XLA_DRIVEN_TARGETS` target -- the PJRT ``xla`` targets and the ``jax``
+    baseline, which is XLA too -- gets the ROCm command-buffer workaround
+    (:data:`gpu_targets.XLA_WORKAROUND_FLAGS`); every other target (``numpy``,
+    ``iree-rocm``) inherits the parent environment untouched. An empty ``requested`` is
+    a request for the *absence* of the workaround (``--xla-flags ''``), so it stays the
+    empty string.
     """
-    return requested if target_name in PJRT_TARGETS else None
+    return requested if target_name in XLA_DRIVEN_TARGETS else None
 
 
 def _export_xla_flags(
@@ -764,9 +771,9 @@ def _child_command(
 def _child_environment(plugin: str | None, xla_flags: str | None) -> dict[str, str]:
     """This process's environment, plus the plugin and the xla workaround.
 
-    ``xla_flags`` follows :func:`_effective_xla_flags`: exported as ``XLA_FLAGS`` for
-    an xla target, removed for an empty value (``--xla-flags ''``), and untouched
-    (``None``) for every other target.
+    ``xla_flags`` follows :func:`_effective_xla_flags`: exported as ``XLA_FLAGS`` for an
+    XLA-driven target (``xla`` or ``jax``), removed for an empty value
+    (``--xla-flags ''``), and untouched (``None``) for the ``numpy``/``iree`` targets.
     """
     child = dict(os.environ)
     if plugin is not None:
@@ -823,8 +830,9 @@ def _document_meta(
 ) -> dict[str, Any]:
     """The ``meta`` block of a matrix document (command, title/note, env, protocol).
 
-    ``xla_flags`` is the ``XLA_FLAGS`` value the ``xla`` rows ran with, and ``None``
-    when no planned target is an xla target (a numpy/iree/jax matrix records no flag).
+    ``xla_flags`` is the ``XLA_FLAGS`` value the XLA-driven rows (``xla`` and ``jax``)
+    ran with, and ``None`` when no planned target is XLA-driven (a numpy/iree matrix
+    records no flag).
     """
     meta = {
         "command": shlex.join([sys.executable, *sys.argv]),
@@ -835,7 +843,7 @@ def _document_meta(
         "workload_geometry": {workload.name: workload_geometry(workload)
                               for workload in workloads},
         "targets": targets,
-        "xla_flags": args.xla_flags if any(t in PJRT_TARGETS for t in targets) else None,
+        "xla_flags": args.xla_flags if any(t in XLA_DRIVEN_TARGETS for t in targets) else None,
         "env": environment(),
     }
     if pjrt_plugin is not None:
@@ -877,7 +885,7 @@ def matrix_command(args: argparse.Namespace) -> int:
         for index, (workload, target) in enumerate(plan, 1):
             row_path = Path(tmp) / f"row_{index:03d}.json"
             command = _child_command(args, script, workload, target, row_path, plugin)
-            # Per row, because the workaround applies to xla targets only.
+            # Per row, because the workaround applies to the XLA-driven targets only.
             child_env = _child_environment(
                 plugin, _effective_xla_flags(target, args.xla_flags))
             print(f"[{index}/{len(plan)}] {workload} / {target}: running", flush=True)
@@ -1050,13 +1058,13 @@ def _plugin_text(plugin: dict[str, Any]) -> str:
 
 
 def _xla_flags_text(document: dict[str, Any]) -> str:
-    """The ``XLA_FLAGS`` the record's xla rows ran with -- never left implicit.
+    """The ``XLA_FLAGS`` the record's XLA-driven rows ran with -- never left implicit.
 
     A non-empty ``meta["xla_flags"]`` names the workaround the session exported; a
-    key present but empty while the record holds xla rows says those numbers were
-    measured *without* it (``--xla-flags ''``); a record with no key predates the
-    workaround and is attributed to no flag at all; and a key of ``None`` with no xla
-    row means no flag applied because no target uses XLA.
+    key present but empty while the record holds an XLA-driven row says those numbers
+    were measured *without* it (``--xla-flags ''``); a record with no key predates the
+    workaround and is attributed to no flag at all; and a key of ``None`` with no
+    XLA-driven row means no flag applied because no target uses XLA.
     """
     meta = document.get("meta") or {}
     if "xla_flags" not in meta:
@@ -1067,9 +1075,9 @@ def _xla_flags_text(document: dict[str, Any]) -> str:
             f"`{flags}` (ROCm command-buffer workaround: the RL rollout's long "
             "`while` SIGSEGVs under FUSION capture; a forward pass has no `while`)"
         )
-    if any(record.get("target") in PJRT_TARGETS for record in _records(document)):
+    if any(record.get("target") in XLA_DRIVEN_TARGETS for record in _records(document)):
         return "not set (`--xla-flags ''`: measured without the command-buffer workaround)"
-    return "not applicable (no `xla` row in this record)"
+    return "not applicable (no XLA-driven row in this record)"
 
 
 def _environment_section(document: dict[str, Any]) -> list[str]:
@@ -1307,8 +1315,8 @@ def list_command(args: argparse.Namespace) -> int:
     print("new side (impl=new): tensorneat's Pipeline.setup() population, one evoxc "
           "forward graph")
     print()
-    print(f"xla targets export XLA_FLAGS={XLA_WORKAROUND_FLAGS!r} by default "
-          "(--xla-flags '' measures without it)")
+    print(f"XLA-driven targets (xla-rocm, jax) export XLA_FLAGS={XLA_WORKAROUND_FLAGS!r} "
+          "by default (--xla-flags '' measures without it)")
     print()
     print(f"default matrix: workloads {DEFAULT_WORKLOADS}; targets {DEFAULT_TARGETS}; "
           f"seed {DEFAULT_SEED}; {DEFAULT_WARMUP} warmup + {DEFAULT_PASSES} timed passes")
@@ -1363,13 +1371,14 @@ def _add_measurement_arguments(parser: argparse.ArgumentParser) -> None:
               "fallback to another backend"))
     parser.add_argument(
         "--xla-flags", default=XLA_WORKAROUND_FLAGS, metavar="TEXT",
-        help=(f"XLA_FLAGS exported for the xla targets only (default: "
-              f"{XLA_WORKAROUND_FLAGS!r}, the ROCm command-buffer workaround for a "
-              "captured long `while`). It is a process-environment setting because XLA "
-              "reads it at backend init, so it cannot be a compile option. Pass "
+        help=(f"XLA_FLAGS exported for the XLA-driven targets only (xla-rocm and the jax "
+              f"baseline; default: {XLA_WORKAROUND_FLAGS!r}, the ROCm command-buffer "
+              "workaround for a captured long `while`). It is a process-environment "
+              "setting because XLA reads it at backend init, so it cannot be a compile "
+              "option. Pass "
               "--xla-flags '' to measure WITHOUT the workaround: the variable is then "
-              "removed from the child environment, never inherited. Targets that do "
-              "not use XLA keep their environment untouched"))
+              "removed from the child environment, never inherited. The numpy and iree "
+              "targets keep their environment untouched"))
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
