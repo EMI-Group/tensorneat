@@ -86,11 +86,11 @@ it competes with ``"tiled"`` rather than with ``"single"``, and
 ``grouped.group_size`` answers ``k = 1`` for every non-accelerator state, so the
 host leg measures one centre per ``__call__``.
 On the accelerator statics the group is
-``k = max(1, min(ACCELERATOR_GROUP = 8, GROUP_ROW_BUDGET // pop_size, K))``,
-capped at the table's own slot count: a ``K = 20`` table is 2 grouped calls of
-``k = 8`` (800 rows at ``P = 100``, 4 000 at ``P = 500``) plus its 4 trailing
-rows, and 5 grouped calls of ``k = 4`` (4 000 rows) with no tail at
-``P = 1000``, where the row budget binds before the group cap does.
+``k = max(1, min(ACCELERATOR_GROUP = 8, GROUP_ROW_BUDGET // pop_size, K))``
+with ``GROUP_ROW_BUDGET = 8192``, capped at the table's own slot count: a
+``K = 20`` table is 2 grouped calls of ``k = 8`` (800 rows at ``P = 100``,
+4 000 at ``P = 500`` and 8 000 at ``P = 1000``, where the row budget binds
+exactly at the group cap) plus its 4 trailing rows.
 The grouped leg scans ``K // k`` **groups**: one iteration gathers the ``k``
 centre rows of its group, merges them with ``grouped.centre_batch`` and makes
 one ``measure_distance`` call against the ``k``-times tiled digest, and at most
@@ -342,9 +342,8 @@ class DistanceRows:
             count, so that tail is never the whole table.
             ``k`` is ``max(1, min(ACCELERATOR_GROUP, GROUP_ROW_BUDGET // P, K))``,
             so a 20-slot table is 2 grouped calls of ``k = 8`` plus a 4-row tail
-            at ``P = 100``/``500``, 5 grouped calls of ``k = 4`` and no tail at
-            ``P = 1000``, and one grouped call of ``k == K`` for a table of at
-            most 8 slots.
+            at ``P = 100``/``500``/``1000`` (800 / 4 000 / 8 000 rows), and one
+            grouped call of ``k == K`` for a table of at most 8 slots.
             A tail row is measured at the table's own width -- the ``(P,)`` the
             plain digest answers, ``reshape`` d to ``(1, P)`` -- so the
             concatenation stacks one dtype and one row width in row order.
