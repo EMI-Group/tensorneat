@@ -1,0 +1,906 @@
+{
+  "schema": "tensorneat-jax-device/1",
+  "meta": {
+    "command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python benchmarks/jax_device_measure.py matrix --cases xor_p100,xor_p500,xor_p1000,xor3d_p500,custom_pagie_p500 --platform rocm --warmup 3 --generations 20 --seed 42 --json benchmarks/results/jax_rocm_2026-11-07.json --out benchmarks/GPU.md --report-title 'TensorNEAT accelerator measurement \u2014 the frozen JAX implementation on the MI300X VF' --report-note 'The old-side rows of this record are the frozen pre-rewrite JAX implementation (`benchmarks/legacy_jax`) measured on the same MI300X the accelerator record used: seed 42, 3 warmup + 20 timed generations, one fresh process per row, `jax.jit(...).lower().compile()` timed separately under `JAX_FLAGS`-class `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (without it the legacy jitted step dies with HIP_ERROR_InvalidValue); the new-side columns are read from `benchmarks/results/gpu_rocm_xla_2026-11-07.json` (tree `93ce3cac`) and belong to that session.'",
+    "report_title": "TensorNEAT accelerator measurement \u2014 the frozen JAX implementation on the MI300X VF",
+    "report_note": "The old-side rows of this record are the frozen pre-rewrite JAX implementation (`benchmarks/legacy_jax`) measured on the same MI300X the accelerator record used: seed 42, 3 warmup + 20 timed generations, one fresh process per row, `jax.jit(...).lower().compile()` timed separately under `JAX_FLAGS`-class `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (without it the legacy jitted step dies with HIP_ERROR_InvalidValue); the new-side columns are read from `benchmarks/results/gpu_rocm_xla_2026-11-07.json` (tree `93ce3cac`) and belong to that session.",
+    "created_utc": "2026-11-07T12:22:23+00:00",
+    "session_utc": {
+      "start": "2026-11-07T12:22:23+00:00",
+      "end": "2026-11-07T12:23:25+00:00"
+    },
+    "protocol": {
+      "implementation": "old -- the frozen pre-rewrite JAX implementation under benchmarks/legacy_jax (import tensorneat_legacy)",
+      "worker": "benchmarks/harness/worker.py --impl old --backend jax, so a row is the same tensorneat-bench/1 run the CPU harness records",
+      "one_configuration_per_process": true,
+      "rows_strictly_sequential": true,
+      "warmup_generations": 3,
+      "timed_generations": 20,
+      "seed": 42,
+      "repeat": "one repeat per row (repeat 0)",
+      "threads": 0,
+      "timed_region": "one compiled generation (jax.jit(pipeline.step)), timed with time.perf_counter() around the whole call including the jax.device_get host sync",
+      "compile_measured_separately": true,
+      "compile_charged_to_a_generation": false,
+      "device_verification": "a separate probe process, spawned with the row's exact environment, imports jax and reports default_backend/devices/device_kind; a row whose default_backend is not the one --platform promises is an error row",
+      "row_environment": "JAX_PLATFORMS=<platform>, XLA_PYTHON_CLIENT_PREALLOCATE=false and XLA_FLAGS=<the recorded workaround> are exported to every child (probe and worker); an empty --xla-flags removes XLA_FLAGS instead of inheriting it",
+      "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB, a process-lifetime high-water mark, which is why one row is one process",
+      "logging_in_timed_region": false,
+      "new_side_columns": "never re-measured here: read from a committed 'tensorneat-gpu/1' accelerator record at render time",
+      "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+    },
+    "platform": "rocm",
+    "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+    "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+    "cases": [
+      "xor_p100",
+      "xor_p500",
+      "xor_p1000",
+      "xor3d_p500",
+      "custom_pagie_p500"
+    ],
+    "new_targets": [
+      "xla-rocm",
+      "iree-rocm"
+    ],
+    "new_source": {
+      "path": "benchmarks/results/gpu_rocm_xla_2026-11-07.json",
+      "git_commit": "93ce3cac122fef34edc00093d3a3d2b4b9bbf5f7",
+      "session_utc": {
+        "start": "2026-11-07T10:29:06+00:00",
+        "end": "2026-11-07T10:32:39+00:00"
+      }
+    },
+    "forward_sources": {
+      "old": {
+        "path": "benchmarks/results/forward_jax_rocm_2026-11-07.json",
+        "git_commit": "54683c3e3d9b85239d60213beffbf5ad4532efa6",
+        "session_utc": {
+          "start": "2026-11-07T12:21:02+00:00",
+          "end": "2026-11-07T12:21:54+00:00"
+        }
+      },
+      "new": {
+        "path": "benchmarks/results/forward.json",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
+        "session_utc": {
+          "start": "2026-11-07T08:17:07+00:00",
+          "end": "2026-11-07T08:19:54+00:00"
+        }
+      }
+    },
+    "env": {
+      "python": "3.12.3",
+      "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+      "machine": "x86_64",
+      "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+      "cpu_count": 20,
+      "memory_mb": 241611,
+      "numpy": "2.5.4",
+      "jax": "0.10.2",
+      "evoxc": "0.1.0",
+      "tensorneat": "0.2.0",
+      "threads": null,
+      "thread_env": {
+        "OMP_NUM_THREADS": null,
+        "MKL_NUM_THREADS": null,
+        "OPENBLAS_NUM_THREADS": null,
+        "NUMEXPR_NUM_THREADS": null,
+        "XLA_FLAGS": null
+      },
+      "loadavg": [
+        1.24,
+        0.78,
+        0.69
+      ],
+      "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+      "git_dirty": false,
+      "git_dirty_paths": []
+    },
+    "device": {
+      "error": null,
+      "python": "3.12.3",
+      "jax_version": "0.10.2",
+      "jaxlib_version": "0.10.2",
+      "jax_default_backend": "gpu",
+      "jax_devices": [
+        "rocm:0"
+      ],
+      "device_kinds": [
+        "AMD Instinct MI300X VF"
+      ],
+      "platforms_env": "rocm",
+      "preallocate_env": "false",
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+      "plugin_source": "jax_plugins discovery",
+      "platform": "rocm",
+      "expected_backend": "gpu",
+      "verified": true,
+      "plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      }
+    },
+    "jax_version": "0.10.2",
+    "jaxlib_version": "0.10.2",
+    "pjrt_plugin": {
+      "path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+      "basename": "xla_rocm_plugin.so",
+      "size_bytes": 503453288,
+      "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+    }
+  },
+  "records": [
+    {
+      "case": "xor_p100",
+      "impl": "old",
+      "backend": "jax",
+      "platform": "rocm",
+      "seed": 42,
+      "warmup": 3,
+      "timed": 20,
+      "threads": 0,
+      "status": "ok",
+      "error": null,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:22:23+00:00",
+      "device": {
+        "error": null,
+        "python": "3.12.3",
+        "jax_version": "0.10.2",
+        "jaxlib_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "device_kinds": [
+          "AMD Instinct MI300X VF"
+        ],
+        "platforms_env": "rocm",
+        "preallocate_env": "false",
+        "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "plugin_source": "jax_plugins discovery",
+        "platform": "rocm",
+        "expected_backend": "gpu",
+        "verified": true,
+        "plugin": {
+          "path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+          "basename": "xla_rocm_plugin.so",
+          "size_bytes": 503453288,
+          "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+        }
+      },
+      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor_p100 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_lfy12ac_/worker.json",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.1,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "gens_to_target": true,
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "xor_p100",
+        "notes": "",
+        "pop_size": 100,
+        "problem": "XOR",
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "1000": 157.0,
+          "500": 109.0
+        },
+        "seed": 42
+      },
+      "worker_env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": "0.10.2",
+        "loadavg": [
+          0.7,
+          0.61,
+          0.63
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": "0.2.0",
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "threads": 0
+      },
+      "compile_s": 6.8394813819322735,
+      "generations_consumed_before_timing": 0,
+      "ms_per_generation": {
+        "mean": 4.919401672668755,
+        "median": 4.93875565007329,
+        "min": 4.535570042207837,
+        "max": 5.179696949198842,
+        "samples": [
+          4.584028152748942,
+          4.535570042207837,
+          4.700792022049427,
+          4.801834933459759,
+          4.839286906644702,
+          4.9858849961310625,
+          5.055117886513472,
+          5.122274160385132,
+          5.033622030168772,
+          5.179696949198842,
+          5.028096027672291,
+          5.022790050134063,
+          4.990539979189634,
+          4.9385621678084135,
+          4.921266110613942,
+          4.930706927552819,
+          4.912154981866479,
+          4.938949132338166,
+          4.966099048033357,
+          4.9007609486579895
+        ]
+      },
+      "gens_per_second": 202.4801530695612,
+      "peak_rss_mib": 3320.82421875,
+      "loadavg_start": [
+        0.62,
+        0.59,
+        0.62
+      ],
+      "loadavg_end": [
+        0.7,
+        0.61,
+        0.63
+      ],
+      "final_max_fitness": -0.24134759604930878
+    },
+    {
+      "case": "xor_p500",
+      "impl": "old",
+      "backend": "jax",
+      "platform": "rocm",
+      "seed": 42,
+      "warmup": 3,
+      "timed": 20,
+      "threads": 0,
+      "status": "ok",
+      "error": null,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:22:35+00:00",
+      "device": {
+        "error": null,
+        "python": "3.12.3",
+        "jax_version": "0.10.2",
+        "jaxlib_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "device_kinds": [
+          "AMD Instinct MI300X VF"
+        ],
+        "platforms_env": "rocm",
+        "preallocate_env": "false",
+        "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "plugin_source": "jax_plugins discovery",
+        "platform": "rocm",
+        "expected_backend": "gpu",
+        "verified": true,
+        "plugin": {
+          "path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+          "basename": "xla_rocm_plugin.so",
+          "size_bytes": 503453288,
+          "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+        }
+      },
+      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor_p500 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_szxifgtg/worker.json",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.1,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "gens_to_target": true,
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "xor_p500",
+        "notes": "",
+        "pop_size": 500,
+        "problem": "XOR",
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "1000": 157.0,
+          "500": 109.0
+        },
+        "seed": 42
+      },
+      "worker_env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": "0.10.2",
+        "loadavg": [
+          0.83,
+          0.64,
+          0.64
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": "0.2.0",
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "threads": 0
+      },
+      "compile_s": 6.748448814032599,
+      "generations_consumed_before_timing": 0,
+      "ms_per_generation": {
+        "mean": 10.739350214134902,
+        "median": 10.773819056339562,
+        "min": 10.225689969956875,
+        "max": 10.884610004723072,
+        "samples": [
+          10.869859950616956,
+          10.741485981270671,
+          10.83492604084313,
+          10.789738036692142,
+          10.82448405213654,
+          10.716693010181189,
+          10.778205003589392,
+          10.874668136239052,
+          10.835533030331135,
+          10.84814197383821,
+          10.748288128525019,
+          10.61896700412035,
+          10.852190898731351,
+          10.725360829383135,
+          10.548997204750776,
+          10.884610004723072,
+          10.659453924745321,
+          10.640277992933989,
+          10.769433109089732,
+          10.225689969956875
+        ]
+      },
+      "gens_per_second": 92.81759743417791,
+      "peak_rss_mib": 3443.3828125,
+      "loadavg_start": [
+        0.7,
+        0.61,
+        0.63
+      ],
+      "loadavg_end": [
+        0.83,
+        0.64,
+        0.64
+      ],
+      "final_max_fitness": -0.20228970050811768
+    },
+    {
+      "case": "xor_p1000",
+      "impl": "old",
+      "backend": "jax",
+      "platform": "rocm",
+      "seed": 42,
+      "warmup": 3,
+      "timed": 20,
+      "threads": 0,
+      "status": "ok",
+      "error": null,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:22:48+00:00",
+      "device": {
+        "error": null,
+        "python": "3.12.3",
+        "jax_version": "0.10.2",
+        "jaxlib_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "device_kinds": [
+          "AMD Instinct MI300X VF"
+        ],
+        "platforms_env": "rocm",
+        "preallocate_env": "false",
+        "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "plugin_source": "jax_plugins discovery",
+        "platform": "rocm",
+        "expected_backend": "gpu",
+        "verified": true,
+        "plugin": {
+          "path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+          "basename": "xla_rocm_plugin.so",
+          "size_bytes": 503453288,
+          "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+        }
+      },
+      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor_p1000 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_ecbwb4er/worker.json",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.1,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "gens_to_target": true,
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "xor_p1000",
+        "notes": "",
+        "pop_size": 1000,
+        "problem": "XOR",
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "1000": 157.0,
+          "500": 109.0
+        },
+        "seed": 42
+      },
+      "worker_env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": "0.10.2",
+        "loadavg": [
+          1.26,
+          0.74,
+          0.67
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": "0.2.0",
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "threads": 0
+      },
+      "compile_s": 6.479150749975815,
+      "generations_consumed_before_timing": 0,
+      "ms_per_generation": {
+        "mean": 10.37467501591891,
+        "median": 10.450887377373874,
+        "min": 9.551824070513248,
+        "max": 10.593760991469026,
+        "samples": [
+          10.54578903131187,
+          10.4262949898839,
+          10.41642902418971,
+          10.249919025227427,
+          10.363884037360549,
+          10.530248982831836,
+          10.393272154033184,
+          10.461702942848206,
+          10.45112987048924,
+          10.37238398566842,
+          10.593760991469026,
+          10.450644884258509,
+          10.57030213996768,
+          10.555293876677752,
+          10.501502081751823,
+          10.471977991983294,
+          10.428720153868198,
+          10.481946170330048,
+          9.551824070513248,
+          9.67647391371429
+        ]
+      },
+      "gens_per_second": 95.68565461388434,
+      "peak_rss_mib": 3470.4375,
+      "loadavg_start": [
+        0.83,
+        0.64,
+        0.64
+      ],
+      "loadavg_end": [
+        1.26,
+        0.74,
+        0.67
+      ],
+      "final_max_fitness": -0.18571680784225464
+    },
+    {
+      "case": "xor3d_p500",
+      "impl": "old",
+      "backend": "jax",
+      "platform": "rocm",
+      "seed": 42,
+      "warmup": 3,
+      "timed": 20,
+      "threads": 0,
+      "status": "ok",
+      "error": null,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:23:00+00:00",
+      "device": {
+        "error": null,
+        "python": "3.12.3",
+        "jax_version": "0.10.2",
+        "jaxlib_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "device_kinds": [
+          "AMD Instinct MI300X VF"
+        ],
+        "platforms_env": "rocm",
+        "preallocate_env": "false",
+        "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "plugin_source": "jax_plugins discovery",
+        "platform": "rocm",
+        "expected_backend": "gpu",
+        "verified": true,
+        "plugin": {
+          "path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+          "basename": "xla_rocm_plugin.so",
+          "size_bytes": 503453288,
+          "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+        }
+      },
+      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case xor3d_p500 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_3jpb6_if/worker.json",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.05,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 3,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "gens_to_target": true,
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "xor3d_p500",
+        "notes": "",
+        "pop_size": 500,
+        "problem": "XOR3d",
+        "problem_config": {
+          "class": "XOR3d"
+        },
+        "reference_ms_per_generation": {},
+        "seed": 42
+      },
+      "worker_env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": "0.10.2",
+        "loadavg": [
+          1.2,
+          0.75,
+          0.67
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": "0.2.0",
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "threads": 0
+      },
+      "compile_s": 6.883873296901584,
+      "generations_consumed_before_timing": 0,
+      "ms_per_generation": {
+        "mean": 8.320209686644375,
+        "median": 8.874712511897087,
+        "min": 5.790263181552291,
+        "max": 9.501688880845904,
+        "samples": [
+          5.790263181552291,
+          6.184329045936465,
+          6.398933939635754,
+          6.920708110556006,
+          7.21025699749589,
+          7.749075070023537,
+          8.055601036176085,
+          8.478812174871564,
+          8.957757148891687,
+          8.839205140247941,
+          8.910219883546233,
+          8.956453995779157,
+          9.199307998642325,
+          9.234337136149406,
+          9.162732865661383,
+          9.492823155596852,
+          9.501688880845904,
+          9.336781920865178,
+          9.328479180112481,
+          8.696426870301366
+        ]
+      },
+      "gens_per_second": 112.67970637465041,
+      "peak_rss_mib": 3441.05078125,
+      "loadavg_start": [
+        1.24,
+        0.74,
+        0.67
+      ],
+      "loadavg_end": [
+        1.2,
+        0.75,
+        0.67
+      ],
+      "final_max_fitness": -0.25
+    },
+    {
+      "case": "custom_pagie_p500",
+      "impl": "old",
+      "backend": "jax",
+      "platform": "rocm",
+      "seed": 42,
+      "warmup": 3,
+      "timed": 20,
+      "threads": 0,
+      "status": "ok",
+      "error": null,
+      "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+      "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
+      "timestamp_utc": "2026-11-07T12:23:13+00:00",
+      "device": {
+        "error": null,
+        "python": "3.12.3",
+        "jax_version": "0.10.2",
+        "jaxlib_version": "0.10.2",
+        "jax_default_backend": "gpu",
+        "jax_devices": [
+          "rocm:0"
+        ],
+        "device_kinds": [
+          "AMD Instinct MI300X VF"
+        ],
+        "platforms_env": "rocm",
+        "preallocate_env": "false",
+        "xla_flags": "--xla_gpu_enable_command_buffer=WHILE",
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "plugin_source": "jax_plugins discovery",
+        "platform": "rocm",
+        "expected_backend": "gpu",
+        "verified": true,
+        "plugin": {
+          "path": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+          "basename": "xla_rocm_plugin.so",
+          "size_bytes": 503453288,
+          "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+        }
+      },
+      "worker_command": "/root/tensorneat/.genesis/workers/worker_T1_A69/.venv/bin/python /root/tensorneat/.genesis/workers/worker_T1_A69/benchmarks/harness/worker.py --case custom_pagie_p500 --impl old --backend jax --repeat 0 --seed 42 --generations 20 --warmup 3 --threads 0 --out /tmp/jax_device_measure_ac1_dv20/worker.json",
+      "case_config": {
+        "algorithm": "NEAT",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "family": "func_fit",
+        "fitness_target": -0.01,
+        "generation_limit": 150,
+        "genome": "DefaultGenome",
+        "genome_config": {
+          "class": "DefaultGenome",
+          "max_conns": 100,
+          "max_nodes": 50,
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "output_transform": "sigmoid"
+        },
+        "gens_to_target": true,
+        "impls": [
+          "old",
+          "new"
+        ],
+        "name": "custom_pagie_p500",
+        "notes": "per-impl divergence: the legacy side seeds the global numpy RNG and vmaps a jax-typed func; the new side samples from default_rng(seed) with a numpy func \u2014 same distribution, different draws",
+        "pop_size": 500,
+        "problem": "CustomFuncFit",
+        "problem_config": {
+          "class": "CustomFuncFit",
+          "func": "pagie",
+          "low_bounds": [
+            -1.0,
+            -1.0
+          ],
+          "method": "sample",
+          "num_samples": 500,
+          "upper_bounds": [
+            1.0,
+            1.0
+          ]
+        },
+        "reference_ms_per_generation": {},
+        "seed": 42
+      },
+      "worker_env": {
+        "cpu_count": 20,
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "evoxc": "0.1.0",
+        "git_commit": "83a8574faf2eb81f6c1b4a29376cc980d5509f67",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "jax": "0.10.2",
+        "loadavg": [
+          1.17,
+          0.76,
+          0.68
+        ],
+        "machine": "x86_64",
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "python": "3.12.3",
+        "tensorneat": "0.2.0",
+        "thread_env": {
+          "MKL_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "XLA_FLAGS": "--xla_gpu_enable_command_buffer=WHILE"
+        },
+        "threads": 0
+      },
+      "compile_s": 6.787701603025198,
+      "generations_consumed_before_timing": 0,
+      "ms_per_generation": {
+        "mean": 12.552416895050555,
+        "median": 12.53890700172633,
+        "min": 12.181394034996629,
+        "max": 12.863492127507925,
+        "samples": [
+          12.181394034996629,
+          12.420498067513108,
+          12.455018004402518,
+          12.450312031432986,
+          12.574609136208892,
+          12.613230850547552,
+          12.451783986762166,
+          12.740642996504903,
+          12.561658164486289,
+          12.808525003492832,
+          12.50962889753282,
+          12.537294998764992,
+          12.425009859725833,
+          12.4601349234581,
+          12.540519004687667,
+          12.386260088533163,
+          12.626925949007273,
+          12.863492127507925,
+          12.726612854748964,
+          12.714786920696497
+        ]
+      },
+      "gens_per_second": 79.75176782651967,
+      "peak_rss_mib": 3467.58203125,
+      "loadavg_start": [
+        1.2,
+        0.75,
+        0.67
+      ],
+      "loadavg_end": [
+        1.17,
+        0.76,
+        0.68
+      ],
+      "final_max_fitness": -0.042952608317136765
+    }
+  ]
+}

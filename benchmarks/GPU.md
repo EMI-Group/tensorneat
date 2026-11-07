@@ -203,6 +203,82 @@ Every xla row of this record runs with `XLA_FLAGS=--xla_gpu_enable_command_buffe
 <!-- END MEASURED (gpu_measure.py) -->
 ## Against the frozen JAX implementation, same device
 <!-- BEGIN MEASURED (jax_device_measure.py) -->
+## Frozen JAX on the device — old vs new per generation
+
+**Verdict: the new evoxc engine is faster per generation than the frozen JAX implementation on the same device on most compared cases — `xla-rocm` by 1.29x–2.67x, `iree-rocm` by 0.46x–0.85x on 0 of 5 cases, and slower on `xor_p100` (`iree-rocm` 0.46x), `xor_p500` (`iree-rocm` 0.85x), `xor_p1000` (`iree-rocm` 0.69x), `xor3d_p500` (`iree-rocm` 0.69x), `custom_pagie_p500` (`iree-rocm` 0.79x) (old ÷ new, medians of one repeat per row).**
+The old side is `benchmarks/legacy_jax` (`import tensorneat_legacy`) — the frozen pre-rewrite implementation — compiled with `jax.jit(pipeline.step).lower(state).compile()` and measured by one `benchmarks/harness/worker.py` process per row, exactly as the CPU matrix measures it.
+The new side is the committed accelerator record's own `xla` and `iree` rows on the same device, read at render time and never re-measured, so each speed-up is a per-generation ratio of two sessions on one physical device.
+
+### Per generation
+
+`median` is one old-side worker process's median over its timed generations and `min – max` that row's own per-generation spread — the uncertainty measure here, because a single median is not a distribution.
+The `xla` and `iree` columns are the same case's medians in the accelerator record this block names under `### Provenance`; their `build s` is that record's one-off compile, reported beside the timing and never charged to a generation.
+`n/a` means that leg has no `ok` row (see `### Blocked rows`); it is never filled in from another session.
+
+| Case | old JAX ms/gen (median, min–max) | `xla` ms/gen | `iree` ms/gen | old ÷ `xla` | old ÷ `iree` | old JAX compile s | `xla` build s | `iree` build s |
+|---|---|---|---|---|---|---|---|---|
+| `xor_p100` | 4.939 (4.536 – 5.180) | 3.825 | 10.633 | 1.29x | 0.46x | 6.839 | 2.034 | 7.799 |
+| `xor_p500` | 10.774 (10.226 – 10.885) | 4.033 | 12.744 | 2.67x | 0.85x | 6.748 | 2.244 | 8.017 |
+| `xor_p1000` | 10.451 (9.552 – 10.594) | 4.968 | 15.203 | 2.10x | 0.69x | 6.479 | 2.354 | 8.193 |
+| `xor3d_p500` | 8.875 (5.790 – 9.502) | 4.153 | 12.910 | 2.14x | 0.69x | 6.884 | 2.211 | 8.063 |
+| `custom_pagie_p500` | 12.539 (12.181 – 12.863) | 5.891 | 15.873 | 2.13x | 0.79x | 6.788 | 2.607 | 8.406 |
+
+### Batch forward
+
+One forward pass of a whole population of differently-shaped networks: the RL rollout pays this once per timestep, which is why it is reported beside the generation and not folded into it.
+Both columns are `forward_measure.py` records joined row for row — the old side's `jax` target and the new side's `xla-rocm` target, medians over that row's timed passes — and nothing here is re-measured or re-derived (see `### Provenance`).
+`setup / build` is the JAX side's one-off cost, reported beside the timing and never charged to a pass; `n/a` means a leg has no `ok` row for that workload.
+
+| Workload | rows | old JAX ms/pass | `xla` ms/pass | speed-up | jax setup / build s | `xla` build s |
+|---|---|---|---|---|---|---|
+| `xor_p100_s4` | 400 | 1.435 | 0.419 | 3.42x | 3.320 / 0.285 | 0.401 |
+| `xor_p500_s4` | 2000 | 1.660 | 0.481 | 3.45x | 3.263 / 0.299 | 0.545 |
+| `xor_p1000_s4` | 4000 | 1.611 | 0.497 | 3.24x | 3.299 / 0.296 | 0.678 |
+| `xor_p100_s500` | 50000 | 3.081 | 0.745 | 4.13x | 3.345 / 0.316 | 0.498 |
+| `xor_p500_s500` | 250000 | 7.366 | 1.326 | 5.55x | 3.264 / 0.455 | 0.840 |
+| `xor_p1000_s500` | 500000 | 13.745 | 2.229 | 6.17x | 3.322 / 0.321 | 1.363 |
+| `cartpole_p100_s1` | 100 | 1.439 | 0.450 | 3.20x | 5.740 / 0.271 | 0.571 |
+
+### Environment
+
+Measured conditions, not a verdict: these numbers are comparable with another session on the same device and tree, and with nothing else.
+
+| Item | Value |
+|---|---|
+| `--platform` → `jax.default_backend()` | `'rocm'` → `'gpu'` (expected `'gpu'`, verified yes) |
+| Device(s) / `device_kind` | `rocm:0`; device_kind `AMD Instinct MI300X VF` |
+| JAX / jaxlib | 0.10.2 / 0.10.2 |
+| `JAX_PLATFORMS` (as the rows saw it) | `'rocm'` |
+| `XLA_FLAGS` | `--xla_gpu_enable_command_buffer=WHILE` (ROCm command-buffer workaround: without it the legacy jitted step fails with `HIP_ERROR_InvalidValue`) |
+| XLA allocator policy | `XLA_PYTHON_CLIENT_PREALLOCATE=false` — allocate on demand instead of reserving 75 % of a shared device up front, which OOMed rows |
+| PJRT plugin (the jax ROCm backend *is* this plugin) | `xla_rocm_plugin.so` (480.1 MiB, sha256 `8e8319b48fcc…`) |
+| Load average (start of each row) | 0.62 – 1.24 (1-minute sample at each row's start) |
+| Python / numpy | 3.12.3 / 2.5.4 |
+| CPU cores / platform | 20 / Linux-6.8.0-146-generic-x86_64-with-glibc2.39 |
+| Git commit (code under test) | `83a8574faf2e` (clean — generated report artifacts are not counted) |
+| Session (UTC) | 2026-11-07T12:22:23+00:00 – 2026-11-07T12:23:25+00:00 |
+
+### Provenance
+
+Old-side rows (this block's `old JAX` and `old ÷ …` columns): `benchmarks/results/jax_rocm_2026-11-07.json` — 5 row(s), 5 ok and 0 error — measured at git `83a8574faf2e` (clean — generated report artifacts are not counted) in the session 2026-11-07T12:22:23+00:00 – 2026-11-07T12:23:25+00:00.
+New-side columns (`xla`, `iree`, their `build s`): `benchmarks/results/gpu_rocm_xla_2026-11-07.json` at git `93ce3cac122f` (session 2026-11-07T10:29:06+00:00 – 2026-11-07T10:32:39+00:00), schema `tensorneat-gpu/1` — read at render time, never re-measured here and never hard-coded.
+Batch-forward rows: `benchmarks/results/forward_jax_rocm_2026-11-07.json` at git `54683c3e3d9b` (session 2026-11-07T12:21:02+00:00 – 2026-11-07T12:21:54+00:00) (target `jax`) joined with `benchmarks/results/forward.json` at git `8c6330989a92` (session 2026-11-07T08:17:07+00:00 – 2026-11-07T08:19:54+00:00) (target `xla-rocm`), both schema `tensorneat-forward/1`.
+Protocol: seed 42, 3 warmup + 20 timed generations, one fresh process per row, one repeat per row.
+The one-off compile (`jax.jit(pipeline.step).lower(state).compile()`) is timed separately and never charged to a generation, and every quoted millisecond is a median, not a mean.
+Nothing here is a statement about HEAD: every number belongs to the record, tree and session it names.
+The old-side rows of this record are the frozen pre-rewrite JAX implementation (`benchmarks/legacy_jax`) measured on the same MI300X the accelerator record used: seed 42, 3 warmup + 20 timed generations, one fresh process per row, `jax.jit(...).lower().compile()` timed separately under `JAX_FLAGS`-class `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (without it the legacy jitted step dies with HIP_ERROR_InvalidValue); the new-side columns are read from `benchmarks/results/gpu_rocm_xla_2026-11-07.json` (tree `93ce3cac`) and belong to that session.
+
+### What is and is not comparable
+
+- Same physical device: both legs run on the accelerator this block names, and a row whose `jax.default_backend()` did not match `--platform` is an error row rather than a fast CPU number.
+- Same workload shape: one seed, the same generation count and the same `benchmarks/cases.py` case configuration on both sides.
+- Not comparable in values: the two implementations draw different PRNGs (JAX `PRNGKey` versus evoxc splitmix64), so their search trajectories differ by design and fitness is never compared here (`test/parity/` owns numerical fidelity).
+- Not a lockstep comparison: the new-side columns come from `benchmarks/results/gpu_rocm_xla_2026-11-07.json` — an earlier session on the same device at a different tree — so each ratio is a per-generation ratio of two sessions, not one interleaved run.
+- One repeat per row: the per-row `min – max` is the uncertainty measure and the medians are point estimates, so a small ratio difference is noise, not a result.
+
+### Blocked rows
+
+None: every planned old-side row measured on the device. This section is written from the record, so it reappears the moment a leg fails.
 <!-- END MEASURED (jax_device_measure.py) -->
 ## Limitations
 
