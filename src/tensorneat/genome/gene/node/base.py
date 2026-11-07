@@ -34,9 +34,14 @@ def _takes_scalars(fn: Callable) -> bool:
     forward pass materialised once (``..step._PreparedScalars``) — to every configured
     aggregation / activation that declares a ``scalars`` parameter, so its literals become the
     pass's prepared tensors instead of one fresh ``enp.full`` per unrolled level (``evoxc``
-    merges no constants). A kernel that does not declare it keeps the exact two/one-argument
-    call it always had, which is why the committed ``common.functions`` tree — where no kernel
-    accepts ``scalars`` yet — traces the very same graph as before.
+    merges no constants).
+    ``common.functions.act.sigmoid`` and all six ``common.functions.agg`` kernels (``sum``,
+    ``product``, ``max``, ``min``, ``maxabs``, ``mean``) declare ``scalars=None``, so this
+    answers ``True`` for every shipped option and the mapping is what a shipped forward pass
+    actually consumes: the host level body emits no ``constant`` op of its own.
+    A kernel that accepts the mapping reads it as ``scalars.get(value)``, so a pass whose bundle
+    lacks that value falls back to the kernel's own literal and still traces; a kernel that
+    declares no ``scalars`` parameter keeps its own literal and the exact two/one-argument call.
 
     This is a host-side signature read, done once per configured option by
     :meth:`BaseNode._scalars_flags`, never per level and never on a traced value.
@@ -234,9 +239,10 @@ class BaseNode(BaseGene):
             attrs = self.prepare(attrs, is_output_node)
         aggregated = self.aggregate(state, attrs, messages, valid_mask)
         z = self.combine(state, attrs, aggregated)
-        # ``scalars`` is offered only to the options that declare it (``_scalars_flags``): a
-        # kernel of the unpatched ``common.functions`` tree takes ``z`` alone, so the call shape
-        # — and therefore the traced graph and every value — is unchanged for it.
+        # ``scalars`` is offered only to the options that declare it (``_scalars_flags``); every
+        # shipped option does (``sigmoid`` and all six ``agg`` kernels take ``scalars=None``), and
+        # an option that accepts it reads a missing key as its own literal (``scalars.get(value)``),
+        # so a pass whose bundle lacks the value still traces.
         mapping = None if attrs.scalars is None else attrs.scalars.mapping
         flags = self._scalars_flags("activation")
         return select_cascade(
@@ -464,9 +470,11 @@ class BaseNode(BaseGene):
             zero = enp.zeros((), dtype=evoxc.float32)
             scalars = None
         # The prepared rank-0 constants are offered only to the options that declare a
-        # ``scalars`` parameter (``_scalars_flags``, cached per gene): every kernel of the
-        # unpatched ``common.functions`` tree keeps its own two-argument call, and the traced
-        # graph is the same one it was before this mapping existed.
+        # ``scalars`` parameter (``_scalars_flags``, cached per gene): every shipped option does
+        # (``sigmoid`` and all six ``agg`` kernels take ``scalars=None``), so each aggregation's
+        # neutral element is this pass's ``zero``; an option that accepts the mapping reads a
+        # missing key as its own literal, and one that declares no parameter keeps its own literal
+        # and two-argument call.
         mapping = None if scalars is None else scalars.mapping
         flags = self._scalars_flags("aggregation")
         aggregated = select_cascade(
