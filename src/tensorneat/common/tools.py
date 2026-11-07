@@ -56,7 +56,7 @@ Sentinel **constants are hoistable**: every sentinel is emitted as a rank-0
 change the result dtype), so a helper called from inside a ``scan``/``cond``
 body would pay one such op per iteration. :func:`fetch_first` and
 :func:`argmin_with_mask` therefore also accept a pre-built constant, which is
-used verbatim; build it once at trace time and close over it. Helpers that do
+used verbatim; build it once at trace time and close over it. Helpers without
 that spelling are listed in ``common/CONTEXT.md``.
 
 Public surface without a production caller: :func:`fetch_random`,

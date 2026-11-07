@@ -489,8 +489,8 @@ def edge_order(dst, edge_valid, max_nodes, max_conns, kernel_mode="host"):
         the ``order``/``src`` gathers of :func:`incoming_table`, which is what makes the
         window a gather instead of a scatter (see that function's ``Notes``). Only the
         **inverse** permutation is formulation-dependent: the host route inverts with a
-        ``(P, C + N)`` flat ``scatter`` (75 000 serialised writes at ``xor_p500``,
-        measured at 1.40 ms of a ROCm generation) and the accelerator route counts the
+        ``(P, C + N)`` flat ``scatter`` (75 000 serialised update elements at
+        ``xor_p500``) and the accelerator route counts the
         same predicate over a ``(P, N, C)`` table instead. The ``argsort`` and the
         returned ``order`` are identical on both routes.
     """
