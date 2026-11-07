@@ -9,6 +9,7 @@ scaffolding; the attr tables and the concrete combine algebra belong to the
 families.
 """
 
+import inspect
 from typing import Any, Callable, NamedTuple, Sequence
 
 import evoxc
@@ -20,6 +21,37 @@ from ....common.functions import FunctionManager
 from ....common.functions.act import ACT_IDENTITY
 from ..base import BaseGene, column, option_masks, select_cascade
 from ...window import any_slot, fill
+
+
+#: ``BaseNode.__dict__`` key holding the cached per-option "accepts ``scalars``" flags.
+_SCALARS_FLAG_CACHE = "_option_scalars_flags"
+
+
+def _takes_scalars(fn: Callable) -> bool:
+    """Whether one option callable accepts the prepared-scalar mapping.
+
+    The node gene offers ``{0.0: zero, 1.0: one}`` — the rank-0 ``float32`` constants one
+    forward pass materialised once (``..step._PreparedScalars``) — to every configured
+    aggregation / activation that declares a ``scalars`` parameter, so its literals become the
+    pass's prepared tensors instead of one fresh ``enp.full`` per unrolled level (``evoxc``
+    merges no constants). A kernel that does not declare it keeps the exact two/one-argument
+    call it always had, which is why the committed ``common.functions`` tree — where no kernel
+    accepts ``scalars`` yet — traces the very same graph as before.
+
+    This is a host-side signature read, done once per configured option by
+    :meth:`BaseNode._scalars_flags`, never per level and never on a traced value.
+
+    Args:
+        fn: One configured aggregation or activation callable.
+
+    Returns:
+        ``True`` iff ``"scalars"`` is a named parameter of ``fn``; ``False`` for a builtin or
+        any callable whose signature cannot be read.
+    """
+    try:
+        return "scalars" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 class NodeOperands(NamedTuple):
@@ -46,13 +78,19 @@ class NodeOperands(NamedTuple):
             :meth:`BaseNode.forward` skip its ``select(is_output_node, z, activated)``.
         zero: Rank-0 ``float32`` zero, shared by the dispatch of every level (the
             cascade's "no option matched" value) instead of materialising one constant
-            per level.
+            per level. When a pass prepared its scalars (``scalars`` below) this *is* that
+            pass's ``zero`` tensor, so the "no option matched" value and an ``agg.sum``
+            neutral padding that took the same mapping share one graph constant.
+        scalars: The pass's prepared rank-0 constants (``_StepStatics.scalars``: ``zero``,
+            ``one`` and their ``float -> tensor`` mapping), or ``None`` for a bundle built
+            outside a prepared pass. No per-level constant is derived from either spelling.
     """
 
     columns: tuple
     aggregation_masks: tuple
     activation_masks: tuple
     zero: Any
+    scalars: Any = None
 
 
 class BaseNode(BaseGene):
@@ -196,16 +234,53 @@ class BaseNode(BaseGene):
             attrs = self.prepare(attrs, is_output_node)
         aggregated = self.aggregate(state, attrs, messages, valid_mask)
         z = self.combine(state, attrs, aggregated)
+        # ``scalars`` is offered only to the options that declare it (``_scalars_flags``): a
+        # kernel of the unpatched ``common.functions`` tree takes ``z`` alone, so the call shape
+        # — and therefore the traced graph and every value — is unchanged for it.
+        mapping = None if attrs.scalars is None else attrs.scalars.mapping
+        flags = self._scalars_flags("activation")
         return select_cascade(
             attrs.activation_masks,
-            [fn(z) for fn in self.activation_options],
+            [
+                fn(z, mapping) if flag else fn(z)
+                for fn, flag in zip(self.activation_options, flags)
+            ],
             z,
         )
+
+    def _scalars_flags(self, kind: str) -> tuple[bool, ...]:
+        """Which configured options of ``kind`` accept the prepared-scalar mapping.
+
+        :func:`_takes_scalars` reads a signature, which is host-side work, so the answer is
+        computed once per gene instance and cached in ``self.__dict__``: :meth:`aggregate` and
+        :meth:`forward` then only read a tuple, never re-inspect a callable per level or per
+        query. The cache is keyed by no state — the option tuples are construction-time data —
+        so a second call can never produce a different answer than the first.
+
+        Args:
+            kind: ``"aggregation"`` or ``"activation"``.
+
+        Returns:
+            One flag per configured option of that kind, in option order.
+        """
+        cache = self.__dict__.get(_SCALARS_FLAG_CACHE)
+        if cache is None:
+            cache = {
+                "aggregation": tuple(
+                    _takes_scalars(fn) for fn in self.aggregation_options
+                ),
+                "activation": tuple(
+                    _takes_scalars(fn) for fn in self.activation_options
+                ),
+            }
+            self.__dict__[_SCALARS_FLAG_CACHE] = cache
+        return cache[kind]
 
     def prepare(
         self,
         attrs: evoxc.SymbolicTensor,
         is_output_node: evoxc.SymbolicTensor,
+        scalars: Any = None,
     ) -> NodeOperands:
         """Read every attribute column and resolve the option dispatch once per forward pass.
 
@@ -225,6 +300,12 @@ class BaseNode(BaseGene):
                 their activation id is forced to
                 :data:`~tensorneat.common.functions.act.ACT_IDENTITY` so the activation
                 dispatch leaves them untouched.
+            scalars: The pass's prepared rank-0 constants
+                (``_StepStatics.scalars``: a ``zero``, a ``one`` and their ``float -> tensor``
+                mapping). When given, its ``zero`` becomes :attr:`NodeOperands.zero` too, so the
+                dispatch's "no option matched" value is the same graph constant the aggregation
+                kernels are offered; ``None`` (a bundle built outside a prepared pass) keeps the
+                local ``enp.zeros`` and hands no mapping on.
 
         Returns:
             The :class:`NodeOperands` of ``attrs``.
@@ -264,7 +345,8 @@ class BaseNode(BaseGene):
             columns,
             option_masks(aggregation_ids, len(self.aggregation_options)),
             option_masks(activation_ids, len(self.activation_options)),
-            enp.zeros((), dtype=evoxc.float32),
+            enp.zeros((), dtype=evoxc.float32) if scalars is None else scalars.zero,
+            scalars,
         )
 
     def _option_ids(
@@ -349,6 +431,11 @@ class BaseNode(BaseGene):
         masks are built once per forward pass by :meth:`prepare`, not once per level, and
         the branch kernels are the configured option callables themselves.
 
+        An option that declares a ``scalars`` parameter is also handed the pass's prepared
+        ``float -> tensor`` mapping, so its neutral literal is that pass's rank-0 constant
+        (see :func:`_takes_scalars`) instead of a fresh ``enp.full`` per level; every other
+        option is called with the plain ``(messages, valid_mask)`` pair.
+
         Args:
             state: Host configuration container.
             attrs: Node attributes, ``(P, N, NA)`` float32, or the :class:`NodeOperands`
@@ -365,7 +452,7 @@ class BaseNode(BaseGene):
             its first configured option, exactly as :meth:`prepare` resolves the dispatch.
         """
         if isinstance(attrs, NodeOperands):
-            masks, zero = attrs.aggregation_masks, attrs.zero
+            masks, zero, scalars = attrs.aggregation_masks, attrs.zero, attrs.scalars
         else:
             if self.has_attr("aggregation"):
                 ids = evoxc.cast(self.attr_column(attrs, "aggregation"), evoxc.int32)
@@ -375,9 +462,19 @@ class BaseNode(BaseGene):
                 )
             masks = option_masks(ids, len(self.aggregation_options))
             zero = enp.zeros((), dtype=evoxc.float32)
+            scalars = None
+        # The prepared rank-0 constants are offered only to the options that declare a
+        # ``scalars`` parameter (``_scalars_flags``, cached per gene): every kernel of the
+        # unpatched ``common.functions`` tree keeps its own two-argument call, and the traced
+        # graph is the same one it was before this mapping existed.
+        mapping = None if scalars is None else scalars.mapping
+        flags = self._scalars_flags("aggregation")
         aggregated = select_cascade(
             masks,
-            [fn(messages, valid_mask) for fn in self.aggregation_options],
+            [
+                fn(messages, valid_mask, mapping) if flag else fn(messages, valid_mask)
+                for fn, flag in zip(self.aggregation_options, flags)
+            ],
             zero,
         )
         if not self.needs_has_valid:
