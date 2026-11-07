@@ -11,11 +11,13 @@ optional dependency; ``backend="iree"`` is the compiled backend that works end
 to end here (``uv sync --extra iree``) and, on the CPU, is still slower per
 generation than the numpy interpreter (the CPU-side record, on IREE 3.13, is
 ``benchmarks/BACKENDS.md``); ``backend="xla"`` requires a PJRT C API plugin
-``.so``, named by the ``EVOXC_PJRT_PLUGIN`` environment variable or by
-``compile_options={"plugin_path": "/path/to/plugin.so"}`` -- the ``xla-rocm``
-extra installs the AMD wheel, no CPU plugin is pip-installable, and none ships
-with the package; ``tvm`` is untested here.  There is no JAX and no PyTorch
-anywhere in the library.
+``.so``: the ``xla-rocm`` extra installs the AMD wheel and ``evoxc`` finds an
+installed ``jax_plugins/*/*_plugin.so`` by itself, while
+``compile_options={"plugin_path": "/path/to/plugin.so"}`` (or the
+``EVOXC_PJRT_PLUGIN`` environment variable) pins a different one when several
+are present -- no CPU plugin is pip-installable, and none ships with the
+package; ``tvm`` is untested here.  There is no JAX and no PyTorch anywhere in
+the library.
 
 ``device=`` is the second axis.  A device kind (``"cpu"``, ``"cuda"``,
 ``"rocm"``) or an ``evoxc.Device`` is forwarded to ``evoxc.build`` and the
@@ -126,11 +128,23 @@ the AMD one, so the plugin is part of the sync and every later sync keeps it:
 .. code-block:: bash
 
    uv sync --extra xla-rocm                  # jax-rocm7-pjrt==0.10.2
-   export EVOXC_PJRT_PLUGIN=$(uv run python -c "import sysconfig,glob,os; print(glob.glob(os.path.join(sysconfig.get_paths()['purelib'],'jax_plugins','*','*.so'))[0])")
 
 .. code-block:: python
 
    pipeline = Pipeline(..., backend="xla", device="rocm")
+
+No environment variable is needed for that single installed plugin: ``evoxc``
+(``[tool.uv.sources]`` pins it to an upstream ``main`` commit) resolves the
+plugin from ``compile_options["plugin_path"]``, then ``EVOXC_PJRT_PLUGIN``,
+then a few well-known library directories, then an installed
+``jax_plugins/<platform>/<name>_plugin.so`` probed for ``GetPjRtApi`` --
+dlopen-ed over ctypes, never imported as ``jax`` -- and
+``EVOXC_PJRT_PLUGIN_DISCOVERY=0`` turns that last scan off.  The first two
+steps are how you pin a *different* plugin when more than one is installed:
+
+.. code-block:: bash
+
+   export EVOXC_PJRT_PLUGIN=$(uv run python -c "import sysconfig,glob,os; print(glob.glob(os.path.join(sysconfig.get_paths()['purelib'],'jax_plugins','*','*.so'))[0])")
 
 ``jax-rocm7-pjrt`` is the AMD plugin wheel; on this box it lands at
 ``<site-packages>/jax_plugins/xla_rocm7/xla_rocm_plugin.so``, which is the path
@@ -139,21 +153,34 @@ is ``jax-cuda12-pjrt`` and the device kind is ``"cuda"``: install it the same
 way by pointing the ``xla-rocm`` entry in ``pyproject.toml``'s
 ``[project.optional-dependencies]`` at that wheel and re-running ``uv lock``,
 or one-off with ``uv pip install --no-deps jax-cuda12-pjrt``, which a later
-``uv sync`` prunes because no extra tracks it.  The pinned ``evoxc`` (the tag
-``uv`` resolves) does not scan ``site-packages`` for plugins: it resolves the
-plugin from ``compile_options["plugin_path"]``, then from
-``EVOXC_PJRT_PLUGIN``, then from a few well-known library directories -- and
-its availability probe takes no options and reads only that variable, so
-export it as above rather than passing ``plugin_path`` alone.  A newer ``evoxc``
-discovers an installed ``jax_plugins/*/*_plugin.so`` by itself.
+``uv sync`` prunes because no extra tracks it.
+
+.. note::
+
+   On XLA-ROCm a generation holding the RL rollout's long ``while`` can
+   intermittently SIGSEGV inside ``PJRT_LoadedExecutable_Execute`` (the FUSION
+   command-buffer / HIP-graph replay path).  The workaround is the environment
+   setting ``XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE``, read at backend
+   init and never a compile option, and it costs nothing measurable.  It is
+   what the ``xla`` figures below were measured with.
 
 Both compiled paths are bit-identical to the reference interpreter at generation
 1 (integer keys exact, attributes within two float32 ulps).  On this box's AMD
-Instinct MI300X a generation costs 3.6--13.4 ms on XLA-ROCm and 10.3--61.5 ms on
-IREE-ROCm against 43--965 ms on the numpy reference interpreter, for the six
-shipped benchmark cases at seed 42; the whole matrix -- compile times, the
-generations needed to amortise them, and the numerical cross-check -- is
+Instinct MI300X a generation costs 3.8--23.6 ms on XLA-ROCm and 10.6--67.2 ms on
+IREE-ROCm against 18.8--887.3 ms on the numpy reference interpreter, for the six
+shipped benchmark cases at seed 42, 3 warmup and 20 timed generations: XLA is
+4.91--150.61x faster than the numpy leg and 2.69--3.16x faster than IREE, buying
+that with a 2.0--2.6 s one-off compile per static shape against IREE's
+7.8--8.7 s, and the whole matrix -- compile times, the generations needed to
+amortise them, memory, and the numerical cross-check -- is
 ``benchmarks/GPU.md``.
+A single forward pass of the whole population -- the cost an RL rollout pays
+once per environment timestep -- is ahead of the frozen pre-rewrite JAX
+implementation on every measured tile: ``xla`` by 3.30x/3.25x/3.34x at
+400/2 000/4 000 evaluated rows and 4.60x/5.79x/6.39x at 50 000/250 000/500 000,
+and by 3.07x on the CartPole policy shape (1.383 ms JAX against 0.450 ms
+``xla``); ``iree`` ranges 0.92--3.68x.  That record is
+``benchmarks/FORWARD.md``.
 
 API reference
 -------------
@@ -171,3 +198,4 @@ Links
 * `Benchmark results <https://github.com/EMI-Group/tensorneat/blob/main/benchmarks/RESULTS.md>`_
 * `Backends <https://github.com/EMI-Group/tensorneat/blob/main/benchmarks/BACKENDS.md>`_
 * `Accelerator (GPU) results <https://github.com/EMI-Group/tensorneat/blob/main/benchmarks/GPU.md>`_
+* `Forward-pass results <https://github.com/EMI-Group/tensorneat/blob/main/benchmarks/FORWARD.md>`_
