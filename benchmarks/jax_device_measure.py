@@ -139,8 +139,11 @@ END_MARKER = "<!-- END MEASURED (jax_device_measure.py) -->"
 #: ``--platform`` -> the ``jax.default_backend()`` value that platform must report.
 PLATFORMS: dict[str, str] = {"rocm": "gpu", "cpu": "cpu"}
 
-#: The cases the committed accelerator record covers, in its own order (data only).
-DEFAULT_CASES = "xor_p100,xor_p500,xor_p1000,xor3d_p500,custom_pagie_p500,cartpole_p100"
+#: The cases that have a paired new-side column, in the accelerator record's order:
+#: ``cartpole_p100`` is new-only in ``cases.py`` (the legacy library has no such problem)
+#: and ``xor3d_p100``/``xor3d_p1000`` are absent from that record, so planning them would
+#: only add a row that is ``skipped`` by construction.
+DEFAULT_CASES = "xor_p100,xor_p500,xor_p1000,xor3d_p500,custom_pagie_p500"
 DEFAULT_PLATFORM = "rocm"
 DEFAULT_SEED, DEFAULT_WARMUP, DEFAULT_GENERATIONS = 42, 3, 20
 #: Seconds one row subprocess may take before it is killed and recorded as an error.
@@ -821,34 +824,44 @@ def _ratio_pairs(
     return pairs
 
 
+def _ratio_span(pairs: list[tuple[str, float]]) -> str:
+    """One target's ratio span: ``X.XXx`` when flat, else ``X.XXx–Y.YYx``."""
+    low, high = min(ratio for _, ratio in pairs), max(ratio for _, ratio in pairs)
+    return f"{low:.2f}x" if abs(high - low) < 5e-3 else f"{low:.2f}x–{high:.2f}x"
+
+
+def _target_clause(target: str, pairs: list[tuple[str, float]]) -> str:
+    """One target's self-contained claim, from its own ``(case, old / new)`` pairs."""
+    if not pairs:
+        return f"`{target}` n/a (no case measured both legs)"
+    wins = [(case, ratio) for case, ratio in pairs if ratio > 1.0]
+    losses = [(case, ratio) for case, ratio in pairs if ratio <= 1.0]
+    count = len(pairs)
+    cases = f"{count} compared case{'' if count == 1 else 's'}"
+    span = _ratio_span(pairs)
+    if not losses:
+        return f"`{target}` is {span} faster on all {cases}"
+    if not wins:
+        return f"`{target}` is slower on all {cases} ({span})"
+    named = ", ".join(f"`{case}` {ratio:.2f}x" for case, ratio in losses)
+    return (f"`{target}` is faster on {len(wins)} of {count} compared cases ({span}), "
+            f"slower on {named}")
+
+
 def _verdict_line(document: dict[str, Any], new_document: dict[str, Any]) -> str:
-    """The block's one-line verdict, derived from the two documents' medians."""
-    clauses, slower, counts = [], [], []
+    """The block's one-line verdict: one self-contained claim per new-side target."""
+    clauses, compared = [], 0
     for target in NEW_TARGETS:
         pairs = _ratio_pairs(document, new_document, target)
-        if not pairs:
-            clauses.append(f"`{target}` n/a (no case measured both legs)")
-            continue
-        counts.append(len(pairs))
-        losses = [(case, ratio) for case, ratio in pairs if ratio <= 1.0]
-        slower += [f"`{case}` (`{target}` {ratio:.2f}x)" for case, ratio in losses]
-        low, high = min(r for _, r in pairs), max(r for _, r in pairs)
-        span = f"{low:.2f}x" if abs(high - low) < 5e-3 else f"{low:.2f}x–{high:.2f}x"
-        scope = "" if not losses else f" on {len(pairs) - len(losses)} of {len(pairs)} cases"
-        clauses.append(f"`{target}` by {span}{scope}")
-    compared = min(counts) if counts else 0
+        compared += len(pairs)
+        clauses.append(_target_clause(target, pairs))
     if not compared:  # nothing comparable at all: say so instead of claiming a win
         return ("**Verdict: no case in this record has an `ok` old-side row that the "
                 "accelerator record also measured, so no same-device speed-up can be "
                 "computed — see `### Blocked rows`.**")
-    cases = f"{compared} compared case{'' if compared == 1 else 's'}"
-    faster = (f"is faster per generation than the frozen JAX implementation on the same "
-              f"device on all {cases}" if not slower else
-              "is faster per generation than the frozen JAX implementation on the same "
-              "device on most compared cases")
-    tail = "" if not slower else f", and slower on {', '.join(slower)}"
-    return (f"**Verdict: the new evoxc engine {faster} — " + ", ".join(clauses)
-            + f"{tail} (old ÷ new, medians of one repeat per row).**")
+    return ("**Verdict: the new evoxc engine against the frozen JAX implementation on the "
+            "same device — " + "; ".join(clauses)
+            + " (old ÷ new, medians of one repeat per row).**")
 
 
 def _verdict_section(document: dict[str, Any], new_document: dict[str, Any]) -> list[str]:
