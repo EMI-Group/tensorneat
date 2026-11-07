@@ -3,7 +3,7 @@
   "meta": {
     "command": "/root/tensorneat/.genesis/workers/worker_T1_A88/.venv/bin/python benchmarks/gpu_measure.py matrix --cases xor_p100,xor_p500,xor_p1000,xor3d_p500,custom_pagie_p500,cartpole_p100 --targets numpy,iree-rocm,xla-rocm --warmup 3 --generations 20 --seed 42 --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A88/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --json benchmarks/results/gpu_rocm_xla_2026-11-07_grouped.json",
     "report_title": "TensorNEAT accelerator measurement \u2014 numpy / iree llvm-cpu / iree rocm",
-    "report_note": null,
+    "report_note": "Every `xla` row of this record runs with `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (the XLA+ROCm command-buffer workaround, stored in `meta.xla_flags`), one fresh process per row, on the tree this record's fingerprint names (`03368c1e`, the grouped accelerator distance table); it supersedes `gpu_rocm_xla_2026-11-07.json` for per-generation figures, and its numbers are not comparable with the FUSION-capture `xla` rows of `gpu_rocm_xla_2026-11-06.json` or with any earlier `evoxc` revision.",
     "created_utc": "2026-11-07T13:58:25+00:00",
     "session_utc": {
       "start": "2026-11-07T13:58:25+00:00",
