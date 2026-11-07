@@ -79,9 +79,12 @@ its own protocol and names the tree it was measured on.
   seeds 42/43/44, 150 generations), so every row describes that tree and that
   session, and only a full harness re-run may replace it.
   Its verdict is ``FAIL``, and the remaining CPU gap on ``xor_p100``,
-  ``xor3d_*`` and ``custom_pagie_p500`` is the documented ``evoxc`` interpreter
-  overhead the pinned ``v0.1.1`` tag still carries
-  (``benchmarks/PERF_NUMPY.md`` pass 3), not a kernel cost.
+  ``xor3d_*`` and ``custom_pagie_p500`` is the interpreter overhead those rows
+  were measured with, not a kernel cost: the pinned revision (upstream ``main``,
+  ``fe85a534``) carries the numpy-interpreter performance pass (per-block
+  dispatch plans, a flat value store, dead-value release at last use), and
+  ``benchmarks/PERF_NUMPY.md`` pass 3 holds the 1.07-2.25x per-generation A/B
+  against the pre-pass revision those rows were measured with.
 * ``benchmarks/BACKENDS.md`` -- the measured ``numpy`` vs ``iree`` (llvm-cpu)
   per-generation table, its protocol and the per-gate portability fix record.
 * ``benchmarks/results/xor3d_quality_2026-11-04.md`` -- the narrower xor3d and
