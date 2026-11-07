@@ -9,3 +9,5 @@
 !gpu_rocm_xla_2026-11-06.json
 !gpu_rocm_xla_2026-11-07.json
 !forward.json
+!jax_rocm_2026-11-07.json
+!forward_jax_rocm_2026-11-07.json
