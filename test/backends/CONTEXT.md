@@ -46,14 +46,14 @@ The expression implies the leg only when the first selects the test and the seco
 Residual: with `iree` installed but no AMD device, an explicit `-m requires_rocm` run skips (exit 0) rather than failing — the guard cannot probe `/dev/kfd` or the driver without importing the extension in `conftest.py`, which this directory forbids; only the iree-absent case is loud for `requires_rocm`.
 
 ## How to run
-Commands from the repo root with every extra installed (`uv sync --all-extras`; IREE 3.13.0, `evoxc` git v0.1.1).
+Commands from the repo root with every extra installed (`uv sync --all-extras`; IREE 3.13.0, `evoxc` resolved by `[tool.uv.sources]` from upstream `main` at rev `fe85a534192f749a97b2f6e3b13b0800f69b8d90`).
 - `uv run pytest test/backends -q -o addopts=""` — this directory alone: **46 passed in ~17.5 s** (41 guard cases + 3 llvm-cpu + 2 ROCm; the ROCm compile happens once and ~10 s of the total is that leg).
 - `uv run pytest test/backends -q -o addopts="" -m requires_iree` — **5 passed, 41 deselected in ~18.8 s**, because the ROCm module also carries `requires_iree` (a GPU leg needs iree too).
 - `uv run pytest test/backends -q -o addopts="" -m requires_rocm` — **2 passed, 44 deselected in ~9.5 s**.
 - `uv run pytest test/backends -q -o addopts="" -m "not requires_iree"` — **41 passed, 5 deselected in ~0.45 s**: the guard's own cases only, no compile.
 - `uv run pytest test/backends/test_conftest.py -q -o addopts=""` — **41 passed in 0.03 s**, no optional dependency.
 - Without the extra (bare `uv sync`): `uv run pytest test/backends -q -o addopts=""` reports **41 passed, 2 skipped, 1 warning, exit 0** — the guard's own cases run, each leg contributes its one structural skip, and the warning names the install step. With iree absent an explicit `-m requires_iree` **or** `-m requires_rocm` **exits 1** with the message `this run explicitly requests the compiled-backend leg (-m '…', which selects the '…' marker) but the optional iree backend is not installed.` followed by the install step (naming the directory keeps exit 1; a whole-tree marker run exits 2 because the same `pytest.exit` fires during collection — non-zero either way).
-- The documented default gate `-m "not parity and not slow"` selects both compiled legs; on this box it is **1312 passed, 104 deselected in ~59 s**, and the whole tree with every extra is **1416 passed, 0 skipped in ~99 s**.
+- The documented default gate `-m "not parity and not slow"` selects both compiled legs; on this box it is **1398 passed, 122 deselected in ~52 s**, and the whole tree with every extra is **1520 passed, 0 skipped in ~102 s**.
 - Absence can be simulated without uninstalling anything: a throwaway pytest plugin (`-p block_iree`) that sets `sys.modules["iree"] = None` makes `find_spec("iree")` return `None` and `import iree` fail, which reproduces the bare-environment counts above.
 Markers: `requires_iree` and `requires_rocm` are declared in `../conftest.py`; both are in no gate of their own, but the default gate selects them.
 

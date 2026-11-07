@@ -7,7 +7,7 @@ This directory is the whole content of the default gate; `./parity` (legacy JAX 
 
 ## Counts
 `./common` 272, `./genome` 180, `./algorithm` 389, `./problem` 374, `./benchmarks` 82 — 1297 passing cases in the subdirectories, plus five modules at this node's root (`./test_host_payload.py` 12, `./test_pipeline_device.py` 13, `./test_pipeline_host_phase.py` 7, `./test_ir_ops.py` 4, `./test_version.py` 2 = 38): **1335 passed, 0 failed, 0 skipped**.
-`pytest -m "not parity and not slow"` from the repo root: **1398 passed, 121 deselected** in ~55 s after `uv sync --all-extras`, and **1393 passed, 6 skipped, 85 deselected** in ~38 s in a bare `uv sync` (the six skips are the four `jax` parity modules and the two `../backends` modules; `--ignore` is no longer needed, see `../backends/conftest.py`).
+`pytest -m "not parity and not slow"` from the repo root: **1398 passed, 122 deselected** in ~55 s after `uv sync --all-extras`, and **1393 passed, 6 skipped, 85 deselected** in ~38 s in a bare `uv sync` (the six skips are the four `jax` parity modules and the two `../backends` modules; `--ignore` is no longer needed, see `../backends/conftest.py`).
 `./algorithm` carries no `xfail` (the HyperNEAT read-out test passes); nothing in this node is skipped.
 `./algorithm` and `./genome` dominate the wall clock (one traced executable per graph), then `./common`, `./problem` and `./benchmarks`.
 
