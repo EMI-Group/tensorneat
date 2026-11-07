@@ -997,12 +997,22 @@ def render_block(document: dict[str, Any], record_path: Path | str | None = None
     return "\n".join(lines).strip("\n")
 
 
-def splice_block(report_path: Path | str, block: str) -> None:
+def splice_block(
+    report_path: Path | str,
+    block: str,
+    *,
+    begin_marker: str = BEGIN_MARKER,
+    end_marker: str = END_MARKER,
+) -> None:
     """Replace the text between the report's exact markers with ``block``.
 
     Args:
         report_path: The report to rewrite; every byte outside the markers is kept.
         block: The rendered block (markers are added here, never by the caller).
+        begin_marker: The report's BEGIN marker; defaults to this module's
+            ``GPU.md`` one, and the forward-pass report (``forward_measure.py``)
+            passes its own pair so both reports share this one splice routine.
+        end_marker: The matching END marker.
 
     Raises:
         RenderError: When the report cannot be read, or either marker is absent or
@@ -1013,17 +1023,17 @@ def splice_block(report_path: Path | str, block: str) -> None:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise RenderError(f"cannot read the report {path}: {exc}") from exc
-    begin = text.find(BEGIN_MARKER)
-    end = text.find(END_MARKER)
+    begin = text.find(begin_marker)
+    end = text.find(end_marker)
     if begin < 0 or end < 0:
         raise RenderError(
-            f"the report {path} does not carry both markers ({BEGIN_MARKER!r} and "
-            f"{END_MARKER!r}); refusing to touch it"
+            f"the report {path} does not carry both markers ({begin_marker!r} and "
+            f"{end_marker!r}); refusing to touch it"
         )
     if end < begin:
         raise RenderError(
             f"the markers in {path} are out of order: the END marker precedes the BEGIN "
             "marker"
         )
-    replacement = f"{BEGIN_MARKER}\n{block.strip()}\n{END_MARKER}"
-    path.write_text(text[:begin] + replacement + text[end + len(END_MARKER):], encoding="utf-8")
+    replacement = f"{begin_marker}\n{block.strip()}\n{end_marker}"
+    path.write_text(text[:begin] + replacement + text[end + len(end_marker):], encoding="utf-8")
