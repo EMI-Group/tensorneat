@@ -67,7 +67,6 @@ class _CartPoleConstants(NamedTuple):
             ``x_dot`` derivative slot.
         lane_thetaacc: The ``(1, 4)`` boolean row selecting lane 3, the
             ``theta_dot`` derivative slot.
-        zero: A float32 ``0``, the split point of the death slack.
         reset_scale: Half-width of the uniform reset distribution.
         neg_reset_scale: ``-reset_scale``, the lower bound of the reset draw.
         four_thirds: The ``4/3`` of the pole-moment denominator.
@@ -91,7 +90,6 @@ class _CartPoleConstants(NamedTuple):
     perm_idx: Any
     lane_xacc: Any
     lane_thetaacc: Any
-    zero: Any
     reset_scale: Any
     neg_reset_scale: Any
     four_thirds: Any
@@ -511,8 +509,7 @@ class CartPole(BaseProblem):
             (``masscart + masspole``), ``length``, ``force_mag``,
             ``neg_force_mag``, ``dt``, the ``(1, 4)`` ``threshold_row`` (with
             ``theta_threshold`` in radians), the row-assembly lanes
-            ``perm_idx``/``lane_xacc``/``lane_thetaacc`` and ``zero``,
-            ``reset_scale``, ``neg_reset_scale``, ``four_thirds``, ``nan`` (all
+            ``perm_idx``/``lane_xacc``/``lane_thetaacc``, ``reset_scale``, ``neg_reset_scale``, ``four_thirds``, ``nan`` (all
             float32), the bool ``false`` the alive mask is reset to, plus the
             int32 loop scalars ``one_step`` and ``horizon`` -- so neither the
             reset draw nor the trip condition ever sees an f64 constant.
@@ -551,7 +548,6 @@ class CartPole(BaseProblem):
                     np.array([[False, False, False, True]], dtype=np.bool_)
                 )
             ),
-            zero=enp.full((), 0.0),
             reset_scale=enp.full((), self.reset_scale),
             neg_reset_scale=enp.full((), -self.reset_scale),
             four_thirds=enp.full((), 4.0 / 3.0),
@@ -648,21 +644,27 @@ class CartPole(BaseProblem):
         :attr:`_CartPoleConstants.threshold_row` --
         ``(x_threshold, +inf, theta_threshold, +inf)``, so the two velocity
         columns can never fail, exactly like the two comparisons it replaces --
-        followed by a fold of the four columns into one. The fold is a
-        ``reduce_max`` of the *signed slack* ``|obs| - threshold`` rather than a
-        boolean ``logical_or`` chain: a boolean fold needs two slices plus an
-        extraction (three ops) where the reduce is one, and the strict
-        inequality survives the subtraction exactly (``|obs_j| - t > 0`` iff
-        ``|obs_j| > t`` in IEEE, ``+inf`` included).
+        followed by a fold of the four boolean columns into one: ``abs``,
+        ``greater`` and a bool ``reduce_max``, three ops. A boolean
+        ``logical_or`` chain is not the alternative it looks like (two slices
+        plus an extraction, three ops on its own), and a ``reduce_max`` of the
+        *signed slack* ``|obs| - threshold`` followed by ``greater(slack, 0)``
+        costs one op more.
 
-        One corner differs from two independent comparisons: a velocity column
-        that overflowed to ``+-inf`` makes its own slack ``NaN`` (``inf -
-        inf``), and a ``NaN`` in the folded maximum reports *alive* even when
-        ``|x|`` or ``|theta|`` is over its limit. That state is unreachable
-        from a bounded rollout -- the reset draw is
+        The bool fold is also the NaN-honest spelling. A column that is not
+        less than or equal to its limit cannot make a row alive: a genuinely
+        ``NaN`` observation compares false against every limit, so a ``NaN``
+        column contributes ``False`` and never fails the row on its own, and a
+        velocity column that overflowed to ``+inf`` compares false against its
+        own ``+inf`` limit and can never fail. The slack spelling subtracts
+        instead, so the same two columns make their *slack* ``NaN`` (``NaN -
+        t`` and ``inf - inf``), and a ``NaN`` in the folded maximum swallows a
+        genuine violation in another column: ``(|x| = 3, x_dot = +inf)`` is
+        dead here and alive there, and so is ``(x = NaN, theta = 5)``. Neither
+        state is reachable from a bounded rollout -- the reset draw is
         ``U(-reset_scale, reset_scale)`` and the force is never non-finite, so
-        a frozen episode's observation stays finite -- and a genuinely ``NaN``
-        observation is reported alive by both spellings.
+        a frozen episode's observation stays finite -- but the fold that
+        cannot hide a failure is the one worth shipping.
 
         Args:
             obs: Observations of shape ``(B, 4)``.
@@ -671,8 +673,7 @@ class CartPole(BaseProblem):
         Returns:
             ``(B,)`` boolean mask, ``True`` where the episode has failed.
         """
-        slack = enp.max(enp.abs(obs) - consts.threshold_row, axis=1)
-        return enp.greater(slack, consts.zero)
+        return enp.max(enp.greater(enp.abs(obs), consts.threshold_row), axis=1)
 
     def _terminated(self, obs: Any, consts: Any) -> Any:
         """Return the death mask of an observation.

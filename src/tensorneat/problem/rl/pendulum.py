@@ -258,7 +258,10 @@ class Pendulum(BaseProblem):
            shared verbatim by both carry formulations.
         5. Fitness = mean over the ``repeat_times`` axis of the episode return
            (a value in ``[-max_step * max_cost, 0]`` per episode), then
-           ``finalize_fitness``.
+           ``finalize_fitness``. The shipped ``repeat_times=1`` already makes
+           ``total`` one return per individual, so that path skips the
+           ``returns_of`` reshape and the mean entirely (two ops on the
+           identity); only ``repeat_times > 1`` pays them.
 
         There is no termination and no alive mask: the trip count is the static
         ``max_step``, so every episode is scored over the same horizon.
@@ -294,6 +297,13 @@ class Pendulum(BaseProblem):
         """
         pop_size = static_batch_size(transformed)
         total, _ = self._rollout(keys, act_fn, pop_size, kernel_mode(state))
+        if self.repeat_times == 1:
+            # ``repeat_times`` is host-side config, so this is a trace-time
+            # branch and never a branch on a traced value: with one repeat
+            # ``total`` already holds one return per individual, and the
+            # ``returns_of`` reshape plus the mean would be two ops on the
+            # identity.
+            return finalize_fitness(total)
         return finalize_fitness(
             enp.mean(returns_of(total, pop_size, self.repeat_times), axis=1)
         )

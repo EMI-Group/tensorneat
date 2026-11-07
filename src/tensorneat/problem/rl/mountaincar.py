@@ -320,6 +320,10 @@ class MountainCarContinuous(BaseProblem):
            the state of every episode that just reached the goal.
         5. Fitness = mean over the ``repeat_times`` axis of the episode return
            (in ``[-(0.1 * max_step), 100]`` per episode), then ``finalize_fitness``.
+           The shipped ``repeat_times=1`` already makes ``total`` one return per
+           individual, so that path skips the ``returns_of`` reshape and the
+           mean entirely (two ops on the identity); only ``repeat_times > 1``
+           pays them.
 
         NaN handling: ``a = tanh(NaN) = NaN``, so the clip does not fold it
         (numpy ``clip`` is ``minimum(maximum(...))``, and both propagate NaN),
@@ -347,6 +351,13 @@ class MountainCarContinuous(BaseProblem):
         """
         pop_size = static_batch_size(transformed)
         total, _ = self._rollout(keys, act_fn, pop_size)
+        if self.repeat_times == 1:
+            # ``repeat_times`` is host-side config, so this is a trace-time
+            # branch and never a branch on a traced value: with one repeat
+            # ``total`` already holds one return per individual, and the
+            # ``returns_of`` reshape plus the mean would be two ops on the
+            # identity.
+            return finalize_fitness(total)
         return finalize_fitness(
             enp.mean(returns_of(total, pop_size, self.repeat_times), axis=1)
         )
