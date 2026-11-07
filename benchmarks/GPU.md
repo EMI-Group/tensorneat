@@ -129,7 +129,7 @@ The trace is part of the record (`trajectory` per row, `protocol.trajectory_gene
 
 | Item | Value |
 |---|---|
-| Date / session (UTC) | 2026-11-07T10:29:06+00:00 – 2026-11-07T10:32:39+00:00 |
+| Date / session (UTC) | 2026-11-07T13:58:25+00:00 – 2026-11-07T14:02:04+00:00 |
 | GPU model (gfx version) | AMD Instinct MI300X VF (gfx942) |
 | HIP devices (IREE runtime query) | device_id=1 AMD Instinct MI300X VF |
 | ROCm version | 7.1.0 |
@@ -144,8 +144,8 @@ The trace is part of the record (`trajectory` per row, `protocol.trajectory_gene
 | CPU model / count | INTEL(R) XEON(R) PLATINUM 8568Y+ / 20 logical |
 | Memory | 241611 MiB |
 | Threads | runtime defaults (nothing exported; inherited environment recorded) |
-| Git commit | `93ce3cac122f` (clean — generated report artifacts are not counted) |
-| Load average (1/5/15 min, document build) | 4.54 / 4.17 / 6.54 |
+| Git commit | `03368c1ea03c` (clean — generated report artifacts are not counted) |
+| Load average (1/5/15 min, document build) | 3.17 / 2.76 / 2.81 |
 
 ## Measured: numpy vs iree-rocm vs xla-rocm
 
@@ -153,24 +153,24 @@ One row per planned `(case, target)`; `n/a` marks a metric the row does not have
 
 | Case | Target | Backend | Status | setup (s) | build (s) | ms/gen median | ms/gen mean | ms/gen min–max | gens/s | peak RSS (MiB) | final max fitness | cross-check |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| xor_p100 | `numpy` | `numpy` | ok | 0.015 | 0.280 | 18.767 | 18.694 | 15.515 – 21.715 | 53.493 | 143.6 | -0.176966 | skipped (target is the numpy reference) |
-| xor_p100 | `iree-rocm` | `iree` | ok | 1.186 | 7.799 | 10.633 | 10.588 | 9.814 – 11.068 | 94.444 | 1891.0 | -0.184767 | gen 1 pass; final-state drift (node_keys) |
-| xor_p100 | `xla-rocm` | `xla` | ok | 4.014 | 2.034 | 3.825 | 3.845 | 3.741 – 3.978 | 260.106 | 9358.2 | -0.176966 | pass (gen 1) |
-| xor_p500 | `numpy` | `numpy` | ok | 0.016 | 0.313 | 72.983 | 73.092 | 68.448 – 77.273 | 13.681 | 167.6 | -0.147786 | skipped (target is the numpy reference) |
-| xor_p500 | `iree-rocm` | `iree` | ok | 1.218 | 8.017 | 12.744 | 12.835 | 12.636 – 13.937 | 77.915 | 1914.7 | -0.112459 | gen 1 pass; final-state drift (node_keys) |
-| xor_p500 | `xla-rocm` | `xla` | ok | 4.019 | 2.244 | 4.033 | 4.055 | 3.929 – 4.231 | 246.590 | 9396.2 | -0.140949 | gen 1 pass; final-state drift (node_keys) |
-| xor_p1000 | `numpy` | `numpy` | ok | 0.017 | 0.375 | 132.185 | 132.150 | 126.273 – 136.785 | 7.567 | 198.0 | -0.053339 | skipped (target is the numpy reference) |
-| xor_p1000 | `iree-rocm` | `iree` | ok | 1.258 | 8.193 | 15.203 | 15.314 | 14.784 – 16.048 | 65.299 | 1937.6 | -0.136390 | gen 1 pass; final-state drift (node_keys) |
-| xor_p1000 | `xla-rocm` | `xla` | ok | 4.084 | 2.354 | 4.968 | 4.977 | 4.877 – 5.061 | 200.940 | 9402.0 | -0.053339 | gen 1 pass; final-state drift (node_keys) |
-| xor3d_p500 | `numpy` | `numpy` | ok | 0.016 | 0.316 | 87.598 | 86.238 | 75.244 – 91.674 | 11.596 | 180.0 | -0.223466 | skipped (target is the numpy reference) |
-| xor3d_p500 | `iree-rocm` | `iree` | ok | 1.220 | 8.063 | 12.910 | 13.018 | 12.742 – 14.581 | 76.820 | 1916.2 | -0.250000 | gen 1 pass; final-state drift (node_keys) |
-| xor3d_p500 | `xla-rocm` | `xla` | ok | 4.053 | 2.211 | 4.153 | 4.134 | 4.037 – 4.219 | 241.896 | 9408.0 | -0.223466 | gen 1 pass; final-state drift (node_keys) |
-| custom_pagie_p500 | `numpy` | `numpy` | ok | 0.015 | 0.786 | 887.256 | 887.815 | 812.595 – 966.154 | 1.126 | 933.9 | -0.032613 | skipped (target is the numpy reference) |
-| custom_pagie_p500 | `iree-rocm` | `iree` | ok | 1.204 | 8.406 | 15.873 | 15.980 | 14.420 – 22.298 | 62.579 | 1944.1 | -0.046049 | gen 1 pass; final-state drift (node_keys) |
-| custom_pagie_p500 | `xla-rocm` | `xla` | ok | 3.048 | 2.607 | 5.891 | 5.969 | 5.624 – 6.401 | 167.529 | 4880.9 | -0.032613 | gen 1 pass; final-state drift (node_keys) |
-| cartpole_p100 | `numpy` | `numpy` | ok | 0.016 | 0.266 | 95.952 | 105.252 | 94.413 – 153.009 | 9.501 | 142.4 | 200.000000 | skipped (target is the numpy reference) |
-| cartpole_p100 | `iree-rocm` | `iree` | ok | 1.215 | 8.658 | 67.202 | 65.513 | 58.912 – 70.199 | 15.264 | 1939.0 | 200.000000 | pass (gen 1) |
-| cartpole_p100 | `xla-rocm` | `xla` | ok | 4.159 | 2.236 | 23.567 | 24.927 | 23.101 – 33.047 | 40.117 | 9385.7 | 200.000000 | gen 1 pass; final-state drift (fitness) |
+| xor_p100 | `numpy` | `numpy` | ok | 0.034 | 0.271 | 18.760 | 19.003 | 17.384 – 21.720 | 52.622 | 151.2 | -0.176966 | skipped (target is the numpy reference) |
+| xor_p100 | `iree-rocm` | `iree` | ok | 1.271 | 8.814 | 9.867 | 9.830 | 9.385 – 10.235 | 101.727 | 1894.5 | -0.184767 | gen 1 pass; final-state drift (node_keys) |
+| xor_p100 | `xla-rocm` | `xla` | ok | 4.089 | 2.243 | 3.599 | 3.587 | 3.405 – 3.946 | 278.800 | 9380.6 | -0.176966 | pass (gen 1) |
+| xor_p500 | `numpy` | `numpy` | ok | 0.016 | 0.313 | 73.846 | 73.665 | 68.791 – 78.338 | 13.575 | 167.9 | -0.147786 | skipped (target is the numpy reference) |
+| xor_p500 | `iree-rocm` | `iree` | ok | 1.231 | 9.099 | 11.863 | 11.965 | 11.784 – 12.288 | 83.574 | 1911.4 | -0.112459 | gen 1 pass; final-state drift (node_keys) |
+| xor_p500 | `xla-rocm` | `xla` | ok | 4.046 | 2.431 | 3.883 | 3.888 | 3.791 – 4.057 | 257.219 | 9407.4 | -0.140949 | gen 1 pass; final-state drift (node_keys) |
+| xor_p1000 | `numpy` | `numpy` | ok | 0.017 | 0.380 | 130.224 | 130.617 | 123.946 – 143.296 | 7.656 | 198.5 | -0.053339 | skipped (target is the numpy reference) |
+| xor_p1000 | `iree-rocm` | `iree` | ok | 1.190 | 9.136 | 14.215 | 14.377 | 13.752 – 15.198 | 69.555 | 1938.0 | -0.136390 | gen 1 pass; final-state drift (node_keys) |
+| xor_p1000 | `xla-rocm` | `xla` | ok | 4.075 | 2.617 | 4.054 | 4.053 | 3.929 – 4.262 | 246.699 | 9421.5 | -0.053339 | gen 1 pass; final-state drift (node_keys) |
+| xor3d_p500 | `numpy` | `numpy` | ok | 0.016 | 0.315 | 86.328 | 86.019 | 74.911 – 94.357 | 11.625 | 180.2 | -0.223466 | skipped (target is the numpy reference) |
+| xor3d_p500 | `iree-rocm` | `iree` | ok | 1.204 | 9.179 | 12.004 | 12.073 | 11.839 – 12.382 | 82.832 | 1912.4 | -0.250000 | gen 1 pass; final-state drift (node_keys) |
+| xor3d_p500 | `xla-rocm` | `xla` | ok | 4.123 | 2.510 | 3.876 | 3.907 | 3.731 – 4.197 | 255.923 | 9404.6 | -0.223466 | gen 1 pass; final-state drift (node_keys) |
+| custom_pagie_p500 | `numpy` | `numpy` | ok | 0.015 | 0.744 | 813.551 | 812.973 | 712.758 – 890.623 | 1.230 | 933.8 | -0.032613 | skipped (target is the numpy reference) |
+| custom_pagie_p500 | `iree-rocm` | `iree` | ok | 1.221 | 9.397 | 14.751 | 14.384 | 13.481 – 15.283 | 69.523 | 1939.7 | -0.046049 | gen 1 pass; final-state drift (node_keys) |
+| custom_pagie_p500 | `xla-rocm` | `xla` | ok | 4.124 | 2.785 | 5.276 | 5.369 | 5.182 – 5.828 | 186.268 | 9442.8 | -0.032613 | gen 1 pass; final-state drift (node_keys) |
+| cartpole_p100 | `numpy` | `numpy` | ok | 0.015 | 0.270 | 97.705 | 106.299 | 95.018 – 156.348 | 9.407 | 142.2 | 200.000000 | skipped (target is the numpy reference) |
+| cartpole_p100 | `iree-rocm` | `iree` | ok | 1.198 | 9.692 | 59.030 | 59.269 | 58.579 – 61.811 | 16.872 | 1936.8 | 200.000000 | pass (gen 1) |
+| cartpole_p100 | `xla-rocm` | `xla` | ok | 4.100 | 2.309 | 23.628 | 25.124 | 23.317 – 33.016 | 39.803 | 9392.5 | 200.000000 | gen 1 pass; final-state drift (fitness) |
 
 ## Numerical cross-check
 
@@ -187,7 +187,7 @@ Each non-numpy row is compared against a fresh `backend="numpy"` run of the same
 | xor3d_p500 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000298 | 0.000000060 | 0 | fail | node_keys 976 mismatch(es); conn_keys 4456 mismatch(es) | node_attrs 4.066220284; conn_attrs 4.489749908 | 0.153934240 | 7562 |
 | xor3d_p500 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000000; conn_attrs 0.000000000 | 0.000000060 | 0 | fail | node_keys 959 mismatch(es); conn_keys 4229 mismatch(es) | node_attrs 4.066220284; conn_attrs 4.200792313 | 0.152276725 | 4512 |
 | custom_pagie_p500 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000294 | 0.000000238 | 0 | fail | node_keys 507 mismatch(es); conn_keys 2853 mismatch(es) | node_attrs 3.389557362; conn_attrs 3.321706295 | 0.095183104 | 5962 |
-| custom_pagie_p500 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000000; conn_attrs 0.000000000 | 0.000000060 | 0 | fail | node_keys 237 mismatch(es); conn_keys 1458 mismatch(es) | node_attrs 3.406351328; conn_attrs 2.775112629 | 0.112810448 | 1896 |
+| custom_pagie_p500 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000000; conn_attrs 0.000000000 | 0.000000119 | 0 | fail | node_keys 237 mismatch(es); conn_keys 1458 mismatch(es) | node_attrs 3.406351328; conn_attrs 2.775112629 | 0.112810433 | 1896 |
 | cartpole_p100 | `iree-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000477; conn_attrs 0.000000294 | 0.000000000 | 0 | pass | node_keys exact; conn_keys exact | node_attrs 0.000000119; conn_attrs 0.000000238 | 0.000000000 | 0 |
 | cartpole_p100 | `xla-rocm` | pass | node_keys exact; conn_keys exact | node_attrs 0.000000000; conn_attrs 0.000000000 | 0.000000000 | 0 | fail | node_keys exact; conn_keys exact | node_attrs 0.000000119; conn_attrs 0.000000238 | 1.000000000 | 0 |
 
@@ -197,10 +197,9 @@ No row was blocked: every planned row is `ok`.
 
 ## Provenance of this block
 
-This block is rendered from `benchmarks/results/gpu_rocm_xla_2026-11-07.json`: 18 record(s), 18 ok and 0 error, measured in the session 2026-11-07T10:29:06+00:00 – 2026-11-07T10:32:39+00:00 (UTC) at git `93ce3cac122f` (clean — generated report artifacts are not counted).
-`benchmarks/results/gpu_rocm_xla_2026-11-07.json` is committed evidence (it is in the re-include list of `benchmarks/results/.gitignore`), so every cell above is traceable to the committed record.
+This block is rendered from `benchmarks/results/gpu_rocm_xla_2026-11-07_grouped.json`: 18 record(s), 18 ok and 0 error, measured in the session 2026-11-07T13:58:25+00:00 – 2026-11-07T14:02:04+00:00 (UTC) at git `03368c1ea03c` (clean — generated report artifacts are not counted).
+`benchmarks/results/gpu_rocm_xla_2026-11-07_grouped.json` is committed evidence (it is in the re-include list of `benchmarks/results/.gitignore`), so every cell above is traceable to the committed record.
 Nothing here is a statement about HEAD: every number belongs to that record and to the tree its fingerprint names.
-Every xla row of this record runs with `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` (the XLA+ROCm command-buffer workaround, stored in `meta.xla_flags`), one fresh process per row, on the tree this record's fingerprint names; its per-generation numbers are not comparable with the FUSION-capture xla rows of `gpu_rocm_xla_2026-11-06.json` or with any earlier evoxc revision.
 <!-- END MEASURED (gpu_measure.py) -->
 ## Against the frozen JAX implementation, same device
 Everything above compares the new engine against the *numpy reference interpreter* — the same implementation on a slower engine — so no row above can speak to the old-vs-new question that `RESULTS.md` answers on the CPU.
