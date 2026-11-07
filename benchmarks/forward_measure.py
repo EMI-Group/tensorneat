@@ -37,6 +37,17 @@ in :data:`TARGETS`: :data:`gpu_targets.TARGETS` verbatim (``numpy``, ``iree-rocm
 ``xla-rocm`` additionally needs the PJRT plugin named by ``--pjrt-plugin PATH`` or
 ``$EVOXC_PJRT_PLUGIN`` (an unresolvable plugin is a named error row, never a fallback).
 
+The ``XLA_FLAGS`` workaround (``--xla-flags``): a *generation* graph holding a long
+``while`` (the RL rollout) SIGSEGVs on this box inside
+``PJRT_LoadedExecutable_Execute`` because XLA captures it as a HIP graph / FUSION
+command buffer, and ``--xla_gpu_enable_command_buffer=WHILE`` in ``XLA_FLAGS`` cures
+it (XLA reads that variable at backend init, so it must be an environment setting,
+never a ``compile_options`` entry; see ``benchmarks/gpu_targets.py``). A forward pass
+holds no ``while`` and does not crash, so the flag is not load-bearing here -- but an
+``xla-rocm`` row is exported the very same ``XLA_FLAGS`` value, for an xla target
+only, and records it (``record["xla_flags"]`` / ``meta["xla_flags"]``), so a
+forward number is never attributed to a flag it did not run with.
+
 Protocol, per row, one fresh process: ``setup_s`` and ``build_s`` are measured and
 reported **separately, never charged to a pass**; ``--warmup`` untimed passes then
 ``--passes`` timed ones run under ``os.devnull``, each timed with ``perf_counter`` around
@@ -90,6 +101,7 @@ import sys
 import tempfile
 import time
 import traceback
+from collections.abc import MutableMapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -109,8 +121,8 @@ from gpu_report import (  # noqa: E402  (after the sys.path guard)
     last_error_line, splice_block,
 )
 from gpu_targets import (  # noqa: E402  (after the sys.path guard)
-    PJRT_ENV_VAR, PJRT_FLAG, PJRT_TARGETS, TARGETS as GPU_TARGETS, PluginError,
-    fingerprint_plugin, plugin_for, require_plugin,
+    PJRT_ENV_VAR, PJRT_FLAG, PJRT_TARGETS, TARGETS as GPU_TARGETS,
+    XLA_WORKAROUND_FLAGS, PluginError, fingerprint_plugin, plugin_for, require_plugin,
 )
 
 #: Schema of a forward-pass document (one record list under ``records``).
@@ -300,6 +312,40 @@ def _target_plan(target_name: str, plugin: str | None = None) -> dict[str, Any]:
         "name": target_name, "impl": base["impl"], "backend": base["backend"],
         "device": base["device"], "compile_options": options,
     }
+
+
+# --- The xla ``XLA_FLAGS`` workaround (row environment, never a compile option) --------
+
+
+def _effective_xla_flags(target_name: str, requested: str) -> str | None:
+    """The ``XLA_FLAGS`` value this target is measured with (``None`` = leave alone).
+
+    Only a :data:`gpu_targets.PJRT_TARGETS` target gets the ROCm command-buffer
+    workaround (:data:`gpu_targets.XLA_WORKAROUND_FLAGS`); every other target --
+    including ``iree-rocm`` and the ``jax`` baseline -- inherits the parent
+    environment untouched. An empty ``requested`` is a request for the *absence* of
+    the workaround (``--xla-flags ''``), so it stays the empty string.
+    """
+    return requested if target_name in PJRT_TARGETS else None
+
+
+def _export_xla_flags(
+    environment: MutableMapping[str, str], flags: str | None
+) -> MutableMapping[str, str]:
+    """Apply the workaround rule to ``environment`` in place and return it.
+
+    ``None`` leaves the environment byte-identical; a non-empty value is exported as
+    ``XLA_FLAGS``; an empty value **removes** the variable, so "measured without the
+    workaround" is a real absence rather than a value inherited from the parent
+    process (XLA reads ``XLA_FLAGS`` when its backend is initialised).
+    """
+    if flags is None:
+        return environment
+    if flags:
+        environment["XLA_FLAGS"] = flags
+    else:
+        environment.pop("XLA_FLAGS", None)
+    return environment
 
 
 def _protocol(args: argparse.Namespace) -> dict[str, Any]:
@@ -592,7 +638,10 @@ def measure_row(args: argparse.Namespace) -> dict[str, Any]:
     plugin first -- the path goes into ``compile_options["plugin_path"]`` *and* into
     ``$EVOXC_PJRT_PLUGIN``, which is what the adapter's availability probe reads -- and
     an unresolvable plugin is a named ``error`` row, never a fallback to another
-    backend.
+    backend. The row also records the ``XLA_FLAGS`` value it ran with
+    (``record["xla_flags"]``; ``None`` for a target that does not use XLA) and exports
+    it into :data:`os.environ` before the graph is built, because XLA reads the
+    variable at backend init.
     """
     workload = _workload(args.workload)
     base = TARGETS[args.target]
@@ -602,10 +651,13 @@ def measure_row(args: argparse.Namespace) -> dict[str, Any]:
         "compile_options": copy.deepcopy(base["compile_options"]),
         "seed": args.seed, **workload_geometry(workload),
         "warmup_passes": args.warmup, "timed_passes": args.passes,
+        "xla_flags": _effective_xla_flags(args.target, args.xla_flags),
         "protocol": _protocol(args), "status": "ok", "error": None,
         "jax_imported": None, "jax_allocator": None,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
+    # Before any backend init: XLA reads the variable when its client is created.
+    _export_xla_flags(os.environ, record["xla_flags"])
     try:
         plugin = plugin_for(args.target, args.pjrt_plugin)
     except PluginError as exc:
@@ -702,15 +754,23 @@ def _child_command(
         "--warmup", str(args.warmup), "--passes", str(args.passes),
         "--seed", str(args.seed), "--json", str(row_path),
     ]
-    return command + ([PJRT_FLAG, plugin] if plugin is not None else [])
+    if plugin is not None:
+        command += [PJRT_FLAG, plugin]
+    # Forwarded explicitly so `--xla-flags ''` reaches the child as an empty value.
+    return command + ["--xla-flags", args.xla_flags]
 
 
-def _child_environment(plugin: str | None) -> dict[str, str]:
-    """This process's environment, plus the resolved plugin the adapter probe reads."""
+def _child_environment(plugin: str | None, xla_flags: str | None) -> dict[str, str]:
+    """This process's environment, plus the plugin and the xla workaround.
+
+    ``xla_flags`` follows :func:`_effective_xla_flags`: exported as ``XLA_FLAGS`` for
+    an xla target, removed for an empty value (``--xla-flags ''``), and untouched
+    (``None``) for every other target.
+    """
     child = dict(os.environ)
     if plugin is not None:
         child[PJRT_ENV_VAR] = plugin
-    return child
+    return _export_xla_flags(child, xla_flags)
 
 
 def _crash_row(
@@ -725,6 +785,7 @@ def _crash_row(
         "backend": TARGETS[target]["backend"], "status": "error",
         "error": "\n".join(parts), "returncode": returncode,
         "child_command": shlex.join(command), "stderr_tail": tail,
+        "xla_flags": _effective_xla_flags(target, args.xla_flags),
         "protocol": _protocol(args),
         "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -759,7 +820,11 @@ def _document_meta(
     args: argparse.Namespace, session: dict[str, str], workloads: list[Workload],
     targets: list[str], pjrt_plugin: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """The ``meta`` block of a matrix document (command, title/note, env, protocol)."""
+    """The ``meta`` block of a matrix document (command, title/note, env, protocol).
+
+    ``xla_flags`` is the ``XLA_FLAGS`` value the ``xla`` rows ran with, and ``None``
+    when no planned target is an xla target (a numpy/iree/jax matrix records no flag).
+    """
     meta = {
         "command": shlex.join([sys.executable, *sys.argv]),
         "report_title": args.report_title, "report_note": args.report_note,
@@ -768,7 +833,9 @@ def _document_meta(
         "workloads": [workload.name for workload in workloads],
         "workload_geometry": {workload.name: workload_geometry(workload)
                               for workload in workloads},
-        "targets": targets, "env": environment(),
+        "targets": targets,
+        "xla_flags": args.xla_flags if any(t in PJRT_TARGETS for t in targets) else None,
+        "env": environment(),
     }
     if pjrt_plugin is not None:
         meta["pjrt_plugin"] = pjrt_plugin
@@ -805,11 +872,13 @@ def matrix_command(args: argparse.Namespace) -> int:
     plan = [(workload.name, target) for workload in workloads for target in targets]
     script, records = Path(__file__).resolve(), []
     started = datetime.now(timezone.utc)
-    child_env = _child_environment(plugin)
     with tempfile.TemporaryDirectory(prefix="forward_measure_") as tmp:
         for index, (workload, target) in enumerate(plan, 1):
             row_path = Path(tmp) / f"row_{index:03d}.json"
             command = _child_command(args, script, workload, target, row_path, plugin)
+            # Per row, because the workaround applies to xla targets only.
+            child_env = _child_environment(
+                plugin, _effective_xla_flags(target, args.xla_flags))
             print(f"[{index}/{len(plan)}] {workload} / {target}: running", flush=True)
             try:
                 completed = subprocess.run(
@@ -979,6 +1048,29 @@ def _plugin_text(plugin: dict[str, Any]) -> str:
     return f"`{name}` ({mib}, sha256 `{digest[:12] if digest else 'n/a'}…`)"
 
 
+def _xla_flags_text(document: dict[str, Any]) -> str:
+    """The ``XLA_FLAGS`` the record's xla rows ran with -- never left implicit.
+
+    A non-empty ``meta["xla_flags"]`` names the workaround the session exported; a
+    key present but empty while the record holds xla rows says those numbers were
+    measured *without* it (``--xla-flags ''``); a record with no key predates the
+    workaround and is attributed to no flag at all; and a key of ``None`` with no xla
+    row means no flag applied because no target uses XLA.
+    """
+    meta = document.get("meta") or {}
+    if "xla_flags" not in meta:
+        return "not recorded (record predates the workaround)"
+    flags = meta["xla_flags"]
+    if isinstance(flags, str) and flags:
+        return (
+            f"`{flags}` (ROCm command-buffer workaround: the RL rollout's long "
+            "`while` SIGSEGVs under FUSION capture; a forward pass has no `while`)"
+        )
+    if any(record.get("target") in PJRT_TARGETS for record in _records(document)):
+        return "not set (`--xla-flags ''`: measured without the command-buffer workaround)"
+    return "not applicable (no `xla` row in this record)"
+
+
 def _environment_section(document: dict[str, Any]) -> list[str]:
     """Section 1: the measured environment fingerprint as a two-column table."""
     meta = document.get("meta") or {}
@@ -1008,6 +1100,7 @@ def _environment_section(document: dict[str, Any]) -> list[str]:
          f"{', '.join(jax_info.get('jax_devices') or []) or 'n/a'}; allocator "
          f"{_jax_allocator_text(document)}"],
         *([["PJRT plugin (xla targets)", _plugin_text(plugin)]] if plugin else []),
+        ["XLA_FLAGS (xla targets)", _xla_flags_text(document)],
         ["tensorneat / evoxc", f"{env.get('tensorneat') or 'n/a'} / {env.get('evoxc') or 'n/a'}"],
         ["numpy", env.get("numpy") or "n/a"],
         ["Python", env.get("python") or "n/a"],
@@ -1213,6 +1306,9 @@ def list_command(args: argparse.Namespace) -> int:
     print("new side (impl=new): tensorneat's Pipeline.setup() population, one evoxc "
           "forward graph")
     print()
+    print(f"xla targets export XLA_FLAGS={XLA_WORKAROUND_FLAGS!r} by default "
+          "(--xla-flags '' measures without it)")
+    print()
     print(f"default matrix: workloads {DEFAULT_WORKLOADS}; targets {DEFAULT_TARGETS}; "
           f"seed {DEFAULT_SEED}; {DEFAULT_WARMUP} warmup + {DEFAULT_PASSES} timed passes")
     print(f"default record: {display_path(DEFAULT_JSON)}; default report: "
@@ -1263,6 +1359,15 @@ def _add_measurement_arguments(parser: argparse.ArgumentParser) -> None:
               "for the adapter's availability probe. Resolution order: this flag, then "
               f"${PJRT_ENV_VAR}; an xla target with neither is a named error, never a "
               "fallback to another backend"))
+    parser.add_argument(
+        "--xla-flags", default=XLA_WORKAROUND_FLAGS, metavar="TEXT",
+        help=(f"XLA_FLAGS exported for the xla targets only (default: "
+              f"{XLA_WORKAROUND_FLAGS!r}, the ROCm command-buffer workaround for a "
+              "captured long `while`). It is a process-environment setting because XLA "
+              "reads it at backend init, so it cannot be a compile option. Pass "
+              "--xla-flags '' to measure WITHOUT the workaround: the variable is then "
+              "removed from the child environment, never inherited. Targets that do "
+              "not use XLA keep their environment untouched"))
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

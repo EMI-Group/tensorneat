@@ -31,7 +31,7 @@ REPO_ROOT = HERE.parent
 
 if str(HERE) not in sys.path:  # ``gpu_targets`` is a sibling module, not a package
     sys.path.insert(0, str(HERE))
-from gpu_targets import short_sha  # noqa: E402  (after the sys.path guard)
+from gpu_targets import PJRT_TARGETS, short_sha  # noqa: E402  (after the sys.path guard)
 
 #: Schema of the aggregated matrix document (one record list under ``records``).
 SCHEMA = "tensorneat-gpu/1"
@@ -563,6 +563,31 @@ def _plugin_text(plugin: dict[str, Any]) -> str:
     return f"`{name}` ({mib}, sha256 `{short_sha(plugin.get('sha256'))}…`)"
 
 
+def _xla_flags_text(document: dict[str, Any]) -> str:
+    """The ``XLA_FLAGS`` the record's xla rows ran with -- never left implicit.
+
+    Three recorded cases plus one gap: a record whose ``meta["xla_flags"]`` is a
+    non-empty string names the workaround it exported; a record that carries the key
+    empty (``--xla-flags ''``) but holds xla rows says its numbers were measured
+    *without* the command-buffer workaround; a record written before the workaround
+    existed has no key at all, so its numbers are attributed to no flag at all
+    (older committed records stay renderable); and a record with the key set to
+    ``None`` because no planned target uses XLA has no xla row to attribute.
+    """
+    meta = document.get("meta") or {}
+    if "xla_flags" not in meta:
+        return "not recorded (record predates the workaround)"
+    flags = meta["xla_flags"]
+    if isinstance(flags, str) and flags:
+        return (
+            f"`{flags}` (ROCm command-buffer workaround: the RL rollout's long "
+            "`while` SIGSEGVs under FUSION capture)"
+        )
+    if any(record.get("target") in PJRT_TARGETS for record in document.get("records") or []):
+        return "not set (`--xla-flags ''`: measured without the command-buffer workaround)"
+    return "not applicable (no `xla` row in this record)"
+
+
 def _environment_section(document: dict[str, Any]) -> list[str]:
     """Section 1: the measured environment fingerprint as a two-column table."""
     meta = document.get("meta") or {}
@@ -592,6 +617,7 @@ def _environment_section(document: dict[str, Any]) -> list[str]:
         ["IREE compiler / runtime",
          f"{iree.get('compiler') or 'n/a'} / {iree.get('runtime') or 'n/a'}"],
         *([["PJRT plugin (xla targets)", _plugin_text(plugin)]] if plugin else []),
+        ["XLA_FLAGS (xla targets)", _xla_flags_text(document)],
         ["evoxc", env.get("evoxc") or "n/a"],
         ["numpy", env.get("numpy") or "n/a"],
         ["Python", env.get("python") or "n/a"],
