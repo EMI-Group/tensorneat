@@ -8,9 +8,9 @@ This node owns no `kernel_mode` / `distance_*` static: it emits the same graph o
 ## Module map (leaf; one responsibility per file, all far under ~1000 lines)
 | File | Lines | Responsibility |
 |---|---|---|
-| `act.py` | 391 | 12 activations, their constants, `ACT_IDENTITY`, `ACT_FUNCS`, `apply_activation`. |
-| `agg.py` | 760 | 6 aggregations, the `K`-plane folds (`_FOLD_MAX_WIDTH = 128`), the `_Window` memo, `AGG_FUNCS`, `apply_aggregation`. |
-| `act_sympy.py` | 220 | sympy twins of `ACT_FUNCS`, `SympyClip`, `ACT_SYMPY_HELPERS`. |
+| `act.py` | 395 | 12 activations, their constants, `ACT_IDENTITY`, `ACT_FUNCS`, `apply_activation`. |
+| `agg.py` | 762 | 6 aggregations, the `K`-plane folds (`_FOLD_MAX_WIDTH = 128`), the `_Window` memo, `AGG_FUNCS`, `apply_aggregation`. |
+| `act_sympy.py` | 221 | sympy twins of `ACT_FUNCS`, `SympyClip`, `ACT_SYMPY_HELPERS`. |
 | `agg_sympy.py` | 117 | sympy twins of `AGG_FUNCS`. |
 | `manager.py` | 380 | `FunctionManager`: pairing, lookups, validation, `sympy_module`, `random_index`. |
 
