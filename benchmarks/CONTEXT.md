@@ -219,7 +219,7 @@ There is no pytest suite in this node (`test/` is a sibling, read-only); its ver
 | `./gpu_report.py` | `tensorneat-gpu/1` schema and every rendered line of `GPU.md`'s block. |
 | `./GPU.md` | Hand-written accelerator report over the committed measured block (`ddd7295a`). |
 | `./forward_measure.py` | Batch forward-pass CLI/protocol: `run`/`matrix`/`render`/`--list`, the `tensorneat-forward/1` record and the rendered block of `./FORWARD.md`. |
-| `./FORWARD.md` | Hand-written forward-pass report over the committed measured block (`forward.json`, `713f4a61`). |
+| `./FORWARD.md` | Hand-written forward-pass report over the committed four-target measured block (`forward.json`, `8c63309`: numpy, iree rocm, xla rocm and the frozen JAX baseline). |
 | `./THREADS.md` | Generated `--threads 1` XOR-family report (`results/threads1.json`). |
 | `./iree.md` | Historical pre-fix IREE attempt report (`results/iree.json`), superseded by `BACKENDS.md`. |
 | `../test/parity` | Numerical-fidelity suite using `./legacy_jax` as the oracle (sibling — read-only, escalate writes to parent). |
