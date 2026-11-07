@@ -51,7 +51,7 @@ Everything else is preserved from the pre-rewrite library and pinned by `test/pa
 ```bash
 git clone https://github.com/EMI-Group/tensorneat.git
 cd tensorneat
-uv sync                              # resolves evoxc from the v0.1.1 git tag, see Install
+uv sync                              # resolves evoxc from the pinned upstream commit, see Install
 uv run python examples/func_fit/xor.py
 ```
 
@@ -124,7 +124,7 @@ genome / algorithm / problem kernels        src/tensorneat/genome, algorithm, pr
   evoxc.build(fn, *TensorSpec, backend=..., **options)      ← the compile site
         │     backend="numpy"   reference interpreter, always available
         │     backend="iree"    StableHLO export + iree-compile (llvm-cpu)
-        │     backend="xla"     StableHLO export + PJRT plugin (needs EVOXC_PJRT_PLUGIN)
+        │     backend="xla"     StableHLO export + PJRT plugin .so (auto-discovered)
         │     backend="tvm"     opt-in extra
         ▼
   evoxc.Executable  cached in Pipeline._executables[(pop_size, max_nodes, max_conns,
@@ -184,8 +184,8 @@ Not in the library any more (they required JAX): the Brax/Gymnax/mujoco RL envir
 | backend | install | measured here |
 |---|---|---|
 | `numpy` | none — the default | the evoxc reference interpreter: the only leg with no optional dependency and the fastest CPU leg ([`benchmarks/RESULTS.md`](./benchmarks/RESULTS.md)) |
-| `iree` | `uv sync --extra iree` — `iree-base-compiler` / `iree-base-runtime` 3.13.x (3.10/3.11 abort in the ROCm/HIP HAL on any `while`/`scan` loop and SIGSEGV `iree-compile` on a `while`-nested `cond`; 3.13 fixes both) | llvm-cpu is 1.54× / 5.47× / 6.63× slower per generation than `numpy` at pop 100/500/1000, with one 8.0–9.6 s `iree-compile` per static shape ([`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md)); on the AMD Instinct MI300X (ROCm 7.1, gfx942) with `compile_options={"target_backends": ["rocm"]}` and `device="rocm"` it runs every shipped case at `xor_p100` 10.3, `xor_p500` 12.8, `xor_p1000` 15.1, `xor3d_p500` 12.9, `custom_pagie_p500` 15.8 and `cartpole_p100` 61.5 ms/generation ([`benchmarks/GPU.md`](./benchmarks/GPU.md)) |
-| `xla` | `uv sync --extra xla-rocm` — `jax-rocm7-pjrt` (ROCm; NVIDIA would use `jax-cuda12-pjrt`, and no CPU PJRT plugin is pip-installable). The plugin lands at `<site-packages>/jax_plugins/xla_rocm7/xla_rocm_plugin.so`; the pinned `evoxc` v0.1.1 needs `EVOXC_PJRT_PLUGIN=<that path>` (a newer evoxc discovers `jax_plugins/*/*_plugin.so` itself) | the fastest accelerator leg: `xor_p100` 3.6, `xor_p500` 4.5, `xor_p1000` 5.5, `xor3d_p500` 4.6, `custom_pagie_p500` 6.3 and `cartpole_p100` 13.4 ms/generation — 2.5–4.6× faster than `iree` on the same device, with a 2.1–2.7 s compile per shape ([`benchmarks/GPU.md`](./benchmarks/GPU.md)) |
+| `iree` | `uv sync --extra iree` — `iree-base-compiler` / `iree-base-runtime` 3.13.x (3.10/3.11 abort in the ROCm/HIP HAL on any `while`/`scan` loop and SIGSEGV `iree-compile` on a `while`-nested `cond`; 3.13 fixes both) | llvm-cpu is 1.54× / 5.47× / 6.63× slower per generation than `numpy` at pop 100/500/1000, with one 8.0–9.6 s `iree-compile` per static shape ([`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md)); on the AMD Instinct MI300X (ROCm 7.1, gfx942) with `compile_options={"target_backends": ["rocm"]}` and `device="rocm"` it runs every shipped case at `xor_p100` 10.6, `xor_p500` 12.7, `xor_p1000` 15.2, `xor3d_p500` 12.9, `custom_pagie_p500` 15.9 and `cartpole_p100` 67.2 ms/generation ([`benchmarks/GPU.md`](./benchmarks/GPU.md)) |
+| `xla` | `uv sync --extra xla-rocm` — `jax-rocm7-pjrt` (ROCm; NVIDIA would use `jax-cuda12-pjrt`, and no CPU PJRT plugin is pip-installable). The plugin lands at `<site-packages>/jax_plugins/xla_rocm7/xla_rocm_plugin.so` and `evoxc` discovers an installed `jax_plugins/*/*_plugin.so` itself (`plugin_path` or `EVOXC_PJRT_PLUGIN` pins a different one). A long `while` (the RL rollout) can SIGSEGV the ROCm plugin inside `PJRT_LoadedExecutable_Execute`, whose FUSION command buffer replays the loop as a HIP graph; `XLA_FLAGS=--xla_gpu_enable_command_buffer=WHILE` removes it at no measurable cost | the fastest accelerator leg: `xor_p100` 3.8, `xor_p500` 4.0, `xor_p1000` 5.0, `xor3d_p500` 4.2, `custom_pagie_p500` 5.9 and `cartpole_p100` 23.6 ms/generation — 2.7–3.2× faster than `iree` on the same device and 4.9–150.6× faster than the numpy leg, with a 2.0–2.6 s compile per shape ([`benchmarks/GPU.md`](./benchmarks/GPU.md)) |
 | `tvm` | `uv sync --extra tvm` | opt-in extra, untested on this box |
 
 Getting `iree` to run took five exporter/compiler gates (rank-3 `scatter`, unsigned dtypes, v1-deferred ops, one shared index block `iree-compile` could not legalize, and a negative `concatenate` axis); each failure and the fix that removed it is recorded in [`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md).
@@ -201,8 +201,10 @@ algo = algorithm.NEAT(genome=g, pop_size=100, species_size=20, survival_threshol
 prob = problem.XOR()
 
 # xla on ROCm: the PJRT C API plugin is a .so loaded over ctypes (no `jax` import).
+# evoxc finds an installed jax_plugins/*/*_plugin.so on its own; this pins one explicitly.
 plugin = "<site-packages>/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
-os.environ["EVOXC_PJRT_PLUGIN"] = plugin          # what the pinned v0.1.1 probes
+# A long `while` (the RL rollout) needs the ROCm plugin to skip HIP-graph capture.
+os.environ["XLA_FLAGS"] = "--xla_gpu_enable_command_buffer=WHILE"
 pipe = Pipeline(algo, prob, backend="xla", device="rocm",
                 compile_options={"plugin_path": plugin})
 
@@ -232,7 +234,24 @@ Its verdict is `FAIL`, and nothing below is a uniform CPU win.
 | `cartpole_p100` | 100 | n/a (no old-side equivalent) | 307.16 | n/a |
 
 The numpy interpreter is 2.59× (`xor_p500`) and 4.06× (`xor_p1000`) faster than the frozen JAX side, 1.07× on `xor3d_p1000`, and slower on `xor_p100` (0.94×), `xor3d_p100` (0.68×), `xor3d_p500` (0.83×) and `custom_pagie_p500` (0.38×: 1258.04 vs 480.21 ms/gen); `cartpole_p100` is new-only at 307.16 ms/gen.
-On the accelerator the same numpy-leg cases take 3.6–13.4 ms/generation through `xla`, i.e. 12–153× faster than the numpy reference (and 10.8×–147× vs the same-box JAX baseline on the XOR family).
+On the accelerator the same cases take 3.8–23.6 ms/generation through `xla`, i.e. 4.9–150.6× faster than the numpy reference and 2.7–3.2× faster than `iree` on the same device.
+
+### The batch forward pass
+
+The forward pass is where the rewrite's advantage is largest, because the pre-rewrite implementation evaluated it as `lax.fori_loop(0, max_nodes, ...)` with a per-node `lax.cond` and a `vmap` over every connection, while this library runs one tensorized level sweep over the whole population. Measured on one process, median of 20 passes after 3 warmups, on the merged tree (`benchmarks/results/forward.json`, rendered in [`benchmarks/FORWARD.md`](./benchmarks/FORWARD.md)):
+
+| forward workload | rows | legacy JAX ms | `numpy` ms | `iree` ms | `xla` ms | JAX ÷ `xla` | JAX ÷ `iree` |
+|---|---|---|---|---|---|---|---|
+| `xor_p100` × 4 samples | 400 | 1.382 | 2.950 | 1.498 | **0.419** | **3.30×** | 0.92× |
+| `xor_p500` × 4 | 2 000 | 1.566 | 11.316 | 1.701 | 0.481 | 3.25× | 0.92× |
+| `xor_p1000` × 4 | 4 000 | 1.661 | 19.975 | 1.663 | 0.497 | 3.34× | 1.00× |
+| `xor_p100` × 500 | 50 000 | 3.430 | 94.724 | 1.885 | 0.745 | 4.60× | 1.82× |
+| `xor_p500` × 500 | 250 000 | 7.681 | 561.243 | 2.892 | 1.326 | 5.79× | 2.66× |
+| `xor_p1000` × 500 | 500 000 | 14.238 | 1 094.888 | 3.867 | 2.229 | **6.39×** | 3.68× |
+| CartPole policy forward | 100 | 1.383 | 1.801 | 1.177 | **0.450** | **3.07×** | 1.18× |
+
+The gap widens with the number of rows: the legacy side re-runs its `max_nodes`-step loop per individual call, while the tensorized sweep amortises each level's dispatch over the whole batch. The CPU reference interpreter wins only on the 400-row row, where its numpy kernel bodies are cheap and the accelerator's launch floor dominates.
+The CartPole row is the one that matters in practice: a rollout re-invokes the policy forward at every timestep, so its 3.07× is paid `max_step` times per generation.
 
 Build/compile is the one latency number that went the other way: the evoxc build is 0.30 / 0.45 / 0.61 s for `xor_p100`/`xor_p500`/`xor_p1000` against 2.99 / 2.97 / 2.96 s for `jax.jit(...).lower().compile()`, and peak RSS is 6.2× / 3.6× / 2.4× lower than the frozen JAX side on the same rows (109.2/191.5/291.6 vs 680.1/693.6/703.5 MiB) but 1.5× higher on Pagie (1299.0 vs 849.9 MiB), where the interpreter's per-generation working set grows with `pop_size × max_nodes × max_conns` while the XLA side stays close to its runtime floor.
 Both are record-only facts: they describe `63f0fc67`, not a universal property of the interpreter.
@@ -243,10 +262,10 @@ Where the rewrite does win:
 - **No JAX, no torch, no CUDA toolchain.** `import tensorneat` pulls in neither, enforced by `test/release_gate_no_jax.py`; the runtime dependency set is `evoxc`, `numpy`, `networkx`, `matplotlib`, `sympy`.
 - **The graph is data.** It is inspectable, cacheable and transformable (`evoxc.Graph`, `evoxc.lower(...)`), instead of being an opaque `jax.jit` dispatch; one executable per static shape is built once and reused.
 - **Latency to first generation.** Build 0.30 s at pop 100 vs 2.99 s of XLA compilation, and the same order for the XOR quickstart graph above, whose one quoted run printed `compile finished, cost time: 0.285115s` (the build is 0.30-0.61 s on the three XOR rows and 1.55 s on Pagie; it is a one-off per static shape).
-- **Switchable backends.** The same kernels run on IREE llvm-cpu and on an accelerator: `xla` is 12–153× faster per generation than the numpy leg on the MI300X, while on this CPU `iree` llvm-cpu is 1.54–6.63× slower (see Backends and [`benchmarks/GPU.md`](./benchmarks/GPU.md)).
+- **Switchable backends.** The same kernels run on IREE llvm-cpu and on an accelerator: `xla` is 4.9–150.6× faster per generation than the numpy leg on the MI300X and 2.7–3.2× faster than `iree` there, while on this CPU `iree` llvm-cpu is 1.54–6.63× slower (see Backends and [`benchmarks/GPU.md`](./benchmarks/GPU.md)).
 - **Memory at small scale.** Peak RSS is 2.4–6.2× lower than the frozen JAX side on the three XOR rows (109.2/191.5/291.6 vs 680.1/693.6/703.5 MiB) and 1.5× higher on Pagie (1299.0 vs 849.9 MiB).
 
-The measured bottleneck on the numpy backend is `tell` (speciation), not the forward pass, and the figures come from the hand-measured passes recorded in [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md). Profiling 20 generations at pop 500 *before* the first pass put `evoxc`'s interpreter per-op overhead (operand resolution, dtype/shape validation, `Tensor` construction, ~13 µs/op) at ~63 % of a generation against ~37 % of numpy kernel bodies and 0.1 % of host-side Python, and the two `speciate` scans at 9 160 of the 10 767 executed ops per generation (85 %). The op-count pass (`a697531` → tree `f619f46`) brought a pop-500 generation to 8 336 executed ops (−23 %; 8 340 at pop 1000), and at the post-tiling tree `90d97b4` a generation executes 8 263 ops for `xor_p500`, 11 490 for `custom_pagie_p500` and 31 604 for `cartpole_p100` (op count is a leading indicator of wall time, never a proxy: pass 1's `agg` fold *added* 16 ops and made `forward` 26 % faster). No committed artifact re-measures the overhead or speciation share after either pass. Pass 3 of the same record is measured on the merged tree (`3437e556`, whose `src/` is byte-identical to `63f0fc67`): keeping the graph and the executed op count fixed, the post-pass evoxc interpreter is 1.07–2.25× faster per generation at 12–37 % lower peak RSS, but that win lives on an evoxc branch past the pinned `v0.1.1`, so a plain `uv sync` user does not see it yet.
+The measured bottleneck on the numpy backend is `tell` (speciation), not the forward pass, and the figures come from the hand-measured passes recorded in [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md). Profiling 20 generations at pop 500 *before* the first pass put `evoxc`'s interpreter per-op overhead (operand resolution, dtype/shape validation, `Tensor` construction, ~13 µs/op) at ~63 % of a generation against ~37 % of numpy kernel bodies and 0.1 % of host-side Python, and the two `speciate` scans at 9 160 of the 10 767 executed ops per generation (85 %). The op-count pass (`a697531` → tree `f619f46`) brought a pop-500 generation to 8 336 executed ops (−23 %; 8 340 at pop 1000), and on the current tree a generation executes 7 920 ops for `xor_p500`, 11 187 for `custom_pagie_p500` and 27 860 for `cartpole_p100` (op count is a leading indicator of wall time, never a proxy: pass 1's `agg` fold *added* 16 ops and made `forward` 26 % faster). No committed artifact re-measures the overhead or speciation share after either pass. Pass 3 of the same record is measured on the merged tree (`3437e556`, whose `src/` is byte-identical to `63f0fc67`): keeping the graph and the executed op count fixed, the post-pass evoxc interpreter is 1.07–2.25× faster per generation at 12–37 % lower peak RSS, and that pass is on the pinned `evoxc` revision, so a plain `uv sync` gets it.
 
 Record map: [`benchmarks/GPU.md`](./benchmarks/GPU.md) is the accelerator matrix, [`benchmarks/BACKENDS.md`](./benchmarks/BACKENDS.md) the CPU compiled-backend evidence, and [`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md) the hand-measured numpy passes.
 
@@ -277,22 +296,22 @@ Extras:
 
 e.g. `uv sync --extra bench --extra iree` or `uv sync --all-extras`.
 
-The pinned `evoxc` v0.1.1 does not discover the `xla-rocm` plugin by itself: point `EVOXC_PJRT_PLUGIN` (or `compile_options={"plugin_path": ...}`) at `<site-packages>/jax_plugins/xla_rocm7/xla_rocm_plugin.so`; a newer `evoxc` finds an installed `jax_plugins/*/*_plugin.so` on its own.
+`evoxc` discovers an installed `jax_plugins/*/*_plugin.so` by itself, so `backend="xla"` needs no environment variable; `compile_options={"plugin_path": ...}` (or `EVOXC_PJRT_PLUGIN`) pins a different plugin.
 
-`evoxc` is resolved from the **git tag `v0.1.1`**, not from PyPI, by `[tool.uv.sources]` in `pyproject.toml`:
+`evoxc` is resolved from a **pinned upstream commit**, not from PyPI, by `[tool.uv.sources]` in `pyproject.toml`:
 
 ```toml
 [tool.uv.sources]
-evoxc = { git = "https://github.com/EMI-Group/evoxc", tag = "v0.1.1" }
+evoxc = { git = "https://github.com/EMI-Group/evoxc", rev = "fe85a534192f749a97b2f6e3b13b0800f69b8d90" }
 ```
 
-The reason is written next to the dependency in `pyproject.toml`: PyPI only ships the 0.1.0 wheel, which predates the v0.1.1 frontend work (linear `ir.verify`, two redundant verify passes removed from `lower()`, batched constant-payload emission, frame-walk source-location capture, an xla deadlock fix). Note that the tag's own package metadata still says `version = "0.1.0"`, so `evoxc.__version__` prints `0.1.0` even on the correct checkout.
+The reason is written next to the dependency in `pyproject.toml`: PyPI only ships the 0.1.0 wheel, which predates both the frontend work (linear `ir.verify`, two redundant verify passes removed from `lower()`, batched constant-payload emission, frame-walk source-location capture, an xla deadlock fix) and the numpy-interpreter performance pass (per-block dispatch plans, a flat value store, dead-value release at last use), which together are 1.07–2.25× on the numpy leg ([`benchmarks/PERF_NUMPY.md`](./benchmarks/PERF_NUMPY.md)). Note that the pinned revision's package metadata still says `version = "0.1.0"`, so `evoxc.__version__` prints `0.1.0` even on the correct checkout.
 
 ### pip (verified, but with two caveats)
 
 ```bash
-# 1. runtime deps, with evoxc from the tag (PyPI evoxc is the slower 0.1.0 wheel)
-pip install "evoxc @ git+https://github.com/EMI-Group/evoxc@v0.1.1" \
+# 1. runtime deps, with evoxc from the pinned commit (PyPI evoxc is the slower 0.1.0 wheel)
+pip install "evoxc @ git+https://github.com/EMI-Group/evoxc@fe85a534192f749a97b2f6e3b13b0800f69b8d90" \
             numpy networkx matplotlib sympy
 # 2. this package, from a checkout (or a git URL)
 git clone https://github.com/EMI-Group/tensorneat.git
@@ -302,7 +321,7 @@ pip install --no-deps ./tensorneat
 Caveats, both verified on 2026-11-04:
 
 1. **`tensorneat` has no release on PyPI** (`https://pypi.org/pypi/tensorneat/json` → 404), so `pip install tensorneat` cannot work; install from the git checkout.
-2. **`--no-deps` is required.** `pyproject.toml` declares `evoxc >= 0.1.1` and the `>= 0.1.1` floor is deliberate ("the `>= 0.1.1` floor keeps non-uv installers honest: they cannot silently resolve back to the slower 0.1.0 wheel"), but the `v0.1.1` git tag still carries `version = "0.1.0"` metadata while PyPI only has 0.1.0, so pip's resolver refuses:
+2. **`--no-deps` is required.** `pyproject.toml` declares `evoxc >= 0.1.1` and the `>= 0.1.1` floor is deliberate ("the `>= 0.1.1` floor keeps non-uv installers honest: they cannot silently resolve back to the slower 0.1.0 wheel"), but the pinned git revision still carries `version = "0.1.0"` metadata while PyPI only has 0.1.0, so pip's resolver refuses:
 
    ```
    ERROR: Could not find a version that satisfies the requirement evoxc>=0.1.1 (from tensorneat)
@@ -368,16 +387,16 @@ Measured on this box with every extra installed (`uv sync --all-extras`):
 
 ```
 $ uv run pytest
-1497 passed, 0 failed, 0 skipped in ~101s
+1520 passed, 0 failed, 0 skipped in ~102s
 ```
 
-All 1497 collected tests pass: `test/unit` 1313, `test/parity` 60, `test/integration` 60, `test/backends` 46 (3 llvm-cpu + 2 ROCm compiled-backend cases plus the 41 marker-guard cases in `test/backends/test_conftest.py`), `test/support` 9, and 9 release gates (4 in `test/release_gate_no_jax.py` + 5 in `test/test_release_gate_surface.py`). The parity tests need the `bench` extra (`jax`) and the backend tests need `--extra iree` plus a HIP device for the ROCm cases; without those extras the parity modules and the compiled-backend cases skip at import instead of failing (an explicit `-m requires_iree`/`-m requires_rocm` run fails loudly instead), and everything else runs on a bare `uv sync`.
+All 1520 collected tests pass: `test/unit` 1335, `test/parity` 60, `test/integration` 61, `test/backends` 46 (3 llvm-cpu + 2 ROCm compiled-backend cases plus the 41 marker-guard cases in `test/backends/test_conftest.py`), `test/support` 9, and 9 release gates (4 in `test/release_gate_no_jax.py` + 5 in `test/test_release_gate_surface.py`). The parity tests need the `bench` extra (`jax`) and the backend tests need `--extra iree` plus a HIP device for the ROCm cases; without those extras the parity modules and the compiled-backend cases skip at import instead of failing (an explicit `-m requires_iree`/`-m requires_rocm` run fails loudly instead), and everything else runs on a bare `uv sync`.
 
 | suite | tests | extra needed | proves |
 |---|---|---|---|
-| `test/unit/` | 1313 | none | kernels against numpy oracles: schedule derivation, forward/NaN rules, mutation/crossover invariants, speciation (both `GATED_ROWS` paths), distance, parent selection and spawn, `grad` vs finite differences, ACT/AGG tables, the three RL problems against host oracles, HyperNEAT substrates/weights/genes plus a two-generation end-to-end run, version metadata, and the benchmark harness's own protocol/report/fingerprint |
+| `test/unit/` | 1335 | none | kernels against numpy oracles: schedule derivation, forward/NaN rules, mutation/crossover invariants, speciation (both `GATED_ROWS` paths), distance, parent selection and spawn, `grad` vs finite differences, ACT/AGG tables, the three RL problems against host oracles, HyperNEAT substrates/weights/genes plus a two-generation end-to-end run, version metadata, and the benchmark harness's own protocol/report/fingerprint |
 | `test/parity/` | 60 | `--extra bench` | the same kernels on identical payloads against `benchmarks/legacy_jax` (rtol 1e-5 forward, 1e-4 gradients), marker `parity`; `test_oracle_integrity.py` additionally pins that the oracle stays a separate implementation, that its four modules are actually collected, and that the directory still collects 60 tests |
-| `test/integration/` | 60 | none | whole-pipeline XOR evolution, per-seed determinism, rebuild on shape change, checkpoint round-trip, `show(state, best)`, the `ask`/`tell` diagnostics hook, chunked evaluate and its guard, the `host_payload=False` opt-out and `materialize_payload`, `auto_run` stopping, HyperNEAT end to end, RL golden returns, marker `slow` |
+| `test/integration/` | 61 | none | whole-pipeline XOR evolution, per-seed determinism, rebuild on shape change, checkpoint round-trip, `show(state, best)`, the `ask`/`tell` diagnostics hook, chunked evaluate and its guard, the `host_payload=False` opt-out and `materialize_payload`, `auto_run` stopping, HyperNEAT end to end, RL golden returns, marker `slow` |
 | `test/backends/` | 46 | `--extra iree`, plus a HIP device for the 2 ROCm cases | `backend="iree"` end to end on llvm-cpu (3 cases) and on a real ROCm device with `device="rocm"` + `target_backends=["rocm"]` (2 cases, skipping with a named reason without `/dev/kfd` or a HIP device), both agreeing with numpy on the same seed and rejecting an unknown compile option instead of falling back; the marker-guard suite `test_conftest.py` (41 cases, no extra) pins the `implies_requires_iree`/`requires_rocm` `-m` truth table and the announced IREE 3.13 install command |
 | `test/support/` | 9 | none | `test_lazy.py` pins the lazy-import helper (`support/lazy.py`): it imports a suite's package when the fixture runs, propagates every error by default (`NotImplementedError` included — a pending implementation is a defect), and skips only an explicit `allow_pending=True` `NotImplementedError` raised inside `src/tensorneat`; the rest of the directory (`runner.py`, `payloads.py`, `oracle.py`, `functions_ref.py`) is imported by the other suites rather than collected |
 | `test/release_gate_no_jax.py` + `test/test_release_gate_surface.py` | 4 + 5 | none | import hygiene — `import tensorneat` leaves `jax`, `jaxlib`, `torch`, `brax`, `gymnax`, `mujoco` out of `sys.modules`, even under an import hook that raises for them, and a tiny XOR run still evolves — plus the package surface: every module imports in a fresh subprocess, every `__all__` name resolves, and no `src/` file imports a forbidden framework |

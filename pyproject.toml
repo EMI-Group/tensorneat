@@ -74,9 +74,11 @@ docs = ["sphinx >= 7.0", "sphinx-rtd-theme"]
 "Bug Tracker" = "https://github.com/EMI-Group/tensorneat/issues"
 
 # uv-only resolution override: the runtime dependency above stays a normal
-# version constraint, while uv resolves it from the v0.1.1 tag. This only
-# affects uv (`uv lock` / `uv sync`); pip and other installers still see the
-# plain `evoxc >= 0.1.1` requirement.
+# version constraint, while uv resolves it from the pinned upstream commit on
+# `main` (PyPI only ships 0.1.0, which predates both the frontend work and the
+# numpy-interpreter performance pass). This only affects uv (`uv lock` /
+# `uv sync`); pip and other installers still see the plain `evoxc >= 0.1.1`
+# requirement.
 [tool.uv.sources]
 evoxc = { git = "https://github.com/EMI-Group/evoxc", rev = "fe85a534192f749a97b2f6e3b13b0800f69b8d90" }
 
