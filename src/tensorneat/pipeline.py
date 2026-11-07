@@ -147,6 +147,15 @@ _RUNTIME_KEYS: tuple[str, ...] = ("pop", "generation", "species", "randkey")
 #: key is forwarded unchanged.
 _DEVICE_TARGETING_OPTIONS: tuple[str, ...] = ("device", "target_backends")
 
+#: Backends that own no CPU-capable device, mapped to the backend their
+#: **host-only** setup/reporting graphs run on instead. ``"xla"`` drives a PJRT
+#: plugin whose platform follows the installed plugin (``rocm`` here), so it
+#: refuses to build for ``Device("cpu", 0)``; those graphs are host-side
+#: orchestration whose resulting tensors are placed on the real device afterwards
+#: (:meth:`Pipeline._place_state`), so the reference interpreter serves them.
+#: Every other backend keeps building its own host artifact on llvm-cpu.
+_HOST_BACKEND_FALLBACKS: dict[str, str] = {"xla": "numpy"}
+
 
 # The host payload helpers (``_NetworkActFn``, ``_one_individual``, ...) live in
 # :mod:`tensorneat.host_payload` and are imported above.
@@ -462,12 +471,17 @@ class Pipeline(StatefulBaseClass):
         is the host ``randkey`` and ``evoxc.run`` never transfers across
         devices. A CPU run cannot execute an artifact compiled for the
         accelerator either, so the device-targeting ``compile_options`` entries
-        are stripped for that phase (:meth:`_host_build_options`). Only after
-        ``problem.setup`` are the real ``device`` and ``compile_options``
-        registered and the runtime tensors placed on the device
+        are stripped for that phase (:meth:`_host_build_options`), and a backend
+        that owns no CPU device at all -- ``"xla"``, whose PJRT plugin follows
+        the installed platform -- runs that phase on the reference interpreter
+        (:meth:`_host_backend`). The host phase is orchestration only: its
+        ``backend`` entry is the host backend, and after ``problem.setup`` the
+        requested ``backend`` is registered with the real ``device`` and
+        ``compile_options`` and the runtime tensors are placed on the device
         (:meth:`_place_state`), so generation 0 and every later :meth:`step` are
-        fully device-resident. With ``device=None`` nothing is placed and the
-        state is returned with its configuration unchanged.
+        fully device-resident and use the requested backend. With ``device=None``
+        nothing is placed and the state is returned with its configuration
+        unchanged.
 
         Args:
             state (State, optional): Base state to extend; ``None`` -- spelled
@@ -497,23 +511,29 @@ class Pipeline(StatefulBaseClass):
         ) = _formulation_statics(self.device)
         state = state.register(randkey=evoxc.random.key(self.seed))
         state = state.register(
-            backend=self.backend,
-            distance_centre=self.distance_centre,
-            distance_formulation=self.distance_formulation,
-            kernel_mode=self.kernel_mode,
             # Setup graphs stay on CPU: ``algorithm.setup`` runs its
             # initialisation graph on ``randkey``, which is host memory, and a
             # CPU run cannot execute an artifact compiled for the accelerator.
+            # A backend with no CPU device builds that phase on the reference
+            # interpreter; the requested one is registered again below.
+            backend=self._host_backend(),
+            distance_centre=self.distance_centre,
+            distance_formulation=self.distance_formulation,
+            kernel_mode=self.kernel_mode,
             device=None,
             compile_options=self._host_build_options(),
         )
         state = self.algorithm.setup(state)
         state = self.problem.setup(state)
 
-        # The real device and compile options are registered only now, then the
-        # runtime tensors are placed once: every later generation runs and stays
-        # on that device.
-        state = state.update(device=self.device, compile_options=self.compile_options)
+        # The requested backend, device and compile options are registered only
+        # now, then the runtime tensors are placed once: every later generation
+        # runs and stays on that device.
+        state = state.update(
+            backend=self.backend,
+            device=self.device,
+            compile_options=self.compile_options,
+        )
         if self.device is not None:
             state = self._place_state(state)
 
@@ -606,6 +626,32 @@ class Pipeline(StatefulBaseClass):
             + (eval_chunk_rows(self._device_kind(), max_nodes),)
         )
 
+    def _host_backend(self) -> str:
+        """The backend the CPU-only setup/reporting graphs build on.
+
+        The setup phase registers ``device=None`` for its graphs, so the backend
+        it names must be able to serve ``Device("cpu", 0)``. ``"xla"`` cannot:
+        it drives a PJRT C API plugin, and the installed plugin's platform (here
+        ``rocm``) is the only device kind it serves, so a CPU build raises
+        ``evoxc``'s own ``BackendError``. Such a backend therefore hands that
+        phase to the reference interpreter (:data:`_HOST_BACKEND_FALLBACKS`);
+        every other backend -- ``numpy`` and ``iree``, which compiles an
+        llvm-cpu artifact when no device is named -- keeps building its own host
+        artifact.
+
+        This is not a silent fallback for the *run*: the host graphs are
+        host-side orchestration only (initialisation, schedule derivation,
+        reporting), their result tensors are host tensors, and
+        :meth:`_place_state` puts them on the requested device afterwards, while
+        the requested backend is registered again before generation 0. A backend
+        that cannot reach its requested device still raises.
+
+        Returns:
+            str: :data:`_HOST_BACKEND_FALLBACKS`'s entry for :attr:`backend`, or
+            :attr:`backend` itself.
+        """
+        return _HOST_BACKEND_FALLBACKS.get(self.backend, self.backend)
+
     def _host_build_options(self) -> Optional[dict]:
         """The compile options the CPU-only setup graphs may see.
 
@@ -617,9 +663,18 @@ class Pipeline(StatefulBaseClass):
         it is run on. Every unrelated key (``iree_compile_args``,
         ``iree_runtime_args``, flags, ...) is preserved, and ``None`` stays
         ``None``.
+
+        When the host phase runs on a *different* backend than the requested one
+        (:meth:`_host_backend` -- the reference interpreter for ``"xla"``), the
+        whole mapping is dropped: those keys describe the requested backend's
+        device and compiler (``plugin_path``, ``target_backends``, compiler
+        flags), and the reference interpreter must not receive options it does
+        not recognize.
         """
         if not self.compile_options:
             return self.compile_options
+        if self._host_backend() != self.backend:
+            return None
         return {
             key: value
             for key, value in self.compile_options.items()
@@ -634,19 +689,30 @@ class Pipeline(StatefulBaseClass):
         defaulted or rewritten: a backend that cannot compile a kernel raises its
         own error instead of falling back.
 
-        ``state`` selects *whose* device is forwarded: the generation graph
-        passes the real state (:attr:`device`), while a host-reporting call
-        passes :meth:`_host_view`'s state, whose ``device`` entry is ``None``,
+        ``state`` selects *whose* build selection is forwarded -- its
+        ``backend``/``device``/``compile_options`` entries win when registered,
+        :attr:`backend`/:attr:`device`/:attr:`compile_options` otherwise: the
+        generation graph passes the real state, whose entries are the requested
+        backend and device (:meth:`setup` registers them before generation 0),
+        while a host-reporting call passes :meth:`_host_view`'s state, whose
+        entries are the CPU host phase -- ``device=None`` plus the host backend
+        (:meth:`_host_backend`) and its options (:meth:`_host_build_options`) --
         so reports build and run on the CPU side-channel instead of paying a
         fresh compile on the requested device.
         """
         registered = state.registered_keys() if state is not None else ()
+        backend = state.backend if "backend" in registered else self.backend
         device = state.device if "device" in registered else self.device
-        options: dict[str, Any] = {"backend": self.backend}
+        compile_options = (
+            state.compile_options
+            if "compile_options" in registered
+            else self.compile_options
+        )
+        options: dict[str, Any] = {"backend": backend}
         if device is not None:
             options["device"] = device
-        if self.compile_options:
-            options.update(dict(self.compile_options))
+        if compile_options:
+            options.update(dict(compile_options))
         return options
 
     def _placement_device(self) -> Optional[Any]:
@@ -705,10 +771,20 @@ class Pipeline(StatefulBaseClass):
         move stays ``Tensor.to``, which returns ``self`` on the tensor's own
         device, so the call is idempotent, a CPU placement copies nothing, and
         the default ``device=None`` path returns the state untouched.
+
+        Uploading goes through the *requested* backend's placement provider:
+        ``Tensor.to`` dispatches to the preferred transfer backend's provider
+        for the target kind, and that preference is recorded by the backend
+        registry on lookup, so :attr:`backend` is resolved first -- a registry
+        lookup only (no plugin load, no compile) -- instead of letting another
+        adapter's flat default provider supply a payload the requested backend's
+        executables would reject. A backend with no provider for that kind
+        (``"numpy"``) leaves the registry preference untouched.
         """
         device = self._placement_device()
         if device is None:
             return state
+        evoxc.backends.get(self.backend)
 
         def place(leaf: Any) -> Any:
             """Move one tensor leaf to ``device``; leave host values alone."""
@@ -736,12 +812,14 @@ class Pipeline(StatefulBaseClass):
         the two ``show_details`` hooks) consume host data (``evoxc.from_numpy``
         / ``evoxc.constant`` are CPU-only), so they keep building and running on
         the CPU side-channel: this view registers ``device=None`` (its build
-        options carry no device) and moves the runtime tensors to
-        ``Device("cpu", 0)``. That move is evoxc's explicit D2H transfer
-        (``Tensor.to(cpu)`` materialises a fresh host copy of a device payload),
-        so a device-resident state is never rejected and the result is never fed
-        back into evolution. The default ``device=None`` path returns ``state``
-        itself.
+        options carry no device) together with the host phase's backend and
+        options (:meth:`_host_backend` / :meth:`_host_build_options` -- the
+        reference interpreter for a backend that owns no CPU device), and moves
+        the runtime tensors to ``Device("cpu", 0)``. That move is evoxc's
+        explicit D2H transfer (``Tensor.to(cpu)`` materialises a fresh host copy
+        of a device payload), so a device-resident state is never rejected and
+        the result is never fed back into evolution. The default ``device=None``
+        path returns ``state`` itself.
         """
         if self.device is None:
             return state
@@ -756,7 +834,19 @@ class Pipeline(StatefulBaseClass):
             for name in _RUNTIME_KEYS
             if name in state.registered_keys()
         }
-        return state.update(device=None, **placed)
+        backend = (
+            self._host_backend()
+            if "backend" in state.registered_keys()
+            else self.backend
+        )
+        compile_options = (
+            self._host_build_options()
+            if "compile_options" in state.registered_keys()
+            else self.compile_options
+        )
+        return state.update(
+            backend=backend, device=None, compile_options=compile_options, **placed
+        )
 
     def _static_config(self, state: State) -> State:
         """The tensor-free configuration ``State`` baked into the graph.
