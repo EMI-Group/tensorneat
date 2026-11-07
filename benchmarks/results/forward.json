@@ -1,13 +1,13 @@
 {
   "schema": "tensorneat-forward/1",
   "meta": {
-    "command": "/root/tensorneat/.genesis/workers/worker_T1_A3/.venv/bin/python benchmarks/forward_measure.py matrix --workloads all --targets numpy,iree-rocm,jax --passes 10 --warmup 3 --json benchmarks/results/forward.json --out benchmarks/FORWARD.md --report-note 'This is the batch forward-pass record of this session: one forward pass of a fixed population, measured per target in its own process. It says nothing about HEAD beyond the tree its fingerprint names.'",
+    "command": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/bin/python benchmarks/forward_measure.py matrix --workloads all --targets numpy,iree-rocm,xla-rocm,jax --passes 10 --warmup 3 --pjrt-plugin /root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so --json benchmarks/results/forward.json --out benchmarks/FORWARD.md --report-note 'This is the batch forward-pass record of this session: one forward pass of a fixed population, measured per target (numpy CPU reference, iree rocm, xla rocm and the frozen JAX baseline) in its own fresh process. It says nothing about HEAD beyond the tree its fingerprint names.'",
     "report_title": "TensorNEAT batch forward pass \u2014 new evoxc vs frozen JAX",
-    "report_note": "This is the batch forward-pass record of this session: one forward pass of a fixed population, measured per target in its own process. It says nothing about HEAD beyond the tree its fingerprint names.",
-    "created_utc": "2026-11-07T08:08:22+00:00",
+    "report_note": "This is the batch forward-pass record of this session: one forward pass of a fixed population, measured per target (numpy CPU reference, iree rocm, xla rocm and the frozen JAX baseline) in its own fresh process. It says nothing about HEAD beyond the tree its fingerprint names.",
+    "created_utc": "2026-11-07T08:17:07+00:00",
     "session_utc": {
-      "start": "2026-11-07T08:08:22+00:00",
-      "end": "2026-11-07T08:10:15+00:00"
+      "start": "2026-11-07T08:17:07+00:00",
+      "end": "2026-11-07T08:19:54+00:00"
     },
     "protocol": {
       "one_forward_configuration_per_process": true,
@@ -91,6 +91,7 @@
     "targets": [
       "numpy",
       "iree-rocm",
+      "xla-rocm",
       "jax"
     ],
     "env": {
@@ -113,11 +114,11 @@
         "XLA_FLAGS": null
       },
       "loadavg": [
-        2.58,
-        2.89,
-        2.56
+        6.42,
+        5.17,
+        3.67
       ],
-      "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+      "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
       "git_dirty": false,
       "git_dirty_paths": [],
       "probe_error": null,
@@ -141,6 +142,12 @@
         },
         "rocm_smi_error": null
       }
+    },
+    "pjrt_plugin": {
+      "path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+      "basename": "xla_rocm_plugin.so",
+      "size_bytes": 503453288,
+      "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
     }
   },
   "records": [
@@ -183,7 +190,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:08:22+00:00",
+      "timestamp_utc": "2026-11-07T08:17:07+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -204,11 +211,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          0.98,
-          3.05,
-          2.58
+          5.6,
+          3.95,
+          3.03
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -235,7 +242,7 @@
       },
       "device_memory": {
         "vram_total_mib": 196288.0,
-        "vram_used_mib": 285.9,
+        "vram_used_mib": 147517.1,
         "error": null
       },
       "device_info": {
@@ -287,8 +294,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 0.01488,
-      "build_s": 0.057577,
+      "setup_s": 0.015485,
+      "build_s": 0.059016,
       "output": {
         "shape": [
           400,
@@ -300,25 +307,25 @@
       },
       "peak_rss_mib": 134.27,
       "ms_per_forward": {
-        "mean": 2.8039,
-        "median": 2.8065,
-        "min": 2.7666,
-        "max": 2.8461,
+        "mean": 2.9763,
+        "median": 2.9505,
+        "min": 2.8848,
+        "max": 3.094,
         "samples": [
-          2.793,
-          2.824,
-          2.8461,
-          2.8076,
-          2.8062,
-          2.7809,
-          2.8313,
-          2.8068,
-          2.7765,
-          2.7666
+          2.9483,
+          3.094,
+          2.9324,
+          2.9229,
+          2.8848,
+          2.9798,
+          3.0468,
+          3.0641,
+          2.9376,
+          2.9527
         ]
       },
-      "forwards_per_second": 356.3152,
-      "rows_per_second": 142526.0976
+      "forwards_per_second": 338.9255,
+      "rows_per_second": 135570.1943
     },
     {
       "workload": "xor_p100_s4",
@@ -363,7 +370,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:08:23+00:00",
+      "timestamp_utc": "2026-11-07T08:17:08+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -384,11 +391,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          0.98,
-          3.05,
-          2.58
+          5.6,
+          3.95,
+          3.03
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -415,7 +422,7 @@
       },
       "device_memory": {
         "vram_total_mib": 196288.0,
-        "vram_used_mib": 285.9,
+        "vram_used_mib": 149094.2,
         "error": null
       },
       "device_info": {
@@ -471,8 +478,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 1.193481,
-      "build_s": 1.584227,
+      "setup_s": 1.280328,
+      "build_s": 1.557985,
       "output": {
         "shape": [
           400,
@@ -482,27 +489,213 @@
         "mean": 0.5259560942649841,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 1879.38,
+      "peak_rss_mib": 1879.82,
       "ms_per_forward": {
-        "mean": 1.4823,
-        "median": 1.4813,
-        "min": 1.4492,
-        "max": 1.5353,
+        "mean": 1.5021,
+        "median": 1.498,
+        "min": 1.4786,
+        "max": 1.5536,
         "samples": [
-          1.482,
-          1.475,
-          1.5353,
-          1.4682,
-          1.4806,
-          1.4987,
-          1.4634,
-          1.484,
-          1.4492,
-          1.4864
+          1.4872,
+          1.5019,
+          1.4952,
+          1.4812,
+          1.5134,
+          1.5007,
+          1.5536,
+          1.4786,
+          1.4905,
+          1.5185
         ]
       },
-      "forwards_per_second": 675.0724,
-      "rows_per_second": 270028.9644
+      "forwards_per_second": 667.5668,
+      "rows_per_second": 267026.7024
+    },
+    {
+      "workload": "xor_p100_s4",
+      "case": "xor_p100",
+      "target": "xla-rocm",
+      "impl": "new",
+      "backend": "xla",
+      "device": "rocm",
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "pop_size": 100,
+      "samples": 4,
+      "rows": 400,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": false,
+      "jax_allocator": null,
+      "timestamp_utc": "2026-11-07T08:17:12+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          5.31,
+          3.92,
+          3.02
+        ],
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 148055.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "new",
+        "backend": "xla",
+        "device": "rocm:0",
+        "device_kind": "rocm",
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "payload_device": "Device(kind='rocm', index=0)",
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 8.442909,
+      "build_s": 0.400881,
+      "output": {
+        "shape": [
+          400,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.5259560942649841,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 9167.28,
+      "ms_per_forward": {
+        "mean": 0.4252,
+        "median": 0.4193,
+        "min": 0.4134,
+        "max": 0.4554,
+        "samples": [
+          0.4554,
+          0.4255,
+          0.4169,
+          0.4134,
+          0.4257,
+          0.4165,
+          0.4207,
+          0.4147,
+          0.4179,
+          0.4453
+        ]
+      },
+      "forwards_per_second": 2384.919,
+      "rows_per_second": 953967.6128
     },
     {
       "workload": "xor_p100_s4",
@@ -543,7 +736,7 @@
       "error": null,
       "jax_imported": null,
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T08:08:26+00:00",
+      "timestamp_utc": "2026-11-07T08:17:22+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -564,11 +757,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          0.98,
-          3.05,
-          2.58
+          6.79,
+          4.28,
+          3.15
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -595,7 +788,7 @@
       },
       "device_memory": {
         "vram_total_mib": 196288.0,
-        "vram_used_mib": 285.9,
+        "vram_used_mib": 193938.8,
         "error": null
       },
       "device_info": {
@@ -649,8 +842,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 3.424412,
-      "build_s": 0.303239,
+      "setup_s": 3.434215,
+      "build_s": 0.297108,
       "output": {
         "shape": [
           100,
@@ -661,27 +854,27 @@
         "mean": 0.514570951461792,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 4702.39,
+      "peak_rss_mib": 4702.75,
       "ms_per_forward": {
-        "mean": 1.4261,
-        "median": 1.4148,
-        "min": 1.3802,
-        "max": 1.4974,
+        "mean": 1.3833,
+        "median": 1.3824,
+        "min": 1.343,
+        "max": 1.423,
         "samples": [
-          1.4207,
-          1.4106,
-          1.404,
-          1.4177,
-          1.46,
-          1.4119,
-          1.4514,
-          1.4072,
-          1.4974,
-          1.3802
+          1.3759,
+          1.423,
+          1.375,
+          1.3615,
+          1.3815,
+          1.343,
+          1.3843,
+          1.3833,
+          1.4179,
+          1.3876
         ]
       },
-      "forwards_per_second": 706.7969,
-      "rows_per_second": 282718.7612
+      "forwards_per_second": 723.3741,
+      "rows_per_second": 289349.6486
     },
     {
       "workload": "xor_p500_s4",
@@ -722,7 +915,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:08:34+00:00",
+      "timestamp_utc": "2026-11-07T08:17:33+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -743,11 +936,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.14,
-          3.02,
-          2.57
+          8.26,
+          4.7,
+          3.3
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -826,8 +1019,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 0.016694,
-      "build_s": 0.110659,
+      "setup_s": 0.015465,
+      "build_s": 0.103926,
       "output": {
         "shape": [
           2000,
@@ -837,27 +1030,27 @@
         "mean": 0.5001996755599976,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 153.15,
+      "peak_rss_mib": 152.98,
       "ms_per_forward": {
-        "mean": 11.6163,
-        "median": 11.6549,
-        "min": 11.2757,
-        "max": 11.986,
+        "mean": 11.2977,
+        "median": 11.3156,
+        "min": 10.8787,
+        "max": 11.6551,
         "samples": [
-          11.7922,
-          11.7042,
-          11.3824,
-          11.5793,
-          11.3551,
-          11.6695,
-          11.986,
-          11.7779,
-          11.6403,
-          11.2757
+          11.2813,
+          11.3225,
+          11.101,
+          11.6551,
+          11.5687,
+          11.5074,
+          11.4599,
+          11.3087,
+          10.8787,
+          10.894
         ]
       },
-      "forwards_per_second": 85.8008,
-      "rows_per_second": 171601.5354
+      "forwards_per_second": 88.3737,
+      "rows_per_second": 176747.4653
     },
     {
       "workload": "xor_p500_s4",
@@ -902,7 +1095,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:08:35+00:00",
+      "timestamp_utc": "2026-11-07T08:17:34+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -923,11 +1116,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.14,
-          3.02,
-          2.57
+          8.26,
+          4.7,
+          3.3
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -1010,8 +1203,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 1.218286,
-      "build_s": 1.685979,
+      "setup_s": 1.273649,
+      "build_s": 1.786175,
       "output": {
         "shape": [
           2000,
@@ -1021,27 +1214,213 @@
         "mean": 0.5001996755599976,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 1891.52,
+      "peak_rss_mib": 1891.3,
       "ms_per_forward": {
-        "mean": 1.7215,
-        "median": 1.7155,
-        "min": 1.6709,
-        "max": 1.7702,
+        "mean": 1.7028,
+        "median": 1.7007,
+        "min": 1.6629,
+        "max": 1.7549,
         "samples": [
-          1.7495,
-          1.7133,
-          1.7395,
-          1.7702,
-          1.7479,
-          1.6709,
-          1.7075,
-          1.702,
-          1.6968,
-          1.7176
+          1.6773,
+          1.7202,
+          1.7101,
+          1.6914,
+          1.7357,
+          1.7152,
+          1.7549,
+          1.6762,
+          1.6629,
+          1.6841
         ]
       },
-      "forwards_per_second": 582.9342,
-      "rows_per_second": 1165868.379
+      "forwards_per_second": 587.9788,
+      "rows_per_second": 1175957.6827
+    },
+    {
+      "workload": "xor_p500_s4",
+      "case": "xor_p500",
+      "target": "xla-rocm",
+      "impl": "new",
+      "backend": "xla",
+      "device": "rocm",
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "pop_size": 500,
+      "samples": 4,
+      "rows": 2000,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": false,
+      "jax_allocator": null,
+      "timestamp_utc": "2026-11-07T08:17:38+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          7.84,
+          4.67,
+          3.3
+        ],
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "new",
+        "backend": "xla",
+        "device": "rocm:0",
+        "device_kind": "rocm",
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "payload_device": "Device(kind='rocm', index=0)",
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 4.1215,
+      "build_s": 0.545257,
+      "output": {
+        "shape": [
+          2000,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.5001996755599976,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 9185.11,
+      "ms_per_forward": {
+        "mean": 0.4853,
+        "median": 0.4813,
+        "min": 0.454,
+        "max": 0.529,
+        "samples": [
+          0.5106,
+          0.529,
+          0.4845,
+          0.4859,
+          0.4781,
+          0.454,
+          0.5115,
+          0.4667,
+          0.4697,
+          0.4632
+        ]
+      },
+      "forwards_per_second": 2077.6628,
+      "rows_per_second": 4155325.5048
     },
     {
       "workload": "xor_p500_s4",
@@ -1082,7 +1461,7 @@
       "error": null,
       "jax_imported": null,
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T08:08:39+00:00",
+      "timestamp_utc": "2026-11-07T08:17:44+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -1103,11 +1482,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.21,
-          3.0,
-          2.57
+          7.29,
+          4.61,
+          3.29
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -1134,7 +1513,7 @@
       },
       "device_memory": {
         "vram_total_mib": 196288.0,
-        "vram_used_mib": 285.9,
+        "vram_used_mib": 147513.6,
         "error": null
       },
       "device_info": {
@@ -1188,8 +1567,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 3.354754,
-      "build_s": 0.317269,
+      "setup_s": 3.302431,
+      "build_s": 0.299509,
       "output": {
         "shape": [
           500,
@@ -1200,27 +1579,27 @@
         "mean": 0.5041775107383728,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 4720.68,
+      "peak_rss_mib": 4712.44,
       "ms_per_forward": {
-        "mean": 1.5559,
-        "median": 1.5541,
-        "min": 1.5201,
-        "max": 1.6173,
+        "mean": 1.5676,
+        "median": 1.5659,
+        "min": 1.5324,
+        "max": 1.6096,
         "samples": [
-          1.5716,
-          1.5467,
-          1.5599,
-          1.5568,
-          1.5514,
-          1.5612,
-          1.6173,
-          1.5201,
-          1.5463,
-          1.5273
+          1.5563,
+          1.5999,
+          1.5722,
+          1.5611,
+          1.5554,
+          1.5706,
+          1.5324,
+          1.6096,
+          1.5426,
+          1.5756
         ]
       },
-      "forwards_per_second": 643.4417,
-      "rows_per_second": 1286883.3219
+      "forwards_per_second": 638.6201,
+      "rows_per_second": 1277240.2883
     },
     {
       "workload": "xor_p1000_s4",
@@ -1261,7 +1640,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:08:46+00:00",
+      "timestamp_utc": "2026-11-07T08:17:52+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -1282,11 +1661,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.27,
-          2.98,
-          2.57
+          7.58,
+          4.77,
+          3.35
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -1365,8 +1744,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 0.01683,
-      "build_s": 0.158758,
+      "setup_s": 0.01804,
+      "build_s": 0.174018,
       "output": {
         "shape": [
           4000,
@@ -1376,27 +1755,27 @@
         "mean": 0.4979352355003357,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 176.49,
+      "peak_rss_mib": 176.44,
       "ms_per_forward": {
-        "mean": 21.1636,
-        "median": 21.2577,
-        "min": 20.3937,
-        "max": 21.7584,
+        "mean": 19.963,
+        "median": 19.9748,
+        "min": 19.808,
+        "max": 20.0789,
         "samples": [
-          21.2357,
-          20.4092,
-          21.3812,
-          21.3585,
-          21.2796,
-          21.1886,
-          20.3937,
-          21.7584,
-          21.6128,
-          21.0186
+          19.987,
+          20.0628,
+          19.9626,
+          20.0627,
+          19.808,
+          20.0789,
+          19.8308,
+          19.9084,
+          19.8993,
+          20.0299
         ]
       },
-      "forwards_per_second": 47.0418,
-      "rows_per_second": 188167.3684
+      "forwards_per_second": 50.0631,
+      "rows_per_second": 200252.3477
     },
     {
       "workload": "xor_p1000_s4",
@@ -1441,7 +1820,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:08:47+00:00",
+      "timestamp_utc": "2026-11-07T08:17:53+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -1462,11 +1841,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.33,
-          2.97,
-          2.56
+          7.58,
+          4.77,
+          3.35
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -1549,8 +1928,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 1.223896,
-      "build_s": 1.736697,
+      "setup_s": 1.233174,
+      "build_s": 1.778892,
       "output": {
         "shape": [
           4000,
@@ -1560,27 +1939,213 @@
         "mean": 0.4979352355003357,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 1904.2,
+      "peak_rss_mib": 1907.55,
       "ms_per_forward": {
-        "mean": 1.6386,
-        "median": 1.6452,
-        "min": 1.6081,
-        "max": 1.6568,
+        "mean": 1.6696,
+        "median": 1.6632,
+        "min": 1.6394,
+        "max": 1.7235,
         "samples": [
-          1.656,
-          1.6437,
-          1.6568,
-          1.6485,
-          1.6467,
-          1.6538,
-          1.6168,
-          1.6327,
-          1.6081,
-          1.6231
+          1.6785,
+          1.6616,
+          1.6564,
+          1.6762,
+          1.6815,
+          1.6394,
+          1.6608,
+          1.6527,
+          1.6649,
+          1.7235
         ]
       },
-      "forwards_per_second": 607.8312,
-      "rows_per_second": 2431324.8711
+      "forwards_per_second": 601.2349,
+      "rows_per_second": 2404939.6526
+    },
+    {
+      "workload": "xor_p1000_s4",
+      "case": "xor_p1000",
+      "target": "xla-rocm",
+      "impl": "new",
+      "backend": "xla",
+      "device": "rocm",
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "pop_size": 1000,
+      "samples": 4,
+      "rows": 4000,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": false,
+      "jax_allocator": null,
+      "timestamp_utc": "2026-11-07T08:17:57+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          7.05,
+          4.7,
+          3.34
+        ],
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "new",
+        "backend": "xla",
+        "device": "rocm:0",
+        "device_kind": "rocm",
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "payload_device": "Device(kind='rocm', index=0)",
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p1000",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 1000,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 4.072499,
+      "build_s": 0.677838,
+      "output": {
+        "shape": [
+          4000,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.4979352355003357,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 9211.72,
+      "ms_per_forward": {
+        "mean": 0.4957,
+        "median": 0.4967,
+        "min": 0.4727,
+        "max": 0.5132,
+        "samples": [
+          0.5132,
+          0.5085,
+          0.4981,
+          0.4856,
+          0.4995,
+          0.4996,
+          0.4935,
+          0.4911,
+          0.4727,
+          0.4953
+        ]
+      },
+      "forwards_per_second": 2013.3644,
+      "rows_per_second": 8053457.5444
     },
     {
       "workload": "xor_p1000_s4",
@@ -1621,7 +2186,7 @@
       "error": null,
       "jax_imported": null,
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T08:08:51+00:00",
+      "timestamp_utc": "2026-11-07T08:18:03+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -1642,11 +2207,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.33,
-          2.97,
-          2.56
+          6.64,
+          4.66,
+          3.33
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -1673,7 +2238,7 @@
       },
       "device_memory": {
         "vram_total_mib": 196288.0,
-        "vram_used_mib": 285.9,
+        "vram_used_mib": 148367.7,
         "error": null
       },
       "device_info": {
@@ -1727,8 +2292,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 3.414422,
-      "build_s": 0.338703,
+      "setup_s": 3.432297,
+      "build_s": 0.295923,
       "output": {
         "shape": [
           1000,
@@ -1739,27 +2304,27 @@
         "mean": 0.4983142912387848,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 4716.59,
+      "peak_rss_mib": 4723.73,
       "ms_per_forward": {
-        "mean": 1.651,
-        "median": 1.6363,
-        "min": 1.5942,
-        "max": 1.7577,
+        "mean": 1.6679,
+        "median": 1.6611,
+        "min": 1.6191,
+        "max": 1.7734,
         "samples": [
-          1.6142,
-          1.6105,
-          1.6473,
-          1.6286,
-          1.7219,
-          1.6425,
-          1.5942,
-          1.6633,
-          1.7577,
-          1.63
+          1.7734,
+          1.6589,
+          1.6535,
+          1.6191,
+          1.6738,
+          1.6632,
+          1.6268,
+          1.6837,
+          1.6551,
+          1.6709
         ]
       },
-      "forwards_per_second": 611.148,
-      "rows_per_second": 2444591.8556
+      "forwards_per_second": 602.016,
+      "rows_per_second": 2408064.018
     },
     {
       "workload": "xor_p100_s500",
@@ -1800,7 +2365,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:08:59+00:00",
+      "timestamp_utc": "2026-11-07T08:18:11+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -1821,11 +2386,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.43,
-          2.94,
-          2.56
+          7.55,
+          4.88,
+          3.41
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -1904,8 +2469,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 0.014944,
-      "build_s": 0.135044,
+      "setup_s": 0.015492,
+      "build_s": 0.144152,
       "output": {
         "shape": [
           50000,
@@ -1915,27 +2480,27 @@
         "mean": 0.5233384966850281,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 311.0,
+      "peak_rss_mib": 311.02,
       "ms_per_forward": {
-        "mean": 85.812,
-        "median": 85.7851,
-        "min": 84.2709,
-        "max": 87.3911,
+        "mean": 94.4535,
+        "median": 94.7239,
+        "min": 91.6512,
+        "max": 98.9555,
         "samples": [
-          84.3721,
-          84.5588,
-          87.2082,
-          84.2709,
-          85.2182,
-          87.3911,
-          86.3205,
-          85.871,
-          87.2094,
-          85.6993
+          91.6512,
+          94.5002,
+          95.4173,
+          92.523,
+          92.2453,
+          92.1671,
+          94.9475,
+          98.9555,
+          96.5508,
+          95.577
         ]
       },
-      "forwards_per_second": 11.657,
-      "rows_per_second": 582851.6748
+      "forwards_per_second": 10.557,
+      "rows_per_second": 527850.075
     },
     {
       "workload": "xor_p100_s500",
@@ -1980,7 +2545,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:09:01+00:00",
+      "timestamp_utc": "2026-11-07T08:18:13+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -2001,11 +2566,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.43,
-          2.94,
-          2.56
+          7.03,
+          4.81,
+          3.4
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -2088,8 +2653,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 1.251649,
-      "build_s": 1.617344,
+      "setup_s": 1.230706,
+      "build_s": 1.70053,
       "output": {
         "shape": [
           50000,
@@ -2099,27 +2664,213 @@
         "mean": 0.5233384966850281,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 1885.57,
+      "peak_rss_mib": 1884.97,
       "ms_per_forward": {
-        "mean": 1.7603,
-        "median": 1.7646,
-        "min": 1.7275,
-        "max": 1.792,
+        "mean": 1.9974,
+        "median": 1.8849,
+        "min": 1.6816,
+        "max": 2.5657,
         "samples": [
-          1.7741,
-          1.7471,
-          1.7561,
-          1.7852,
-          1.7732,
-          1.7275,
-          1.7422,
-          1.7741,
-          1.792,
-          1.7312
+          2.5657,
+          1.7682,
+          1.7377,
+          1.6816,
+          1.7152,
+          1.8961,
+          1.9548,
+          2.5371,
+          1.8737,
+          2.2444
         ]
       },
-      "forwards_per_second": 566.6883,
-      "rows_per_second": 28334413.9152
+      "forwards_per_second": 530.5366,
+      "rows_per_second": 26526830.1691
+    },
+    {
+      "workload": "xor_p100_s500",
+      "case": "xor_p100",
+      "target": "xla-rocm",
+      "impl": "new",
+      "backend": "xla",
+      "device": "rocm",
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "pop_size": 100,
+      "samples": 500,
+      "rows": 50000,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": false,
+      "jax_allocator": null,
+      "timestamp_utc": "2026-11-07T08:18:17+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          6.87,
+          4.82,
+          3.41
+        ],
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 1139.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "new",
+        "backend": "xla",
+        "device": "rocm:0",
+        "device_kind": "rocm",
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "payload_device": "Device(kind='rocm', index=0)",
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p100",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 4.098765,
+      "build_s": 0.498165,
+      "output": {
+        "shape": [
+          50000,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.5233384966850281,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 9200.42,
+      "ms_per_forward": {
+        "mean": 0.7574,
+        "median": 0.7454,
+        "min": 0.7266,
+        "max": 0.8197,
+        "samples": [
+          0.7936,
+          0.7695,
+          0.758,
+          0.7395,
+          0.7359,
+          0.7401,
+          0.7491,
+          0.7266,
+          0.8197,
+          0.7418
+        ]
+      },
+      "forwards_per_second": 1341.5168,
+      "rows_per_second": 67075839.6296
     },
     {
       "workload": "xor_p100_s500",
@@ -2160,7 +2911,7 @@
       "error": null,
       "jax_imported": null,
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T08:09:05+00:00",
+      "timestamp_utc": "2026-11-07T08:18:23+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -2181,11 +2932,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.48,
-          2.92,
-          2.55
+          6.56,
+          4.79,
+          3.4
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -2212,7 +2963,7 @@
       },
       "device_memory": {
         "vram_total_mib": 196288.0,
-        "vram_used_mib": 285.9,
+        "vram_used_mib": 147666.7,
         "error": null
       },
       "device_info": {
@@ -2266,8 +3017,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 3.464484,
-      "build_s": 0.304846,
+      "setup_s": 3.368227,
+      "build_s": 0.295072,
       "output": {
         "shape": [
           100,
@@ -2278,27 +3029,27 @@
         "mean": 0.5079181790351868,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 4889.79,
+      "peak_rss_mib": 4893.77,
       "ms_per_forward": {
-        "mean": 3.4351,
-        "median": 3.4265,
-        "min": 3.3718,
-        "max": 3.5358,
+        "mean": 3.4217,
+        "median": 3.4296,
+        "min": 3.3505,
+        "max": 3.4598,
         "samples": [
-          3.4172,
-          3.3741,
-          3.5358,
-          3.4359,
-          3.479,
-          3.4543,
-          3.4042,
-          3.3718,
-          3.4679,
-          3.4111
+          3.3505,
+          3.3754,
+          3.446,
+          3.4307,
+          3.4194,
+          3.4598,
+          3.4423,
+          3.4584,
+          3.4284,
+          3.4057
         ]
       },
-      "forwards_per_second": 291.8389,
-      "rows_per_second": 14591945.1102
+      "forwards_per_second": 291.5802,
+      "rows_per_second": 14579008.478
     },
     {
       "workload": "xor_p500_s500",
@@ -2339,7 +3090,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:09:12+00:00",
+      "timestamp_utc": "2026-11-07T08:18:30+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -2360,11 +3111,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.56,
-          2.89,
-          2.55
+          8.27,
+          5.17,
+          3.54
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -2443,8 +3194,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 0.015867,
-      "build_s": 0.532668,
+      "setup_s": 0.015886,
+      "build_s": 0.528216,
       "output": {
         "shape": [
           250000,
@@ -2454,27 +3205,27 @@
         "mean": 0.4972958266735077,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 920.22,
+      "peak_rss_mib": 920.33,
       "ms_per_forward": {
-        "mean": 544.5527,
-        "median": 541.941,
-        "min": 527.7106,
-        "max": 568.4624,
+        "mean": 571.0936,
+        "median": 561.2432,
+        "min": 530.0576,
+        "max": 626.0802,
         "samples": [
-          543.775,
-          540.107,
-          527.7106,
-          552.5753,
-          527.8631,
-          534.6796,
-          530.857,
-          568.4624,
-          559.0378,
-          560.4594
+          586.9977,
+          591.759,
+          618.9661,
+          626.0802,
+          547.0094,
+          536.0,
+          530.0576,
+          568.3237,
+          554.1628,
+          551.5798
         ]
       },
-      "forwards_per_second": 1.8452,
-      "rows_per_second": 461304.8374
+      "forwards_per_second": 1.7818,
+      "rows_per_second": 445439.6806
     },
     {
       "workload": "xor_p500_s500",
@@ -2519,7 +3270,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:09:21+00:00",
+      "timestamp_utc": "2026-11-07T08:18:40+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -2540,11 +3291,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.59,
-          2.87,
-          2.54
+          7.15,
+          5.04,
+          3.51
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -2627,8 +3378,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 1.244731,
-      "build_s": 1.975351,
+      "setup_s": 1.234716,
+      "build_s": 1.976166,
       "output": {
         "shape": [
           250000,
@@ -2638,27 +3389,213 @@
         "mean": 0.4972958266735077,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 1918.34,
+      "peak_rss_mib": 1919.5,
       "ms_per_forward": {
-        "mean": 2.9158,
-        "median": 2.9177,
-        "min": 2.8602,
-        "max": 2.9613,
+        "mean": 2.9038,
+        "median": 2.8915,
+        "min": 2.8705,
+        "max": 2.949,
         "samples": [
-          2.9505,
-          2.9613,
-          2.9196,
-          2.9092,
-          2.8798,
-          2.9163,
-          2.9191,
-          2.8602,
-          2.8966,
-          2.9455
+          2.9436,
+          2.9363,
+          2.949,
+          2.8942,
+          2.8824,
+          2.8705,
+          2.8797,
+          2.8764,
+          2.8888,
+          2.9175
         ]
       },
-      "forwards_per_second": 342.734,
-      "rows_per_second": 85683498.9042
+      "forwards_per_second": 345.839,
+      "rows_per_second": 86459743.3928
+    },
+    {
+      "workload": "xor_p500_s500",
+      "case": "xor_p500",
+      "target": "xla-rocm",
+      "impl": "new",
+      "backend": "xla",
+      "device": "rocm",
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "pop_size": 500,
+      "samples": 500,
+      "rows": 250000,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": false,
+      "jax_allocator": null,
+      "timestamp_utc": "2026-11-07T08:18:44+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          6.74,
+          4.99,
+          3.5
+        ],
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "new",
+        "backend": "xla",
+        "device": "rocm:0",
+        "device_kind": "rocm",
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "payload_device": "Device(kind='rocm', index=0)",
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p500",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 500,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 500,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 3.989259,
+      "build_s": 0.839509,
+      "output": {
+        "shape": [
+          250000,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.4972958266735077,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 9247.61,
+      "ms_per_forward": {
+        "mean": 1.3317,
+        "median": 1.3263,
+        "min": 1.3111,
+        "max": 1.368,
+        "samples": [
+          1.3443,
+          1.368,
+          1.3205,
+          1.3301,
+          1.3446,
+          1.3225,
+          1.3197,
+          1.343,
+          1.3111,
+          1.3135
+        ]
+      },
+      "forwards_per_second": 753.9548,
+      "rows_per_second": 188488703.0114
     },
     {
       "workload": "xor_p500_s500",
@@ -2699,7 +3636,7 @@
       "error": null,
       "jax_imported": null,
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T08:09:25+00:00",
+      "timestamp_utc": "2026-11-07T08:18:50+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -2720,11 +3657,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.63,
-          2.86,
-          2.54
+          6.28,
+          4.92,
+          3.49
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -2751,7 +3688,7 @@
       },
       "device_memory": {
         "vram_total_mib": 196288.0,
-        "vram_used_mib": 285.9,
+        "vram_used_mib": 147514.7,
         "error": null
       },
       "device_info": {
@@ -2805,8 +3742,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 3.305076,
-      "build_s": 0.464641,
+      "setup_s": 3.302893,
+      "build_s": 0.487062,
       "output": {
         "shape": [
           500,
@@ -2817,27 +3754,27 @@
         "mean": 0.500207245349884,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 4926.46,
+      "peak_rss_mib": 4928.16,
       "ms_per_forward": {
-        "mean": 7.7267,
-        "median": 7.726,
-        "min": 7.6219,
-        "max": 7.8998,
+        "mean": 7.6796,
+        "median": 7.6813,
+        "min": 7.6077,
+        "max": 7.7475,
         "samples": [
-          7.7377,
-          7.6578,
-          7.6219,
-          7.7179,
-          7.751,
-          7.7341,
-          7.7047,
-          7.6871,
-          7.7549,
-          7.8998
+          7.6112,
+          7.6547,
+          7.7367,
+          7.6733,
+          7.716,
+          7.7475,
+          7.6894,
+          7.6077,
+          7.6899,
+          7.6695
         ]
       },
-      "forwards_per_second": 129.4333,
-      "rows_per_second": 32358331.5541
+      "forwards_per_second": 130.1859,
+      "rows_per_second": 32546478.7412
     },
     {
       "workload": "xor_p1000_s500",
@@ -2878,7 +3815,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:09:33+00:00",
+      "timestamp_utc": "2026-11-07T08:18:58+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -2899,11 +3836,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.69,
-          2.83,
-          2.53
+          6.73,
+          5.07,
+          3.55
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -2982,8 +3919,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 0.017674,
-      "build_s": 1.102511,
+      "setup_s": 0.016569,
+      "build_s": 1.086093,
       "output": {
         "shape": [
           500000,
@@ -2993,27 +3930,27 @@
         "mean": 0.4958953559398651,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 1654.0,
+      "peak_rss_mib": 1654.13,
       "ms_per_forward": {
-        "mean": 1092.3187,
-        "median": 1092.0272,
-        "min": 1083.1832,
-        "max": 1108.2974,
+        "mean": 1099.8164,
+        "median": 1094.8878,
+        "min": 1088.2964,
+        "max": 1140.784,
         "samples": [
-          1097.4765,
-          1086.2317,
-          1085.1526,
-          1089.714,
-          1083.1832,
-          1084.6906,
-          1099.5357,
-          1094.5647,
-          1108.2974,
-          1094.3404
+          1088.2964,
+          1091.9685,
+          1102.5954,
+          1092.7235,
+          1101.6347,
+          1094.1274,
+          1089.1569,
+          1101.2288,
+          1140.784,
+          1095.6482
         ]
       },
-      "forwards_per_second": 0.9157,
-      "rows_per_second": 457864.048
+      "forwards_per_second": 0.9133,
+      "rows_per_second": 456667.8017
     },
     {
       "workload": "xor_p1000_s500",
@@ -3058,7 +3995,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:09:50+00:00",
+      "timestamp_utc": "2026-11-07T08:19:15+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -3079,11 +4016,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.76,
-          2.79,
-          2.52
+          5.46,
+          4.87,
+          3.51
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -3166,8 +4103,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 1.241079,
-      "build_s": 2.357759,
+      "setup_s": 1.216586,
+      "build_s": 2.48464,
       "output": {
         "shape": [
           500000,
@@ -3177,27 +4114,213 @@
         "mean": 0.4958953559398651,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 1968.09,
+      "peak_rss_mib": 1967.79,
       "ms_per_forward": {
-        "mean": 3.8371,
-        "median": 3.8334,
-        "min": 3.7937,
-        "max": 3.8817,
+        "mean": 3.862,
+        "median": 3.8666,
+        "min": 3.7926,
+        "max": 3.9311,
         "samples": [
-          3.8349,
-          3.832,
-          3.8432,
-          3.8478,
-          3.8158,
-          3.8817,
-          3.8771,
-          3.8133,
-          3.7937,
-          3.8312
+          3.8954,
+          3.8924,
+          3.8259,
+          3.8638,
+          3.9311,
+          3.8239,
+          3.7926,
+          3.8693,
+          3.8398,
+          3.886
         ]
       },
-      "forwards_per_second": 260.8623,
-      "rows_per_second": 130431152.6749
+      "forwards_per_second": 258.6274,
+      "rows_per_second": 129313676.5414
+    },
+    {
+      "workload": "xor_p1000_s500",
+      "case": "xor_p1000",
+      "target": "xla-rocm",
+      "impl": "new",
+      "backend": "xla",
+      "device": "rocm",
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "pop_size": 1000,
+      "samples": 500,
+      "rows": 500000,
+      "num_inputs": 2,
+      "num_outputs": 1,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": false,
+      "jax_allocator": null,
+      "timestamp_utc": "2026-11-07T08:19:20+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          5.1,
+          4.8,
+          3.5
+        ],
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "new",
+        "backend": "xla",
+        "device": "rocm:0",
+        "device_kind": "rocm",
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "payload_device": "Device(kind='rocm', index=0)",
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "xor_p1000",
+        "family": "func_fit",
+        "impls": [
+          "old",
+          "new"
+        ],
+        "pop_size": 1000,
+        "generation_limit": 150,
+        "fitness_target": -0.1,
+        "seed": 42,
+        "notes": "",
+        "gens_to_target": true,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "XOR",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 1000,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 2,
+          "num_outputs": 1,
+          "max_nodes": 50,
+          "max_conns": 100,
+          "output_transform": "sigmoid"
+        },
+        "problem_config": {
+          "class": "XOR"
+        },
+        "reference_ms_per_generation": {
+          "100": 51.0,
+          "500": 109.0,
+          "1000": 157.0
+        }
+      },
+      "setup_s": 4.019975,
+      "build_s": 1.363103,
+      "output": {
+        "shape": [
+          500000,
+          1
+        ],
+        "dtype": "float32",
+        "mean": 0.4958953559398651,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 9304.45,
+      "ms_per_forward": {
+        "mean": 2.2346,
+        "median": 2.2293,
+        "min": 2.1722,
+        "max": 2.3175,
+        "samples": [
+          2.2927,
+          2.2967,
+          2.2383,
+          2.1746,
+          2.1852,
+          2.1892,
+          2.1722,
+          2.2591,
+          2.3175,
+          2.2203
+        ]
+      },
+      "forwards_per_second": 448.5726,
+      "rows_per_second": 224286308.2741
     },
     {
       "workload": "xor_p1000_s500",
@@ -3238,7 +4361,7 @@
       "error": null,
       "jax_imported": null,
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T08:09:54+00:00",
+      "timestamp_utc": "2026-11-07T08:19:27+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -3259,11 +4382,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.78,
-          2.78,
-          2.52
+          4.77,
+          4.74,
+          3.48
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -3290,7 +4413,7 @@
       },
       "device_memory": {
         "vram_total_mib": 196288.0,
-        "vram_used_mib": 285.9,
+        "vram_used_mib": 147515.6,
         "error": null
       },
       "device_info": {
@@ -3344,8 +4467,8 @@
           "1000": 157.0
         }
       },
-      "setup_s": 3.42241,
-      "build_s": 0.387432,
+      "setup_s": 3.962982,
+      "build_s": 0.364931,
       "output": {
         "shape": [
           1000,
@@ -3356,27 +4479,27 @@
         "mean": 0.49673670530319214,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 4936.54,
+      "peak_rss_mib": 4936.7,
       "ms_per_forward": {
-        "mean": 14.096,
-        "median": 14.1098,
-        "min": 13.8389,
-        "max": 14.2305,
+        "mean": 15.1535,
+        "median": 14.2379,
+        "min": 14.061,
+        "max": 17.6092,
         "samples": [
-          13.8389,
-          14.0505,
-          14.0628,
-          14.0953,
-          14.2305,
-          14.1514,
-          14.1256,
-          14.1052,
-          14.1144,
-          14.1853
+          14.061,
+          14.1449,
+          14.1785,
+          14.1509,
+          14.1732,
+          16.8641,
+          16.3154,
+          17.6092,
+          15.7411,
+          14.2972
         ]
       },
-      "forwards_per_second": 70.8728,
-      "rows_per_second": 35436380.9521
+      "forwards_per_second": 70.2353,
+      "rows_per_second": 35117638.2465
     },
     {
       "workload": "cartpole_p100_s1",
@@ -3417,7 +4540,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:10:02+00:00",
+      "timestamp_utc": "2026-11-07T08:19:35+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -3438,11 +4561,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.81,
-          2.75,
-          2.52
+          5.53,
+          4.91,
+          3.55
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -3469,7 +4592,7 @@
       },
       "device_memory": {
         "vram_total_mib": 196288.0,
-        "vram_used_mib": 285.9,
+        "vram_used_mib": 148604.4,
         "error": null
       },
       "device_info": {
@@ -3517,8 +4640,8 @@
         },
         "reference_ms_per_generation": {}
       },
-      "setup_s": 0.015896,
-      "build_s": 0.056262,
+      "setup_s": 0.015237,
+      "build_s": 0.054222,
       "output": {
         "shape": [
           100,
@@ -3528,27 +4651,27 @@
         "mean": -0.02731543593108654,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 132.54,
+      "peak_rss_mib": 132.55,
       "ms_per_forward": {
-        "mean": 1.8443,
-        "median": 1.8311,
-        "min": 1.7727,
-        "max": 1.9396,
+        "mean": 1.8303,
+        "median": 1.8014,
+        "min": 1.7772,
+        "max": 1.9822,
         "samples": [
-          1.9396,
-          1.8929,
-          1.9235,
-          1.8931,
-          1.8415,
-          1.7896,
-          1.8208,
-          1.7857,
-          1.7837,
-          1.7727
+          1.9026,
+          1.9822,
+          1.7782,
+          1.7991,
+          1.7878,
+          1.8038,
+          1.8883,
+          1.7772,
+          1.7779,
+          1.8061
         ]
       },
-      "forwards_per_second": 546.11,
-      "rows_per_second": 54610.9966
+      "forwards_per_second": 555.1122,
+      "rows_per_second": 55511.2247
     },
     {
       "workload": "cartpole_p100_s1",
@@ -3593,7 +4716,7 @@
       "error": null,
       "jax_imported": false,
       "jax_allocator": null,
-      "timestamp_utc": "2026-11-07T08:10:03+00:00",
+      "timestamp_utc": "2026-11-07T08:19:36+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -3614,11 +4737,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          1.81,
-          2.75,
-          2.52
+          5.53,
+          4.91,
+          3.55
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -3645,7 +4768,7 @@
       },
       "device_memory": {
         "vram_total_mib": 196288.0,
-        "vram_used_mib": 285.9,
+        "vram_used_mib": 147516.1,
         "error": null
       },
       "device_info": {
@@ -3697,8 +4820,8 @@
         },
         "reference_ms_per_generation": {}
       },
-      "setup_s": 1.406841,
-      "build_s": 2.247531,
+      "setup_s": 1.256117,
+      "build_s": 2.147357,
       "output": {
         "shape": [
           100,
@@ -3708,27 +4831,209 @@
         "mean": -0.027315473183989525,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 1879.94,
+      "peak_rss_mib": 1879.86,
       "ms_per_forward": {
-        "mean": 1.1262,
-        "median": 1.1188,
-        "min": 1.1105,
-        "max": 1.1507,
+        "mean": 1.1741,
+        "median": 1.1765,
+        "min": 1.1332,
+        "max": 1.2074,
         "samples": [
-          1.1327,
-          1.1168,
-          1.1105,
-          1.1129,
-          1.1466,
-          1.1194,
-          1.1507,
-          1.1152,
-          1.1181,
-          1.1388
+          1.1867,
+          1.1807,
+          1.1889,
+          1.2074,
+          1.177,
+          1.1761,
+          1.1707,
+          1.1527,
+          1.1332,
+          1.1677
         ]
       },
-      "forwards_per_second": 893.8276,
-      "rows_per_second": 89382.762
+      "forwards_per_second": 849.9574,
+      "rows_per_second": 84995.7392
+    },
+    {
+      "workload": "cartpole_p100_s1",
+      "case": "cartpole_p100",
+      "target": "xla-rocm",
+      "impl": "new",
+      "backend": "xla",
+      "device": "rocm",
+      "compile_options": {
+        "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+      },
+      "seed": 42,
+      "pop_size": 100,
+      "samples": 1,
+      "rows": 100,
+      "num_inputs": 4,
+      "num_outputs": 2,
+      "warmup_passes": 3,
+      "timed_passes": 10,
+      "protocol": {
+        "one_forward_configuration_per_process": true,
+        "rows_strictly_sequential": true,
+        "warmup_forward_passes": 3,
+        "timed_forward_passes": 10,
+        "seed": 42,
+        "timed_region": "one forward pass of the whole population: no mutation, no selection and no environment step inside the timed region",
+        "timing_clock": "time.perf_counter() around each pass, including the host materialisation of the output block",
+        "input_block": "a fixed (rows, num_inputs) float32 array drawn once from numpy default_rng(seed) and pre-placed on the target device; nothing is transferred inside the timed region",
+        "payload": "Pipeline.setup() (new) / algorithm.setup() (old) initial population",
+        "build_measured_separately": true,
+        "build_charged_to_a_pass": false,
+        "peak_rss": "resource.getrusage(RUSAGE_SELF).ru_maxrss in MiB -- a process-lifetime high-water mark, which is why one row is one process",
+        "logging_in_timed_region": false,
+        "jax_allocator": "old-side rows pin XLA_PYTHON_CLIENT_PREALLOCATE=false before importing jax and record it; the default 75 % reservation fails rows on a shared device",
+        "float_rtol": 1e-05,
+        "float_atol": 1e-06,
+        "errors": "recorded as status='error' rows carrying the traceback, never dropped"
+      },
+      "status": "ok",
+      "error": null,
+      "jax_imported": false,
+      "jax_allocator": null,
+      "timestamp_utc": "2026-11-07T08:19:40+00:00",
+      "pjrt_plugin": {
+        "path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "basename": "xla_rocm_plugin.so",
+        "size_bytes": 503453288,
+        "sha256": "8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7"
+      },
+      "env": {
+        "python": "3.12.3",
+        "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "cpu_model": "INTEL(R) XEON(R) PLATINUM 8568Y+",
+        "cpu_count": 20,
+        "memory_mb": 241611,
+        "numpy": "2.5.4",
+        "jax": "0.10.2",
+        "evoxc": "0.1.0",
+        "tensorneat": "0.2.0",
+        "threads": null,
+        "thread_env": {
+          "OMP_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "NUMEXPR_NUM_THREADS": null,
+          "XLA_FLAGS": null
+        },
+        "loadavg": [
+          6.45,
+          5.11,
+          3.62
+        ],
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
+        "git_dirty": false,
+        "git_dirty_paths": [],
+        "probe_error": null,
+        "iree": {
+          "compiler": "3.13.0",
+          "runtime": "3.13.0",
+          "hip_devices": [
+            {
+              "device_id": 1,
+              "name": "AMD Instinct MI300X VF"
+            }
+          ],
+          "hip_error": null
+        },
+        "gpu": {
+          "rocm_version": "7.1.0",
+          "rocm_smi": {
+            "gpu_model": "AMD Instinct MI300X VF",
+            "gfx_version": "gfx942",
+            "driver_version": "6.16.6"
+          },
+          "rocm_smi_error": null
+        }
+      },
+      "device_memory": {
+        "vram_total_mib": 196288.0,
+        "vram_used_mib": 285.9,
+        "error": null
+      },
+      "device_info": {
+        "impl": "new",
+        "backend": "xla",
+        "device": "rocm:0",
+        "device_kind": "rocm",
+        "compile_options": {
+          "plugin_path": "/root/tensorneat/.genesis/workers/worker_T1_A14/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        },
+        "payload_device": "Device(kind='rocm', index=0)",
+        "max_nodes": 50,
+        "max_conns": 100
+      },
+      "case_config": {
+        "name": "cartpole_p100",
+        "family": "rl",
+        "impls": [
+          "new"
+        ],
+        "pop_size": 100,
+        "generation_limit": 150,
+        "fitness_target": 180.0,
+        "seed": 42,
+        "notes": "new-only: the legacy library has no equivalent problem",
+        "gens_to_target": false,
+        "algorithm": "NEAT",
+        "genome": "DefaultGenome",
+        "problem": "CartPole",
+        "algorithm_config": {
+          "class": "NEAT",
+          "pop_size": 100,
+          "species_size": 20,
+          "survival_threshold": 0.01
+        },
+        "genome_config": {
+          "class": "DefaultGenome",
+          "num_inputs": 4,
+          "num_outputs": 2,
+          "max_nodes": 50,
+          "max_conns": 100
+        },
+        "problem_config": {
+          "class": "CartPole",
+          "max_step": 200,
+          "repeat_times": 1
+        },
+        "reference_ms_per_generation": {}
+      },
+      "setup_s": 4.065959,
+      "build_s": 0.570966,
+      "output": {
+        "shape": [
+          100,
+          2
+        ],
+        "dtype": "float32",
+        "mean": -0.02731543593108654,
+        "finite_fraction": 1.0
+      },
+      "peak_rss_mib": 9202.26,
+      "ms_per_forward": {
+        "mean": 0.4598,
+        "median": 0.4501,
+        "min": 0.4275,
+        "max": 0.5496,
+        "samples": [
+          0.4657,
+          0.5496,
+          0.483,
+          0.452,
+          0.4558,
+          0.4275,
+          0.443,
+          0.4349,
+          0.4384,
+          0.4481
+        ]
+      },
+      "forwards_per_second": 2221.8374,
+      "rows_per_second": 222183.7438
     },
     {
       "workload": "cartpole_p100_s1",
@@ -3769,7 +5074,7 @@
       "error": null,
       "jax_imported": null,
       "jax_allocator": "XLA_PYTHON_CLIENT_PREALLOCATE=false",
-      "timestamp_utc": "2026-11-07T08:10:08+00:00",
+      "timestamp_utc": "2026-11-07T08:19:46+00:00",
       "env": {
         "python": "3.12.3",
         "platform": "Linux-6.8.0-146-generic-x86_64-with-glibc2.39",
@@ -3790,11 +5095,11 @@
           "XLA_FLAGS": null
         },
         "loadavg": [
-          2.63,
-          2.9,
-          2.57
+          6.01,
+          5.04,
+          3.61
         ],
-        "git_commit": "713f4a61822309b1b0db709f1b9ff26bb447c5c6",
+        "git_commit": "8c6330989a9214695a9f27d76e082bff55c7ca99",
         "git_dirty": false,
         "git_dirty_paths": [],
         "probe_error": null,
@@ -3821,7 +5126,7 @@
       },
       "device_memory": {
         "vram_total_mib": 196288.0,
-        "vram_used_mib": 285.9,
+        "vram_used_mib": 147513.9,
         "error": null
       },
       "device_info": {
@@ -3871,8 +5176,8 @@
         },
         "reference_ms_per_generation": {}
       },
-      "setup_s": 5.913216,
-      "build_s": 0.27436,
+      "setup_s": 5.944137,
+      "build_s": 0.293719,
       "output": {
         "shape": [
           100,
@@ -3883,27 +5188,27 @@
         "mean": -0.053147949278354645,
         "finite_fraction": 1.0
       },
-      "peak_rss_mib": 4683.16,
+      "peak_rss_mib": 4682.24,
       "ms_per_forward": {
-        "mean": 1.3745,
-        "median": 1.3583,
-        "min": 1.3384,
-        "max": 1.4608,
+        "mean": 1.397,
+        "median": 1.3825,
+        "min": 1.3527,
+        "max": 1.4921,
         "samples": [
-          1.3523,
-          1.4062,
-          1.3593,
-          1.3943,
-          1.3384,
-          1.3549,
-          1.4608,
-          1.3573,
-          1.3744,
-          1.3472
+          1.4288,
+          1.3786,
+          1.3812,
+          1.3647,
+          1.3527,
+          1.4125,
+          1.4921,
+          1.3694,
+          1.4057,
+          1.3837
         ]
       },
-      "forwards_per_second": 736.1971,
-      "rows_per_second": 73619.7107
+      "forwards_per_second": 723.3386,
+      "rows_per_second": 72333.8609
     }
   ]
 }

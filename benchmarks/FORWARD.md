@@ -1,23 +1,24 @@
-# TensorNEAT batch forward pass — new evoxc (numpy / iree rocm) vs frozen JAX on one MI300X VF
-**Verdict for the record this file renders: every planned row measured — twenty-one of twenty-one `ok`, zero blocked — and the new evoxc forward pass sits between 0.91x (the JAX baseline marginally ahead) and 3.68x (the new side ahead) of the frozen JAX one per forward, on the same device, in the same session.**
-That single range is the whole story and it is not a win everywhere: below ~4 000 evaluated rows per pass the two sides are at parity and JAX is nominally ahead (0.96x at 400 rows, 0.91x at 2 000, 0.99x at 4 000), because at that size both sides are paying a fixed launch-and-readback cost and JAX's is marginally smaller; from 50 000 rows up the new side wins, by 1.94x at 50 000, 2.65x at 250 000 and 3.68x at 500 000 evaluated rows.
-The RL shape — one observation per individual, `(100, 4) -> (100, 2)` — is 1.21x faster on the new side (1.119 against 1.358 ms), the row that matters most for a rollout, since an RL generation calls exactly this forward once per environment timestep.
-The shape of the two curves, not any single number, is what this record establishes: the new side is nearly flat in the row count (1.481 ms at 400 rows, 3.833 ms at 500 000 — a 2.6x growth for 1 250x the work, 130 431 153 rows/s at the widest tile), while the JAX baseline grows with it (1.415 ms -> 14.110 ms, a 10.0x growth, 35 436 381 rows/s). Both are dominated by a fixed per-pass cost — launch, synchronisation and the host materialisation of the output block — and the new side's fixed cost is the larger one at small tiles and the smaller coefficient on the row count at wide ones; a mechanism is not attributed here, because one forward-pass record cannot separate kernel time from readback time.
-Against the `numpy` leg — the CPU reference interpreter, which is what a reader without a GPU runs — the JAX device leg is 2.0x/7.5x/13.0x/25.0x/70.1x/77.4x/1.35x faster on the seven workloads in declaration order (`xor_p100_s4`, `xor_p500_s4`, `xor_p1000_s4`, `xor_p100_s500`, `xor_p500_s500`, `xor_p1000_s500`, `cartpole_p100_s1`), and the CPU leg's cost is the one that scales hardest with the tiled rows (2.807 ms at 400 rows to 1 092.027 ms at 500 000).
-Setup and build are one-off and are never charged to a pass: the new side's `Pipeline.setup()` costs 0.015–0.018 s on the numpy leg and 1.193–1.407 s on `iree` rocm (loading the IREE runtime), the forward graph builds in 0.056–1.103 s (numpy) and 1.584–2.358 s (`iree`); the JAX side's setup — XLA client plus `vmap(transform)` — costs 3.305–5.913 s and its `jit(...).lower().compile()` 0.274–0.465 s.
-Numerically the two new-side targets are the same computation: `iree` rocm matches the `numpy` leg's output mean to `0.000e+00` on six of the seven workloads and to `3.725e-08` on `cartpole_p100_s1`, the one row that takes the `samples == 1` accelerated kernel formulation. The JAX side draws its own population from its own PRNG, so its output is a different individual set and is deliberately not compared here (`test/parity/` owns numerical fidelity).
+# TensorNEAT batch forward pass — new evoxc (numpy / iree rocm / xla rocm) vs frozen JAX on one MI300X VF
+**Verdict for the record this file renders: every planned row measured — twenty-eight of twenty-eight `ok`, zero blocked — and the fastest new-side leg, `xla` rocm, is ahead of the frozen JAX baseline on all seven workloads, from 3.07x (the RL shape) to 6.39x (500 000 evaluated rows) per forward pass, on the same device, in the same session.**
+The new side is a leg-by-leg story, not one range: `xla` rocm wins every row (3.30x/3.25x/3.34x/4.60x/5.79x/6.39x/3.07x in declaration order), `iree` rocm sits at parity on the narrow XOR tiles (0.92x at 400 and 2 000 rows, 1.00x at 4 000) and pulls ahead only from 50 000 rows up (1.82x, 2.66x, 3.68x), and the CPU `numpy` reference is behind the JAX device on all seven (0.47x/0.14x/0.08x/0.04x/0.01x/0.01x/0.77x).
+Against `iree` rocm on the same device, `xla` rocm is 3.58x/3.54x/3.35x/2.53x/2.18x/1.73x/2.62x faster per forward pass: the widest advantage at the narrowest tiles, where the fixed per-pass cost dominates, shrinking as the tile widens and the kernel work takes over.
+The RL shape — one observation per individual, `(100, 4) -> (100, 2)` — is the row that matters most for a rollout, since an RL generation calls exactly this forward once per environment timestep: `xla` rocm 0.450 ms against the JAX side's 1.383 ms (3.07x), `iree` rocm 1.177 ms (1.18x) and the CPU leg 1.801 ms.
+The shape of the curves, not any single number, is what this record establishes: `xla` rocm is nearly flat in the row count (0.419 ms at 400 rows, 2.229 ms at 500 000 — a 5.3x growth for 1 250x the work, 224 286 308 rows/s at the widest tile), `iree` rocm grows 2.6x over the same span (1.498 ms -> 3.867 ms, 129 313 677 rows/s), the JAX baseline grows 10.3x (1.382 ms -> 14.238 ms, 35 117 638 rows/s) and the CPU leg 371x (2.950 ms -> 1 094.888 ms, 456 668 rows/s). Every leg is dominated by a fixed per-pass cost — launch, synchronisation and the host materialisation of the output block — and a mechanism is not attributed here, because one forward-pass record cannot separate kernel time from readback time.
+Against the `numpy` leg — the CPU reference interpreter, which is what a reader without a GPU runs — the JAX device leg is 2.1x/7.2x/12.0x/27.6x/73.1x/76.9x/1.30x faster on the seven workloads in declaration order (`xor_p100_s4`, `xor_p500_s4`, `xor_p1000_s4`, `xor_p100_s500`, `xor_p500_s500`, `xor_p1000_s500`, `cartpole_p100_s1`), and `xla` rocm is 7.0x/23.5x/40.2x/127.1x/423.3x/491.2x/4.00x faster; the CPU leg's cost is the one that scales hardest with the tiled rows (2.950 ms at 400 rows to 1 094.888 ms at 500 000).
+Setup and build are one-off and are never charged to a pass: the new side's `Pipeline.setup()` costs 0.015–0.018 s on the numpy leg, 1.217–1.280 s on `iree` rocm (loading the IREE runtime) and 3.989–4.122 s on `xla` rocm (the PJRT plugin client; the first xla row pays 8.443 s because it also loads the 480.1 MiB plugin library), the forward graph builds in 0.054–1.086 s (numpy), 1.558–2.485 s (`iree`) and 0.401–1.363 s (`xla`); the JAX side's setup — XLA client plus `vmap(transform)` — costs 3.302–5.944 s and its `jit(...).lower().compile()` 0.294–0.487 s.
+Numerically every new-side target is the same computation: `xla` rocm matches the `numpy` leg's output mean to `0.000e+00` on all seven workloads and `iree` rocm on six of the seven plus `3.725e-08` on `cartpole_p100_s1`, the one row that takes the `samples == 1` accelerated kernel formulation. The JAX side draws its own population from its own PRNG, so its output is a different individual set and is deliberately not compared here (`test/parity/` owns numerical fidelity).
 Nothing below quotes a number that is not in `benchmarks/results/forward.json`; the ratios in the headline table and in the prose are arithmetic on that record's medians, and nothing here is a statement about HEAD.
 ## Headline: one forward pass of the whole population
-| Workload | Evaluated rows | JAX ms/forward | new `iree` rocm ms/forward | new `numpy` ms/forward | JAX ÷ `iree` | JAX ÷ `numpy` | `iree` rows/s | `jax` rows/s |
-|---|---|---|---|---|---|---|---|---|
-| `xor_p100_s4` | 400 | 1.415 | 1.481 | 2.807 | 0.96x | 0.50x | 270 029 | 282 719 |
-| `xor_p500_s4` | 2 000 | 1.554 | 1.716 | 11.655 | 0.91x | 0.13x | 1 165 868 | 1 286 883 |
-| `xor_p1000_s4` | 4 000 | 1.636 | 1.645 | 21.258 | 0.99x | 0.08x | 2 431 325 | 2 444 592 |
-| `xor_p100_s500` | 50 000 | 3.426 | 1.765 | 85.785 | 1.94x | 0.04x | 28 334 414 | 14 591 945 |
-| `xor_p500_s500` | 250 000 | 7.726 | 2.918 | 541.941 | 2.65x | 0.01x | 85 683 499 | 32 358 332 |
-| `xor_p1000_s500` | 500 000 | 14.110 | 3.833 | 1 092.027 | 3.68x | 0.01x | 130 431 153 | 35 436 381 |
-| `cartpole_p100_s1` | 100 | 1.358 | 1.119 | 1.831 | 1.21x | 0.74x | 89 383 | 73 620 |
-Every cell is a column of the generated block below (`Median ms` recomputed as rows/s here, `Rows` as the second column); `JAX ÷ iree` and `JAX ÷ numpy` are the `speed-up vs jax` columns of that block's speed-up table, where a value below 1.00x means the JAX side is faster.
+| Workload | Evaluated rows | JAX ms/forward | new `xla` rocm ms/forward | new `iree` rocm ms/forward | new `numpy` ms/forward | JAX ÷ `xla` | JAX ÷ `iree` | JAX ÷ `numpy` | `xla` rows/s | `iree` rows/s | `jax` rows/s |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `xor_p100_s4` | 400 | 1.382 | 0.419 | 1.498 | 2.950 | 3.30x | 0.92x | 0.47x | 953 968 | 267 029 | 289 350 |
+| `xor_p500_s4` | 2 000 | 1.566 | 0.481 | 1.701 | 11.316 | 3.25x | 0.92x | 0.14x | 4 155 326 | 1 175 958 | 1 277 240 |
+| `xor_p1000_s4` | 4 000 | 1.661 | 0.497 | 1.663 | 19.975 | 3.34x | 1.00x | 0.08x | 8 053 458 | 2 404 940 | 2 408 064 |
+| `xor_p100_s500` | 50 000 | 3.430 | 0.745 | 1.885 | 94.724 | 4.60x | 1.82x | 0.04x | 67 075 840 | 26 526 830 | 14 579 008 |
+| `xor_p500_s500` | 250 000 | 7.681 | 1.326 | 2.892 | 561.243 | 5.79x | 2.66x | 0.01x | 188 488 703 | 86 459 743 | 32 546 479 |
+| `xor_p1000_s500` | 500 000 | 14.238 | 2.229 | 3.867 | 1 094.888 | 6.39x | 3.68x | 0.01x | 224 286 308 | 129 313 677 | 35 117 638 |
+| `cartpole_p100_s1` | 100 | 1.383 | 0.450 | 1.177 | 1.801 | 3.07x | 1.18x | 0.77x | 222 184 | 84 996 | 72 334 |
+Every cell is a column of the generated block below (`Median ms` recomputed as rows/s here, `Rows` as the second column); `JAX ÷ xla`, `JAX ÷ iree` and `JAX ÷ numpy` are the `speed-up vs jax` columns of that block's speed-up table, where a value below 1.00x means the JAX side is faster.
 ## What is measured, and what is deliberately outside the timed region
 One row is one forward pass of a fixed population of NEAT networks, each with its own evolved topology, evaluated through the tensorized forward: `population x samples` rows in, `population x samples x num_outputs` out.
 The population comes from `Pipeline.setup()` on the new side and from `algorithm.setup()` + `vmap(algorithm.transform)` on the old side, so the two sides forward *their own initial population* of the same size, drawn from their own PRNG (evoxc splitmix64 versus JAX `PRNGKey`) — one seed identifies the same workload, never the same search.
@@ -29,7 +30,7 @@ One `(workload, target)` pair per fresh process: the matrix spawns one `forward_
 Every row runs `--warmup 3` untimed passes and `--passes 10` timed ones with stdout/stderr redirected to `os.devnull`; a pass is timed with `time.perf_counter()` around the call, and the row reports mean, median, min and max of those ten samples plus the `min – max` spread — the spread, not the median, is this record's uncertainty measure.
 The JAX baseline pins `XLA_PYTHON_CLIENT_PREALLOCATE=false` before importing JAX and records the resolved policy as `jax_allocator`: the default 75 % preallocation of a shared 205.8 GB `MI300X VF` failed rows with `HIP_ERROR_OutOfMemory` and inflated their RSS, and the policy changes neither the compiled computation nor the device op count.
 The `numpy` leg is the CPU reference interpreter on the same box (no device placement), reported for scale: it is what the library does with no optional dependency.
-`xla-rocm` is an opt-in target (`--targets numpy,iree-rocm,xla-rocm,jax`) and is **not** part of this record: on this tree its host phase fails inside `Pipeline.setup()`'s device load, `evoxc.core.errors.BackendError: the xla PJRT plugin reports platform 'rocm', which serves device kind(s) ('rocm', 'hip'); it cannot serve Device(kind='cpu', index=0)`, so the leg is an explicit `error` row and no `xla` number is quoted here. A later session adds those rows.
+`xla-rocm` is a shipped target and part of the tool's default matrix (`DEFAULT_TARGETS` is `numpy,iree-rocm,xla-rocm,jax`): it drives the `jax-rocm7-pjrt==0.10.2` PJRT C API plugin from the `xla-rocm` extra (`.so` loaded over ctypes, no `jax` import — every new-side row records `jax_imported: false`), resolved once per session from `--pjrt-plugin PATH` or `$EVOXC_PJRT_PLUGIN` and never from a fallback. The plugin is fingerprinted in the environment table above (`xla_rocm_plugin.so`, 480.1 MiB, sha256 `8e8319b48fcc…`) because a number measured against a different `.so` is a different experiment. The leg builds and runs on this tree because `Pipeline.setup()` now runs the host setup graphs on the numpy reference backend and registers the real backend and device afterwards (`src/tensorneat/pipeline.py`, `fcbf677f`); before that fix the host-phase device load refused the ROCm plugin (`BackendError: … it cannot serve Device(kind='cpu', index=0)`) and the leg was an error row.
 <!-- BEGIN MEASURED (forward_measure.py) -->
 ## Environment
 
@@ -37,21 +38,22 @@ Measured conditions, not a verdict: these numbers are comparable only with anoth
 
 | Item | Value |
 |---|---|
-| Date / session (UTC) | 2026-11-07T08:08:22+00:00 – 2026-11-07T08:10:15+00:00 |
+| Date / session (UTC) | 2026-11-07T08:17:07+00:00 – 2026-11-07T08:19:54+00:00 |
 | GPU model (gfx version) | AMD Instinct MI300X VF (gfx942) |
 | HIP devices (IREE runtime query) | device_id=1 AMD Instinct MI300X VF |
-| Device memory during the rows | 286 – 286 MiB used of 196288 MiB total |
+| Device memory during the rows | 286 – 193939 MiB used of 196288 MiB total |
 | ROCm version | 7.1.0 |
 | IREE compiler / runtime | 3.13.0 / 3.13.0 |
 | JAX (old side) | 0.10.2; backend gpu; devices rocm:0; allocator XLA_PYTHON_CLIENT_PREALLOCATE=false |
+| PJRT plugin (xla targets) | `xla_rocm_plugin.so` (480.1 MiB, sha256 `8e8319b48fcc…`) |
 | tensorneat / evoxc | 0.2.0 / 0.1.0 |
 | numpy | 2.5.4 |
 | Python | 3.12.3 |
 | Platform | Linux-6.8.0-146-generic-x86_64-with-glibc2.39 |
 | CPU cores / RAM | 20 / 241611 MB |
 | Threads (inherited env) | runtime defaults |
-| Git commit (code under test) | `713f4a618223` (clean — generated report artifacts are not counted) |
-| Load average (1/5/15 min) | 2.58 / 2.89 / 2.56 |
+| Git commit (code under test) | `8c6330989a92` (clean — generated report artifacts are not counted) |
+| Load average (1/5/15 min) | 6.42 / 5.17 / 3.67 |
 
 ## Measured (one forward pass of the whole population)
 
@@ -59,41 +61,48 @@ Measured conditions, not a verdict: these numbers are comparable only with anoth
 
 | Workload | Target | Rows | Median ms | Min – max ms | Rows/s | Peak RSS MiB | Status |
 |---|---|---|---|---|---|---|---|
-| `xor_p100_s4` | numpy | 400 | 2.807 | 2.767 – 2.846 | 142526 | 134.3 | ok |
-| `xor_p100_s4` | iree-rocm | 400 | 1.481 | 1.449 – 1.535 | 270029 | 1879.4 | ok |
-| `xor_p100_s4` | jax | 400 | 1.415 | 1.380 – 1.497 | 282719 | 4702.4 | ok |
-| `xor_p500_s4` | numpy | 2000 | 11.655 | 11.276 – 11.986 | 171602 | 153.2 | ok |
-| `xor_p500_s4` | iree-rocm | 2000 | 1.716 | 1.671 – 1.770 | 1165868 | 1891.5 | ok |
-| `xor_p500_s4` | jax | 2000 | 1.554 | 1.520 – 1.617 | 1286883 | 4720.7 | ok |
-| `xor_p1000_s4` | numpy | 4000 | 21.258 | 20.394 – 21.758 | 188167 | 176.5 | ok |
-| `xor_p1000_s4` | iree-rocm | 4000 | 1.645 | 1.608 – 1.657 | 2431325 | 1904.2 | ok |
-| `xor_p1000_s4` | jax | 4000 | 1.636 | 1.594 – 1.758 | 2444592 | 4716.6 | ok |
-| `xor_p100_s500` | numpy | 50000 | 85.785 | 84.271 – 87.391 | 582852 | 311.0 | ok |
-| `xor_p100_s500` | iree-rocm | 50000 | 1.765 | 1.728 – 1.792 | 28334414 | 1885.6 | ok |
-| `xor_p100_s500` | jax | 50000 | 3.426 | 3.372 – 3.536 | 14591945 | 4889.8 | ok |
-| `xor_p500_s500` | numpy | 250000 | 541.941 | 527.711 – 568.462 | 461305 | 920.2 | ok |
-| `xor_p500_s500` | iree-rocm | 250000 | 2.918 | 2.860 – 2.961 | 85683499 | 1918.3 | ok |
-| `xor_p500_s500` | jax | 250000 | 7.726 | 7.622 – 7.900 | 32358332 | 4926.5 | ok |
-| `xor_p1000_s500` | numpy | 500000 | 1092.027 | 1083.183 – 1108.297 | 457864 | 1654.0 | ok |
-| `xor_p1000_s500` | iree-rocm | 500000 | 3.833 | 3.794 – 3.882 | 130431153 | 1968.1 | ok |
-| `xor_p1000_s500` | jax | 500000 | 14.110 | 13.839 – 14.230 | 35436381 | 4936.5 | ok |
-| `cartpole_p100_s1` | numpy | 100 | 1.831 | 1.773 – 1.940 | 54611 | 132.5 | ok |
-| `cartpole_p100_s1` | iree-rocm | 100 | 1.119 | 1.111 – 1.151 | 89383 | 1879.9 | ok |
-| `cartpole_p100_s1` | jax | 100 | 1.358 | 1.338 – 1.461 | 73620 | 4683.2 | ok |
+| `xor_p100_s4` | numpy | 400 | 2.950 | 2.885 – 3.094 | 135570 | 134.3 | ok |
+| `xor_p100_s4` | iree-rocm | 400 | 1.498 | 1.479 – 1.554 | 267027 | 1879.8 | ok |
+| `xor_p100_s4` | xla-rocm | 400 | 0.419 | 0.413 – 0.455 | 953968 | 9167.3 | ok |
+| `xor_p100_s4` | jax | 400 | 1.382 | 1.343 – 1.423 | 289350 | 4702.8 | ok |
+| `xor_p500_s4` | numpy | 2000 | 11.316 | 10.879 – 11.655 | 176747 | 153.0 | ok |
+| `xor_p500_s4` | iree-rocm | 2000 | 1.701 | 1.663 – 1.755 | 1175958 | 1891.3 | ok |
+| `xor_p500_s4` | xla-rocm | 2000 | 0.481 | 0.454 – 0.529 | 4155326 | 9185.1 | ok |
+| `xor_p500_s4` | jax | 2000 | 1.566 | 1.532 – 1.610 | 1277240 | 4712.4 | ok |
+| `xor_p1000_s4` | numpy | 4000 | 19.975 | 19.808 – 20.079 | 200252 | 176.4 | ok |
+| `xor_p1000_s4` | iree-rocm | 4000 | 1.663 | 1.639 – 1.724 | 2404940 | 1907.5 | ok |
+| `xor_p1000_s4` | xla-rocm | 4000 | 0.497 | 0.473 – 0.513 | 8053458 | 9211.7 | ok |
+| `xor_p1000_s4` | jax | 4000 | 1.661 | 1.619 – 1.773 | 2408064 | 4723.7 | ok |
+| `xor_p100_s500` | numpy | 50000 | 94.724 | 91.651 – 98.956 | 527850 | 311.0 | ok |
+| `xor_p100_s500` | iree-rocm | 50000 | 1.885 | 1.682 – 2.566 | 26526830 | 1885.0 | ok |
+| `xor_p100_s500` | xla-rocm | 50000 | 0.745 | 0.727 – 0.820 | 67075840 | 9200.4 | ok |
+| `xor_p100_s500` | jax | 50000 | 3.430 | 3.350 – 3.460 | 14579008 | 4893.8 | ok |
+| `xor_p500_s500` | numpy | 250000 | 561.243 | 530.058 – 626.080 | 445440 | 920.3 | ok |
+| `xor_p500_s500` | iree-rocm | 250000 | 2.892 | 2.870 – 2.949 | 86459743 | 1919.5 | ok |
+| `xor_p500_s500` | xla-rocm | 250000 | 1.326 | 1.311 – 1.368 | 188488703 | 9247.6 | ok |
+| `xor_p500_s500` | jax | 250000 | 7.681 | 7.608 – 7.747 | 32546479 | 4928.2 | ok |
+| `xor_p1000_s500` | numpy | 500000 | 1094.888 | 1088.296 – 1140.784 | 456668 | 1654.1 | ok |
+| `xor_p1000_s500` | iree-rocm | 500000 | 3.867 | 3.793 – 3.931 | 129313677 | 1967.8 | ok |
+| `xor_p1000_s500` | xla-rocm | 500000 | 2.229 | 2.172 – 2.317 | 224286308 | 9304.5 | ok |
+| `xor_p1000_s500` | jax | 500000 | 14.238 | 14.061 – 17.609 | 35117638 | 4936.7 | ok |
+| `cartpole_p100_s1` | numpy | 100 | 1.801 | 1.777 – 1.982 | 55511 | 132.6 | ok |
+| `cartpole_p100_s1` | iree-rocm | 100 | 1.177 | 1.133 – 1.207 | 84996 | 1879.9 | ok |
+| `cartpole_p100_s1` | xla-rocm | 100 | 0.450 | 0.427 – 0.550 | 222184 | 9202.3 | ok |
+| `cartpole_p100_s1` | jax | 100 | 1.383 | 1.353 – 1.492 | 72334 | 4682.2 | ok |
 
 ## Speed-up against the frozen JAX baseline
 
 Speed-up is `jax median / new median` per forward pass (higher means the new side is faster), the same `old/new` convention as `RESULTS.md`; `n/a` means one of the two legs has no timing in this record — see `## Blocked rows`.
 
-| Workload | jax median ms | numpy median ms | speed-up vs jax | iree-rocm median ms | speed-up vs jax |
-|---|---|---|---|---|---|
-| `xor_p100_s4` | 1.415 | 2.807 | 0.50x | 1.481 | 0.96x |
-| `xor_p500_s4` | 1.554 | 11.655 | 0.13x | 1.716 | 0.91x |
-| `xor_p1000_s4` | 1.636 | 21.258 | 0.08x | 1.645 | 0.99x |
-| `xor_p100_s500` | 3.426 | 85.785 | 0.04x | 1.765 | 1.94x |
-| `xor_p500_s500` | 7.726 | 541.941 | 0.01x | 2.918 | 2.65x |
-| `xor_p1000_s500` | 14.110 | 1092.027 | 0.01x | 3.833 | 3.68x |
-| `cartpole_p100_s1` | 1.358 | 1.831 | 0.74x | 1.119 | 1.21x |
+| Workload | jax median ms | numpy median ms | speed-up vs jax | iree-rocm median ms | speed-up vs jax | xla-rocm median ms | speed-up vs jax |
+|---|---|---|---|---|---|---|---|
+| `xor_p100_s4` | 1.382 | 2.950 | 0.47x | 1.498 | 0.92x | 0.419 | 3.30x |
+| `xor_p500_s4` | 1.566 | 11.316 | 0.14x | 1.701 | 0.92x | 0.481 | 3.25x |
+| `xor_p1000_s4` | 1.661 | 19.975 | 0.08x | 1.663 | 1.00x | 0.497 | 3.34x |
+| `xor_p100_s500` | 3.430 | 94.724 | 0.04x | 1.885 | 1.82x | 0.745 | 4.60x |
+| `xor_p500_s500` | 7.681 | 561.243 | 0.01x | 2.892 | 2.66x | 1.326 | 5.79x |
+| `xor_p1000_s500` | 14.238 | 1094.888 | 0.01x | 3.867 | 3.68x | 2.229 | 6.39x |
+| `cartpole_p100_s1` | 1.383 | 1.801 | 0.77x | 1.177 | 1.18x | 0.450 | 3.07x |
 
 ## Numerical agreement (new-side targets vs the numpy leg)
 
@@ -102,12 +111,19 @@ Every new-side target runs the same graph on the same payload, so its output mus
 | Workload | Target | numpy mean | target mean | abs delta | Status |
 |---|---|---|---|---|---|
 | `xor_p100_s4` | iree-rocm | 0.52595609 | 0.52595609 | 0.000e+00 | pass |
+| `xor_p100_s4` | xla-rocm | 0.52595609 | 0.52595609 | 0.000e+00 | pass |
 | `xor_p500_s4` | iree-rocm | 0.50019968 | 0.50019968 | 0.000e+00 | pass |
+| `xor_p500_s4` | xla-rocm | 0.50019968 | 0.50019968 | 0.000e+00 | pass |
 | `xor_p1000_s4` | iree-rocm | 0.49793524 | 0.49793524 | 0.000e+00 | pass |
+| `xor_p1000_s4` | xla-rocm | 0.49793524 | 0.49793524 | 0.000e+00 | pass |
 | `xor_p100_s500` | iree-rocm | 0.52333850 | 0.52333850 | 0.000e+00 | pass |
+| `xor_p100_s500` | xla-rocm | 0.52333850 | 0.52333850 | 0.000e+00 | pass |
 | `xor_p500_s500` | iree-rocm | 0.49729583 | 0.49729583 | 0.000e+00 | pass |
+| `xor_p500_s500` | xla-rocm | 0.49729583 | 0.49729583 | 0.000e+00 | pass |
 | `xor_p1000_s500` | iree-rocm | 0.49589536 | 0.49589536 | 0.000e+00 | pass |
+| `xor_p1000_s500` | xla-rocm | 0.49589536 | 0.49589536 | 0.000e+00 | pass |
 | `cartpole_p100_s1` | iree-rocm | -0.02731544 | -0.02731547 | 3.725e-08 | pass |
+| `cartpole_p100_s1` | xla-rocm | -0.02731544 | -0.02731544 | 0.000e+00 | pass |
 
 ## Blocked rows
 
@@ -115,27 +131,32 @@ None: every planned row measured. This section is written from the record, so it
 
 ## Provenance of this block
 
-This block is rendered from `benchmarks/results/forward.json`: 21 row(s), 21 ok and 0 error, measured in the session 2026-11-07T08:08:22+00:00 – 2026-11-07T08:10:15+00:00 (UTC) at git `713f4a618223` (clean — generated report artifacts are not counted).
+This block is rendered from `benchmarks/results/forward.json`: 28 row(s), 28 ok and 0 error, measured in the session 2026-11-07T08:17:07+00:00 – 2026-11-07T08:19:54+00:00 (UTC) at git `8c6330989a92` (clean — generated report artifacts are not counted).
 Every row is one `forward_measure.py run` in its own process, so the reported peak RSS is that process's high-water mark and no JAX thread pool shared a process with the evoxc interpreter.
 Nothing here is a statement about HEAD: every number belongs to that record and to the tree its fingerprint names.
-This is the batch forward-pass record of this session: one forward pass of a fixed population, measured per target in its own process. It says nothing about HEAD beyond the tree its fingerprint names.
+This is the batch forward-pass record of this session: one forward pass of a fixed population, measured per target (numpy CPU reference, iree rocm, xla rocm and the frozen JAX baseline) in its own fresh process. It says nothing about HEAD beyond the tree its fingerprint names.
 <!-- END MEASURED (forward_measure.py) -->
 ## Limitations
-- The box was quiet but shared during this session (`/proc/loadavg` 2.58/2.89/2.56 at start, 285.9 MiB of 205 822 MiB device VRAM in use by a co-tenant), so the per-row `min – max` spread is the honest uncertainty measure and a single median is not a distribution.
+- The box was quiet but shared during this session (`/proc/loadavg` 5.60/3.95/3.03 at start, 4.77–8.27 across the rows, 6.42/5.17/3.67 at document build), so the per-row `min – max` spread is the honest uncertainty measure and a single median is not a distribution.
 - One seed (42) and ten timed passes per row: this is a per-forward cost measurement, not a search-quality measurement, and it says nothing about the generations in `RESULTS.md`.
-- `xor_p500_s500` and `xor_p1000_s500` are the widest tiles shipped here (250 000 and 500 000 evaluated rows); a compiled one-shot forward at that width is where the new side's kernel amortises best, so the range above is a range over tile widths, not a single headline number.
+- `xor_p500_s500` and `xor_p1000_s500` are the widest tiles shipped here (250 000 and 500 000 evaluated rows); a compiled one-shot forward at that width is where a kernel amortises best, so the ratios above are a function of tile width, not a single headline number.
 - The JAX side's numbers are its ROCm backend on the same device, with the allocator policy stated above; a default-allocator JAX run on a shared device cannot even reach these rows (`HIP_ERROR_OutOfMemory` on `jit_topological_sort`), which is a property of the box, not of the baseline.
-- Peak RSS is driver RSS and it separates the sides cleanly: the `numpy` leg stays 132.5–1 654.0 MiB (growing with the tile width), `iree` rocm 1 879.4–1 968.1 MiB (runtime-dominated and flat), the JAX side 4 683.2–4 936.5 MiB (XLA client plus executable).
+- Peak RSS is driver RSS and it separates the legs cleanly: the `numpy` leg stays 132.6–1 654.1 MiB (growing with the tile width), `iree` rocm 1 879.8–1 967.8 MiB (runtime-dominated and flat), the JAX side 4 682.2–4 936.7 MiB (XLA client plus executable) and `xla` rocm 9 167.3–9 304.5 MiB — the largest footprint here, the PJRT plugin plus its executable, which is real resident memory and not the allocator's address-space reserve.
+- The `xla` leg's BFC allocator reserves device memory per row — each `xla` row logs `XLA backend allocating 143.77GiB … for BFCAllocator` at client creation — so this leg needs a device where ~144 GiB is free; a fully shared MI300X would fail those rows with a device OOM rather than a wrong number.
+- The `Device memory during the rows` range in the table above is a probe artifact, not a co-tenant: `device_memory` is sampled at the *start* of a row, before that row's own device client exists, so it can read the previous row's allocation while the driver reclaims it (a JAX row leaves ~144 GiB visible, an `xla` row ~148 GiB), which is why it spans 286–193 939 MiB while the same box was otherwise idle.
+- The `xla` leg's setup (3.989–4.122 s) is its one-off client creation plus plugin load, `TF_XLA_HSACO_CACHE_DIR` is unset so every fresh process recompiles its kernel (`HSACO file cache is disabled!`), and the first xla row's 8.443 s is that load paid cold; none of it is charged to a pass.
 ## Reproduce
 ```
-# the committed record and the block below (one (workload, target) row per fresh process, ~2 min)
+# the committed record and the block below (one (workload, target) row per fresh process, ~3 min)
+export EVOXC_PJRT_PLUGIN="$PWD/.venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
 uv run --all-extras python benchmarks/forward_measure.py matrix --workloads all \
-    --targets numpy,iree-rocm,jax --passes 10 --warmup 3 \
+    --targets numpy,iree-rocm,xla-rocm,jax --passes 10 --warmup 3 \
+    --pjrt-plugin "$EVOXC_PJRT_PLUGIN" \
     --json benchmarks/results/forward.json --out benchmarks/FORWARD.md \
-    --report-note "This is the batch forward-pass record of this session: one forward pass of a fixed population, measured per target in its own process. It says nothing about HEAD beyond the tree its fingerprint names."
+    --report-note "This is the batch forward-pass record of this session: one forward pass of a fixed population, measured per target (numpy CPU reference, iree rocm, xla rocm and the frozen JAX baseline) in its own fresh process. It says nothing about HEAD beyond the tree its fingerprint names."
 # one row, one process
 uv run --all-extras python benchmarks/forward_measure.py run --workload xor_p500_s4 --target iree-rocm
-# the xla leg (opt-in; blocked on this tree, see "Protocol" above)
+# the xla leg (needs the plugin; --pjrt-plugin also accepts the path directly)
 uv run --all-extras python benchmarks/forward_measure.py run --workload xor_p100_s4 \
     --target xla-rocm --pjrt-plugin .venv/lib/python3.12/site-packages/jax_plugins/xla_rocm7/xla_rocm_plugin.so
 # re-render this block from the committed record without measuring anything
