@@ -327,3 +327,171 @@ def test_to_numpy_unwraps_evoxc_tensors_and_coerces_the_rest(problem, evoxc):
     scalar = to_numpy(np.float32(1.5))
     assert isinstance(scalar, np.ndarray) and scalar.shape == ()
     assert float(scalar) == 1.5
+
+
+# --------------------------------------------------------------------------- #
+# the shared fixed-horizon trip condition of every rollout loop
+# --------------------------------------------------------------------------- #
+#: The static horizon the condition table is built against.
+HORIZON = 5
+#: ``(counter, other slot)`` pairs, chosen so a wrong carry slot cannot pass: at
+#: ``counter == 0`` the condition is True while ``other == HORIZON`` makes the
+#: *other* slot's comparison False, and the boundary rows pin strict ``<`` (the loop
+#: runs exactly ``max_step`` iterations, never one more).
+COUNTER_CASES = ((0, HORIZON), (HORIZON - 1, HORIZON), (HORIZON, 0), (HORIZON + 1, 0))
+
+
+def test_horizon_cond_is_the_removed_per_environment_loop_condition(run_in_graph, evoxc):
+    """Invariant: ``horizon_cond`` reproduces ``less(carry[index], horizon)`` exactly.
+
+    Oracle: the closure each environment used to spell for itself (``_loop_cond`` in
+    ``cartpole.py``/``mountaincar.py``/``pendulum.py`` before the dedup) —
+    ``cond(carry) = enp.less(carry[index], consts.horizon)`` at index ``3`` for the
+    shared four-leaf carry and ``1`` for ``Pendulum``'s packed ``(row, step)`` carry.
+    Both are transcribed here, on the same operands, so the assertion is against the
+    old behaviour rather than against a second copy of the new one.
+
+    Assertion: for every ``(counter, other)`` case the host-carry condition equals
+    ``counter < HORIZON`` and the packed one equals the same value read from its own
+    slot; the strict boundary (``counter == HORIZON`` ⇒ False) is included; and at
+    ``counter == 0`` the *other* slot's comparison is ``False`` while the condition is
+    ``True``, so a condition reading the wrong slot cannot pass. The load-bearing
+    semantic is asserted too: the carry's ``alive`` slot is all-``False`` (every
+    episode dead) and the loop still asks for the next step, because the horizon is
+    static config and never "is any episode still alive".
+
+    Notes:
+        ``consts`` is a stand-in bundle: the only entry ``horizon_cond`` reads is
+        ``horizon``, so a ``SimpleNamespace`` pins that read — a helper reaching for
+        a second field would raise here instead of silently using a shipped bundle.
+    """
+    from types import SimpleNamespace
+
+    from evoxc import numpy as enp
+
+    from tensorneat.problem.rl._common import horizon_cond
+
+    from tensorneat.problem.rl import _common
+
+    assert "horizon_cond" in _common.__all__, (
+        "horizon_cond must stay on problem.rl._common's public surface"
+    )
+    assert _common.horizon_cond is horizon_cond
+
+    def traced():
+        """Every case of the table in one graph: condition, old form, wrong slot."""
+        horizon = enp.full((), HORIZON, dtype=evoxc.int32)
+        consts = SimpleNamespace(horizon=horizon)
+        dead = enp.zeros((3,), dtype=evoxc.bool_)
+        out = []
+        for counter, other in COUNTER_CASES:
+            step = enp.full((), counter, dtype=evoxc.int32)
+            alt = enp.full((), other, dtype=evoxc.int32)
+            host_carry = (dead, alt, alt, step)
+            packed_carry = (alt, step)
+            out.append(horizon_cond(consts)(host_carry))
+            out.append(enp.less(host_carry[3], consts.horizon))  # the old spelling
+            out.append(enp.less(alt, consts.horizon))  # what slot 1 would answer
+            out.append(horizon_cond(consts, 1)(packed_carry))
+            out.append(enp.less(packed_carry[1], consts.horizon))  # the old packed form
+        return tuple(out)
+
+    results = [bool(value) for value in run_in_graph(traced)]
+    assert len(results) == 5 * len(COUNTER_CASES)
+    for index, (counter, other) in enumerate(COUNTER_CASES):
+        cond3, old3, wrong3, cond1, old1 = results[5 * index : 5 * index + 5]
+        expected = counter < HORIZON
+        assert cond3 is expected, (
+            f"counter={counter}: horizon_cond(consts) answered {cond3}, expected "
+            f"{expected}"
+        )
+        assert cond1 is expected, (
+            f"counter={counter}: horizon_cond(consts, 1) answered {cond1}, expected "
+            f"{expected}"
+        )
+        assert old3 is expected and old1 is expected, "the transcription disagrees"
+        assert wrong3 is (other < HORIZON), "the wrong-slot control lost its value"
+
+    first = results[0:5]
+    assert first[0] is True, "a dead episode set must not stop the static horizon"
+    assert first[2] is False, (
+        "the wrong-slot control must differ at counter=0, else the index is unpinned"
+    )
+    boundary = results[5 * 2 : 5 * 2 + 5]
+    assert boundary[0] is False and boundary[3] is False, (
+        "the horizon is a strict bound: counter == HORIZON must stop the loop"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# every environment builds its rollout from the shared condition
+# --------------------------------------------------------------------------- #
+def _state(common, **entries):
+    """A host ``State`` with the given entries (module ``State()`` otherwise)."""
+    return common.State(**entries)
+
+
+@pytest.mark.parametrize(
+    "class_name, output_dim, kernel_mode, expected_index",
+    [
+        ("CartPole", 2, None, 3),
+        ("Pendulum", 1, None, 3),
+        ("Pendulum", 1, "accelerator", 1),
+        ("MountainCarContinuous", 1, None, 3),
+    ],
+    ids=["cartpole", "pendulum_host", "pendulum_packed", "mountaincar"],
+)
+def test_each_environment_builds_its_loop_from_horizon_cond(
+    problem, common, enp, evoxc, runner, schedule_type, fake_schedule,
+    monkeypatch, class_name, output_dim, kernel_mode, expected_index,
+):
+    """Invariant: all three rollouts ask ``_common.horizon_cond`` at their own counter slot.
+
+    Oracle: the recorded call. Each environment module holds the *module-local* name
+    imported from ``._common``, so replacing that name with a recorder that delegates
+    to the real helper proves which helper the rollout built its ``while_loop`` trip
+    condition from — a module that reintroduced a private ``_loop_cond`` would leave
+    the recorder empty.
+
+    Assertion: exactly one call per rollout, at the documented slot — ``3`` for the
+    shared four-leaf ``(obs, alive, total, step)`` carry of all three environments and
+    ``1`` for ``Pendulum``'s packed ``(row, step)`` accelerator carry — and the
+    rollout still produces one finite fitness per individual.
+    """
+    module = getattr(problem.rl, {
+        "CartPole": "cartpole",
+        "Pendulum": "pendulum",
+        "MountainCarContinuous": "mountaincar",
+    }[class_name])
+    calls = []
+    real = module.horizon_cond
+
+    def recorder(consts, step_index=3):
+        """Record the slot, then hand back the real trip condition."""
+        calls.append(step_index)
+        return real(consts, step_index)
+
+    monkeypatch.setattr(module, "horizon_cond", recorder)
+    problem_object = getattr(problem, class_name)(max_step=4, repeat_times=1)
+    entries = {} if kernel_mode is None else {"kernel_mode": kernel_mode}
+    state = _state(common, **entries)
+    schedule = fake_schedule(2)
+
+    def act_fn(batch):
+        """A zero-logit policy: finite on every step, no NaN poison."""
+        return enp.zeros((int(batch.shape[0]), output_dim), dtype=evoxc.float32)
+
+    def kernel(*arrays):
+        """One ``evaluate`` call on the fake schedule."""
+        return problem_object.evaluate(
+            state, evoxc.random.key(0), act_fn, schedule_type(*arrays)
+        )
+
+    fitness = runner.run_defn(kernel, *tuple(schedule))
+
+    assert calls == [expected_index], (
+        f"{class_name} ({kernel_mode or 'host'}) built its trip condition at "
+        f"{calls} instead of [{expected_index}]"
+    )
+    assert fitness.shape == (2,)
+    assert np.isfinite(fitness).all(), f"fitness came back non-finite: {fitness}"

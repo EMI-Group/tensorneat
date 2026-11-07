@@ -881,3 +881,79 @@ def test_configuration_errors_keep_the_exact_owner_prefixed_message(
     with pytest.raises(common.TensorNEATError) as excinfo:
         problem.CartPole(**kwargs)
     assert str(excinfo.value) == message
+
+
+# --------------------------------------------------------------------------- #
+# the repeat_times == 1 fast path of evaluate
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("repeat_times", [1, 2])
+def test_the_single_repeat_fast_path_equals_the_grouped_mean(
+    problem, state, enp, evoxc, runner, schedule_type, fake_schedule, repeat_times
+):
+    """Invariant: at ``repeat_times == 1`` the skipped reshape+mean is the identity.
+
+    Oracle: the *grouped* spelling computed explicitly in the same graph —
+    ``finalize_fitness(mean(returns_of(total, P, R), axis=1))`` — beside the plain
+    ``finalize_fitness(total)`` ``evaluate`` returns on the fast path. With ``R = 1``
+    every individual has exactly one return, so ``returns_of``'s ``(B,) -> (P, 1)``
+    reshape and the mean over that length-1 axis are two ops on the identity, and the
+    two expressions must agree bit for bit; with ``R = 2`` the grouping is real,
+    ``evaluate`` must take the grouped branch, and the two expressions must differ
+    (otherwise the parametrization would prove nothing about which branch ran).
+
+    Assertion: for ``R = 1`` the fast and grouped values are array-equal and
+    ``evaluate`` returns the fast one; for ``R = 2`` ``evaluate`` returns the grouped
+    one; in both cases the returns are the documented survival counts
+    (:data:`CONSTANT_POLICY_SURVIVAL` for the constant-push-right rows, the whole
+    horizon for the stabilising one), so the equality is not vacuous.
+
+    Notes:
+        ``reset_scale = 0.0`` makes every episode start at rest, so the row policy
+        alone fixes each episode's return and the expected values are known.
+        ``repeat_times`` is host-side config, which is what makes the branch a
+        trace-time one: the two parametrizations trace two different graphs.
+    """
+    from tensorneat.problem.base import finalize_fitness
+    from tensorneat.problem.rl._common import returns_of
+
+    max_step = 12
+    pop_size = 3
+    cartpole = problem.CartPole(
+        max_step=max_step, repeat_times=repeat_times, reset_scale=0.0
+    )
+    # Row 0 survives the horizon (stabilised), rows 1 and 2 die at step 9.
+    act_fn = _split_row_policy(enp, 1)
+    schedule = fake_schedule(pop_size)
+
+    def kernel(*arrays):
+        """The returned fitness beside both spellings of the fitness algebra."""
+        total, _ = cartpole._rollout(evoxc.random.key(0), act_fn, pop_size)
+        fast = finalize_fitness(total)
+        grouped = finalize_fitness(
+            enp.mean(returns_of(total, pop_size, repeat_times), axis=1)
+        )
+        evaluated = cartpole.evaluate(
+            state, evoxc.random.key(0), act_fn, schedule_type(*arrays)
+        )
+        return evaluated, fast, grouped
+
+    evaluated, fast, grouped = runner.run_defn(kernel, *tuple(schedule))
+
+    assert evaluated.shape == (pop_size,)
+    # The closed form: only row 0 is the constant push-right policy (it dies at
+    # :data:`CONSTANT_POLICY_SURVIVAL`); every other row balances the pole for the
+    # whole horizon. ``repeat_times`` only changes how those per-episode returns are
+    # grouped -- row 0's pair is (9, max_step), hence the mean below.
+    if repeat_times == 1:
+        np.testing.assert_array_equal(fast, grouped)
+        np.testing.assert_array_equal(evaluated, fast)
+        expected = (CONSTANT_POLICY_SURVIVAL, max_step, max_step)
+    else:
+        assert fast.shape == (pop_size * repeat_times,)
+        np.testing.assert_array_equal(evaluated, grouped)
+        assert not np.array_equal(fast, evaluated), (
+            "with repeat_times=2 the grouped branch must differ from the raw "
+            "per-episode returns, else this test cannot tell the branches apart"
+        )
+        expected = ((CONSTANT_POLICY_SURVIVAL + max_step) / 2, max_step, max_step)
+    np.testing.assert_array_equal(evaluated, np.array(expected, dtype=np.float32))

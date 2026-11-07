@@ -2,16 +2,22 @@
 
 What this module proves
 -----------------------
-``prepare_pass`` picks the level spelling from two host statics
-(``genome/default.py``)::
+``prepare_pass`` picks the level spelling from three host statics
+(``genome/default.py::_static_sweep``)::
 
-    sweep = is_accelerator(kernel_mode(state)) and samples == 1
+    sweep = (kernel_mode(state) == "accelerator"
+             and samples == 1
+             and backend not in _SWEEP_UNSAFE_BACKENDS)      # ("xla",)
 
 ``True`` selects ``_level_sweep`` — the same ``_node_step`` statically unrolled over
 ``level = 1 .. max_depth``, with **no** ``evoxc.while_loop`` and neither the depth
 bound (``_depth_limit``'s ``reduce_max``) nor the rank-0 loop counter. Every other
-combination (the host leg at any ``samples``, the accelerator leg at ``samples > 1``)
-selects ``_level_loop`` — one ``evoxc.while_loop`` bounded by that depth limit.
+combination selects ``_level_loop`` — one ``evoxc.while_loop`` bounded by that depth
+limit: the host leg at any ``samples``, the accelerator leg at ``samples > 1`` (a tiled
+dataset), and the accelerator leg on a backend named in ``_SWEEP_UNSAFE_BACKENDS`` —
+``xla``, whose captured HIP graph SIGSEGVs after one completed generation. A state
+that registered no ``backend`` entry (a bare ``State`` in a unit test) reads as "not
+``xla``" and keeps the sweep.
 
 The two spellings must be the *same function*, bit for bit, and this module is the
 first committed regression test of that claim. It proves, on hand-built payloads:
@@ -24,7 +30,12 @@ first committed regression test of that claim. It proves, on hand-built payloads
 2. ``samples == 4``: the accelerator leg falls back to the loop and still agrees with
    the host leg exactly, and a batch whose four rows per individual are identical
    repeats that individual's ``samples == 1`` result — the individual-major tiling;
-3. by **traced op names**: the accelerator ``samples == 1`` graph holds no ``while``
+3. the **backend axis** of the same gate at ``samples == 1``: ``backend="xla"`` takes
+   the loop while ``backend="iree"`` and a state with no ``backend`` entry keep the
+   sweep, proved by traced op names *and* by the three spellings returning one
+   array — the sweep is numerically the same function as the loop on every backend,
+   so excluding ``xla`` from it costs no accuracy;
+4. by **traced op names**: the accelerator ``samples == 1`` graph holds no ``while``
    op (and no ``reduce_max``) while the host graph holds exactly one of each, and the
    accelerator unroll is *more* ops than the loop; a tiled accelerator batch holds
    the ``while`` op again. That is the proof the two spellings really ran: a
@@ -64,6 +75,12 @@ Gotchas this module encodes
 * The sweep is selected only for ``samples == 1`` on the accelerator leg on purpose:
   a tiled dataset keeps the loop (the unrolled form multiplies a ``P * samples``-row
   batch by ``max_depth``). Never "simplify" the gate to the formulation static alone.
+* The backend is the third static: ``xla`` keeps the loop even at ``samples == 1``
+  because its capture-eligible sweep body SIGSEGVs after one completed generation,
+  and the loop is only the least-bad spelling there. A state that never registered a
+  ``backend`` is *not* ``xla`` (the gate reads ``getattr(state, "backend", None)``),
+  which is why the ``_states`` fixture below needs no ``backend`` entry. Do not
+  "simplify" the gate to ``kernel_mode`` + ``samples`` either.
 * The op counts come from the shared walker ``..ir_ops``, which descends a region's
   **blocks** (``op.regions -> region.blocks -> block.ops``): a ``Region`` is an
   ordered list of blocks and has no ``.ops`` of its own, so recursing into the
@@ -321,6 +338,52 @@ def traced(runner, common, chain):
 
         counts[route] = op_names(evoxc.trace(forward_route, *specs))
     return counts
+
+
+@pytest.fixture(scope="module")
+def backend_routes(runner, common, chain, run_forward):
+    """The accelerator leg at ``samples == 1``, traced and run once per backend spelling.
+
+    Oracle: the traced IR (the route-selected proof) and the host loop (the value
+    oracle). The three cases differ in exactly one host static of
+    :func:`~tensorneat.genome.default._static_sweep` — the ``backend`` entry
+    ``setup`` registered on the state — so ``xla`` must take the loop while
+    ``iree`` and a state with no ``backend`` entry keep the sweep.
+
+    Returns:
+        ``{"counts": {name: op counts}, "values": {name: (P, num_outputs)}}`` for
+        ``"xla"``, ``"iree"`` and ``"missing"`` (no ``backend`` entry at all).
+
+    Notes:
+        The schedule is the accelerator leg's own (``chain``'s), reused here: the
+        backend is a *build* static, not a schedule one, and
+        :func:`_states` derives it per ``kernel_mode`` only. The executable cache
+        is keyed by the identity of the state, so each backend spelling traces its
+        own forward graph instead of sharing one.
+    """
+    import evoxc
+
+    payload, genome_object, _states_by_leg, legs = chain
+    width = len(common.Transformed._fields)
+    _schedule_state, schedule = legs["accelerator"]
+    cases = {"xla": {"backend": "xla"}, "iree": {"backend": "iree"}, "missing": {}}
+    counts, values = {}, {}
+    for name, entries in cases.items():
+        state = genome_object.setup(
+            common.State(kernel_mode="accelerator", **entries)
+        )
+        args = (*schedule, *payload.args(), INPUTS)
+        specs = [runner.spec_like(array) for array in args]
+
+        def forward_route(*arrays, state=state, schedule=schedule):
+            """One ``forward`` call with the schedule rebuilt inside the trace."""
+            return genome_object.forward(
+                state, common.Transformed(*arrays[:width]), *arrays[width:]
+            )
+
+        counts[name] = op_names(evoxc.trace(forward_route, *specs))
+        values[name] = run_forward(genome_object, state, schedule, payload, INPUTS)
+    return {"counts": counts, "values": values}
 
 
 # --------------------------------------------------------------------------- #
@@ -657,3 +720,111 @@ def test_a_tiled_accelerator_batch_keeps_the_while_loop(traced):
         f"the tiled accelerator leg traced {_total(tiled)} ops against the "
         f"samples==1 sweep's {_total(sweep)}: the tiled batch was unrolled"
     )
+
+
+# --------------------------------------------------------------------------- #
+# the third static: the registered backend
+# --------------------------------------------------------------------------- #
+def test_the_static_sweep_gate_is_the_documented_table(common):
+    """Invariant: ``sweep`` is ``accelerator and samples == 1 and backend != "xla"``.
+
+    Oracle: :func:`~tensorneat.genome.default._static_sweep`'s own four documented
+    facts, written out as a table: the formulation must be the accelerator one, the
+    pass must be non-tiled, and the registered backend must not be in
+    ``_SWEEP_UNSAFE_BACKENDS`` — where a state with **no** ``backend`` entry reads
+    as "not ``xla``" (the documented bare-``State`` default used by every other row
+    of this module). The backend comparison is case-folding and whitespace-tolerant
+    (``" XLA "``), so a caller's spelling cannot smuggle the sweep onto ``xla``.
+
+    Assertion: every cell of the table, so a gate that lost the backend term (the
+    pre-fix rule ``is_accelerator(...) and samples == 1``) fails on the ``xla``
+    row, one that dropped the tiling term fails on ``samples == 4``, and one that
+    dropped the formulation term fails on the host rows.
+    """
+    from tensorneat.genome.default import _SWEEP_UNSAFE_BACKENDS, _static_sweep
+
+    assert _SWEEP_UNSAFE_BACKENDS == ("xla",), (
+        "the documented unsafe-backend list is exactly ('xla',), got "
+        f"{_SWEEP_UNSAFE_BACKENDS}"
+    )
+    cases = (
+        ({"kernel_mode": "accelerator"}, 1, True, "bare state, no backend entry"),
+        ({"kernel_mode": "accelerator", "backend": "iree"}, 1, True, "iree"),
+        ({"kernel_mode": "accelerator", "backend": "numpy"}, 1, True, "numpy"),
+        ({"kernel_mode": "accelerator", "backend": "xla"}, 1, False, "xla"),
+        ({"kernel_mode": "accelerator", "backend": " XLA "}, 1, False, "xla spelling"),
+        ({"kernel_mode": "accelerator", "backend": None}, 1, True, "explicit None"),
+        ({"kernel_mode": "accelerator", "backend": "xla"}, 4, False, "tiled xla"),
+        ({"kernel_mode": "accelerator"}, 4, False, "tiled"),
+        ({"kernel_mode": "host"}, 1, False, "host"),
+        ({"kernel_mode": "host", "backend": "xla"}, 1, False, "host xla"),
+    )
+    for entries, samples, expected, label in cases:
+        state = common.State(**entries)
+        assert _static_sweep(state, samples) is expected, (
+            f"{label}: _static_sweep({entries}, samples={samples}) should be "
+            f"{expected}"
+        )
+
+
+def test_xla_takes_the_while_loop_while_iree_and_a_bare_state_sweep(backend_routes):
+    """Invariant: ``backend="xla"`` selects the loop; ``iree`` and a bare state the sweep.
+
+    Oracle: the traced IR of the same genome, payload and ``kernel_mode`` at
+    ``samples == 1``, differing only in the state's ``backend`` entry. ``xla`` keeps
+    the data-dependent loop because its capture-eligible sweep body SIGSEGVs inside
+    the ROCm plugin after one completed generation (``_SWEEP_UNSAFE_BACKENDS``), and
+    the loop is selected there as the least-bad spelling, not as a fix.
+
+    Assertion: ``xla`` holds exactly one ``while`` op and one ``reduce_max`` (the
+    loop's own bound); ``iree`` and the state with no ``backend`` entry hold zero of
+    each and strictly more total ops (the unroll). A gate that ignored the backend
+    therefore fails on the ``xla`` row — the pre-fix rule did exactly that.
+    """
+    counts = backend_routes["counts"]
+    xla, iree, missing = counts["xla"], counts["iree"], counts["missing"]
+
+    assert xla.get("while", 0) == 1, (
+        "the xla leg must fall back to the level while_loop, got "
+        f"{xla.get('while', 0)} while op(s)"
+    )
+    assert xla.get("reduce_max", 0) == 1, (
+        "the xla loop must derive its trip count from reduce_max, got "
+        f"{xla.get('reduce_max', 0)} such op(s)"
+    )
+    for label, route in (("iree", iree), ("bare state", missing)):
+        assert route.get("while", 0) == 0, (
+            f"the {label} leg should keep the statically unrolled sweep, got "
+            f"{route.get('while', 0)} while op(s)"
+        )
+        assert route.get("reduce_max", 0) == 0, (
+            f"the {label} sweep reads no depth bound, got "
+            f"{route.get('reduce_max', 0)} reduce_max op(s)"
+        )
+        assert _total(route) > _total(xla), (
+            f"the {label} sweep traced {_total(route)} ops against the xla loop's "
+            f"{_total(xla)}: the unroll should cost more than one loop body"
+        )
+
+
+def test_every_backend_spelling_returns_the_same_values(backend_routes, chain, run_forward):
+    """Invariant: the ``xla`` loop and the ``iree``/bare-state sweep are the same function.
+
+    Oracle: the host loop (exact, ``NaN``-aware) — and, transitively, the closed form
+    pinned by :func:`test_shallow_chain_agrees_exactly_with_its_closed_form`. This is
+    what makes selecting the loop on ``xla`` a *cost* decision rather than an accuracy
+    one: the two spellings visit the same levels in the same order.
+
+    Assertion: the three backend spellings agree with the host leg array for array
+    (shape, dtype and ``NaN`` pattern included), and the read-out is finite and
+    non-zero, so the equality is not the vacuous ``NaN == NaN`` of a dead network.
+    """
+    payload, genome_object, _states_by_leg, legs = chain
+    host = _forward(run_forward, genome_object, legs, "host", payload, INPUTS)
+    assert np.isfinite(host).all(), (
+        f"the control build must compute the whole chain, got {host.ravel()}"
+    )
+    for name, value in backend_routes["values"].items():
+        _assert_same(host, value, f"accelerator/{name}, samples=1")
+        assert np.abs(value).max() > 0.0, f"{name}: every read-out is zero"
+

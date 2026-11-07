@@ -29,6 +29,21 @@ option takes precedence in every later discovery call but cannot satisfy that
 first probe, so the caller must wire **both**: ``compile_options["plugin_path"]``
 for the build and ``EVOXC_PJRT_PLUGIN`` in the measuring process's environment.
 
+The ROCm command-buffer workaround (``XLA_WORKAROUND_FLAGS``)
+------------------------------------------------------------
+On the MI300X, an ``xla`` generation graph that contains a long ``while`` (the RL
+rollout) SIGSEGVs inside ``PJRT_LoadedExecutable_Execute``: XLA captures the graph
+as a HIP graph / FUSION command buffer and replays it through ``hipGraphLaunch``,
+which the ROCm plugin cannot do for that loop. Excluding ``WHILE`` from the
+command buffer cures it (:data:`XLA_WORKAROUND_FLAGS`,
+``--xla_gpu_enable_command_buffer=WHILE``; an empty value also works, while
+``=FUSION`` still crashes), and a pure-forward graph with no ``while`` does not
+crash at all. XLA reads ``XLA_FLAGS`` when the backend is initialised -- before the
+plugin builds the executable -- so the flag is a **process environment** setting
+and cannot be a ``compile_options`` entry. Both accelerator tools export it for
+their ``xla`` targets (and only for those) and record the effective value, so a
+number is never attributed to a flag it did not run with.
+
 This module is stdlib-only at import time (``gpu_measure.py --list``/``--help``
 must work on an interpreter without numpy), and it owns no rendering and no
 measurement: the record schema and every rendered line stay in
@@ -70,6 +85,18 @@ PJRT_FLAG = "--pjrt-plugin"
 #: The environment variable the evoxc ``xla`` adapter reads itself.
 PJRT_ENV_VAR = "EVOXC_PJRT_PLUGIN"
 
+#: The ``XLA_FLAGS`` value the ``xla`` targets are measured with (the ROCm workaround).
+#:
+#: On the MI300X an xla generation graph holding a long ``while`` (the RL rollout)
+#: SIGSEGVs inside ``PJRT_LoadedExecutable_Execute``, because XLA captures it as a
+#: HIP graph / FUSION command buffer and replays it via ``hipGraphLaunch``. Removing
+#: ``WHILE`` from the command buffer cures it: an empty value also works, while
+#: ``=FUSION`` still crashes, and a pure-forward graph (no ``while``) never crashes.
+#: XLA reads ``XLA_FLAGS`` at backend init -- before the plugin builds the executable
+#: -- so this is exported into the measuring process's environment (never into
+#: ``compile_options``) and recorded with the measurement.
+XLA_WORKAROUND_FLAGS = "--xla_gpu_enable_command_buffer=WHILE"
+
 #: The build plan of the ``backend="numpy"`` reference leg (cross-check and trace).
 NUMPY_PLAN: dict[str, Any] = {"name": "numpy", **TARGETS["numpy"], "device_index": None}
 
@@ -84,6 +111,7 @@ __all__ = [
     "PJRT_TARGETS",
     "PJRT_FLAG",
     "PJRT_ENV_VAR",
+    "XLA_WORKAROUND_FLAGS",
     "NUMPY_PLAN",
     "PluginError",
     "resolve_plugin",
